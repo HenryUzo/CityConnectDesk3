@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,17 +23,20 @@ export default function LandingPage() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Redirect to appropriate dashboard if already logged in
-  if (user) {
-    if (user.role === "resident") {
-      setLocation("/resident");
-      return null;
-    } else if (user.role === "provider") {
-      setLocation("/provider");
-      return null;
-    } else if (user.role === "admin") {
-      setLocation("/admin");
-      return null;
+  useEffect(() => {
+    if (user) {
+      if (user.role === "resident") {
+        setLocation("/resident");
+      } else if (user.role === "provider") {
+        setLocation("/provider");
+      } else if (user.role === "admin") {
+        setLocation("/admin");
+      }
     }
+  }, [user, setLocation]);
+
+  if (user) {
+    return null;
   }
 
   const handleGetStarted = (userType: string) => {

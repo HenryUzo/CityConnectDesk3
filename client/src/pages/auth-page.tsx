@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -65,18 +65,7 @@ export default function AuthPage() {
   const [loginMethod, setLoginMethod] = useState<"email" | "code">("email");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
 
-  // Redirect if already logged in
-  if (user) {
-    if (user.role === "resident") {
-      setLocation("/resident");
-    } else if (user.role === "provider") {
-      setLocation("/provider");
-    } else if (user.role === "admin") {
-      setLocation("/admin");
-    }
-    return null;
-  }
-
+  // All hook calls must be above any conditional returns
   const residentLoginForm = useForm({
     resolver: zodResolver(residentLoginSchema),
     defaultValues: {
@@ -116,6 +105,23 @@ export default function AuthPage() {
       experience: 0,
     },
   });
+
+  // Redirect if already logged in - after all hooks are declared
+  useEffect(() => {
+    if (user) {
+      if (user.role === "resident") {
+        setLocation("/resident");
+      } else if (user.role === "provider") {
+        setLocation("/provider");
+      } else if (user.role === "admin") {
+        setLocation("/admin");
+      }
+    }
+  }, [user, setLocation]);
+
+  if (user) {
+    return null;
+  }
 
   const onLogin = async (data: any) => {
     try {

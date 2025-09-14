@@ -218,8 +218,8 @@ export default function ResidentDashboard() {
 
             {/* Quick Actions - Mobile-optimized */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 lg:gap-6">
-              <Card className="hover:shadow-md transition-shadow cursor-pointer" asChild>
-                <Link href="/book-artisan">
+              <Link to="/book-artisan">
+                <Card className="hover:shadow-md transition-shadow cursor-pointer">
                   <CardHeader className="pb-3 sm:pb-6">
                     <CardTitle className="flex items-center text-base sm:text-lg">
                       <Wrench className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-primary" />
@@ -235,11 +235,11 @@ export default function ResidentDashboard() {
                       Book Now
                     </Button>
                   </CardContent>
-                </Link>
-              </Card>
+                </Card>
+              </Link>
 
-              <Card className="hover:shadow-md transition-shadow cursor-pointer" asChild>
-                <Link href="/book-market-run">
+              <Link to="/book-market-run">
+                <Card className="hover:shadow-md transition-shadow cursor-pointer">
                   <CardHeader className="pb-3 sm:pb-6">
                     <CardTitle className="flex items-center text-base sm:text-lg">
                       <ShoppingBag className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-secondary" />
@@ -255,8 +255,8 @@ export default function ResidentDashboard() {
                       Request Now
                     </Button>
                   </CardContent>
-                </Link>
-              </Card>
+                </Card>
+              </Link>
             </div>
 
             {/* Recent Activity - Mobile-optimized */}
@@ -265,7 +265,7 @@ export default function ResidentDashboard() {
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
                   <CardTitle className="text-lg sm:text-xl">Recent Activity</CardTitle>
                   <Button variant="outline" size="sm" className="self-start sm:self-auto h-9" asChild>
-                    <Link href="/track-orders" data-testid="link-view-all-orders">
+                    <Link to="/track-orders" data-testid="link-view-all-orders">
                       View All
                     </Link>
                   </Button>
