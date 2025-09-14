@@ -13,12 +13,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { ArrowLeft, ShoppingBag, LogOut, Wallet } from "lucide-react";
+import { LocationPicker } from "@/components/LocationPicker";
 
 const marketRunRequestSchema = z.object({
   description: z.string().min(10, "Description must be at least 10 characters"),
   urgency: z.enum(["low", "medium", "high", "emergency"]),
   budget: z.string().min(1, "Budget range is required"),
-  location: z.string().min(1, "Delivery address is required"),
+  location: z.object({
+    address: z.string().min(1, "Delivery address is required"),
+    latitude: z.number().optional(),
+    longitude: z.number().optional(),
+  }),
   specialInstructions: z.string().optional(),
 });
 
@@ -35,17 +40,26 @@ export default function BookMarketRun() {
       description: "",
       urgency: "medium",
       budget: "",
-      location: "",
+      location: {
+        address: "",
+        latitude: undefined,
+        longitude: undefined,
+      },
       specialInstructions: "",
     },
   });
 
   const submitRequestMutation = useMutation({
     mutationFn: async (data: MarketRunRequestFormData) => {
-      return await apiRequest("POST", "/api/service-requests", {
+      // Transform location data for submission
+      const submitData = {
         ...data,
+        location: data.location.address,
+        latitude: data.location.latitude,
+        longitude: data.location.longitude,
         category: "market_runner",
-      });
+      };
+      return await apiRequest("POST", "/api/service-requests", submitData);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/service-requests"] });
@@ -205,11 +219,11 @@ export default function BookMarketRun() {
                     <FormItem>
                       <FormLabel>Delivery Address</FormLabel>
                       <FormControl>
-                        <Input 
-                          {...field} 
-                          className="h-12 min-h-[44px] text-base"
-                          placeholder="Your address for delivery (e.g., Block 3, Flat 2A)"
-                          data-testid="input-location"
+                        <LocationPicker
+                          value={field.value}
+                          onChange={field.onChange}
+                          placeholder="Your address for delivery (e.g., Block 3, Flat 2A) or search area"
+                          className="w-full"
                         />
                       </FormControl>
                       <FormMessage />

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, integer, decimal, boolean, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, decimal, boolean, pgEnum, doublePrecision } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -27,6 +27,8 @@ export const users = pgTable("users", {
   serviceCategory: serviceCategoryEnum("service_category"), // for providers
   experience: integer("experience"), // years of experience for providers
   location: text("location"), // building/block info for residents
+  latitude: doublePrecision("latitude"), // optional latitude for location
+  longitude: doublePrecision("longitude"), // optional longitude for location
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -42,6 +44,8 @@ export const serviceRequests = pgTable("service_requests", {
   budget: text("budget").notNull(), // budget range as string
   urgency: urgencyEnum("urgency").notNull(),
   location: text("location").notNull(),
+  latitude: doublePrecision("latitude"), // optional latitude for service location
+  longitude: doublePrecision("longitude"), // optional longitude for service location
   preferredTime: timestamp("preferred_time"),
   specialInstructions: text("special_instructions"),
   createdAt: timestamp("created_at").defaultNow(),

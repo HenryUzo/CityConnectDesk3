@@ -14,13 +14,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { ArrowLeft, Wrench, LogOut, Wallet } from "lucide-react";
+import { LocationPicker } from "@/components/LocationPicker";
 
 const artisanRequestSchema = z.object({
   category: z.enum(["electrician", "plumber", "carpenter"]),
   description: z.string().min(10, "Description must be at least 10 characters"),
   urgency: z.enum(["low", "medium", "high", "emergency"]),
   budget: z.string().min(1, "Budget range is required"),
-  location: z.string().min(1, "Location is required"),
+  location: z.object({
+    address: z.string().min(1, "Location is required"),
+    latitude: z.number().optional(),
+    longitude: z.number().optional(),
+  }),
   preferredTime: z.string().optional(),
   specialInstructions: z.string().optional(),
 });
@@ -39,7 +44,11 @@ export default function BookArtisan() {
       description: "",
       urgency: "medium",
       budget: "",
-      location: "",
+      location: {
+        address: "",
+        latitude: undefined,
+        longitude: undefined,
+      },
       preferredTime: "",
       specialInstructions: "",
     },
@@ -47,10 +56,15 @@ export default function BookArtisan() {
 
   const submitRequestMutation = useMutation({
     mutationFn: async (data: ArtisanRequestFormData) => {
-      return await apiRequest("POST", "/api/service-requests", {
+      // Transform location data for submission
+      const submitData = {
         ...data,
+        location: data.location.address,
+        latitude: data.location.latitude,
+        longitude: data.location.longitude,
         preferredTime: data.preferredTime ? new Date(data.preferredTime).toISOString() : null,
-      });
+      };
+      return await apiRequest("POST", "/api/service-requests", submitData);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/service-requests"] });
@@ -233,11 +247,11 @@ export default function BookArtisan() {
                     <FormItem>
                       <FormLabel>Location Details</FormLabel>
                       <FormControl>
-                        <Input 
-                          {...field} 
-                          className="h-12 min-h-[44px] text-base"
-                          placeholder="e.g., Block 5, Flat 3B, or specific area description"
-                          data-testid="input-location"
+                        <LocationPicker
+                          value={field.value}
+                          onChange={field.onChange}
+                          placeholder="e.g., Block 5, Flat 3B, or search area"
+                          className="w-full"
                         />
                       </FormControl>
                       <FormMessage />

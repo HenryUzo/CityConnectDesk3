@@ -13,13 +13,18 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { ArrowLeft } from "lucide-react";
+import { LocationPicker } from "@/components/LocationPicker";
 
 const residentRegisterSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   email: z.string().email("Invalid email address"),
   phone: z.string().min(10, "Phone number must be at least 10 digits"),
   password: z.string().min(6, "Password must be at least 6 characters"),
-  location: z.string().min(1, "Location is required"),
+  location: z.object({
+    address: z.string().min(1, "Location is required"),
+    latitude: z.number().optional(),
+    longitude: z.number().optional(),
+  }),
 });
 
 const providerRegisterSchema = z.object({
@@ -90,7 +95,11 @@ export default function AuthPage() {
       email: "",
       phone: "",
       password: "",
-      location: "",
+      location: {
+        address: "",
+        latitude: undefined,
+        longitude: undefined,
+      },
     },
   });
 
@@ -150,12 +159,22 @@ export default function AuthPage() {
 
   const onRegister = async (data: any) => {
     try {
-      await registerMutation.mutateAsync({
+      // Transform location data for submission
+      const submitData = {
         ...data,
         role: userType,
         isApproved: userType === "resident", // Residents auto-approved, providers need approval
         username: data.email,
-      });
+      };
+
+      // For residents, transform location object to string and add coordinates
+      if (userType === "resident" && data.location) {
+        submitData.location = data.location.address;
+        submitData.latitude = data.location.latitude;
+        submitData.longitude = data.location.longitude;
+      }
+
+      await registerMutation.mutateAsync(submitData);
     } catch (error) {
       console.error("Registration failed:", error);
     }
@@ -420,11 +439,11 @@ export default function AuthPage() {
                               <FormItem className="space-y-1.5 sm:space-y-2">
                                 <FormLabel className="text-sm sm:text-base font-medium">Location (Block/Flat)</FormLabel>
                                 <FormControl>
-                                  <Input 
-                                    {...field} 
-                                    className="h-11 sm:h-12 text-base"
-                                    placeholder="e.g., Block 5, Flat 3B" 
-                                    data-testid="input-location" 
+                                  <LocationPicker
+                                    value={field.value}
+                                    onChange={field.onChange}
+                                    placeholder="e.g., Block 5, Flat 3B or search area"
+                                    className="w-full"
                                   />
                                 </FormControl>
                                 <FormMessage className="text-xs sm:text-sm" />
