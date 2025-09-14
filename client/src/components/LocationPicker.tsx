@@ -158,50 +158,110 @@ export function LocationPicker({ value, onChange, placeholder = "Enter location"
 
   // Initialize map when sheet opens
   useEffect(() => {
-    if (isMapOpen && mapContainer.current && !mapInstance && MAPBOX_TOKEN) {
-      // Lazy load mapbox-gl
-      import('mapbox-gl').then((mapboxModule) => {
-        const mapboxgl = mapboxModule.default;
-        
-        (mapboxgl as any).accessToken = MAPBOX_TOKEN;
-        
-        const map = new mapboxgl.Map({
-          container: mapContainer.current!,
-          style: 'mapbox://styles/mapbox/streets-v12',
-          center: value.longitude && value.latitude ? [value.longitude, value.latitude] : [3.3792, 6.5244], // Lagos default
-          zoom: value.longitude && value.latitude ? 15 : 10,
-        });
+    console.log('Map effect triggered with conditions:', {
+      isMapOpen,
+      mapContainer: !!mapContainer.current,
+      mapInstance: !!mapInstance,
+      MAPBOX_TOKEN: !!MAPBOX_TOKEN
+    });
 
-        // Add marker
-        const newMarker = new mapboxgl.Marker({ draggable: true })
-          .setLngLat(value.longitude && value.latitude ? [value.longitude, value.latitude] : [3.3792, 6.5244])
-          .addTo(map);
+    if (isMapOpen && MAPBOX_TOKEN && !mapInstance) {
+      // Wait for the map container ref to be available
+      const checkAndInitializeMap = () => {
+        if (!mapContainer.current) {
+          console.log('Map container not ready, retrying...');
+          return false;
+        }
 
-        // Handle marker drag
-        newMarker.on('dragend', async () => {
-          const lngLat = newMarker.getLngLat();
-          const address = await reverseGeocode(lngLat.lat, lngLat.lng);
+        const containerRect = mapContainer.current.getBoundingClientRect();
+        if (containerRect.width === 0 || containerRect.height === 0) {
+          console.warn('Map container has zero dimensions:', containerRect);
+          return false;
+        }
+
+        console.log('Initializing Mapbox map with container dimensions:', containerRect);
+
+        // Lazy load mapbox-gl
+        import('mapbox-gl').then((mapboxModule) => {
+          console.log('Mapbox GL module loaded successfully');
+          const mapboxgl = mapboxModule.default;
           
-          const locationData: LocationData = {
-            address,
-            latitude: lngLat.lat,
-            longitude: lngLat.lng,
-          };
+          (mapboxgl as any).accessToken = MAPBOX_TOKEN;
           
-          setSearchQuery(address);
-          onChange(locationData);
+          const map = new mapboxgl.Map({
+            container: mapContainer.current!,
+            style: 'mapbox://styles/mapbox/streets-v12',
+            center: value.longitude && value.latitude ? [value.longitude, value.latitude] : [3.3792, 6.5244], // Lagos default
+            zoom: value.longitude && value.latitude ? 15 : 10,
+          });
+
+          map.on('load', () => {
+            console.log('Map loaded successfully');
+          });
+
+          map.on('error', (e) => {
+            console.error('Map error:', e);
+            toast({
+              title: "Map error",
+              description: "There was an error loading the map. Please try again.",
+              variant: "destructive",
+            });
+          });
+
+          // Add marker
+          const newMarker = new mapboxgl.Marker({ draggable: true })
+            .setLngLat(value.longitude && value.latitude ? [value.longitude, value.latitude] : [3.3792, 6.5244])
+            .addTo(map);
+
+          // Handle marker drag
+          newMarker.on('dragend', async () => {
+            const lngLat = newMarker.getLngLat();
+            const address = await reverseGeocode(lngLat.lat, lngLat.lng);
+            
+            const locationData: LocationData = {
+              address,
+              latitude: lngLat.lat,
+              longitude: lngLat.lng,
+            };
+            
+            setSearchQuery(address);
+            onChange(locationData);
+          });
+
+          setMapInstance(map);
+          setMarker(newMarker);
+        }).catch((error) => {
+          console.error('Failed to load Mapbox:', error);
+          toast({
+            title: "Map loading failed",
+            description: "Unable to load the map. Please use the search feature instead.",
+            variant: "destructive",
+          });
         });
 
-        setMapInstance(map);
-        setMarker(newMarker);
-      }).catch((error) => {
-        console.error('Failed to load Mapbox:', error);
-        toast({
-          title: "Map loading failed",
-          description: "Unable to load the map. Please use the search feature instead.",
-          variant: "destructive",
+        return true;
+      };
+
+      // Try immediately, then retry with increasing delays
+      if (!checkAndInitializeMap()) {
+        const timeouts: NodeJS.Timeout[] = [];
+        
+        const retryDelays = [50, 100, 200, 500]; // ms
+        retryDelays.forEach((delay, index) => {
+          const timeoutId = setTimeout(() => {
+            console.log(`Retry attempt ${index + 1} after ${delay}ms`);
+            if (checkAndInitializeMap()) {
+              // Clear remaining timeouts
+              timeouts.slice(index + 1).forEach(clearTimeout);
+            }
+          }, delay);
+          timeouts.push(timeoutId);
         });
-      });
+
+        return () => {
+          timeouts.forEach(clearTimeout);
+        };
+      }
     }
   }, [isMapOpen, value.latitude, value.longitude, onChange, toast, mapInstance]);
 
