@@ -32,12 +32,25 @@ const providerRegisterSchema = z.object({
 });
 
 const residentLoginSchema = z.object({
-  email: z.string().email("Invalid email address").optional(),
+  email: z.string().optional(),
   password: z.string().optional(),
-  accessCode: z.string().length(6, "Access code must be 6 digits").optional(),
+  accessCode: z.string().optional(),
 }).refine(
-  (data) => (data.email && data.password) || data.accessCode,
-  "Either email/password or access code is required"
+  (data) => {
+    // Access code login: just need accessCode with 6 digits
+    if (data.accessCode) {
+      return data.accessCode.length === 6;
+    }
+    // Email login: need valid email and password
+    if (data.email && data.password) {
+      return z.string().email().safeParse(data.email).success && data.password.length > 0;
+    }
+    return false;
+  },
+  {
+    message: "Either provide a valid email/password or a 6-digit access code",
+    path: ["root"] // Show error at form level, not field level
+  }
 );
 
 const providerLoginSchema = z.object({
@@ -108,7 +121,10 @@ export default function AuthPage() {
     try {
       if (userType === "resident") {
         if (data.accessCode) {
-          await loginMutation.mutateAsync({ accessCode: data.accessCode });
+          await loginMutation.mutateAsync({ 
+            username: data.accessCode,
+            password: "x" // Dummy password for access code login
+          });
         } else {
           await loginMutation.mutateAsync({ 
             username: data.email, 
