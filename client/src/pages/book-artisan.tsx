@@ -86,15 +86,19 @@ export default function BookArtisan() {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
               <h1 className="text-xl font-bold text-primary">CityConnect</h1>
-              <span className="ml-3 text-sm text-muted-foreground">Book Artisan Repair</span>
+              <span className="ml-2 sm:ml-3 text-xs sm:text-sm text-muted-foreground truncate">Book Artisan</span>
             </div>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center bg-muted rounded-lg px-3 py-1">
+            <div className="flex items-center space-x-2 sm:space-x-4">
+              <div className="hidden sm:flex items-center bg-muted rounded-lg px-3 py-1">
                 <Wallet className="w-4 h-4 mr-2 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">Wallet:</span>
                 <span className="ml-2 font-semibold text-foreground">₦25,000</span>
               </div>
-              <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="button-logout">
+              <div className="flex sm:hidden items-center bg-muted rounded-lg px-2 py-1">
+                <Wallet className="w-4 h-4 mr-1 text-muted-foreground" />
+                <span className="text-xs font-semibold text-foreground">₦25k</span>
+              </div>
+              <Button variant="ghost" size="sm" onClick={handleLogout} className="h-9 w-9 p-0" data-testid="button-logout">
                 <LogOut className="w-4 h-4" />
               </Button>
             </div>
@@ -102,22 +106,22 @@ export default function BookArtisan() {
         </div>
       </nav>
 
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
+        <div className="mb-4 sm:mb-6">
           <Button 
             variant="ghost" 
             onClick={() => setLocation("/resident")} 
-            className="mb-4"
+            className="mb-4 h-11 min-h-[44px] px-4"
             data-testid="button-back-dashboard"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Dashboard
           </Button>
-          <div className="flex items-center mb-4">
-            <Wrench className="w-8 h-8 text-primary mr-3" />
+          <div className="flex flex-col sm:flex-row sm:items-center mb-4 space-y-3 sm:space-y-0">
+            <Wrench className="w-8 h-8 text-primary mr-0 sm:mr-3" />
             <div>
-              <h1 className="text-3xl font-bold text-foreground">Book Artisan Repair</h1>
-              <p className="text-muted-foreground mt-2">Find the right professional for your repair needs</p>
+              <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Book Artisan Repair</h1>
+              <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">Find the right professional for your repair needs</p>
             </div>
           </div>
         </div>
@@ -128,7 +132,7 @@ export default function BookArtisan() {
           </CardHeader>
           <CardContent>
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 sm:space-y-6">
                 <FormField
                   control={form.control}
                   name="category"
@@ -137,7 +141,7 @@ export default function BookArtisan() {
                       <FormLabel>Service Category</FormLabel>
                       <Select onValueChange={field.onChange} defaultValue={field.value}>
                         <FormControl>
-                          <SelectTrigger data-testid="select-service-category">
+                          <SelectTrigger data-testid="select-service-category" className="h-12 min-h-[44px] text-base">
                             <SelectValue placeholder="Select a category" />
                           </SelectTrigger>
                         </FormControl>
@@ -161,7 +165,8 @@ export default function BookArtisan() {
                       <FormControl>
                         <Textarea 
                           {...field} 
-                          rows={4}
+                          rows={3}
+                          className="min-h-[88px] text-base resize-none"
                           placeholder="Describe the repair needed in detail..."
                           data-testid="textarea-description"
                         />
@@ -171,7 +176,7 @@ export default function BookArtisan() {
                   )}
                 />
 
-                <div className="grid md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
                     name="urgency"
@@ -180,7 +185,7 @@ export default function BookArtisan() {
                         <FormLabel>Urgency Level</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
-                            <SelectTrigger data-testid="select-urgency">
+                            <SelectTrigger data-testid="select-urgency" className="h-12 min-h-[44px] text-base">
                               <SelectValue placeholder="Select urgency" />
                             </SelectTrigger>
                           </FormControl>
@@ -204,7 +209,7 @@ export default function BookArtisan() {
                         <FormLabel>Budget Range</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
-                            <SelectTrigger data-testid="select-budget">
+                            <SelectTrigger data-testid="select-budget" className="h-12 min-h-[44px] text-base">
                               <SelectValue placeholder="Select budget" />
                             </SelectTrigger>
                           </FormControl>
@@ -230,6 +235,7 @@ export default function BookArtisan() {
                       <FormControl>
                         <Input 
                           {...field} 
+                          className="h-12 min-h-[44px] text-base"
                           placeholder="e.g., Block 5, Flat 3B, or specific area description"
                           data-testid="input-location"
                         />
@@ -249,6 +255,7 @@ export default function BookArtisan() {
                         <Input 
                           {...field} 
                           type="datetime-local"
+                          className="h-12 min-h-[44px] text-base"
                           data-testid="input-preferred-time"
                         />
                       </FormControl>
@@ -266,7 +273,8 @@ export default function BookArtisan() {
                       <FormControl>
                         <Textarea 
                           {...field} 
-                          rows={3}
+                          rows={2}
+                          className="min-h-[66px] text-base resize-none"
                           placeholder="Any special requirements or notes for the artisan..."
                           data-testid="textarea-special-instructions"
                         />
@@ -276,11 +284,11 @@ export default function BookArtisan() {
                   )}
                 />
 
-                <div className="flex gap-4">
+                <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 pt-2">
                   <Button 
                     type="button" 
                     variant="outline" 
-                    className="flex-1"
+                    className="h-12 min-h-[44px] text-base font-medium flex-1 order-2 sm:order-1"
                     onClick={() => setLocation("/resident")}
                     data-testid="button-cancel"
                   >
@@ -288,7 +296,7 @@ export default function BookArtisan() {
                   </Button>
                   <Button 
                     type="submit" 
-                    className="flex-1"
+                    className="h-12 min-h-[44px] text-base font-medium flex-1 order-1 sm:order-2"
                     disabled={submitRequestMutation.isPending}
                     data-testid="button-submit-request"
                   >

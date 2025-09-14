@@ -81,15 +81,19 @@ export default function BookMarketRun() {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
               <h1 className="text-xl font-bold text-primary">CityConnect</h1>
-              <span className="ml-3 text-sm text-muted-foreground">Request Market Run</span>
+              <span className="ml-2 sm:ml-3 text-xs sm:text-sm text-muted-foreground truncate">Market Run</span>
             </div>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center bg-muted rounded-lg px-3 py-1">
+            <div className="flex items-center space-x-2 sm:space-x-4">
+              <div className="hidden sm:flex items-center bg-muted rounded-lg px-3 py-1">
                 <Wallet className="w-4 h-4 mr-2 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">Wallet:</span>
                 <span className="ml-2 font-semibold text-foreground">₦25,000</span>
               </div>
-              <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="button-logout">
+              <div className="flex sm:hidden items-center bg-muted rounded-lg px-2 py-1">
+                <Wallet className="w-4 h-4 mr-1 text-muted-foreground" />
+                <span className="text-xs font-semibold text-foreground">₦25k</span>
+              </div>
+              <Button variant="ghost" size="sm" onClick={handleLogout} className="h-9 w-9 p-0" data-testid="button-logout">
                 <LogOut className="w-4 h-4" />
               </Button>
             </div>
@@ -97,22 +101,22 @@ export default function BookMarketRun() {
         </div>
       </nav>
 
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
+        <div className="mb-4 sm:mb-6">
           <Button 
             variant="ghost" 
             onClick={() => setLocation("/resident")} 
-            className="mb-4"
+            className="mb-4 h-11 min-h-[44px] px-4"
             data-testid="button-back-dashboard"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Dashboard
           </Button>
-          <div className="flex items-center mb-4">
-            <ShoppingBag className="w-8 h-8 text-secondary mr-3" />
+          <div className="flex flex-col sm:flex-row sm:items-center mb-4 space-y-3 sm:space-y-0">
+            <ShoppingBag className="w-8 h-8 text-secondary mr-0 sm:mr-3" />
             <div>
-              <h1 className="text-3xl font-bold text-foreground">Request Market Run</h1>
-              <p className="text-muted-foreground mt-2">Get your errands and shopping done with ease</p>
+              <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Request Market Run</h1>
+              <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">Get your errands and shopping done with ease</p>
             </div>
           </div>
         </div>
@@ -123,7 +127,7 @@ export default function BookMarketRun() {
           </CardHeader>
           <CardContent>
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 sm:space-y-6">
                 <FormField
                   control={form.control}
                   name="description"
@@ -133,7 +137,8 @@ export default function BookMarketRun() {
                       <FormControl>
                         <Textarea 
                           {...field} 
-                          rows={4}
+                          rows={3}
+                          className="min-h-[88px] text-base resize-none"
                           placeholder="List items to buy, pickup/delivery addresses, or describe the errand in detail..."
                           data-testid="textarea-description"
                         />
@@ -143,7 +148,7 @@ export default function BookMarketRun() {
                   )}
                 />
 
-                <div className="grid md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
                     name="urgency"
@@ -152,7 +157,7 @@ export default function BookMarketRun() {
                         <FormLabel>When do you need this?</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
-                            <SelectTrigger data-testid="select-urgency">
+                            <SelectTrigger data-testid="select-urgency" className="h-12 min-h-[44px] text-base">
                               <SelectValue placeholder="Select timeframe" />
                             </SelectTrigger>
                           </FormControl>
@@ -176,7 +181,7 @@ export default function BookMarketRun() {
                         <FormLabel>Estimated Budget</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
-                            <SelectTrigger data-testid="select-budget">
+                            <SelectTrigger data-testid="select-budget" className="h-12 min-h-[44px] text-base">
                               <SelectValue placeholder="Select budget" />
                             </SelectTrigger>
                           </FormControl>
@@ -202,6 +207,7 @@ export default function BookMarketRun() {
                       <FormControl>
                         <Input 
                           {...field} 
+                          className="h-12 min-h-[44px] text-base"
                           placeholder="Your address for delivery (e.g., Block 3, Flat 2A)"
                           data-testid="input-location"
                         />
@@ -220,7 +226,8 @@ export default function BookMarketRun() {
                       <FormControl>
                         <Textarea 
                           {...field} 
-                          rows={3}
+                          rows={2}
+                          className="min-h-[66px] text-base resize-none"
                           placeholder="Any special requirements, preferences, or notes for the runner..."
                           data-testid="textarea-special-instructions"
                         />
@@ -230,9 +237,9 @@ export default function BookMarketRun() {
                   )}
                 />
 
-                <div className="bg-muted p-4 rounded-lg">
-                  <h4 className="font-medium text-foreground mb-2">What can our runners help with?</h4>
-                  <ul className="text-sm text-muted-foreground space-y-1">
+                <div className="bg-muted p-3 sm:p-4 rounded-lg">
+                  <h4 className="font-medium text-foreground mb-2 text-sm sm:text-base">What can our runners help with?</h4>
+                  <ul className="text-xs sm:text-sm text-muted-foreground space-y-1">
                     <li>• Grocery shopping from local markets</li>
                     <li>• Pharmacy runs for medications</li>
                     <li>• Package pickup and delivery</li>
@@ -241,11 +248,11 @@ export default function BookMarketRun() {
                   </ul>
                 </div>
 
-                <div className="flex gap-4">
+                <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 pt-2">
                   <Button 
                     type="button" 
                     variant="outline" 
-                    className="flex-1"
+                    className="h-12 min-h-[44px] text-base font-medium flex-1 order-2 sm:order-1"
                     onClick={() => setLocation("/resident")}
                     data-testid="button-cancel"
                   >
@@ -254,7 +261,7 @@ export default function BookMarketRun() {
                   <Button 
                     type="submit" 
                     variant="secondary"
-                    className="flex-1"
+                    className="h-12 min-h-[44px] text-base font-medium flex-1 order-1 sm:order-2"
                     disabled={submitRequestMutation.isPending}
                     data-testid="button-submit-request"
                   >
