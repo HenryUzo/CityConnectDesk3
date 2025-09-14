@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -282,8 +283,7 @@ export default function AuthPage() {
                                     <FormItem className="space-y-1.5 sm:space-y-2">
                                       <FormLabel className="text-sm sm:text-base font-medium">Password</FormLabel>
                                       <FormControl>
-                                        <Input 
-                                          type="password" 
+                                        <PasswordInput 
                                           autoComplete="current-password"
                                           className="h-11 sm:h-12 text-base"
                                           placeholder="Enter your password"
@@ -419,8 +419,7 @@ export default function AuthPage() {
                               <FormItem className="space-y-1.5 sm:space-y-2">
                                 <FormLabel className="text-sm sm:text-base font-medium">Password</FormLabel>
                                 <FormControl>
-                                  <Input 
-                                    type="password" 
+                                  <PasswordInput 
                                     autoComplete="new-password"
                                     className="h-11 sm:h-12 text-base"
                                     placeholder="Create a password"
@@ -495,8 +494,7 @@ export default function AuthPage() {
                               <FormItem className="space-y-1.5 sm:space-y-2">
                                 <FormLabel className="text-sm sm:text-base font-medium">Password</FormLabel>
                                 <FormControl>
-                                  <Input 
-                                    type="password" 
+                                  <PasswordInput 
                                     autoComplete="current-password"
                                     className="h-11 sm:h-12 text-base"
                                     placeholder="Enter your password"
@@ -589,8 +587,7 @@ export default function AuthPage() {
                               <FormItem className="space-y-1.5 sm:space-y-2">
                                 <FormLabel className="text-sm sm:text-base font-medium">Password</FormLabel>
                                 <FormControl>
-                                  <Input 
-                                    type="password" 
+                                  <PasswordInput 
                                     autoComplete="new-password"
                                     className="h-11 sm:h-12 text-base"
                                     placeholder="Create a password"
