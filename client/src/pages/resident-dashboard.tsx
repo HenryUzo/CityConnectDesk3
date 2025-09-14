@@ -16,7 +16,8 @@ import {
   Clock,
   CheckCircle,
   DollarSign,
-  Menu
+  Menu,
+  Settings
 } from "lucide-react";
 import { useState } from "react";
 
@@ -83,6 +84,14 @@ export default function ResidentDashboard() {
           Track Orders
         </Link>
       </Button>
+      {user?.role === 'admin' && (
+        <Button variant="ghost" className="w-full justify-start h-12" asChild>
+          <Link href="/admin" data-testid="link-admin-dashboard" onClick={onLinkClick}>
+            <Settings className="w-5 h-5 mr-3" />
+            Admin Dashboard
+          </Link>
+        </Button>
+      )}
     </nav>
   );
 
