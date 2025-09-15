@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
-import { MapPin, Search, Navigation, X } from "lucide-react";
+import { MapPin, Search, Navigation, X, Plus, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 
@@ -57,7 +58,9 @@ export function LocationPicker({ value, onChange, placeholder = "Enter location"
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [marker, setMarker] = useState<any>(null);
+  const [mapStyle, setMapStyle] = useState("streets-v12");
   const mapContainer = useRef<HTMLDivElement>(null);
+  const resizeObserver = useRef<ResizeObserver | null>(null);
   const { toast } = useToast();
 
   const debouncedQuery = useDebounce(searchQuery, 300);
@@ -156,114 +159,176 @@ export function LocationPicker({ value, onChange, placeholder = "Enter location"
     onChange(locationData);
   };
 
-  // Initialize map when sheet opens
+  // Map control functions
+  const zoomIn = () => {
+    if (mapInstance) {
+      mapInstance.zoomIn();
+    }
+  };
+
+  const zoomOut = () => {
+    if (mapInstance) {
+      mapInstance.zoomOut();
+    }
+  };
+
+  const changeMapStyle = (style: string) => {
+    setMapStyle(style);
+    if (mapInstance) {
+      mapInstance.setStyle(`mapbox://styles/mapbox/${style}`);
+    }
+  };
+
+  // Robust map initialization with ResizeObserver
   useEffect(() => {
-    console.log('Map effect triggered with conditions:', {
-      isMapOpen,
-      mapContainer: !!mapContainer.current,
-      mapInstance: !!mapInstance,
-      MAPBOX_TOKEN: !!MAPBOX_TOKEN
-    });
-
     if (isMapOpen && MAPBOX_TOKEN && !mapInstance) {
-      // Wait for the map container ref to be available
-      const checkAndInitializeMap = () => {
-        if (!mapContainer.current) {
-          console.log('Map container not ready, retrying...');
-          return false;
-        }
+      let currentAttempt = 0;
+      let timeoutIds: NodeJS.Timeout[] = [];
 
-        const containerRect = mapContainer.current.getBoundingClientRect();
-        if (containerRect.width === 0 || containerRect.height === 0) {
-          console.warn('Map container has zero dimensions:', containerRect);
-          return false;
-        }
-
-        console.log('Initializing Mapbox map with container dimensions:', containerRect);
-
-        // Lazy load mapbox-gl
-        import('mapbox-gl').then((mapboxModule) => {
-          console.log('Mapbox GL module loaded successfully');
-          const mapboxgl = mapboxModule.default;
-          
-          (mapboxgl as any).accessToken = MAPBOX_TOKEN;
-          
-          const map = new mapboxgl.Map({
-            container: mapContainer.current!,
-            style: 'mapbox://styles/mapbox/streets-v12',
-            center: value.longitude && value.latitude ? [value.longitude, value.latitude] : [3.3792, 6.5244], // Lagos default
-            zoom: value.longitude && value.latitude ? 15 : 10,
-          });
-
-          map.on('load', () => {
-            console.log('Map loaded successfully');
-          });
-
-          map.on('error', (e) => {
-            console.error('Map error:', e);
+      const initializeMapWithRetry = () => {
+        const maxAttempts = 8;
+        const baseDelay = 100;
+        
+        const attemptInitialization = () => {
+          if (currentAttempt >= maxAttempts) {
             toast({
-              title: "Map error",
-              description: "There was an error loading the map. Please try again.",
+              title: "Map loading failed",
+              description: "Please use the search feature to find your location.",
               variant: "destructive",
             });
-          });
+            return;
+          }
 
-          // Add marker
-          const newMarker = new mapboxgl.Marker({ draggable: true })
-            .setLngLat(value.longitude && value.latitude ? [value.longitude, value.latitude] : [3.3792, 6.5244])
-            .addTo(map);
+          if (!mapContainer.current) {
+            currentAttempt++;
+            const delay = baseDelay * Math.pow(1.5, currentAttempt);
+            const timeoutId = setTimeout(attemptInitialization, delay);
+            timeoutIds.push(timeoutId);
+            return;
+          }
 
-          // Handle marker drag
-          newMarker.on('dragend', async () => {
-            const lngLat = newMarker.getLngLat();
-            const address = await reverseGeocode(lngLat.lat, lngLat.lng);
+          // Use requestAnimationFrame to ensure DOM is fully rendered
+          requestAnimationFrame(() => {
+            const containerRect = mapContainer.current?.getBoundingClientRect();
             
-            const locationData: LocationData = {
-              address,
-              latitude: lngLat.lat,
-              longitude: lngLat.lng,
-            };
-            
-            setSearchQuery(address);
-            onChange(locationData);
-          });
+            if (!containerRect || containerRect.width === 0 || containerRect.height === 0) {
+              currentAttempt++;
+              const delay = baseDelay * Math.pow(1.5, currentAttempt);
+              const timeoutId = setTimeout(attemptInitialization, delay);
+              timeoutIds.push(timeoutId);
+              return;
+            }
 
-          setMapInstance(map);
-          setMarker(newMarker);
-        }).catch((error) => {
-          console.error('Failed to load Mapbox:', error);
-          toast({
-            title: "Map loading failed",
-            description: "Unable to load the map. Please use the search feature instead.",
-            variant: "destructive",
-          });
-        });
+            // Container is ready, initialize map
+            import('mapbox-gl')
+              .then((mapboxModule) => {
+                const mapboxgl = mapboxModule.default;
+                (mapboxgl as any).accessToken = MAPBOX_TOKEN;
+                
+                const map = new mapboxgl.Map({
+                  container: mapContainer.current!,
+                  style: `mapbox://styles/mapbox/${mapStyle}`,
+                  center: value.longitude && value.latitude ? [value.longitude, value.latitude] : [3.3792, 6.5244],
+                  zoom: value.longitude && value.latitude ? 15 : 10,
+                });
 
-        return true;
+                map.on('load', () => {
+                  // Ensure map is properly sized after sheet animation
+                  setTimeout(() => map.resize(), 100);
+                });
+
+                map.on('error', (e) => {
+                  toast({
+                    title: "Map error",
+                    description: "There was an error loading the map. Please try again.",
+                    variant: "destructive",
+                  });
+                });
+
+                // Add marker
+                const newMarker = new mapboxgl.Marker({ draggable: true })
+                  .setLngLat(value.longitude && value.latitude ? [value.longitude, value.latitude] : [3.3792, 6.5244])
+                  .addTo(map);
+
+                // Handle marker drag
+                newMarker.on('dragend', async () => {
+                  const lngLat = newMarker.getLngLat();
+                  const address = await reverseGeocode(lngLat.lat, lngLat.lng);
+                  
+                  const locationData: LocationData = {
+                    address,
+                    latitude: lngLat.lat,
+                    longitude: lngLat.lng,
+                  };
+                  
+                  setSearchQuery(address);
+                  onChange(locationData);
+                });
+
+                // Setup ResizeObserver for container dimension changes
+                if (mapContainer.current && typeof ResizeObserver !== 'undefined') {
+                  resizeObserver.current = new ResizeObserver(() => {
+                    if (map) {
+                      map.resize();
+                    }
+                  });
+                  resizeObserver.current.observe(mapContainer.current);
+                }
+
+                setMapInstance(map);
+                setMarker(newMarker);
+              })
+              .catch((error) => {
+                toast({
+                  title: "Map loading failed",
+                  description: "Please use the search feature to find your location.",
+                  variant: "destructive",
+                });
+              });
+          });
+        };
+
+        attemptInitialization();
       };
 
-      // Try immediately, then retry with increasing delays
-      if (!checkAndInitializeMap()) {
-        const timeouts: NodeJS.Timeout[] = [];
-        
-        const retryDelays = [50, 100, 200, 500]; // ms
-        retryDelays.forEach((delay, index) => {
-          const timeoutId = setTimeout(() => {
-            console.log(`Retry attempt ${index + 1} after ${delay}ms`);
-            if (checkAndInitializeMap()) {
-              // Clear remaining timeouts
-              timeouts.slice(index + 1).forEach(clearTimeout);
-            }
-          }, delay);
-          timeouts.push(timeoutId);
-        });
+      initializeMapWithRetry();
 
-        return () => {
-          timeouts.forEach(clearTimeout);
-        };
+      return () => {
+        timeoutIds.forEach(clearTimeout);
+      };
+    }
+  }, [isMapOpen, value.latitude, value.longitude, onChange, toast, mapInstance, mapStyle]);
+
+  // Clean up map when sheet closes to allow re-initialization
+  useEffect(() => {
+    if (!isMapOpen && mapInstance) {
+      // Clean up when sheet closes
+      if (resizeObserver.current) {
+        try {
+          resizeObserver.current.disconnect();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        resizeObserver.current = null;
+      }
+      if (marker) {
+        try {
+          marker.remove();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        setMarker(null);
+      }
+      if (mapInstance) {
+        try {
+          mapInstance.remove();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        setMapInstance(null);
       }
     }
-  }, [isMapOpen, value.latitude, value.longitude, onChange, toast, mapInstance]);
+  }, [isMapOpen, mapInstance, marker]);
 
   // Update map center when coordinates change
   useEffect(() => {
@@ -277,13 +342,32 @@ export function LocationPicker({ value, onChange, placeholder = "Enter location"
   // Cleanup map on unmount
   useEffect(() => {
     return () => {
-      if (mapInstance) {
-        mapInstance.remove();
-        setMapInstance(null);
+      if (resizeObserver.current) {
+        try {
+          resizeObserver.current.disconnect();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        resizeObserver.current = null;
+      }
+      if (marker) {
+        try {
+          marker.remove();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
         setMarker(null);
       }
+      if (mapInstance) {
+        try {
+          mapInstance.remove();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        setMapInstance(null);
+      }
     };
-  }, [mapInstance]);
+  }, [mapInstance, marker]);
 
   return (
     <div className={className}>
@@ -359,6 +443,50 @@ export function LocationPicker({ value, onChange, placeholder = "Enter location"
                   className="w-full h-[calc(80vh-100px)]"
                   data-testid="map-container"
                 />
+                
+                {/* Map Controls */}
+                <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
+                  {/* Zoom Controls */}
+                  <div className="bg-background border border-border rounded-md shadow-sm">
+                    <Button
+                      onClick={zoomIn}
+                      size="sm"
+                      variant="ghost"
+                      className="p-2 h-8 w-8 rounded-none rounded-t-md"
+                      data-testid="button-zoom-in"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </Button>
+                    <div className="h-px bg-border" />
+                    <Button
+                      onClick={zoomOut}
+                      size="sm"
+                      variant="ghost"
+                      className="p-2 h-8 w-8 rounded-none rounded-b-md"
+                      data-testid="button-zoom-out"
+                    >
+                      <Minus className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  
+                  {/* Map Style Selector */}
+                  <div className="bg-background border border-border rounded-md shadow-sm p-2">
+                    <Select value={mapStyle} onValueChange={changeMapStyle}>
+                      <SelectTrigger className="w-32 h-8" data-testid="select-map-style">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="streets-v12">Streets</SelectItem>
+                        <SelectItem value="satellite-v9">Satellite</SelectItem>
+                        <SelectItem value="outdoors-v12">Outdoors</SelectItem>
+                        <SelectItem value="light-v11">Light</SelectItem>
+                        <SelectItem value="dark-v11">Dark</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Done Button */}
                 <Button
                   onClick={() => setIsMapOpen(false)}
                   className="absolute top-4 right-4 z-10"
@@ -368,6 +496,16 @@ export function LocationPicker({ value, onChange, placeholder = "Enter location"
                   <X className="w-4 h-4 mr-2" />
                   Done
                 </Button>
+
+                {/* Current Location Indicator */}
+                {value.latitude && value.longitude && (
+                  <div className="absolute bottom-4 left-4 z-10 bg-background/90 border border-border rounded-md px-3 py-2 text-xs">
+                    <div className="flex items-center gap-1 text-muted-foreground">
+                      <MapPin className="w-3 h-3" />
+                      {value.latitude.toFixed(4)}, {value.longitude.toFixed(4)}
+                    </div>
+                  </div>
+                )}
               </div>
             </SheetContent>
           </Sheet>
