@@ -418,62 +418,194 @@ export default function LandingPage() {
         />
       </motion.section>
 
-      {/* Services Section */}
-      <section className="py-8 sm:py-12 lg:py-16 bg-background">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-          <div className="text-center mb-8 sm:mb-12 lg:mb-16">
-            <h3 className="text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mb-3 sm:mb-4">Our Services</h3>
-            <p className="text-base sm:text-lg md:text-xl text-muted-foreground max-w-xl md:max-w-2xl mx-auto px-2">
-              Connecting you with verified professionals for all your estate needs
-            </p>
-          </div>
+      {/* Modern Services Section */}
+      <section ref={servicesRef} className="py-20 sm:py-24 lg:py-32 relative overflow-hidden">
+        {/* Background Elements */}
+        <div className="absolute inset-0">
+          <motion.div
+            className="absolute top-0 left-1/4 w-64 h-64 bg-gradient-to-r from-blue-400/10 to-purple-400/10 rounded-full blur-3xl"
+            animate={{
+              scale: [1, 1.2, 1],
+              rotate: [0, 180, 360],
+            }}
+            transition={{
+              duration: 20,
+              repeat: Infinity,
+              ease: "linear"
+            }}
+          />
+          <motion.div
+            className="absolute bottom-0 right-1/4 w-96 h-96 bg-gradient-to-r from-purple-400/10 to-pink-400/10 rounded-full blur-3xl"
+            animate={{
+              scale: [1, 0.8, 1],
+              rotate: [360, 180, 0],
+            }}
+            transition={{
+              duration: 25,
+              repeat: Infinity,
+              ease: "linear"
+            }}
+          />
+        </div>
 
-          <div className="grid gap-6 sm:gap-8 md:grid-cols-2 lg:gap-12">
-            {/* Artisan Services */}
-            <Card className="hover:shadow-xl transition-shadow touch-manipulation">
-              <CardContent className="p-4 sm:p-6 lg:p-8">
-                <img 
-                  src="https://images.unsplash.com/photo-1581578731548-c64695cc6952?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&h=400" 
-                  alt="Professional craftsman working on home repairs" 
-                  className="w-full h-40 sm:h-48 object-cover rounded-lg mb-4 sm:mb-6" 
-                />
-                <div className="flex items-center mb-3 sm:mb-4">
-                  <Wrench className="w-6 h-6 sm:w-8 sm:h-8 text-primary mr-2 sm:mr-3" />
-                  <h4 className="text-lg sm:text-xl lg:text-2xl font-semibold text-foreground">Artisan Repairs</h4>
-                </div>
-                <p className="text-sm sm:text-base text-muted-foreground mb-4 sm:mb-6 leading-relaxed">
-                  Connect with skilled electricians, plumbers, and carpenters for all your home repair needs. Verified professionals with ratings and reviews.
-                </p>
-                <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                  <Badge variant="secondary" className="text-xs sm:text-sm px-2 py-1">Electrician</Badge>
-                  <Badge variant="secondary" className="text-xs sm:text-sm px-2 py-1">Plumber</Badge>
-                  <Badge variant="secondary" className="text-xs sm:text-sm px-2 py-1">Carpenter</Badge>
-                </div>
-              </CardContent>
-            </Card>
+        <div className="relative max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
+          <motion.div
+            className="text-center mb-16 lg:mb-20"
+            initial={{ opacity: 0, y: 30 }}
+            animate={servicesInView ? { opacity: 1, y: 0 } : {}}
+            transition={{ duration: 0.8 }}
+          >
+            <motion.div
+              className="inline-flex items-center px-4 py-2 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm font-medium mb-4"
+              initial={{ opacity: 0, scale: 0.5 }}
+              animate={servicesInView ? { opacity: 1, scale: 1 } : {}}
+              transition={{ duration: 0.6, delay: 0.2 }}
+            >
+              ✨ Our Services
+            </motion.div>
+            
+            <motion.h2
+              className="text-3xl sm:text-4xl lg:text-5xl font-bold mb-6 bg-gradient-to-r from-slate-900 via-blue-700 to-indigo-700 dark:from-slate-100 dark:via-blue-300 dark:to-indigo-300 bg-clip-text text-transparent"
+              initial={{ opacity: 0, y: 20 }}
+              animate={servicesInView ? { opacity: 1, y: 0 } : {}}
+              transition={{ duration: 0.8, delay: 0.3 }}
+            >
+              Connecting You With
+              <br />
+              <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                Verified Professionals
+              </span>
+            </motion.h2>
+            
+            <motion.p
+              className="text-lg sm:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto"
+              initial={{ opacity: 0, y: 20 }}
+              animate={servicesInView ? { opacity: 1, y: 0 } : {}}
+              transition={{ duration: 0.8, delay: 0.4 }}
+            >
+              From emergency repairs to daily errands, we've got your estate covered with trusted professionals
+            </motion.p>
+          </motion.div>
 
-            {/* Market Runs */}
-            <Card className="hover:shadow-xl transition-shadow touch-manipulation">
-              <CardContent className="p-4 sm:p-6 lg:p-8">
-                <img 
-                  src="https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&h=400" 
-                  alt="Delivery person with grocery bags and packages" 
-                  className="w-full h-40 sm:h-48 object-cover rounded-lg mb-4 sm:mb-6" 
-                />
-                <div className="flex items-center mb-3 sm:mb-4">
-                  <ShoppingBag className="w-6 h-6 sm:w-8 sm:h-8 text-secondary mr-2 sm:mr-3" />
-                  <h4 className="text-lg sm:text-xl lg:text-2xl font-semibold text-foreground">Market Runs & Errands</h4>
-                </div>
-                <p className="text-sm sm:text-base text-muted-foreground mb-4 sm:mb-6 leading-relaxed">
-                  Let trusted runners handle your grocery shopping, parcel pickups, and delivery needs. Safe, reliable, and convenient service.
-                </p>
-                <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                  <Badge variant="secondary" className="text-xs sm:text-sm px-2 py-1">Groceries</Badge>
-                  <Badge variant="secondary" className="text-xs sm:text-sm px-2 py-1">Deliveries</Badge>
-                  <Badge variant="secondary" className="text-xs sm:text-sm px-2 py-1">Errands</Badge>
-                </div>
-              </CardContent>
-            </Card>
+          <div className="grid gap-8 lg:gap-12 md:grid-cols-2">
+            {[
+              {
+                title: "Artisan Repairs",
+                description: "Connect with skilled electricians, plumbers, and carpenters for all your home repair needs. Every professional is verified with ratings and reviews from your community.",
+                icon: Wrench,
+                gradient: "from-blue-500 to-cyan-500",
+                bgGradient: "from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20",
+                tags: ["Electrician", "Plumber", "Carpenter", "HVAC"],
+                image: "https://images.unsplash.com/photo-1581578731548-c64695cc6952?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&h=400",
+                delay: 0.5
+              },
+              {
+                title: "Market Runs & Errands",
+                description: "Let trusted runners handle your grocery shopping, parcel pickups, and delivery needs. Safe, reliable, and convenient service for busy residents.",
+                icon: ShoppingBag,
+                gradient: "from-purple-500 to-pink-500",
+                bgGradient: "from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20",
+                tags: ["Groceries", "Deliveries", "Errands", "Shopping"],
+                image: "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&h=400",
+                delay: 0.7
+              }
+            ].map((service, index) => {
+              const IconComponent = service.icon;
+              return (
+                <motion.div
+                  key={service.title}
+                  initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                  animate={servicesInView ? { opacity: 1, y: 0, scale: 1 } : {}}
+                  transition={{ duration: 0.8, delay: service.delay }}
+                  className="group relative"
+                >
+                  <motion.div
+                    whileHover={{ y: -8, scale: 1.02 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                    className={`relative overflow-hidden rounded-3xl bg-gradient-to-br ${service.bgGradient} p-8 shadow-xl border border-white/20 dark:border-slate-700/20 backdrop-blur-sm h-full`}
+                  >
+                    {/* Animated Background Gradient */}
+                    <motion.div
+                      className={`absolute inset-0 bg-gradient-to-br ${service.gradient} opacity-0 group-hover:opacity-5 transition-opacity duration-500`}
+                      initial={false}
+                      animate={{ opacity: 0 }}
+                      whileHover={{ opacity: 0.1 }}
+                    />
+
+                    {/* Service Image */}
+                    <motion.div
+                      className="relative overflow-hidden rounded-2xl mb-6"
+                      whileHover={{ scale: 1.05 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <img 
+                        src={service.image}
+                        alt={`${service.title} professional service`}
+                        className="w-full h-48 sm:h-56 object-cover"
+                      />
+                      <div className={`absolute inset-0 bg-gradient-to-t ${service.gradient} opacity-20 group-hover:opacity-30 transition-opacity duration-300`} />
+                    </motion.div>
+
+                    {/* Icon and Title */}
+                    <div className="flex items-center mb-4">
+                      <motion.div
+                        className={`w-12 h-12 rounded-xl bg-gradient-to-r ${service.gradient} p-3 mr-4 shadow-lg`}
+                        whileHover={{ rotate: 360, scale: 1.1 }}
+                        transition={{ duration: 0.6 }}
+                      >
+                        <IconComponent className="w-full h-full text-white" />
+                      </motion.div>
+                      <h3 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
+                        {service.title}
+                      </h3>
+                    </div>
+
+                    {/* Description */}
+                    <p className="text-slate-700 dark:text-slate-300 mb-6 leading-relaxed">
+                      {service.description}
+                    </p>
+
+                    {/* Tags */}
+                    <div className="flex flex-wrap gap-2">
+                      {service.tags.map((tag) => (
+                        <motion.span
+                          key={tag}
+                          whileHover={{ scale: 1.05 }}
+                          className="px-3 py-1 text-xs font-medium rounded-full bg-white/60 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 backdrop-blur-sm border border-white/20 dark:border-slate-700/20"
+                        >
+                          {tag}
+                        </motion.span>
+                      ))}
+                    </div>
+
+                    {/* Hover Effect Elements */}
+                    <motion.div
+                      className="absolute top-4 right-4 w-2 h-2 bg-blue-400 rounded-full opacity-0 group-hover:opacity-60"
+                      animate={{
+                        scale: [1, 1.5, 1],
+                      }}
+                      transition={{
+                        duration: 2,
+                        repeat: Infinity,
+                        ease: "easeInOut"
+                      }}
+                    />
+                    <motion.div
+                      className="absolute bottom-4 left-4 w-1 h-1 bg-purple-400 rounded-full opacity-0 group-hover:opacity-40"
+                      animate={{
+                        scale: [1, 2, 1],
+                      }}
+                      transition={{
+                        duration: 3,
+                        repeat: Infinity,
+                        ease: "easeInOut",
+                        delay: 1
+                      }}
+                    />
+                  </motion.div>
+                </motion.div>
+              );
+            })}
           </div>
         </div>
       </section>
