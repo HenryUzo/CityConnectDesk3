@@ -19,7 +19,11 @@ import {
   ArrowRight,
   Zap,
   Heart,
-  Award
+  Award,
+  MessageSquare,
+  CreditCard,
+  Sparkles,
+  UserPlus
 } from "lucide-react";
 
 export default function LandingPage() {
@@ -610,36 +614,262 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* How It Works Section */}
-      <section className="py-8 sm:py-12 lg:py-16 bg-muted">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-          <div className="text-center mb-8 sm:mb-12 lg:mb-16">
-            <h3 className="text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mb-3 sm:mb-4">How It Works</h3>
-            <p className="text-base sm:text-lg md:text-xl text-muted-foreground px-2">Simple steps to get the help you need</p>
-          </div>
+      {/* Enhanced How It Works Section */}
+      <section className="py-20 sm:py-24 lg:py-32 relative overflow-hidden">
+        {/* Background Elements */}
+        <div className="absolute inset-0 bg-gradient-to-r from-slate-50 via-blue-50/30 to-purple-50/30 dark:from-slate-900 dark:via-blue-950/30 dark:to-purple-950/30">
+          <motion.div
+            className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-br from-blue-400/10 to-cyan-400/10 rounded-full blur-3xl"
+            animate={{
+              x: [0, -50, 0],
+              y: [0, 30, 0],
+            }}
+            transition={{
+              duration: 18,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+          <motion.div
+            className="absolute bottom-0 left-0 w-80 h-80 bg-gradient-to-br from-purple-400/10 to-pink-400/10 rounded-full blur-3xl"
+            animate={{
+              x: [0, 50, 0],
+              y: [0, -30, 0],
+            }}
+            transition={{
+              duration: 22,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+        </div>
 
-          <div className="grid gap-8 sm:gap-8 md:grid-cols-3">
-            <div className="text-center px-2">
-              <div className="bg-primary text-primary-foreground w-12 h-12 sm:w-16 sm:h-16 rounded-full flex items-center justify-center text-lg sm:text-2xl font-bold mx-auto mb-4 sm:mb-6">
-                1
-              </div>
-              <h4 className="text-lg sm:text-xl font-semibold text-foreground mb-3 sm:mb-4">Create Request</h4>
-              <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">Describe your service need, set your budget, and choose urgency level</p>
+        <div className="relative max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
+          <motion.div
+            className="text-center mb-16 lg:mb-20"
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8 }}
+            viewport={{ once: true }}
+          >
+            <motion.div
+              className="inline-flex items-center px-4 py-2 rounded-full bg-gradient-to-r from-blue-100 to-purple-100 dark:from-blue-900/30 dark:to-purple-900/30 text-blue-700 dark:text-blue-300 text-sm font-medium mb-4"
+              initial={{ opacity: 0, scale: 0.5 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+              viewport={{ once: true }}
+            >
+              🔄 How It Works
+            </motion.div>
+            
+            <motion.h2
+              className="text-3xl sm:text-4xl lg:text-5xl font-bold mb-6 bg-gradient-to-r from-slate-900 via-blue-700 to-indigo-700 dark:from-slate-100 dark:via-blue-300 dark:to-indigo-300 bg-clip-text text-transparent"
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, delay: 0.3 }}
+              viewport={{ once: true }}
+            >
+              Simple Steps to
+              <br />
+              <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                Get Help Fast
+              </span>
+            </motion.h2>
+            
+            <motion.p
+              className="text-lg sm:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto"
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, delay: 0.4 }}
+              viewport={{ once: true }}
+            >
+              From request creation to service completion - streamlined for your convenience
+            </motion.p>
+          </motion.div>
+
+          {/* Animated Steps */}
+          <div className="relative">
+            {/* Progress Line */}
+            <div className="hidden md:block absolute top-24 left-1/2 transform -translate-x-1/2 w-full max-w-2xl h-0.5">
+              <motion.div
+                className="h-full bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 rounded-full"
+                initial={{ scaleX: 0 }}
+                whileInView={{ scaleX: 1 }}
+                transition={{ duration: 2, delay: 0.5 }}
+                viewport={{ once: true }}
+                style={{ transformOrigin: "left" }}
+              />
             </div>
-            <div className="text-center px-2">
-              <div className="bg-secondary text-secondary-foreground w-12 h-12 sm:w-16 sm:h-16 rounded-full flex items-center justify-center text-lg sm:text-2xl font-bold mx-auto mb-4 sm:mb-6">
-                2
-              </div>
-              <h4 className="text-lg sm:text-xl font-semibold text-foreground mb-3 sm:mb-4">Get Matched</h4>
-              <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">Verified providers review and accept your request based on availability</p>
+
+            <div className="grid gap-12 md:gap-8 md:grid-cols-3 relative z-10">
+              {[
+                {
+                  step: 1,
+                  title: "Create Request",
+                  description: "Describe your service need, set your budget, and choose urgency level. Our smart matching system will find the perfect provider for you.",
+                  icon: MessageSquare,
+                  color: "from-blue-500 to-cyan-500",
+                  bgColor: "from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20",
+                  delay: 0.6
+                },
+                {
+                  step: 2,
+                  title: "Get Matched",
+                  description: "Verified providers in your area review and accept your request. Get instant notifications when someone is available to help.",
+                  icon: Users,
+                  color: "from-purple-500 to-pink-500",
+                  bgColor: "from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20",
+                  delay: 0.8
+                },
+                {
+                  step: 3,
+                  title: "Track & Pay",
+                  description: "Monitor progress in real-time with live updates. Pay securely upon completion and rate your experience to help the community.",
+                  icon: CreditCard,
+                  color: "from-emerald-500 to-teal-500",
+                  bgColor: "from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20",
+                  delay: 1.0
+                }
+              ].map((step) => {
+                const IconComponent = step.icon;
+                return (
+                  <motion.div
+                    key={step.step}
+                    initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                    whileInView={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ duration: 0.8, delay: step.delay }}
+                    viewport={{ once: true }}
+                    className="relative group"
+                  >
+                    {/* Step Card */}
+                    <motion.div
+                      whileHover={{ y: -8, scale: 1.02 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      className={`relative p-8 rounded-3xl bg-gradient-to-br ${step.bgColor} backdrop-blur-sm border border-white/20 dark:border-slate-700/20 shadow-xl overflow-hidden h-full`}
+                    >
+                      {/* Animated Background */}
+                      <motion.div
+                        className={`absolute inset-0 bg-gradient-to-br ${step.color} opacity-0 group-hover:opacity-5`}
+                        initial={false}
+                        whileHover={{ opacity: 0.1 }}
+                        transition={{ duration: 0.3 }}
+                      />
+
+                      {/* Step Number with Animated Ring */}
+                      <div className="relative mb-6">
+                        <motion.div
+                          className={`w-16 h-16 rounded-2xl bg-gradient-to-r ${step.color} p-4 mx-auto shadow-lg relative overflow-hidden`}
+                          whileHover={{ rotate: 360, scale: 1.1 }}
+                          transition={{ duration: 0.6 }}
+                        >
+                          <IconComponent className="w-full h-full text-white" />
+                          
+                          {/* Animated Ring */}
+                          <motion.div
+                            className="absolute inset-0 rounded-2xl border-2 border-white/20"
+                            initial={{ scale: 1, opacity: 1 }}
+                            animate={{ 
+                              scale: [1, 1.3, 1], 
+                              opacity: [1, 0, 1] 
+                            }}
+                            transition={{
+                              duration: 3,
+                              repeat: Infinity,
+                              ease: "easeInOut"
+                            }}
+                          />
+                        </motion.div>
+                        
+                        {/* Step Number Badge */}
+                        <motion.div
+                          className={`absolute -top-2 -right-2 w-8 h-8 bg-gradient-to-r ${step.color} rounded-full flex items-center justify-center text-white font-bold text-sm shadow-lg`}
+                          initial={{ scale: 0 }}
+                          whileInView={{ scale: 1 }}
+                          transition={{ duration: 0.5, delay: step.delay + 0.2 }}
+                          viewport={{ once: true }}
+                        >
+                          {step.step}
+                        </motion.div>
+                      </div>
+
+                      {/* Content */}
+                      <div className="text-center relative z-10">
+                        <motion.h3
+                          className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4"
+                          initial={{ opacity: 0, y: 10 }}
+                          whileInView={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.6, delay: step.delay + 0.3 }}
+                          viewport={{ once: true }}
+                        >
+                          {step.title}
+                        </motion.h3>
+                        
+                        <motion.p
+                          className="text-slate-700 dark:text-slate-300 leading-relaxed"
+                          initial={{ opacity: 0, y: 10 }}
+                          whileInView={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.6, delay: step.delay + 0.4 }}
+                          viewport={{ once: true }}
+                        >
+                          {step.description}
+                        </motion.p>
+                      </div>
+
+                      {/* Decorative Elements */}
+                      <motion.div
+                        className="absolute top-4 right-4 w-2 h-2 bg-blue-400 rounded-full opacity-0 group-hover:opacity-60"
+                        animate={{
+                          scale: [1, 1.5, 1],
+                        }}
+                        transition={{
+                          duration: 2,
+                          repeat: Infinity,
+                          ease: "easeInOut"
+                        }}
+                      />
+                      <motion.div
+                        className="absolute bottom-4 left-4 w-1 h-1 bg-purple-400 rounded-full opacity-0 group-hover:opacity-40"
+                        animate={{
+                          scale: [1, 2, 1],
+                        }}
+                        transition={{
+                          duration: 3,
+                          repeat: Infinity,
+                          ease: "easeInOut",
+                          delay: 1
+                        }}
+                      />
+                    </motion.div>
+                  </motion.div>
+                );
+              })}
             </div>
-            <div className="text-center px-2">
-              <div className="bg-accent text-accent-foreground w-12 h-12 sm:w-16 sm:h-16 rounded-full flex items-center justify-center text-lg sm:text-2xl font-bold mx-auto mb-4 sm:mb-6">
-                3
-              </div>
-              <h4 className="text-lg sm:text-xl font-semibold text-foreground mb-3 sm:mb-4">Track & Pay</h4>
-              <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">Monitor progress in real-time and pay securely upon completion</p>
-            </div>
+
+            {/* Call to Action */}
+            <motion.div
+              className="text-center mt-16 lg:mt-20"
+              initial={{ opacity: 0, y: 30 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, delay: 1.2 }}
+              viewport={{ once: true }}
+            >
+              <motion.div
+                whileHover={{ scale: 1.05, y: -2 }}
+                whileTap={{ scale: 0.95 }}
+                className="group inline-block"
+              >
+                <Button
+                  onClick={() => setLocation("/auth")}
+                  size="lg"
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-8 py-4 text-lg font-semibold rounded-full shadow-lg hover:shadow-2xl transition-all duration-300 group-hover:shadow-blue-500/25"
+                  data-testid="button-start-journey"
+                >
+                  <Sparkles className="w-5 h-5 mr-2" />
+                  Start Your Journey
+                  <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+                </Button>
+              </motion.div>
+            </motion.div>
           </div>
         </div>
       </section>
