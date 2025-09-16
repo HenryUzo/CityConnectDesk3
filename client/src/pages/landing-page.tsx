@@ -874,44 +874,429 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Features Section */}
-      <section className="py-8 sm:py-12 lg:py-16 bg-background">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-          <div className="text-center mb-8 sm:mb-12 lg:mb-16">
-            <h3 className="text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mb-3 sm:mb-4">Why Choose CityConnect?</h3>
-          </div>
+      {/* Enhanced Features Section */}
+      <section ref={featuresRef} className="py-20 sm:py-24 lg:py-32 relative overflow-hidden">
+        {/* Background Elements */}
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-50 via-purple-50/30 to-blue-50/30 dark:from-slate-900 dark:via-purple-950/30 dark:to-blue-950/30">
+          <motion.div
+            className="absolute top-1/4 left-0 w-72 h-72 bg-gradient-to-br from-blue-400/10 to-cyan-400/10 rounded-full blur-3xl"
+            animate={{
+              x: [0, 100, 0],
+              y: [0, -50, 0],
+            }}
+            transition={{
+              duration: 16,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+          <motion.div
+            className="absolute bottom-1/4 right-0 w-96 h-96 bg-gradient-to-br from-purple-400/10 to-pink-400/10 rounded-full blur-3xl"
+            animate={{
+              x: [0, -80, 0],
+              y: [0, 60, 0],
+            }}
+            transition={{
+              duration: 20,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+        </div>
 
-          <div className="grid gap-6 sm:gap-8 md:grid-cols-3">
-            <div className="text-center p-4 sm:p-6">
-              <div className="w-12 h-12 sm:w-16 sm:h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-3 sm:mb-4">
-                <Shield className="w-6 h-6 sm:w-8 sm:h-8 text-primary" />
-              </div>
-              <h4 className="text-lg sm:text-xl font-semibold text-foreground mb-3 sm:mb-4">Trusted Providers</h4>
-              <p className="text-sm sm:text-base text-muted-foreground leading-relaxed px-2">All service providers are verified and rated by the community for your peace of mind.</p>
-            </div>
-            <div className="text-center p-4 sm:p-6">
-              <div className="w-12 h-12 sm:w-16 sm:h-16 bg-accent/10 rounded-full flex items-center justify-center mx-auto mb-3 sm:mb-4">
-                <Clock className="w-6 h-6 sm:w-8 sm:h-8 text-accent" />
-              </div>
-              <h4 className="text-lg sm:text-xl font-semibold text-foreground mb-3 sm:mb-4">Quick Response</h4>
-              <p className="text-sm sm:text-base text-muted-foreground leading-relaxed px-2">Get connected with available providers instantly. No more waiting around for services.</p>
-            </div>
-            <div className="text-center p-4 sm:p-6">
-              <div className="w-12 h-12 sm:w-16 sm:h-16 bg-secondary/10 rounded-full flex items-center justify-center mx-auto mb-3 sm:mb-4">
-                <Smartphone className="w-6 h-6 sm:w-8 sm:h-8 text-secondary" />
-              </div>
-              <h4 className="text-lg sm:text-xl font-semibold text-foreground mb-3 sm:mb-4">Easy Tracking</h4>
-              <p className="text-sm sm:text-base text-muted-foreground leading-relaxed px-2">Track your requests in real-time from booking to completion with our intuitive interface.</p>
-            </div>
+        <div className="relative max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
+          <motion.div
+            className="text-center mb-16 lg:mb-20"
+            initial={{ opacity: 0, y: 30 }}
+            animate={featuresInView ? { opacity: 1, y: 0 } : {}}
+            transition={{ duration: 0.8 }}
+          >
+            <motion.div
+              className="inline-flex items-center px-4 py-2 rounded-full bg-gradient-to-r from-purple-100 to-blue-100 dark:from-purple-900/30 dark:to-blue-900/30 text-purple-700 dark:text-purple-300 text-sm font-medium mb-4"
+              initial={{ opacity: 0, scale: 0.5 }}
+              animate={featuresInView ? { opacity: 1, scale: 1 } : {}}
+              transition={{ duration: 0.6, delay: 0.2 }}
+            >
+              ⭐ Why Choose Us
+            </motion.div>
+            
+            <motion.h2
+              className="text-3xl sm:text-4xl lg:text-5xl font-bold mb-6 bg-gradient-to-r from-slate-900 via-purple-700 to-blue-700 dark:from-slate-100 dark:via-purple-300 dark:to-blue-300 bg-clip-text text-transparent"
+              initial={{ opacity: 0, y: 20 }}
+              animate={featuresInView ? { opacity: 1, y: 0 } : {}}
+              transition={{ duration: 0.8, delay: 0.3 }}
+            >
+              The CityConnect
+              <br />
+              <span className="bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
+                Advantage
+              </span>
+            </motion.h2>
+            
+            <motion.p
+              className="text-lg sm:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto"
+              initial={{ opacity: 0, y: 20 }}
+              animate={featuresInView ? { opacity: 1, y: 0 } : {}}
+              transition={{ duration: 0.8, delay: 0.4 }}
+            >
+              Experience the difference with our community-focused approach to service connections
+            </motion.p>
+          </motion.div>
+
+          <div className="grid gap-8 lg:gap-12 md:grid-cols-3">
+            {[
+              {
+                title: "Trusted Providers",
+                description: "Every service provider goes through comprehensive verification including background checks, skill assessments, and community reviews. Your safety and satisfaction are our top priorities.",
+                icon: Shield,
+                gradient: "from-emerald-500 to-teal-500",
+                bgGradient: "from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20",
+                metrics: "98%",
+                metricLabel: "Verified Rating",
+                delay: 0.5
+              },
+              {
+                title: "Lightning Fast Response",
+                description: "Our smart matching algorithm connects you with available providers in under 2 minutes. Real-time notifications and instant messaging keep you informed every step of the way.",
+                icon: Zap,
+                gradient: "from-amber-500 to-orange-500",
+                bgGradient: "from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20",
+                metrics: "<2min",
+                metricLabel: "Average Response",
+                delay: 0.7
+              },
+              {
+                title: "Seamless Tracking",
+                description: "Track your service requests from creation to completion with our intuitive dashboard. Get live updates, communicate securely, and rate your experience all in one place.",
+                icon: Smartphone,
+                gradient: "from-blue-500 to-indigo-500",
+                bgGradient: "from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20",
+                metrics: "24/7",
+                metricLabel: "Real-time Updates",
+                delay: 0.9
+              }
+            ].map((feature, index) => {
+              const IconComponent = feature.icon;
+              return (
+                <motion.div
+                  key={feature.title}
+                  initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                  animate={featuresInView ? { opacity: 1, y: 0, scale: 1 } : {}}
+                  transition={{ duration: 0.8, delay: feature.delay }}
+                  className="group relative"
+                >
+                  <motion.div
+                    whileHover={{ y: -12, scale: 1.03 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                    className={`relative p-8 rounded-3xl bg-gradient-to-br ${feature.bgGradient} backdrop-blur-sm border border-white/20 dark:border-slate-700/20 shadow-xl overflow-hidden h-full`}
+                  >
+                    {/* Animated Background */}
+                    <motion.div
+                      className={`absolute inset-0 bg-gradient-to-br ${feature.gradient} opacity-0 group-hover:opacity-5`}
+                      initial={false}
+                      whileHover={{ opacity: 0.1 }}
+                      transition={{ duration: 0.3 }}
+                    />
+
+                    {/* Icon with Pulse Animation */}
+                    <div className="relative mb-6">
+                      <motion.div
+                        className={`w-16 h-16 rounded-2xl bg-gradient-to-r ${feature.gradient} p-4 mx-auto shadow-lg relative overflow-hidden`}
+                        whileHover={{ rotate: [0, -10, 10, 0], scale: 1.1 }}
+                        transition={{ duration: 0.6 }}
+                      >
+                        <IconComponent className="w-full h-full text-white" />
+                        
+                        {/* Pulse Effect */}
+                        <motion.div
+                          className={`absolute inset-0 rounded-2xl bg-gradient-to-r ${feature.gradient} opacity-20`}
+                          animate={{ 
+                            scale: [1, 1.4, 1],
+                            opacity: [0.2, 0, 0.2]
+                          }}
+                          transition={{
+                            duration: 2,
+                            repeat: Infinity,
+                            ease: "easeInOut"
+                          }}
+                        />
+                      </motion.div>
+
+                      {/* Floating Metric */}
+                      <motion.div
+                        className={`absolute -top-2 -right-2 px-3 py-1 bg-gradient-to-r ${feature.gradient} rounded-full text-white text-xs font-bold shadow-lg`}
+                        initial={{ scale: 0 }}
+                        animate={featuresInView ? { scale: 1 } : {}}
+                        transition={{ duration: 0.5, delay: feature.delay + 0.2 }}
+                        whileHover={{ scale: 1.1 }}
+                      >
+                        {feature.metrics}
+                      </motion.div>
+                    </div>
+
+                    {/* Content */}
+                    <div className="text-center relative z-10">
+                      <motion.h3
+                        className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 mb-3"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={featuresInView ? { opacity: 1, y: 0 } : {}}
+                        transition={{ duration: 0.6, delay: feature.delay + 0.3 }}
+                      >
+                        {feature.title}
+                      </motion.h3>
+                      
+                      <motion.p
+                        className="text-slate-700 dark:text-slate-300 leading-relaxed mb-4"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={featuresInView ? { opacity: 1, y: 0 } : {}}
+                        transition={{ duration: 0.6, delay: feature.delay + 0.4 }}
+                      >
+                        {feature.description}
+                      </motion.p>
+
+                      {/* Metric Label */}
+                      <motion.div
+                        className="text-xs font-medium text-slate-500 dark:text-slate-400"
+                        initial={{ opacity: 0 }}
+                        animate={featuresInView ? { opacity: 1 } : {}}
+                        transition={{ duration: 0.6, delay: feature.delay + 0.5 }}
+                      >
+                        {feature.metricLabel}
+                      </motion.div>
+                    </div>
+
+                    {/* Decorative Elements */}
+                    <motion.div
+                      className="absolute top-4 right-4 w-2 h-2 bg-blue-400 rounded-full opacity-0 group-hover:opacity-60"
+                      animate={{
+                        scale: [1, 1.5, 1],
+                      }}
+                      transition={{
+                        duration: 2,
+                        repeat: Infinity,
+                        ease: "easeInOut"
+                      }}
+                    />
+                    <motion.div
+                      className="absolute bottom-4 left-4 w-1 h-1 bg-purple-400 rounded-full opacity-0 group-hover:opacity-40"
+                      animate={{
+                        scale: [1, 2, 1],
+                      }}
+                      transition={{
+                        duration: 3,
+                        repeat: Infinity,
+                        ease: "easeInOut",
+                        delay: 1
+                      }}
+                    />
+                  </motion.div>
+                </motion.div>
+              );
+            })}
           </div>
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="bg-card border-t border-border py-6 sm:py-8">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 text-center">
-          <h1 className="text-lg sm:text-xl font-bold text-primary mb-2">CityConnect</h1>
-          <p className="text-sm sm:text-base text-muted-foreground">Connecting communities through quality services</p>
+      {/* Modern Footer */}
+      <footer className="relative overflow-hidden bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 text-white">
+        {/* Background Elements */}
+        <div className="absolute inset-0">
+          <motion.div
+            className="absolute top-0 left-1/4 w-96 h-96 bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-full blur-3xl"
+            animate={{
+              x: [0, 50, 0],
+              y: [0, -30, 0],
+            }}
+            transition={{
+              duration: 15,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+          <motion.div
+            className="absolute bottom-0 right-1/4 w-80 h-80 bg-gradient-to-r from-purple-500/10 to-pink-500/10 rounded-full blur-3xl"
+            animate={{
+              x: [0, -40, 0],
+              y: [0, 20, 0],
+            }}
+            transition={{
+              duration: 18,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+        </div>
+
+        <div className="relative max-w-7xl mx-auto px-6 sm:px-8 lg:px-12 py-16">
+          <motion.div
+            className="text-center"
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8 }}
+            viewport={{ once: true }}
+          >
+            {/* Logo and Brand */}
+            <motion.div
+              className="flex items-center justify-center mb-8"
+              initial={{ opacity: 0, scale: 0.8 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+              viewport={{ once: true }}
+            >
+              <motion.div 
+                className="w-12 h-12 bg-gradient-to-br from-blue-400 to-purple-500 rounded-2xl mr-4 flex items-center justify-center"
+                whileHover={{ rotate: 360, scale: 1.1 }}
+                transition={{ duration: 0.6 }}
+              >
+                <Zap className="w-7 h-7 text-white" />
+              </motion.div>
+              <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-indigo-400 bg-clip-text text-transparent">
+                CityConnect
+              </h1>
+            </motion.div>
+
+            {/* Tagline */}
+            <motion.p
+              className="text-lg sm:text-xl text-slate-300 mb-8 max-w-2xl mx-auto"
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.4 }}
+              viewport={{ once: true }}
+            >
+              Connecting communities through quality services, building trust one interaction at a time.
+            </motion.p>
+
+            {/* Call to Action */}
+            <motion.div
+              className="mb-12"
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.6 }}
+              viewport={{ once: true }}
+            >
+              <motion.div
+                whileHover={{ scale: 1.05, y: -2 }}
+                whileTap={{ scale: 0.95 }}
+                className="group inline-block"
+              >
+                <Button
+                  onClick={() => setLocation("/auth")}
+                  size="lg"
+                  className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white px-8 py-4 text-lg font-semibold rounded-full shadow-xl hover:shadow-2xl transition-all duration-300 group-hover:shadow-blue-500/25"
+                  data-testid="button-footer-getstarted"
+                >
+                  <Heart className="w-5 h-5 mr-2" />
+                  Join Our Community
+                  <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+                </Button>
+              </motion.div>
+            </motion.div>
+
+            {/* Stats Grid */}
+            <motion.div
+              className="grid grid-cols-1 sm:grid-cols-3 gap-8 mb-12 max-w-3xl mx-auto"
+              initial={{ opacity: 0, y: 30 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, delay: 0.7 }}
+              viewport={{ once: true }}
+            >
+              {[
+                { number: "500+", label: "Happy Residents", icon: Users },
+                { number: "100+", label: "Verified Providers", icon: Shield },
+                { number: "1000+", label: "Services Completed", icon: CheckCircle }
+              ].map((stat, index) => {
+                const IconComponent = stat.icon;
+                return (
+                  <motion.div
+                    key={stat.label}
+                    className="text-center group"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    whileInView={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.6, delay: 0.8 + index * 0.1 }}
+                    viewport={{ once: true }}
+                    whileHover={{ y: -4 }}
+                  >
+                    <motion.div
+                      className="w-12 h-12 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-full flex items-center justify-center mx-auto mb-3"
+                      whileHover={{ scale: 1.1, rotate: 360 }}
+                      transition={{ duration: 0.4 }}
+                    >
+                      <IconComponent className="w-6 h-6 text-blue-400" />
+                    </motion.div>
+                    <div className="text-2xl sm:text-3xl font-bold text-white mb-2 group-hover:text-blue-400 transition-colors">
+                      {stat.number}
+                    </div>
+                    <div className="text-slate-400 font-medium group-hover:text-slate-300 transition-colors">
+                      {stat.label}
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </motion.div>
+
+            {/* Decorative Line */}
+            <motion.div
+              className="w-24 h-0.5 bg-gradient-to-r from-transparent via-blue-400 to-transparent mx-auto mb-8"
+              initial={{ scaleX: 0 }}
+              whileInView={{ scaleX: 1 }}
+              transition={{ duration: 1, delay: 1.0 }}
+              viewport={{ once: true }}
+            />
+
+            {/* Copyright */}
+            <motion.div
+              className="text-slate-400 text-sm"
+              initial={{ opacity: 0 }}
+              whileInView={{ opacity: 1 }}
+              transition={{ duration: 0.6, delay: 1.2 }}
+              viewport={{ once: true }}
+            >
+              <p>© 2025 CityConnect. Building stronger communities through technology.</p>
+            </motion.div>
+
+            {/* Floating Elements */}
+            <motion.div
+              className="absolute top-10 left-10 w-2 h-2 bg-blue-400 rounded-full opacity-40"
+              animate={{
+                y: [0, -20, 0],
+                x: [0, 10, 0],
+                opacity: [0.4, 0.8, 0.4],
+              }}
+              transition={{
+                duration: 4,
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            />
+            <motion.div
+              className="absolute top-20 right-16 w-1 h-1 bg-purple-400 rounded-full opacity-50"
+              animate={{
+                y: [0, 15, 0],
+                x: [0, -8, 0],
+                opacity: [0.5, 1, 0.5],
+              }}
+              transition={{
+                duration: 5,
+                repeat: Infinity,
+                ease: "easeInOut",
+                delay: 2
+              }}
+            />
+            <motion.div
+              className="absolute bottom-10 left-16 w-1.5 h-1.5 bg-indigo-400 rounded-full opacity-30"
+              animate={{
+                y: [0, -10, 0],
+                x: [0, 12, 0],
+                opacity: [0.3, 0.7, 0.3],
+              }}
+              transition={{
+                duration: 6,
+                repeat: Infinity,
+                ease: "easeInOut",
+                delay: 1
+              }}
+            />
+          </motion.div>
         </div>
       </footer>
     </div>
