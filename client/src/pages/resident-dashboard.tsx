@@ -10,12 +10,10 @@ import {
   Wrench, 
   ShoppingBag, 
   ClipboardList, 
-  LogOut, 
-  Wallet,
+  LogOut,
   Plus,
   Clock,
   CheckCircle,
-  DollarSign,
   Menu,
   Settings
 } from "lucide-react";
@@ -25,10 +23,6 @@ export default function ResidentDashboard() {
   const { user, logoutMutation } = useAuth();
   const [, setLocation] = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  const { data: wallet } = useQuery({
-    queryKey: ["/api/wallet"],
-  });
 
   const { data: serviceRequests = [] } = useQuery({
     queryKey: ["/api/service-requests"],
@@ -41,10 +35,7 @@ export default function ResidentDashboard() {
 
   const stats = {
     active: serviceRequests.filter((r: any) => ['pending', 'assigned', 'in_progress'].includes(r.status)).length,
-    completed: serviceRequests.filter((r: any) => r.status === 'completed').length,
-    totalSpent: serviceRequests
-      .filter((r: any) => r.status === 'completed')
-      .reduce((sum: number, r: any) => sum + (parseFloat(r.budget.split('-')[1]?.replace(/[₦,]/g, '') || '0') || 0), 0)
+    completed: serviceRequests.filter((r: any) => r.status === 'completed').length
   };
 
   const recentActivity = serviceRequests
@@ -133,15 +124,8 @@ export default function ResidentDashboard() {
               </div>
             </div>
             
-            {/* Wallet and logout */}
+            {/* Logout */}
             <div className="flex items-center space-x-2 sm:space-x-4">
-              {/* Mobile-optimized wallet display */}
-              <div className="flex items-center bg-muted rounded-lg px-2 sm:px-3 py-1.5 sm:py-1">
-                <Wallet className="w-4 h-4 text-muted-foreground" />
-                <span className="ml-1 sm:ml-2 text-xs sm:text-sm font-semibold text-foreground" data-testid="text-wallet-balance">
-                  ₦{wallet?.balance || '25,000'}
-                </span>
-              </div>
               <Button 
                 variant="ghost" 
                 size="sm" 
@@ -175,7 +159,7 @@ export default function ResidentDashboard() {
             </div>
 
             {/* Stats Cards - Mobile-first responsive grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 lg:gap-6">
               <Card className="hover:shadow-md transition-shadow">
                 <CardContent className="p-4 sm:p-6">
                   <div className="flex items-center justify-between">
@@ -203,22 +187,6 @@ export default function ResidentDashboard() {
                     </div>
                     <div className="bg-secondary/10 p-2 sm:p-3 rounded-lg ml-3">
                       <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-secondary" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="hover:shadow-md transition-shadow sm:col-span-2 lg:col-span-1">
-                <CardContent className="p-4 sm:p-6">
-                  <div className="flex items-center justify-between">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs sm:text-sm font-medium text-muted-foreground mb-1">Total Spent</p>
-                      <p className="text-xl sm:text-2xl font-bold text-foreground" data-testid="text-total-spent">
-                        ₦{stats.totalSpent.toLocaleString()}
-                      </p>
-                    </div>
-                    <div className="bg-primary/10 p-2 sm:p-3 rounded-lg ml-3">
-                      <DollarSign className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
                     </div>
                   </div>
                 </CardContent>
