@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { adminDb } from './admin-db';
 import { 
@@ -87,7 +87,16 @@ router.post('/auth/refresh', async (req, res) => {
       memberships: user.memberships
     });
 
-    res.json({ accessToken: newAccessToken });
+    const newRefreshToken = AdminAuthService.generateToken({
+      sub: user.id,
+      type: 'refresh'
+    });
+
+    res.json({ 
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      user: user
+    });
   } catch (error: any) {
     res.status(401).json({ error: error.message });
   }
@@ -198,10 +207,10 @@ router.delete('/estates/:id',
 // User Management Routes
 router.get('/users', requireAdminDB, authenticateAdmin, setEstateContext, requireModerator, async (req: AdminRequest, res) => {
   try {
-    const { role, search, limit = 50, offset = 0 } = req.query;
+    const { globalRole, search, limit = 50, offset = 0 } = req.query;
     const filter: any = {};
     
-    if (role) filter.role = role;
+    if (globalRole) filter.globalRole = globalRole;
     if (search) {
       filter.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -306,6 +315,75 @@ router.patch('/users/:id',
       
       const { passwordHash, ...userResponse } = user.toObject();
       res.json(userResponse);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+// Provider Management Routes  
+router.get('/providers', requireAdminDB, authenticateAdmin, setEstateContext, requireModerator, async (req: AdminRequest, res) => {
+  try {
+    const { approved, category, search, limit = 50, offset = 0 } = req.query;
+    const filter: any = {};
+    
+    if (approved !== undefined) filter.isApproved = approved === 'true';
+    if (category) filter.categories = category;
+    if (search) {
+      // We'll need to join with users to search by name/email
+      // For now, just use basic provider search
+      filter.$or = [{ categories: { $regex: search, $options: 'i' } }];
+    }
+
+    // Enforce tenant scoping for non-super admins
+    if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      if (!req.currentEstate) {
+        return res.status(400).json({ error: 'Estate context required' });
+      }
+      
+      // Get providers who serve this estate
+      filter.estates = req.currentEstate.id;
+    }
+
+    const providers = await adminDb.getProviders(filter);
+    res.json(providers.slice(Number(offset), Number(offset) + Number(limit)));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch('/providers/:id', 
+  authenticateAdmin, 
+  setEstateContext,
+  requireEstateAdmin, 
+  auditAction('UPDATE', 'PROVIDER'),
+  async (req: AdminRequest, res) => {
+    try {
+      const updates = req.body;
+      const provider = await adminDb.updateProvider(req.params.id, updates);
+      if (!provider) {
+        return res.status(404).json({ error: 'Provider not found' });
+      }
+      res.json(provider);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+router.patch('/providers/:id/approve', 
+  authenticateAdmin, 
+  setEstateContext,
+  requireEstateAdmin, 
+  auditAction('APPROVE', 'PROVIDER'),
+  async (req: AdminRequest, res) => {
+    try {
+      const { approved } = req.body;
+      const provider = await adminDb.updateProvider(req.params.id, { isApproved: approved });
+      if (!provider) {
+        return res.status(404).json({ error: 'Provider not found' });
+      }
+      res.json(provider);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }

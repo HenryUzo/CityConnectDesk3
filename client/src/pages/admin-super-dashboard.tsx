@@ -9,6 +9,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { 
   LayoutDashboard,
   Users,
@@ -29,7 +39,14 @@ import {
   TrendingUp,
   DollarSign,
   Package,
-  AlertTriangle
+  AlertTriangle,
+  UserPlus,
+  Edit,
+  CheckCircle,
+  XCircle,
+  Star,
+  Eye,
+  EyeOff
 } from "lucide-react";
 
 // Admin Context for JWT token management
@@ -386,6 +403,486 @@ const AdminSidebar = ({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }
   );
 };
 
+// Users Management Component
+const UsersManagement = () => {
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [editingUser, setEditingUser] = useState<any>(null);
+  const [showAddUser, setShowAddUser] = useState(false);
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    password: '',
+    globalRole: ''
+  });
+  
+  const { data: users, isLoading } = useQuery({
+    queryKey: ['/api/admin/users', { search, globalRole: roleFilter === 'all' ? undefined : roleFilter }],
+    queryFn: () => adminApiRequest('GET', '/api/admin/users', {
+      search: search || undefined,
+      globalRole: roleFilter === 'all' ? undefined : roleFilter
+    }),
+  });
+
+  const toggleUserStatusMutation = useMutation({
+    mutationFn: ({ userId, isActive }: { userId: string, isActive: boolean }) => 
+      adminApiRequest('PATCH', `/api/admin/users/${userId}`, { isActive }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
+    },
+  });
+
+  const createUserMutation = useMutation({
+    mutationFn: (userData: any) => 
+      adminApiRequest('POST', '/api/admin/users', userData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
+      setShowAddUser(false);
+      resetForm();
+    },
+  });
+
+  const updateUserMutation = useMutation({
+    mutationFn: ({ userId, userData }: { userId: string, userData: any }) => 
+      adminApiRequest('PATCH', `/api/admin/users/${userId}`, userData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
+      setEditingUser(null);
+      resetForm();
+    },
+  });
+
+  const handleToggleUserStatus = (userId: string, currentStatus: boolean) => {
+    toggleUserStatusMutation.mutate({ userId, isActive: !currentStatus });
+  };
+
+  const resetForm = () => {
+    setFormData({ name: '', email: '', phone: '', password: '', globalRole: '' });
+  };
+
+  const handleOpenEditDialog = (user: any) => {
+    setEditingUser(user);
+    setFormData({
+      name: user.name || '',
+      email: user.email || '',
+      phone: user.phone || '',
+      password: '',
+      globalRole: user.globalRole || ''
+    });
+  };
+
+  const handleSubmit = () => {
+    const { password, ...baseData } = formData;
+    const userData = password ? { ...baseData, password } : baseData; // Only include password if provided
+
+    if (editingUser) {
+      updateUserMutation.mutate({ userId: editingUser._id, userData });
+    } else {
+      createUserMutation.mutate(userData);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="h-8 bg-gray-200 rounded w-1/4 animate-pulse"></div>
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-16 bg-gray-200 rounded animate-pulse"></div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">User Management</h1>
+          <p className="text-gray-600 dark:text-gray-400">Manage users and their estate assignments</p>
+        </div>
+        <Button 
+          className="bg-primary hover:bg-primary/90" 
+          onClick={() => setShowAddUser(true)}
+          data-testid="button-add-user"
+        >
+          <UserPlus className="w-4 h-4 mr-2" />
+          Add User
+        </Button>
+      </div>
+
+      {/* Filters */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <Input
+                  placeholder="Search users by name or email..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-10"
+                  data-testid="input-search-users"
+                />
+              </div>
+            </div>
+            <Select value={roleFilter} onValueChange={setRoleFilter}>
+              <SelectTrigger className="w-48" data-testid="select-role-filter">
+                <SelectValue placeholder="Filter by role" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Roles</SelectItem>
+                <SelectItem value="resident">Resident</SelectItem>
+                <SelectItem value="provider">Provider</SelectItem>
+                <SelectItem value="estate_admin">Estate Admin</SelectItem>
+                <SelectItem value="moderator">Moderator</SelectItem>
+                <SelectItem value="super_admin">Super Admin</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Users Table */}
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>Phone</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Last Active</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {users?.map((user: any) => (
+                <TableRow key={user._id} data-testid={`row-user-${user._id}`}>
+                  <TableCell className="font-medium">{user.name}</TableCell>
+                  <TableCell>{user.email}</TableCell>
+                  <TableCell>{user.phone}</TableCell>
+                  <TableCell>
+                    <Badge variant={user.globalRole === 'super_admin' ? 'default' : 'secondary'}>
+                      {user.globalRole || 'User'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={user.isActive ? 'default' : 'destructive'}>
+                      {user.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString() : 'Never'}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex space-x-2">
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => handleOpenEditDialog(user)}
+                        data-testid={`button-edit-user-${user._id}`}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button 
+                        variant={user.isActive ? "destructive" : "default"} 
+                        size="sm"
+                        onClick={() => handleToggleUserStatus(user._id, user.isActive)}
+                        disabled={toggleUserStatusMutation.isPending}
+                        data-testid={`button-toggle-user-${user._id}`}
+                      >
+                        {user.isActive ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {(!users || users.length === 0) && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-8 text-gray-500">
+                    No users found
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Add/Edit User Dialog */}
+      <Dialog open={showAddUser || editingUser !== null} onOpenChange={(open) => {
+        if (!open) {
+          setShowAddUser(false);
+          setEditingUser(null);
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {editingUser ? 'Edit User' : 'Add New User'}
+            </DialogTitle>
+            <DialogDescription>
+              {editingUser ? 'Update user information and permissions.' : 'Create a new user account.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <Input 
+              placeholder="Full Name" 
+              value={formData.name}
+              onChange={(e) => setFormData({...formData, name: e.target.value})}
+              data-testid="input-user-name" 
+            />
+            <Input 
+              placeholder="Email Address" 
+              type="email" 
+              value={formData.email}
+              onChange={(e) => setFormData({...formData, email: e.target.value})}
+              data-testid="input-user-email" 
+            />
+            <Input 
+              placeholder="Phone Number" 
+              value={formData.phone}
+              onChange={(e) => setFormData({...formData, phone: e.target.value})}
+              data-testid="input-user-phone" 
+            />
+            {!editingUser && (
+              <Input 
+                placeholder="Password" 
+                type="password" 
+                value={formData.password}
+                onChange={(e) => setFormData({...formData, password: e.target.value})}
+                data-testid="input-user-password" 
+              />
+            )}
+            <Select value={formData.globalRole} onValueChange={(value) => setFormData({...formData, globalRole: value})}>
+              <SelectTrigger data-testid="select-user-role">
+                <SelectValue placeholder="Select Role" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">No Global Role</SelectItem>
+                <SelectItem value="resident">Resident</SelectItem>
+                <SelectItem value="provider">Provider</SelectItem>
+                <SelectItem value="estate_admin">Estate Admin</SelectItem>
+                <SelectItem value="moderator">Moderator</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowAddUser(false);
+                setEditingUser(null);
+                resetForm();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleSubmit}
+              disabled={createUserMutation.isPending || updateUserMutation.isPending}
+              data-testid="button-save-user"
+            >
+              {createUserMutation.isPending || updateUserMutation.isPending 
+                ? 'Saving...' 
+                : (editingUser ? 'Update User' : 'Create User')
+              }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
+// Providers Management Component
+const ProvidersManagement = () => {
+  const [search, setSearch] = useState('');
+  const [approvalFilter, setApprovalFilter] = useState('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  
+  const { data: providers, isLoading } = useQuery({
+    queryKey: ['/api/admin/providers', { search, approved: approvalFilter === 'all' ? undefined : approvalFilter, category: categoryFilter === 'all' ? undefined : categoryFilter }],
+    queryFn: () => adminApiRequest('GET', '/api/admin/providers', {
+      search: search || undefined,
+      approved: approvalFilter === 'all' ? undefined : approvalFilter,
+      category: categoryFilter === 'all' ? undefined : categoryFilter
+    }),
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: ({ providerId, approved }: { providerId: string, approved: boolean }) => 
+      adminApiRequest('PATCH', `/api/admin/providers/${providerId}/approve`, { approved }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/providers'] });
+    },
+  });
+
+  const handleApproval = (providerId: string, approved: boolean) => {
+    approveMutation.mutate({ providerId, approved });
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="h-8 bg-gray-200 rounded w-1/4 animate-pulse"></div>
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-16 bg-gray-200 rounded animate-pulse"></div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Provider Management</h1>
+          <p className="text-gray-600 dark:text-gray-400">Approve and manage service providers</p>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <Input
+                  placeholder="Search providers by categories..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-10"
+                  data-testid="input-search-providers"
+                />
+              </div>
+            </div>
+            <Select value={approvalFilter} onValueChange={setApprovalFilter}>
+              <SelectTrigger className="w-48" data-testid="select-approval-filter">
+                <SelectValue placeholder="Filter by approval" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Providers</SelectItem>
+                <SelectItem value="true">Approved</SelectItem>
+                <SelectItem value="false">Pending Approval</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+              <SelectTrigger className="w-48" data-testid="select-category-filter">
+                <SelectValue placeholder="Filter by category" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Categories</SelectItem>
+                <SelectItem value="electrician">Electrician</SelectItem>
+                <SelectItem value="plumber">Plumber</SelectItem>
+                <SelectItem value="carpenter">Carpenter</SelectItem>
+                <SelectItem value="market_runner">Market Runner</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Providers Table */}
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Provider ID</TableHead>
+                <TableHead>Categories</TableHead>
+                <TableHead>Experience</TableHead>
+                <TableHead>Rating</TableHead>
+                <TableHead>Total Jobs</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {providers?.map((provider: any) => (
+                <TableRow key={provider._id} data-testid={`row-provider-${provider._id}`}>
+                  <TableCell className="font-medium">{provider.userId}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {provider.categories?.slice(0, 2).map((category: string) => (
+                        <Badge key={category} variant="outline" className="text-xs">
+                          {category.replace('_', ' ')}
+                        </Badge>
+                      ))}
+                      {provider.categories?.length > 2 && (
+                        <Badge variant="outline" className="text-xs">
+                          +{provider.categories.length - 2} more
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>{provider.experience} years</TableCell>
+                  <TableCell>
+                    <div className="flex items-center">
+                      <Star className="w-4 h-4 fill-yellow-400 text-yellow-400 mr-1" />
+                      {provider.rating?.toFixed(1) || 'N/A'}
+                    </div>
+                  </TableCell>
+                  <TableCell>{provider.totalJobs}</TableCell>
+                  <TableCell>
+                    <Badge variant={provider.isApproved ? 'default' : 'destructive'}>
+                      {provider.isApproved ? 'Approved' : 'Pending'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex space-x-2">
+                      {!provider.isApproved ? (
+                        <Button 
+                          variant="default" 
+                          size="sm"
+                          onClick={() => handleApproval(provider._id, true)}
+                          disabled={approveMutation.isPending}
+                          data-testid={`button-approve-provider-${provider._id}`}
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                        </Button>
+                      ) : (
+                        <Button 
+                          variant="destructive" 
+                          size="sm"
+                          onClick={() => handleApproval(provider._id, false)}
+                          disabled={approveMutation.isPending}
+                          data-testid={`button-reject-provider-${provider._id}`}
+                        >
+                          <XCircle className="w-4 h-4" />
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" data-testid={`button-edit-provider-${provider._id}`}>
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {(!providers || providers.length === 0) && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-8 text-gray-500">
+                    No providers found
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
 // Dashboard Stats Component
 const DashboardStats = () => {
   const { data: stats, isLoading } = useQuery({
@@ -610,7 +1107,10 @@ export default function AdminSuperDashboard() {
               </div>
             )}
 
-            {activeTab !== 'dashboard' && (
+            {activeTab === 'users' && <UsersManagement />}
+            {activeTab === 'providers' && <ProvidersManagement />}
+            
+            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'providers' && (
               <div className="text-center py-12">
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
                   {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Management
