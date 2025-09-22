@@ -46,6 +46,105 @@ router.use((req: AdminRequest, res: Response, next: NextFunction) => {
   return requireAdminDB(req, res, next);
 });
 
+// Setup Route (for initial admin setup - doesn't require auth)
+router.post('/setup', async (req, res) => {
+  try {
+    // Check if MongoDB is connected
+    if (!adminDb.isConnected) {
+      return res.status(503).json({ 
+        error: 'MongoDB not connected', 
+        message: 'Please configure MONGODB_URI environment variable first' 
+      });
+    }
+
+    // Check if super admin already exists
+    const existingSuperAdmin = await adminDb.AdminUser.findOne({ globalRole: UserRole.SUPER_ADMIN });
+    if (existingSuperAdmin) {
+      return res.status(400).json({ 
+        error: 'Setup already completed',
+        message: 'Super admin already exists. Use login instead.',
+        loginCredentials: {
+          email: existingSuperAdmin.email,
+          note: 'Use your existing password'
+        }
+      });
+    }
+
+    // Create default estate
+    const defaultEstate = new adminDb.Estate({
+      name: 'Default Estate',
+      slug: 'default-estate',
+      address: '123 Main Street, City, State 12345',
+      phone: '+1-555-0123',
+      email: 'admin@defaultestate.com',
+      isActive: true,
+      settings: {
+        timezone: 'UTC',
+        currency: 'USD',
+        allowMarketplace: true,
+        allowServiceRequests: true
+      }
+    });
+    await defaultEstate.save();
+
+    // Create super admin user
+    const adminEmail = 'admin@example.com';
+    const adminPassword = 'admin123';
+    const hashedPassword = await AdminAuthService.hashPassword(adminPassword);
+
+    const superAdmin = new adminDb.AdminUser({
+      email: adminEmail,
+      name: 'Super Administrator',
+      passwordHash: hashedPassword,
+      globalRole: UserRole.SUPER_ADMIN,
+      isActive: true,
+      isEmailVerified: true,
+      profile: {
+        firstName: 'Super',
+        lastName: 'Administrator',
+        phone: '+1-555-0100'
+      }
+    });
+    await superAdmin.save();
+
+    // Create membership for super admin in default estate
+    const membership = new adminDb.Membership({
+      userId: superAdmin._id.toString(),
+      estateId: defaultEstate._id.toString(),
+      role: UserRole.ESTATE_ADMIN,
+      permissions: ['*'], // All permissions
+      isActive: true
+    });
+    await membership.save();
+
+    // Return success with credentials
+    res.json({
+      success: true,
+      message: 'Admin setup completed successfully!',
+      estate: {
+        name: defaultEstate.name,
+        id: defaultEstate._id.toString()
+      },
+      adminCredentials: {
+        email: adminEmail,
+        password: adminPassword,
+        note: 'IMPORTANT: Change this password after first login!'
+      },
+      nextSteps: {
+        loginUrl: '/admin-dashboard',
+        apiLoginEndpoint: '/api/admin/auth/login'
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Setup error:', error);
+    res.status(500).json({ 
+      error: 'Setup failed', 
+      message: error.message 
+    });
+  }
+});
+
 // Authentication Routes (don't require DB for login)
 router.post('/auth/login', rateLimitAuth, async (req, res) => {
   try {
