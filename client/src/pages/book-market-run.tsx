@@ -51,36 +51,68 @@ interface VendorItem {
 const mockVendors: Vendor[] = [
   {
     id: '1',
-    name: 'Mama Ngozi Kitchen',
+    name: 'Alhaji Musa Meat Market',
     type: 'local_food',
     rating: 4.8,
-    deliveryTime: '20-30 mins',
-    location: 'Block A Market',
-    description: 'Authentic Nigerian dishes made fresh daily',
+    deliveryTime: '30-45 mins',
+    location: 'Central Market Square',
+    description: 'Fresh beef, goat meat, and chicken from local farms',
     items: [
-      { id: '1', name: 'Jollof Rice + Chicken', price: 1500, available: true, description: 'Spicy jollof rice with grilled chicken' },
-      { id: '2', name: 'Fried Rice + Fish', price: 1800, available: true, description: 'Fried rice with fresh fish' },
-      { id: '3', name: 'Pounded Yam + Egusi', price: 2000, available: true, description: 'Fresh pounded yam with egusi soup' },
-      { id: '4', name: 'Amala + Ewedu', price: 1200, available: false, description: 'Amala with ewedu and stew' },
+      { id: '1', name: 'Fresh Beef (1kg)', price: 4500, available: true, description: 'Premium grass-fed beef cuts' },
+      { id: '2', name: 'Goat Meat (1kg)', price: 5200, available: true, description: 'Fresh goat meat, well prepared' },
+      { id: '3', name: 'Whole Chicken (Live)', price: 3500, available: true, description: 'Live broiler chicken, healthy stock' },
+      { id: '4', name: 'Cow Leg (Fresh)', price: 2800, available: false, description: 'Fresh cow leg for pepper soup' },
     ]
   },
   {
     id: '2',
-    name: 'Sweet Bites Cafeteria',
+    name: 'Mama Kemi Fish Center',
     type: 'local_food',
     rating: 4.5,
-    deliveryTime: '15-25 mins',
-    location: 'Food Court Plaza',
-    description: 'Quick meals and snacks for busy schedules',
+    deliveryTime: '20-35 mins',
+    location: 'Waterside Market',
+    description: 'Fresh fish daily from local fishermen',
     items: [
-      { id: '5', name: 'Meat Pie', price: 400, available: true, description: 'Freshly baked meat pie' },
-      { id: '6', name: 'Chicken Shawarma', price: 800, available: true, description: 'Grilled chicken shawarma wrap' },
-      { id: '7', name: 'Fried Plantain + Beans', price: 600, available: true, description: 'Sweet plantain with beans sauce' },
-      { id: '8', name: 'Suya (Large)', price: 1000, available: true, description: 'Spiced grilled beef suya' },
+      { id: '5', name: 'Fresh Catfish (1kg)', price: 2800, available: true, description: 'Live catfish from local ponds' },
+      { id: '6', name: 'Tilapia Fish (Medium)', price: 1500, available: true, description: 'Fresh tilapia, cleaned and scaled' },
+      { id: '7', name: 'Dried Fish (Assorted)', price: 3200, available: true, description: 'Quality dried fish for soups' },
+      { id: '8', name: 'Fresh Prawns (500g)', price: 4500, available: true, description: 'Fresh river prawns' },
     ]
   },
   {
     id: '3',
+    name: 'Baba Tunde Vegetable Farm',
+    type: 'local_food',
+    rating: 4.7,
+    deliveryTime: '25-40 mins',
+    location: 'Farm Gate Market',
+    description: 'Fresh vegetables and fruits directly from local farms',
+    items: [
+      { id: '9', name: 'Fresh Tomatoes (5kg)', price: 2500, available: true, description: 'Vine-ripened tomatoes from farm' },
+      { id: '10', name: 'Red Onions (3kg)', price: 1800, available: true, description: 'Fresh red onions, well sorted' },
+      { id: '11', name: 'Bell Peppers (1kg)', price: 1200, available: true, description: 'Mixed colored bell peppers' },
+      { id: '12', name: 'Fresh Spinach (Bundle)', price: 300, available: false, description: 'Green leafy spinach bundle' },
+      { id: '13', name: 'Plantain (1 bunch)', price: 800, available: true, description: 'Ripe plantain ready for cooking' },
+      { id: '14', name: 'Yam Tubers (Medium)', price: 1500, available: true, description: 'Fresh yam tubers, good quality' },
+    ]
+  },
+  {
+    id: '4',
+    name: 'Uncle Joe Livestock Farm',
+    type: 'local_food',
+    rating: 4.4,
+    deliveryTime: '60-90 mins',
+    location: 'Livestock Market',
+    description: 'Live animals and fresh farm produce',
+    items: [
+      { id: '15', name: 'Live Goat (Small)', price: 25000, available: true, description: 'Healthy young goat for slaughter' },
+      { id: '16', name: 'Live Chicken (Broiler)', price: 3000, available: true, description: 'Ready-to-slaughter broiler chicken' },
+      { id: '17', name: 'Duck (Live)', price: 4500, available: true, description: 'Fresh local duck' },
+      { id: '18', name: 'Turkey (Medium)', price: 12000, available: false, description: 'Live turkey for special occasions' },
+    ]
+  },
+  {
+    id: '5',
     name: 'FreshMart Grocery',
     type: 'grocery',
     rating: 4.6,
@@ -88,16 +120,16 @@ const mockVendors: Vendor[] = [
     location: 'Main Shopping Complex',
     description: 'Wide variety of fresh groceries and household items',
     items: [
-      { id: '9', name: 'Rice (5kg bag)', price: 3500, available: true, description: 'Premium long grain rice' },
-      { id: '10', name: 'Tomatoes (1kg)', price: 800, available: true, description: 'Fresh ripe tomatoes' },
-      { id: '11', name: 'Onions (1kg)', price: 600, available: true, description: 'Fresh red onions' },
-      { id: '12', name: 'Cooking Oil (1L)', price: 1200, available: false, description: 'Vegetable cooking oil' },
-      { id: '13', name: 'Bread (Large)', price: 500, available: true, description: 'Fresh baked bread loaf' },
-      { id: '14', name: 'Eggs (1 crate)', price: 2800, available: true, description: 'Fresh chicken eggs' },
+      { id: '19', name: 'Rice (5kg bag)', price: 3500, available: true, description: 'Premium long grain rice' },
+      { id: '20', name: 'Cooking Oil (1L)', price: 1200, available: false, description: 'Vegetable cooking oil' },
+      { id: '21', name: 'Bread (Large)', price: 500, available: true, description: 'Fresh baked bread loaf' },
+      { id: '22', name: 'Eggs (1 crate)', price: 2800, available: true, description: 'Fresh chicken eggs' },
+      { id: '23', name: 'Milk (1L)', price: 600, available: true, description: 'Fresh dairy milk' },
+      { id: '24', name: 'Sugar (1kg)', price: 700, available: true, description: 'Granulated white sugar' },
     ]
   },
   {
-    id: '4',
+    id: '6',
     name: 'QuickStop Essentials',
     type: 'grocery',
     rating: 4.2,
@@ -105,10 +137,10 @@ const mockVendors: Vendor[] = [
     location: 'Corner Shop Street',
     description: 'Convenient store with everyday essentials',
     items: [
-      { id: '15', name: 'Milk (1L)', price: 600, available: true, description: 'Fresh dairy milk' },
-      { id: '16', name: 'Sugar (1kg)', price: 700, available: true, description: 'Granulated white sugar' },
-      { id: '17', name: 'Salt (500g)', price: 200, available: true, description: 'Table salt' },
-      { id: '18', name: 'Detergent (500g)', price: 450, available: true, description: 'Washing powder' },
+      { id: '25', name: 'Salt (500g)', price: 200, available: true, description: 'Table salt' },
+      { id: '26', name: 'Detergent (500g)', price: 450, available: true, description: 'Washing powder' },
+      { id: '27', name: 'Soap (Pack of 4)', price: 800, available: true, description: 'Bathing soap pack' },
+      { id: '28', name: 'Toothpaste (75ml)', price: 350, available: true, description: 'Fluoride toothpaste' },
     ]
   }
 ];
