@@ -468,6 +468,31 @@ export const updateCategorySchema = z.object({
   isActive: z.boolean().optional()
 });
 
+export const createMarketplaceItemSchema = z.object({
+  vendorId: z.string().min(1),
+  name: z.string().min(1).max(200),
+  description: z.string().max(1000).optional(),
+  price: z.number().positive(),
+  currency: z.string().min(1).max(10).default('NGN'),
+  category: z.string().min(1).max(100),
+  subcategory: z.string().max(100).optional(),
+  stock: z.number().int().min(0).default(0),
+  images: z.array(z.string()).optional()
+});
+
+export const updateMarketplaceItemSchema = z.object({
+  vendorId: z.string().min(1).optional(),
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).optional(),
+  price: z.number().positive().optional(),
+  currency: z.string().min(1).max(10).optional(),
+  category: z.string().min(1).max(100).optional(),
+  subcategory: z.string().max(100).optional(),
+  stock: z.number().int().min(0).optional(),
+  images: z.array(z.string()).optional(),
+  isActive: z.boolean().optional()
+});
+
 // Type Exports
 export type Estate = IEstate;
 export type User = IUser;
@@ -485,3 +510,5 @@ export type CreateMembershipInput = z.infer<typeof createMembershipSchema>;
 export type CreateServiceRequestInput = z.infer<typeof createServiceRequestSchema>;
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
+export type CreateMarketplaceItemInput = z.infer<typeof createMarketplaceItemSchema>;
+export type UpdateMarketplaceItemInput = z.infer<typeof updateMarketplaceItemSchema>;

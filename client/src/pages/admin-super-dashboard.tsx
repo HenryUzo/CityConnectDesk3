@@ -4,6 +4,15 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { adminApiRequest, setAdminToken, setCurrentEstate } from "@/lib/adminApi";
 import { useToast } from "@/hooks/use-toast";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { 
+  createMarketplaceItemSchema, 
+  updateMarketplaceItemSchema,
+  type CreateMarketplaceItemInput,
+  type UpdateMarketplaceItemInput,
+  type IMarketplaceItem
+} from "@shared/admin-schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +20,14 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import {
   Dialog,
   DialogContent,
@@ -47,7 +64,8 @@ import {
   Star,
   Eye,
   EyeOff,
-  Tags
+  Tags,
+  ShoppingBag
 } from "lucide-react";
 
 // Admin Context for JWT token management
@@ -294,8 +312,8 @@ const AdminSidebar = ({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }
     { id: 'users', label: 'Users', icon: Users },
     { id: 'providers', label: 'Providers', icon: UserCheck },
     { id: 'categories', label: 'Categories', icon: Tags },
+    { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
     { id: 'requests', label: 'Service Requests', icon: ClipboardList },
-    { id: 'marketplace', label: 'Marketplace', icon: ShoppingCart },
     { id: 'orders', label: 'Orders', icon: Package },
     { id: 'analytics', label: 'Analytics', icon: FileBarChart },
     { id: 'notifications', label: 'Notifications', icon: MessageSquare },
@@ -1434,6 +1452,649 @@ const CategoriesManagement = () => {
   );
 };
 
+// Marketplace Management Component  
+const MarketplaceManagement = () => {
+  const [search, setSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [vendorFilter, setVendorFilter] = useState('all');
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<IMarketplaceItem | null>(null);
+  
+  const { user } = useAdminAuth();
+  const { toast } = useToast();
+  
+  // Create form with proper Zod validation
+  const createForm = useForm<CreateMarketplaceItemInput>({
+    resolver: zodResolver(createMarketplaceItemSchema),
+    defaultValues: {
+      vendorId: '',
+      name: '',
+      description: '',
+      price: 0,
+      currency: 'NGN',
+      category: '',
+      subcategory: '',
+      stock: 0,
+      images: []
+    }
+  });
+
+  // Edit form with proper Zod validation
+  const editForm = useForm<UpdateMarketplaceItemInput>({
+    resolver: zodResolver(updateMarketplaceItemSchema),
+    defaultValues: {
+      vendorId: '',
+      name: '',
+      description: '',
+      price: 0,
+      currency: 'NGN',
+      category: '',
+      subcategory: '',
+      stock: 0,
+      images: []
+    }
+  });
+  
+  // Use hierarchical query keys and default fetcher
+  const { data: items, isLoading } = useQuery({
+    queryKey: ['/api/admin/marketplace', { category: categoryFilter, vendor: vendorFilter, search }],
+    enabled: true
+  });
+
+  // Get categories and vendors for filtering
+  const { data: categories } = useQuery({
+    queryKey: ['/api/admin/categories'],
+    enabled: true
+  });
+
+  const { data: vendors } = useQuery({
+    queryKey: ['/api/admin/providers'], 
+    enabled: true
+  });
+
+  const createItemMutation = useMutation({
+    mutationFn: (itemData: CreateMarketplaceItemInput) => 
+      adminApiRequest('POST', '/api/admin/marketplace', itemData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/marketplace'] });
+      setIsCreateDialogOpen(false);
+      createForm.reset();
+      toast({ title: "Marketplace item created successfully" });
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      toast({ 
+        title: "Error creating marketplace item", 
+        description: error.response?.data?.error || "Failed to create item",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const updateItemMutation = useMutation({
+    mutationFn: ({ id, ...data }: { id: string } & UpdateMarketplaceItemInput) => 
+      adminApiRequest('PATCH', `/api/admin/marketplace/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/marketplace'] });
+      setEditingItem(null);
+      editForm.reset();
+      toast({ title: "Marketplace item updated successfully" });
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      toast({ 
+        title: "Error updating marketplace item", 
+        description: error.response?.data?.error || "Failed to update item",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const deleteItemMutation = useMutation({
+    mutationFn: (itemId: string) => 
+      adminApiRequest('DELETE', `/api/admin/marketplace/${itemId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/marketplace'] });
+      toast({ title: "Marketplace item deleted successfully" });
+    },
+    onError: (error: Error & { response?: { data?: { error?: string } } }) => {
+      toast({ 
+        title: "Error deleting marketplace item", 
+        description: error.response?.data?.error || "Failed to delete item",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const handleCreateSubmit = (data: CreateMarketplaceItemInput) => {
+    createItemMutation.mutate(data);
+  };
+
+  const handleEditSubmit = (data: UpdateMarketplaceItemInput) => {
+    if (editingItem) {
+      updateItemMutation.mutate({
+        id: editingItem._id,
+        ...data
+      });
+    }
+  };
+
+  const handleDeleteItem = (itemId: string) => {
+    if (confirm('Are you sure you want to delete this marketplace item? This action cannot be undone.')) {
+      deleteItemMutation.mutate(itemId);
+    }
+  };
+
+  const handleOpenEditDialog = (item: IMarketplaceItem) => {
+    setEditingItem(item);
+    editForm.reset({
+      vendorId: item.vendorId || '',
+      name: item.name || '',
+      description: item.description || '',
+      price: item.price || 0,
+      currency: item.currency || 'NGN',
+      category: item.category || '',
+      subcategory: item.subcategory || '',
+      stock: item.stock || 0,
+      images: item.images || []
+    });
+  };
+
+  const filteredItems = items?.filter((item: IMarketplaceItem) => {
+    return item.name?.toLowerCase().includes(search.toLowerCase()) ||
+           item.description?.toLowerCase().includes(search.toLowerCase());
+  }) || [];
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="h-8 bg-gray-200 rounded w-1/4 animate-pulse"></div>
+        <div className="space-y-2">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="h-20 bg-gray-200 rounded animate-pulse"></div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Marketplace Management</h1>
+          <p className="text-gray-600 dark:text-gray-300">Manage marketplace items for food runs and groceries</p>
+        </div>
+        <Button 
+          onClick={() => setIsCreateDialogOpen(true)}
+          className="mt-4 sm:mt-0"
+          data-testid="button-create-marketplace-item"
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Add Item
+        </Button>
+      </div>
+
+      {/* Filters */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-col lg:flex-row gap-4">
+            <div className="flex-1">
+              <Input
+                placeholder="Search items..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full"
+                data-testid="input-search-items"
+              />
+            </div>
+            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+              <SelectTrigger className="w-full lg:w-48" data-testid="select-category-filter">
+                <SelectValue placeholder="Filter by category" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Categories</SelectItem>
+                {categories.map((category) => (
+                  <SelectItem key={category} value={category}>{category}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={vendorFilter} onValueChange={setVendorFilter}>
+              <SelectTrigger className="w-full lg:w-48" data-testid="select-vendor-filter">
+                <SelectValue placeholder="Filter by vendor" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Vendors</SelectItem>
+                {vendors.map((vendor) => (
+                  <SelectItem key={vendor} value={vendor}>{vendor}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Items Table */}
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Item</TableHead>
+                <TableHead>Category</TableHead>
+                <TableHead>Price</TableHead>
+                <TableHead>Stock</TableHead>
+                <TableHead>Vendor</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredItems.map((item: any) => (
+                <TableRow key={item._id} data-testid={`row-item-${item._id}`}>
+                  <TableCell>
+                    <div className="flex items-center space-x-3">
+                      {item.images?.[0] && (
+                        <img 
+                          src={item.images[0]} 
+                          alt={item.name}
+                          className="w-10 h-10 object-cover rounded"
+                        />
+                      )}
+                      <div>
+                        <div className="font-medium" data-testid={`text-item-name-${item._id}`}>
+                          {item.name}
+                        </div>
+                        {item.description && (
+                          <div className="text-sm text-gray-500 max-w-xs truncate">
+                            {item.description}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div>
+                      <Badge variant="outline">{item.category}</Badge>
+                      {item.subcategory && (
+                        <div className="text-xs text-gray-500 mt-1">{item.subcategory}</div>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <span className="font-medium">
+                      {item.currency} {item.price?.toLocaleString()}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={item.stock > 0 ? 'default' : 'secondary'}>
+                      {item.stock} units
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <code className="text-xs bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
+                      {item.vendorId}
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={item.isActive ? 'default' : 'secondary'}>
+                      {item.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex space-x-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleOpenEditDialog(item)}
+                        data-testid={`button-edit-item-${item._id}`}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteItem(item._id)}
+                        className="text-red-600 hover:text-red-700"
+                        data-testid={`button-delete-item-${item._id}`}
+                      >
+                        <XCircle className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Create Item Dialog */}
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Create New Marketplace Item</DialogTitle>
+            <DialogDescription>
+              Add a new item to the marketplace for residents to purchase
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...createForm}>
+            <form onSubmit={createForm.handleSubmit(handleCreateSubmit)} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={createForm.control}
+                  name="vendorId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Vendor ID</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="vendor123"
+                          data-testid="input-vendor-id"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={createForm.control}
+                  name="category"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Category</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="local_food, grocery"
+                          data-testid="input-category"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <FormField
+                control={createForm.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Item Name</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="Fresh Tomatoes (5kg)"
+                        data-testid="input-item-name"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={createForm.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="Fresh tomatoes from local farms"
+                        data-testid="input-description"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={createForm.control}
+                  name="price"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Price</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          placeholder="2500"
+                          data-testid="input-price"
+                          {...field}
+                          onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={createForm.control}
+                  name="stock"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Stock</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          placeholder="50"
+                          data-testid="input-stock"
+                          {...field}
+                          onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <FormField
+                control={createForm.control}
+                name="subcategory"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Subcategory (Optional)</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="vegetables, fruits"
+                        data-testid="input-subcategory"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <DialogFooter>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={() => {
+                    setIsCreateDialogOpen(false);
+                    createForm.reset();
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  disabled={createItemMutation.isPending}
+                  data-testid="button-submit-create-item"
+                >
+                  {createItemMutation.isPending ? 'Creating...' : 'Create Item'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Item Dialog */}
+      <Dialog open={!!editingItem} onOpenChange={(open) => {
+        if (!open) {
+          setEditingItem(null);
+          editForm.reset();
+        }
+      }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Marketplace Item</DialogTitle>
+            <DialogDescription>
+              Update the item details
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...editForm}>
+            <form onSubmit={editForm.handleSubmit(handleEditSubmit)} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={editForm.control}
+                  name="vendorId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Vendor ID</FormLabel>
+                      <FormControl>
+                        <Input
+                          data-testid="input-edit-vendor-id"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={editForm.control}
+                  name="category"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Category</FormLabel>
+                      <FormControl>
+                        <Input
+                          data-testid="input-edit-category"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <FormField
+                control={editForm.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Item Name</FormLabel>
+                    <FormControl>
+                      <Input
+                        data-testid="input-edit-item-name"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={editForm.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Input
+                        data-testid="input-edit-description"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={editForm.control}
+                  name="price"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Price</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          data-testid="input-edit-price"
+                          {...field}
+                          onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={editForm.control}
+                  name="stock"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Stock</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          data-testid="input-edit-stock"
+                          {...field}
+                          onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <FormField
+                control={editForm.control}
+                name="subcategory"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Subcategory (Optional)</FormLabel>
+                    <FormControl>
+                      <Input
+                        data-testid="input-edit-subcategory"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <DialogFooter>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={() => {
+                    setEditingItem(null);
+                    editForm.reset();
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  disabled={updateItemMutation.isPending}
+                  data-testid="button-submit-edit-item"
+                >
+                  {updateItemMutation.isPending ? 'Updating...' : 'Update Item'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
 // Dashboard Stats Component
 const DashboardStats = () => {
   const { data: stats, isLoading } = useQuery({
@@ -1661,8 +2322,9 @@ export default function AdminSuperDashboard() {
             {activeTab === 'users' && <UsersManagement />}
             {activeTab === 'providers' && <ProvidersManagement />}
             {activeTab === 'categories' && <CategoriesManagement />}
+            {activeTab === 'marketplace' && <MarketplaceManagement />}
             
-            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'providers' && activeTab !== 'categories' && (
+            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'providers' && activeTab !== 'categories' && activeTab !== 'marketplace' && (
               <div className="text-center py-12">
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
                   {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Management

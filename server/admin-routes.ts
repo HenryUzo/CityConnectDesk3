@@ -18,6 +18,8 @@ import {
   createMembershipSchema,
   createCategorySchema,
   updateCategorySchema,
+  createMarketplaceItemSchema,
+  updateMarketplaceItemSchema,
   UserRole 
 } from '../shared/admin-schema';
 
@@ -692,6 +694,165 @@ router.delete('/categories/:id', requireAdminDB, authenticateAdmin, setEstateCon
     });
     
     res.json({ message: 'Category deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Marketplace Management Routes
+router.get('/marketplace', requireAdminDB, authenticateAdmin, setEstateContext, requireModerator, async (req: AdminRequest, res) => {
+  try {
+    const { category, vendor, search, limit = 50, offset = 0 } = req.query;
+    const filter: any = {};
+    
+    if (category) filter.category = category;
+    if (vendor) filter.vendorId = vendor;
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    let items;
+    if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN) {
+      // Super admins can see all marketplace items
+      if (req.query.estateId) {
+        items = await adminDb.getMarketplaceItemsByEstate(req.query.estateId as string, filter);
+      } else {
+        items = await adminDb.getMarketplaceItems(filter);
+      }
+    } else {
+      // Estate admins can only see their estate's marketplace items
+      if (!req.currentEstate) {
+        return res.status(400).json({ error: 'Estate context required' });
+      }
+      items = await adminDb.getMarketplaceItemsByEstate(req.currentEstate.id, filter);
+    }
+    
+    // Apply pagination
+    const paginatedItems = items.slice(Number(offset), Number(offset) + Number(limit));
+    res.json(paginatedItems);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/marketplace', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    // Validate request body with Zod
+    const validatedData = createMarketplaceItemSchema.parse(req.body);
+    
+    // Permission checks - Only estate admins and super admins can create marketplace items
+    if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN && 
+        req.adminUser?.globalRole !== UserRole.ESTATE_ADMIN) {
+      return res.status(403).json({ error: 'Only estate admins and super admins can create marketplace items' });
+    }
+    
+    if (!req.currentEstate) {
+      return res.status(400).json({ error: 'Estate context required' });
+    }
+    
+    const itemData = {
+      ...validatedData,
+      estateId: req.currentEstate.id,
+      isActive: true
+    };
+    
+    const item = await adminDb.createMarketplaceItem(itemData);
+    
+    // Audit log
+    await auditAction(req.adminUser!.id, 'CREATE_MARKETPLACE_ITEM', 'MarketplaceItem', item.id, {
+      name: itemData.name,
+      category: itemData.category,
+      price: itemData.price,
+      estateId: itemData.estateId
+    });
+    
+    res.status(201).json(item);
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+router.patch('/marketplace/:id', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const itemId = req.params.id;
+    // Validate request body with Zod
+    const validatedUpdates = updateMarketplaceItemSchema.parse(req.body);
+    
+    // Get existing item to check permissions
+    const existingItem = await adminDb.MarketplaceItem.findById(itemId);
+    if (!existingItem) {
+      return res.status(404).json({ error: 'Marketplace item not found' });
+    }
+    
+    // Permission checks
+    if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN) {
+      // Super admin can modify any item
+    } else if (req.adminUser?.globalRole === UserRole.ESTATE_ADMIN) {
+      // Estate admin can only modify their estate's items
+      if (!req.currentEstate || existingItem.estateId !== req.currentEstate.id) {
+        return res.status(403).json({ error: 'You can only modify items for your estate' });
+      }
+    } else {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    
+    const item = await adminDb.updateMarketplaceItem(itemId, validatedUpdates);
+    if (!item) {
+      return res.status(404).json({ error: 'Marketplace item not found' });
+    }
+    
+    // Audit log
+    await auditAction(req.adminUser!.id, 'UPDATE_MARKETPLACE_ITEM', 'MarketplaceItem', itemId, validatedUpdates);
+    
+    res.json(item);
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+router.delete('/marketplace/:id', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const itemId = req.params.id;
+    
+    // Get existing item to check permissions
+    const existingItem = await adminDb.MarketplaceItem.findById(itemId);
+    if (!existingItem) {
+      return res.status(404).json({ error: 'Marketplace item not found' });
+    }
+    
+    // Permission checks (same as update)
+    if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN) {
+      // Super admin can delete any item
+    } else if (req.adminUser?.globalRole === UserRole.ESTATE_ADMIN) {
+      // Estate admin can only delete their estate's items
+      if (!req.currentEstate || existingItem.estateId !== req.currentEstate.id) {
+        return res.status(403).json({ error: 'You can only delete items for your estate' });
+      }
+    } else {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    
+    // Soft delete by setting isActive to false
+    const item = await adminDb.updateMarketplaceItem(itemId, { isActive: false });
+    
+    // Audit log
+    await auditAction(req.adminUser!.id, 'DELETE_MARKETPLACE_ITEM', 'MarketplaceItem', itemId, {
+      name: existingItem.name,
+      category: existingItem.category
+    });
+    
+    res.json({ message: 'Marketplace item deleted successfully' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
