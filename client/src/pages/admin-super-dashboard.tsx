@@ -416,6 +416,8 @@ const UsersManagement = () => {
     password: '',
     globalRole: ''
   });
+  const [showMemberships, setShowMemberships] = useState(false);
+  const [membershipUser, setMembershipUser] = useState<any>(null);
   
   const { data: users, isLoading } = useQuery({
     queryKey: ['/api/admin/users', { search, globalRole: roleFilter === 'all' ? undefined : roleFilter }],
@@ -423,6 +425,17 @@ const UsersManagement = () => {
       search: search || undefined,
       globalRole: roleFilter === 'all' ? undefined : roleFilter
     }),
+  });
+
+  const { data: estates } = useQuery({
+    queryKey: ['/api/admin/estates'],
+    queryFn: () => adminApiRequest('GET', '/api/admin/estates'),
+  });
+
+  const { data: userMemberships } = useQuery({
+    queryKey: ['/api/admin/memberships', membershipUser?._id],
+    queryFn: () => membershipUser ? adminApiRequest('GET', `/api/admin/users/${membershipUser._id}/memberships`) : [],
+    enabled: !!membershipUser
   });
 
   const toggleUserStatusMutation = useMutation({
@@ -472,6 +485,22 @@ const UsersManagement = () => {
     });
   };
 
+  const createMembershipMutation = useMutation({
+    mutationFn: (membershipData: any) => 
+      adminApiRequest('POST', '/api/admin/memberships', membershipData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/memberships'] });
+    },
+  });
+
+  const updateMembershipMutation = useMutation({
+    mutationFn: ({ userId, estateId, membershipData }: { userId: string, estateId: string, membershipData: any }) => 
+      adminApiRequest('PATCH', `/api/admin/memberships/${userId}/${estateId}`, membershipData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/memberships'] });
+    },
+  });
+
   const handleSubmit = () => {
     const { password, ...baseData } = formData;
     const userData = password ? { ...baseData, password } : baseData; // Only include password if provided
@@ -481,6 +510,15 @@ const UsersManagement = () => {
     } else {
       createUserMutation.mutate(userData);
     }
+  };
+
+  const handleAddMembership = (estateId: string, role: string) => {
+    if (!membershipUser) return;
+    createMembershipMutation.mutate({
+      userId: membershipUser._id,
+      estateId,
+      role
+    });
   };
 
   if (isLoading) {
@@ -591,6 +629,17 @@ const UsersManagement = () => {
                         <Edit className="w-4 h-4" />
                       </Button>
                       <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => {
+                          setMembershipUser(user);
+                          setShowMemberships(true);
+                        }}
+                        data-testid={`button-estates-user-${user._id}`}
+                      >
+                        <Building2 className="w-4 h-4" />
+                      </Button>
+                      <Button 
                         variant={user.isActive ? "destructive" : "default"} 
                         size="sm"
                         onClick={() => handleToggleUserStatus(user._id, user.isActive)}
@@ -693,6 +742,102 @@ const UsersManagement = () => {
                 ? 'Saving...' 
                 : (editingUser ? 'Update User' : 'Create User')
               }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Estate Membership Management Dialog */}
+      <Dialog open={showMemberships} onOpenChange={setShowMemberships}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              Manage Estate Memberships - {membershipUser?.name}
+            </DialogTitle>
+            <DialogDescription>
+              Assign or remove this user from estates and manage their roles.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            {/* Current Memberships */}
+            <div className="mb-6">
+              <h4 className="font-medium mb-3">Current Estate Memberships</h4>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {userMemberships?.map((membership: any) => (
+                  <div
+                    key={`${membership.userId}-${membership.estateId}`}
+                    className="flex items-center justify-between p-3 border rounded-lg"
+                    data-testid={`membership-${membership.estateId}`}
+                  >
+                    <div>
+                      <span className="font-medium">Estate {membership.estateId}</span>
+                      <Badge variant="secondary" className="ml-2">
+                        {membership.role}
+                      </Badge>
+                    </div>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={updateMembershipMutation.isPending}
+                      data-testid={`button-remove-membership-${membership.estateId}`}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+                {(!userMemberships || userMemberships.length === 0) && (
+                  <p className="text-muted-foreground text-center py-4">
+                    No estate memberships found
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Add New Membership */}
+            <div>
+              <h4 className="font-medium mb-3">Add Estate Membership</h4>
+              <div className="flex space-x-2">
+                <Select>
+                  <SelectTrigger className="flex-1" data-testid="select-estate">
+                    <SelectValue placeholder="Select Estate" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {estates?.map((estate: any) => (
+                      <SelectItem key={estate._id} value={estate._id}>
+                        {estate.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select>
+                  <SelectTrigger className="w-40" data-testid="select-estate-role">
+                    <SelectValue placeholder="Select Role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="resident">Resident</SelectItem>
+                    <SelectItem value="provider">Provider</SelectItem>
+                    <SelectItem value="estate_admin">Estate Admin</SelectItem>
+                    <SelectItem value="moderator">Moderator</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  disabled={createMembershipMutation.isPending}
+                  data-testid="button-add-membership"
+                >
+                  {createMembershipMutation.isPending ? 'Adding...' : 'Add'}
+                </Button>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowMemberships(false);
+                setMembershipUser(null);
+              }}
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

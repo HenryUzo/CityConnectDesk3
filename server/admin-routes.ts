@@ -127,10 +127,20 @@ router.get('/dashboard/stats', requireAdminDB, authenticateAdmin, setEstateConte
 });
 
 // Estate Management Routes
-router.get('/estates', authenticateAdmin, requireSuperAdmin, async (req, res) => {
+router.get('/estates', authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
   try {
-    const estates = await adminDb.getEstates();
-    res.json(estates);
+    const isSuperAdmin = req.adminUser?.globalRole === UserRole.SUPER_ADMIN;
+    
+    if (isSuperAdmin) {
+      // Super admins can see all estates
+      const estates = await adminDb.getEstates();
+      res.json(estates);
+    } else if (req.currentEstate) {
+      // Estate admins can see their current estate only
+      res.json([req.currentEstate]);
+    } else {
+      res.status(400).json({ error: 'Estate context required' });
+    }
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -289,6 +299,29 @@ router.get('/users/:id', authenticateAdmin, setEstateContext, requireModerator, 
     
     const { passwordHash, ...userResponse } = user.toObject();
     res.json(userResponse);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/users/:id/memberships', authenticateAdmin, setEstateContext, requireModerator, async (req: AdminRequest, res) => {
+  try {
+    const userId = req.params.id;
+    const memberships = await adminDb.getUserMemberships(userId);
+    
+    // Enforce tenant scoping for non-super admins - only show memberships for current estate
+    if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      if (!req.currentEstate) {
+        return res.status(400).json({ error: 'Estate context required' });
+      }
+      
+      // Filter to current estate only to prevent cross-tenant data leakage
+      const scopedMemberships = memberships.filter(m => m.estateId === req.currentEstate!.id);
+      return res.json(scopedMemberships);
+    }
+    
+    // Super admins can see all memberships
+    res.json(memberships);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
