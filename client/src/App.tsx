@@ -11,6 +11,7 @@ import AuthPage from "@/pages/auth-page";
 import ResidentDashboard from "@/pages/resident-dashboard";
 import ProviderDashboard from "@/pages/provider-dashboard";
 import AdminDashboard from "@/pages/admin-dashboard";
+import AdminSuperDashboard from "@/pages/admin-super-dashboard";
 import BookArtisan from "@/pages/book-artisan";
 import BookMarketRun from "@/pages/book-market-run";
 import TrackOrders from "@/pages/track-orders";
@@ -24,6 +25,7 @@ function Router() {
       <ProtectedRoute path="/resident" component={ResidentDashboard} />
       <ProtectedRoute path="/provider" component={ProviderDashboard} />
       <ProtectedRoute path="/admin" component={AdminDashboard} />
+      <Route path="/admin-dashboard" component={AdminSuperDashboard} />
       <ProtectedRoute path="/book-artisan" component={BookArtisan} />
       <ProtectedRoute path="/book-market-run" component={BookMarketRun} />
       <ProtectedRoute path="/track-orders" component={TrackOrders} />

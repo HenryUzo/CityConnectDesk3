@@ -4,10 +4,14 @@ import { setupAuth } from "./auth";
 import { storage } from "./storage";
 import { insertServiceRequestSchema, residentLoginSchema, providerLoginSchema } from "@shared/schema";
 import { z } from "zod";
+import adminRoutes from "./admin-routes";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
   setupAuth(app);
+
+  // Admin routes for the multi-tenant admin dashboard
+  app.use("/api/admin", adminRoutes);
 
   // Service Requests Routes
   app.post("/api/service-requests", async (req, res, next) => {
