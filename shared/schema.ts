@@ -8,7 +8,28 @@ import { z } from "zod";
 export const userRoleEnum = pgEnum("user_role", ["resident", "provider", "admin"]);
 export const serviceStatusEnum = pgEnum("service_status", ["pending", "assigned", "in_progress", "completed", "cancelled"]);
 export const urgencyEnum = pgEnum("urgency", ["low", "medium", "high", "emergency"]);
-export const serviceCategoryEnum = pgEnum("service_category", ["electrician", "plumber", "carpenter", "market_runner"]);
+export const serviceCategoryEnum = pgEnum("service_category", [
+  "electrician", 
+  "plumber", 
+  "carpenter", 
+  "hvac_technician", 
+  "painter", 
+  "tiler", 
+  "mason", 
+  "roofer", 
+  "gardener", 
+  "cleaner", 
+  "security_guard", 
+  "cook", 
+  "laundry_service", 
+  "pest_control", 
+  "welder", 
+  "mechanic", 
+  "phone_repair", 
+  "appliance_repair", 
+  "tailor", 
+  "market_runner"
+]);
 export const transactionTypeEnum = pgEnum("transaction_type", ["debit", "credit"]);
 export const transactionStatusEnum = pgEnum("transaction_status", ["pending", "completed", "failed"]);
 

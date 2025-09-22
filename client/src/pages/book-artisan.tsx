@@ -13,11 +13,16 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { ArrowLeft, Wrench, LogOut, Wallet } from "lucide-react";
+import { ArrowLeft, Wrench, LogOut } from "lucide-react";
 import { LocationPicker } from "@/components/LocationPicker";
 
 const artisanRequestSchema = z.object({
-  category: z.enum(["electrician", "plumber", "carpenter"]),
+  category: z.enum([
+    "electrician", "plumber", "carpenter", "hvac_technician", "painter", "tiler", 
+    "mason", "roofer", "gardener", "cleaner", "security_guard", "cook", 
+    "laundry_service", "pest_control", "welder", "mechanic", "phone_repair", 
+    "appliance_repair", "tailor", "market_runner"
+  ]),
   description: z.string().min(10, "Description must be at least 10 characters"),
   urgency: z.enum(["low", "medium", "high", "emergency"]),
   budget: z.string().min(1, "Budget range is required"),
@@ -103,15 +108,6 @@ export default function BookArtisan() {
               <span className="ml-2 sm:ml-3 text-xs sm:text-sm text-muted-foreground truncate">Book Artisan</span>
             </div>
             <div className="flex items-center space-x-2 sm:space-x-4">
-              <div className="hidden sm:flex items-center bg-muted rounded-lg px-3 py-1">
-                <Wallet className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Wallet:</span>
-                <span className="ml-2 font-semibold text-foreground">₦25,000</span>
-              </div>
-              <div className="flex sm:hidden items-center bg-muted rounded-lg px-2 py-1">
-                <Wallet className="w-4 h-4 mr-1 text-muted-foreground" />
-                <span className="text-xs font-semibold text-foreground">₦25k</span>
-              </div>
               <Button variant="ghost" size="sm" onClick={handleLogout} className="h-9 w-9 p-0" data-testid="button-logout">
                 <LogOut className="w-4 h-4" />
               </Button>
@@ -163,6 +159,23 @@ export default function BookArtisan() {
                           <SelectItem value="electrician">Electrician</SelectItem>
                           <SelectItem value="plumber">Plumber</SelectItem>
                           <SelectItem value="carpenter">Carpenter</SelectItem>
+                          <SelectItem value="hvac_technician">HVAC Technician</SelectItem>
+                          <SelectItem value="painter">Painter</SelectItem>
+                          <SelectItem value="tiler">Tiler</SelectItem>
+                          <SelectItem value="mason">Mason</SelectItem>
+                          <SelectItem value="roofer">Roofer</SelectItem>
+                          <SelectItem value="gardener">Gardener</SelectItem>
+                          <SelectItem value="cleaner">Cleaner</SelectItem>
+                          <SelectItem value="security_guard">Security Guard</SelectItem>
+                          <SelectItem value="cook">Cook</SelectItem>
+                          <SelectItem value="laundry_service">Laundry Service</SelectItem>
+                          <SelectItem value="pest_control">Pest Control</SelectItem>
+                          <SelectItem value="welder">Welder</SelectItem>
+                          <SelectItem value="mechanic">Mechanic</SelectItem>
+                          <SelectItem value="phone_repair">Phone Repair</SelectItem>
+                          <SelectItem value="appliance_repair">Appliance Repair</SelectItem>
+                          <SelectItem value="tailor">Tailor</SelectItem>
+                          <SelectItem value="market_runner">Market Runner</SelectItem>
                         </SelectContent>
                       </Select>
                       <FormMessage />
