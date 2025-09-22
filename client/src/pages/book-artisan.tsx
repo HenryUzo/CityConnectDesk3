@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { ArrowLeft, Wrench, LogOut } from "lucide-react";
+import { ArrowLeft, Wrench, LogOut, Calendar } from "lucide-react";
 import { LocationPicker } from "@/components/LocationPicker";
 
 const artisanRequestSchema = z.object({
@@ -277,7 +277,10 @@ export default function BookArtisan() {
                   name="preferredTime"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Preferred Time (Optional)</FormLabel>
+                      <FormLabel className="flex items-center justify-between">
+                        <span>Preferred Date and Time (Optional)</span>
+                        <Calendar className="w-4 h-4 text-muted-foreground" />
+                      </FormLabel>
                       <FormControl>
                         <Input 
                           {...field} 
