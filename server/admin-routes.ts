@@ -32,6 +32,16 @@ const requireAdminDB = (req: AdminRequest, res: Response, next: NextFunction) =>
   next();
 };
 
+// Apply database gating to all routes except auth
+router.use((req: AdminRequest, res: Response, next: NextFunction) => {
+  // Exempt auth routes from DB requirement
+  if (req.path.startsWith('/auth/')) {
+    return next();
+  }
+  // All other routes require admin DB
+  return requireAdminDB(req, res, next);
+});
+
 // Authentication Routes (don't require DB for login)
 router.post('/auth/login', rateLimitAuth, async (req, res) => {
   try {
@@ -136,7 +146,7 @@ router.post('/estates',
   }
 );
 
-router.get('/estates/:id', authenticateAdmin, requireEstateAdmin, async (req, res) => {
+router.get('/estates/:id', authenticateAdmin, setEstateContext, requireEstateAdmin, async (req, res) => {
   try {
     const estate = await adminDb.getEstateById(req.params.id);
     if (!estate) {
@@ -150,6 +160,7 @@ router.get('/estates/:id', authenticateAdmin, requireEstateAdmin, async (req, re
 
 router.patch('/estates/:id', 
   authenticateAdmin, 
+  setEstateContext,
   requireEstateAdmin, 
   auditAction('UPDATE', 'ESTATE'),
   async (req: AdminRequest, res) => {
@@ -168,6 +179,7 @@ router.patch('/estates/:id',
 
 router.delete('/estates/:id', 
   authenticateAdmin, 
+  setEstateContext,
   requireSuperAdmin, 
   auditAction('DELETE', 'ESTATE'),
   async (req: AdminRequest, res) => {
@@ -243,9 +255,25 @@ router.post('/users',
   }
 );
 
-router.get('/users/:id', authenticateAdmin, async (req, res) => {
+router.get('/users/:id', authenticateAdmin, setEstateContext, requireModerator, async (req: AdminRequest, res) => {
   try {
-    const user = await adminDb.getUserById(req.params.id);
+    const userId = req.params.id;
+    
+    // Enforce tenant scoping for non-super admins
+    if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      if (!req.currentEstate) {
+        return res.status(400).json({ error: 'Estate context required' });
+      }
+      
+      // Check if user is member of current estate
+      const memberships = await adminDb.getUserMemberships(userId);
+      const isEstateUser = memberships.some(m => m.estateId === req.currentEstate!.id);
+      if (!isEstateUser) {
+        return res.status(403).json({ error: 'User not found in current estate' });
+      }
+    }
+    
+    const user = await adminDb.getUserById(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
