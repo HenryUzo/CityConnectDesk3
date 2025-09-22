@@ -1,7 +1,8 @@
 import { useState, useEffect, createContext, useContext, ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
+import { adminApiRequest, setAdminToken, setCurrentEstate } from "@/lib/adminApi";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -44,85 +45,121 @@ interface AdminUser {
   }>;
 }
 
-const useAdminAuth = () => {
+interface AdminAuthContextType {
+  user: AdminUser | null;
+  token: string | null;
+  selectedEstateId: string | null;
+  setSelectedEstateId: (estateId: string | null) => void;
+  login: (email: string, password: string) => Promise<any>;
+  logout: () => void;
+  isLoading: boolean;
+  refreshToken: () => Promise<void>;
+}
+
+const AdminAuthContext = createContext<AdminAuthContextType | null>(null);
+
+export const useAdminAuth = () => {
+  const context = useContext(AdminAuthContext);
+  if (!context) {
+    throw new Error('useAdminAuth must be used within AdminAuthProvider');
+  }
+  return context;
+};
+
+interface AdminAuthProviderProps {
+  children: ReactNode;
+}
+
+export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
   const [user, setUser] = useState<AdminUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [selectedEstateId, setSelectedEstateId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const [, setLocation] = useLocation();
 
+  // Update global token reference when token changes
   useEffect(() => {
-    if (token) {
-      // Verify token and get user info
-      const decoded = JSON.parse(atob(token.split('.')[1]));
-      setUser({
-        id: decoded.sub,
-        email: decoded.email,
-        name: decoded.name,
-        globalRole: decoded.globalRole,
-        memberships: decoded.memberships
-      });
-    }
+    setAdminToken(token);
   }, [token]);
 
-  const login = async (email: string, password: string) => {
+  // Update global estate context when selectedEstateId changes
+  useEffect(() => {
+    setCurrentEstate(selectedEstateId);
+  }, [selectedEstateId]);
+
+  // Listen for auth failure events from adminApiRequest
+  useEffect(() => {
+    const handleAuthFailure = () => {
+      logout();
+    };
+    window.addEventListener('admin-auth-failed', handleAuthFailure);
+    return () => window.removeEventListener('admin-auth-failed', handleAuthFailure);
+  }, []);
+
+  // Auto-refresh token on mount if refresh token exists
+  useEffect(() => {
+    const refreshTokenFromStorage = sessionStorage.getItem('admin_refresh_token');
+    if (refreshTokenFromStorage && !token) {
+      refreshToken();
+    }
+  }, []);
+
+  const refreshToken = async () => {
+    const refreshTokenValue = sessionStorage.getItem('admin_refresh_token');
+    if (!refreshTokenValue) return;
+
     try {
-      const response: any = await apiRequest("POST", "/api/admin/auth/login", { email, password });
-      // Store access token in memory only
+      const response: any = await adminApiRequest("POST", "/api/admin/auth/refresh", { 
+        refreshToken: refreshTokenValue 
+      });
       setToken(response.accessToken);
-      setAdminToken(response.accessToken);
       setUser(response.user);
-      
-      // Only store refresh token temporarily - in production this should be httpOnly cookie
+      sessionStorage.setItem('admin_refresh_token', response.refreshToken);
+    } catch (error) {
+      // Refresh failed, clear tokens and redirect to login
+      logout();
+    }
+  };
+
+  const login = async (email: string, password: string) => {
+    setIsLoading(true);
+    try {
+      const response: any = await adminApiRequest("POST", "/api/admin/auth/login", { email, password });
+      setToken(response.accessToken);
+      setUser(response.user);
       sessionStorage.setItem('admin_refresh_token', response.refreshToken);
       return response;
     } catch (error) {
       throw error;
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const logout = () => {
     sessionStorage.removeItem('admin_refresh_token');
     setToken(null);
-    setAdminToken(null);
     setUser(null);
     setLocation('/');
   };
 
-  return { user, token, login, logout };
+  return (
+    <AdminAuthContext.Provider value={{ 
+      user, 
+      token, 
+      selectedEstateId, 
+      setSelectedEstateId, 
+      login, 
+      logout, 
+      isLoading, 
+      refreshToken 
+    }}>
+      {children}
+    </AdminAuthContext.Provider>
+  );
 };
 
-// Admin API request function that uses current token from context
-let currentAdminToken: string | null = null;
-
-const setAdminToken = (token: string | null) => {
-  currentAdminToken = token;
-};
-
-const adminApiRequest = async (method: string, endpoint: string, data?: any) => {
-  const headers: any = { 'Content-Type': 'application/json' };
-  
-  if (currentAdminToken) {
-    headers['Authorization'] = `Bearer ${currentAdminToken}`;
-  }
-
-  const config: RequestInit = {
-    method,
-    headers,
-    credentials: 'include',
-  };
-
-  if (data && (method === 'POST' || method === 'PATCH' || method === 'PUT')) {
-    config.body = JSON.stringify(data);
-  }
-
-  const response = await fetch(endpoint, config);
-  
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(errorData.error || `HTTP ${response.status}`);
-  }
-
-  return response.json();
-};
+// Legacy API request function - now uses centralized adminApiRequest
 
 // Admin Login Component
 const AdminLogin = () => {

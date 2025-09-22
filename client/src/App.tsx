@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "./hooks/use-auth";
 import { ProtectedRoute } from "./lib/protected-route";
+import { AdminAuthProvider } from "@/pages/admin-super-dashboard";
 
 import LandingPage from "@/pages/landing-page";
 import AuthPage from "@/pages/auth-page";
@@ -25,7 +26,9 @@ function Router() {
       <ProtectedRoute path="/resident" component={ResidentDashboard} />
       <ProtectedRoute path="/provider" component={ProviderDashboard} />
       <ProtectedRoute path="/admin" component={AdminDashboard} />
-      <Route path="/admin-dashboard" component={AdminSuperDashboard} />
+      <AdminAuthProvider>
+        <Route path="/admin-dashboard" component={AdminSuperDashboard} />
+      </AdminAuthProvider>
       <ProtectedRoute path="/book-artisan" component={BookArtisan} />
       <ProtectedRoute path="/book-market-run" component={BookMarketRun} />
       <ProtectedRoute path="/track-orders" component={TrackOrders} />
