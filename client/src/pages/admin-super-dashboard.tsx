@@ -46,7 +46,8 @@ import {
   XCircle,
   Star,
   Eye,
-  EyeOff
+  EyeOff,
+  Tags
 } from "lucide-react";
 
 // Admin Context for JWT token management
@@ -292,6 +293,7 @@ const AdminSidebar = ({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }
     { id: 'estates', label: 'Estates', icon: Building2 },
     { id: 'users', label: 'Users', icon: Users },
     { id: 'providers', label: 'Providers', icon: UserCheck },
+    { id: 'categories', label: 'Categories', icon: Tags },
     { id: 'requests', label: 'Service Requests', icon: ClipboardList },
     { id: 'marketplace', label: 'Marketplace', icon: ShoppingCart },
     { id: 'orders', label: 'Orders', icon: Package },
@@ -1028,6 +1030,410 @@ const ProvidersManagement = () => {
   );
 };
 
+// Categories Management Component
+const CategoriesManagement = () => {
+  const [search, setSearch] = useState('');
+  const [scopeFilter, setScopeFilter] = useState('all');
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<any>(null);
+  const [formData, setFormData] = useState({
+    name: '',
+    key: '',
+    description: '',
+    icon: '',
+    scope: 'estate'
+  });
+  
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === 'super_admin';
+  
+  const { data: categories, isLoading } = useQuery({
+    queryKey: ['/api/admin/categories', { scope: scopeFilter }],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (scopeFilter !== 'all') params.set('scope', scopeFilter);
+      return adminApiRequest('GET', `/api/admin/categories?${params.toString()}`);
+    }
+  });
+
+  const createCategoryMutation = useMutation({
+    mutationFn: (categoryData: any) => 
+      adminApiRequest('POST', '/api/admin/categories', categoryData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/categories'] });
+      setIsCreateDialogOpen(false);
+      resetForm();
+      toast({ title: "Category created successfully" });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error creating category", 
+        description: error.response?.data?.error || "Failed to create category",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const updateCategoryMutation = useMutation({
+    mutationFn: ({ id, ...data }: any) => 
+      adminApiRequest('PATCH', `/api/admin/categories/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/categories'] });
+      setEditingCategory(null);
+      resetForm();
+      toast({ title: "Category updated successfully" });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error updating category", 
+        description: error.response?.data?.error || "Failed to update category",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const deleteCategoryMutation = useMutation({
+    mutationFn: (categoryId: string) => 
+      adminApiRequest('DELETE', `/api/admin/categories/${categoryId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/categories'] });
+      toast({ title: "Category deleted successfully" });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error deleting category", 
+        description: error.response?.data?.error || "Failed to delete category",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const { toast } = useToast();
+
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const categoryData = {
+      ...formData,
+      key: formData.key || formData.name.toLowerCase().replace(/\s+/g, '_')
+    };
+    createCategoryMutation.mutate(categoryData);
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingCategory) {
+      updateCategoryMutation.mutate({ id: editingCategory._id, ...formData });
+    }
+  };
+
+  const handleDeleteCategory = (categoryId: string) => {
+    if (confirm('Are you sure you want to delete this category? This action cannot be undone.')) {
+      deleteCategoryMutation.mutate(categoryId);
+    }
+  };
+
+  const resetForm = () => {
+    setFormData({ name: '', key: '', description: '', icon: '', scope: 'estate' });
+  };
+
+  const handleOpenEditDialog = (category: any) => {
+    setEditingCategory(category);
+    setFormData({
+      name: category.name || '',
+      key: category.key || '',
+      description: category.description || '',
+      icon: category.icon || '',
+      scope: category.scope || 'estate'
+    });
+  };
+
+  const filteredCategories = categories?.filter((category: any) => {
+    return category.name?.toLowerCase().includes(search.toLowerCase()) ||
+           category.key?.toLowerCase().includes(search.toLowerCase());
+  }) || [];
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="h-8 bg-gray-200 rounded w-1/4 animate-pulse"></div>
+        <div className="space-y-2">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="h-16 bg-gray-200 rounded animate-pulse"></div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Service Categories</h1>
+          <p className="text-gray-600 dark:text-gray-300">Manage global and estate-specific service categories</p>
+        </div>
+        <Button 
+          onClick={() => setIsCreateDialogOpen(true)}
+          className="mt-4 sm:mt-0"
+          data-testid="button-create-category"
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Add Category
+        </Button>
+      </div>
+
+      {/* Filters */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <Input
+                placeholder="Search categories..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full"
+                data-testid="input-search-categories"
+              />
+            </div>
+            <Select value={scopeFilter} onValueChange={setScopeFilter}>
+              <SelectTrigger className="w-full sm:w-48" data-testid="select-scope-filter">
+                <SelectValue placeholder="Filter by scope" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Scopes</SelectItem>
+                <SelectItem value="global">Global</SelectItem>
+                <SelectItem value="estate">Estate</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Categories Table */}
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Key</TableHead>
+                <TableHead>Scope</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredCategories.map((category: any) => (
+                <TableRow key={category._id} data-testid={`row-category-${category._id}`}>
+                  <TableCell>
+                    <div className="flex items-center space-x-2">
+                      {category.icon && <span className="text-lg">{category.icon}</span>}
+                      <span className="font-medium" data-testid={`text-category-name-${category._id}`}>
+                        {category.name}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <code className="text-xs bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
+                      {category.key}
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={category.scope === 'global' ? 'default' : 'secondary'}>
+                      {category.scope}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="max-w-xs truncate">
+                    {category.description || '-'}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={category.isActive ? 'default' : 'secondary'}>
+                      {category.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex space-x-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleOpenEditDialog(category)}
+                        data-testid={`button-edit-category-${category._id}`}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteCategory(category._id)}
+                        className="text-red-600 hover:text-red-700"
+                        data-testid={`button-delete-category-${category._id}`}
+                      >
+                        <XCircle className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Create Category Dialog */}
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create New Category</DialogTitle>
+            <DialogDescription>
+              Add a new service category for {isSuperAdmin ? 'global use or estate-specific use' : 'your estate'}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleCreateSubmit} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Name</label>
+              <Input
+                value={formData.name}
+                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                placeholder="Category name"
+                required
+                data-testid="input-category-name"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Key</label>
+              <Input
+                value={formData.key}
+                onChange={(e) => setFormData({...formData, key: e.target.value})}
+                placeholder="category_key (auto-generated if empty)"
+                data-testid="input-category-key"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Description</label>
+              <Input
+                value={formData.description}
+                onChange={(e) => setFormData({...formData, description: e.target.value})}
+                placeholder="Optional description"
+                data-testid="input-category-description"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Icon</label>
+              <Input
+                value={formData.icon}
+                onChange={(e) => setFormData({...formData, icon: e.target.value})}
+                placeholder="🔧 (optional emoji icon)"
+                data-testid="input-category-icon"
+              />
+            </div>
+            {isSuperAdmin && (
+              <div>
+                <label className="text-sm font-medium">Scope</label>
+                <Select value={formData.scope} onValueChange={(value) => setFormData({...formData, scope: value})}>
+                  <SelectTrigger data-testid="select-category-scope">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="global">Global (all estates)</SelectItem>
+                    <SelectItem value="estate">Estate specific</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <DialogFooter>
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => {
+                  setIsCreateDialogOpen(false);
+                  resetForm();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button 
+                type="submit" 
+                disabled={createCategoryMutation.isPending}
+                data-testid="button-submit-create-category"
+              >
+                {createCategoryMutation.isPending ? 'Creating...' : 'Create Category'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Category Dialog */}
+      <Dialog open={!!editingCategory} onOpenChange={(open) => {
+        if (!open) {
+          setEditingCategory(null);
+          resetForm();
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Category</DialogTitle>
+            <DialogDescription>
+              Update the category details
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleEditSubmit} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Name</label>
+              <Input
+                value={formData.name}
+                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                placeholder="Category name"
+                required
+                data-testid="input-edit-category-name"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Description</label>
+              <Input
+                value={formData.description}
+                onChange={(e) => setFormData({...formData, description: e.target.value})}
+                placeholder="Optional description"
+                data-testid="input-edit-category-description"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Icon</label>
+              <Input
+                value={formData.icon}
+                onChange={(e) => setFormData({...formData, icon: e.target.value})}
+                placeholder="🔧 (optional emoji icon)"
+                data-testid="input-edit-category-icon"
+              />
+            </div>
+            <DialogFooter>
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => {
+                  setEditingCategory(null);
+                  resetForm();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button 
+                type="submit" 
+                disabled={updateCategoryMutation.isPending}
+                data-testid="button-submit-edit-category"
+              >
+                {updateCategoryMutation.isPending ? 'Updating...' : 'Update Category'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
 // Dashboard Stats Component
 const DashboardStats = () => {
   const { data: stats, isLoading } = useQuery({
@@ -1254,8 +1660,9 @@ export default function AdminSuperDashboard() {
 
             {activeTab === 'users' && <UsersManagement />}
             {activeTab === 'providers' && <ProvidersManagement />}
+            {activeTab === 'categories' && <CategoriesManagement />}
             
-            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'providers' && (
+            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'providers' && activeTab !== 'categories' && (
               <div className="text-center py-12">
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
                   {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Management

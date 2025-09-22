@@ -16,6 +16,8 @@ import {
   createEstateSchema, 
   createUserSchema, 
   createMembershipSchema,
+  createCategorySchema,
+  updateCategorySchema,
   UserRole 
 } from '../shared/admin-schema';
 
@@ -520,6 +522,180 @@ router.patch('/service-requests/:id',
     }
   }
 );
+
+// Category Management Routes
+router.get('/categories', requireAdminDB, authenticateAdmin, setEstateContext, requireModerator, async (req: AdminRequest, res) => {
+  try {
+    const { scope } = req.query;
+    let categories;
+    
+    if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN) {
+      // Super admins can see all categories
+      if (scope === 'global') {
+        categories = await adminDb.getCategoriesByScope('global');
+      } else if (scope === 'estate' && req.query.estateId) {
+        categories = await adminDb.getCategoriesByScope('estate', req.query.estateId as string);
+      } else {
+        categories = await adminDb.getCategories();
+      }
+    } else {
+      // Estate admins can only see global categories and their estate's categories
+      if (!req.currentEstate) {
+        return res.status(400).json({ error: 'Estate context required' });
+      }
+      
+      if (scope === 'global') {
+        categories = await adminDb.getCategoriesByScope('global');
+      } else {
+        const globalCategories = await adminDb.getCategoriesByScope('global');
+        const estateCategories = await adminDb.getCategoriesByScope('estate', req.currentEstate.id);
+        categories = [...globalCategories, ...estateCategories];
+      }
+    }
+    
+    res.json(categories);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/categories', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    // Validate request body with Zod
+    const validatedData = createCategorySchema.parse(req.body);
+    const { scope, name, key, description, icon } = validatedData;
+    
+    // Permission checks
+    if (scope === 'global' && req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      return res.status(403).json({ error: 'Only super admins can create global categories' });
+    }
+    
+    if (scope === 'estate') {
+      if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN && 
+          req.adminUser?.globalRole !== UserRole.ESTATE_ADMIN) {
+        return res.status(403).json({ error: 'Only super admins and estate admins can create estate categories' });
+      }
+      
+      if (!req.currentEstate) {
+        return res.status(400).json({ error: 'Estate context required for estate categories' });
+      }
+    }
+    
+    const categoryData = {
+      scope,
+      estateId: scope === 'estate' ? req.currentEstate?.id : undefined,
+      name,
+      key,
+      description,
+      icon,
+      isActive: true
+    };
+    
+    const category = await adminDb.createCategory(categoryData);
+    
+    // Audit log
+    await auditAction(req.adminUser!.id, 'CREATE_CATEGORY', 'Category', category.id, {
+      scope,
+      estateId: categoryData.estateId,
+      name
+    });
+    
+    res.status(201).json(category);
+  } catch (error: any) {
+    if (error.code === 11000) {
+      res.status(409).json({ error: 'Category key already exists in this scope' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+router.patch('/categories/:id', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const categoryId = req.params.id;
+    // Validate request body with Zod
+    const validatedUpdates = updateCategorySchema.parse(req.body);
+    
+    // Get existing category to check permissions
+    const existingCategory = await adminDb.AdminCategory.findById(categoryId);
+    if (!existingCategory) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    
+    // Permission checks
+    if (existingCategory.scope === 'global' && req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      return res.status(403).json({ error: 'Only super admins can modify global categories' });
+    }
+    
+    if (existingCategory.scope === 'estate') {
+      if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN) {
+        // Super admin can modify any estate category
+      } else if (req.adminUser?.globalRole === UserRole.ESTATE_ADMIN) {
+        // Estate admin can only modify their estate's categories
+        if (!req.currentEstate || existingCategory.estateId !== req.currentEstate.id) {
+          return res.status(403).json({ error: 'You can only modify categories for your estate' });
+        }
+      } else {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      }
+    }
+    
+    const category = await adminDb.updateCategory(categoryId, validatedUpdates);
+    if (!category) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    
+    // Audit log
+    await auditAction(req.adminUser!.id, 'UPDATE_CATEGORY', 'Category', categoryId, updates);
+    
+    res.json(category);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/categories/:id', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const categoryId = req.params.id;
+    
+    // Get existing category to check permissions
+    const existingCategory = await adminDb.AdminCategory.findById(categoryId);
+    if (!existingCategory) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    
+    // Permission checks (same as update)
+    if (existingCategory.scope === 'global' && req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      return res.status(403).json({ error: 'Only super admins can delete global categories' });
+    }
+    
+    if (existingCategory.scope === 'estate') {
+      if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN) {
+        // Super admin can delete any estate category
+      } else if (req.adminUser?.globalRole === UserRole.ESTATE_ADMIN) {
+        // Estate admin can only delete their estate's categories
+        if (!req.currentEstate || existingCategory.estateId !== req.currentEstate.id) {
+          return res.status(403).json({ error: 'You can only delete categories for your estate' });
+        }
+      } else {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      }
+    }
+    
+    // Soft delete by setting isActive to false
+    const category = await adminDb.updateCategory(categoryId, { isActive: false });
+    
+    // Audit log
+    await auditAction(req.adminUser!.id, 'DELETE_CATEGORY', 'Category', categoryId, {
+      name: existingCategory.name,
+      scope: existingCategory.scope
+    });
+    
+    res.json({ message: 'Category deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Audit Logs Routes
 router.get('/audit-logs', 

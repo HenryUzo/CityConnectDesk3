@@ -453,6 +453,21 @@ export const createServiceRequestSchema = z.object({
   specialInstructions: z.string().optional()
 });
 
+export const createCategorySchema = z.object({
+  scope: z.enum(['global', 'estate']),
+  name: z.string().min(1).max(100),
+  key: z.string().min(1).max(50).regex(/^[a-z0-9_]+$/),
+  description: z.string().max(500).optional(),
+  icon: z.string().max(10).optional()
+});
+
+export const updateCategorySchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).optional(),
+  icon: z.string().max(10).optional(),
+  isActive: z.boolean().optional()
+});
+
 // Type Exports
 export type Estate = IEstate;
 export type User = IUser;
@@ -468,3 +483,5 @@ export type CreateEstateInput = z.infer<typeof createEstateSchema>;
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type CreateMembershipInput = z.infer<typeof createMembershipSchema>;
 export type CreateServiceRequestInput = z.infer<typeof createServiceRequestSchema>;
+export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
+export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
