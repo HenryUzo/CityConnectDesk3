@@ -112,9 +112,18 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
       const response: any = await adminApiRequest("POST", "/api/admin/auth/refresh", { 
         refreshToken: refreshTokenValue 
       });
+      
+      // Race-proof: Set tokens immediately
+      setAdminToken(response.accessToken);
       setToken(response.accessToken);
       setUser(response.user);
       sessionStorage.setItem('admin_refresh_token', response.refreshToken);
+      
+      // Restore estate selection if user has memberships
+      if (response.user.memberships && response.user.memberships.length > 0 && !selectedEstateId) {
+        const firstEstate = response.user.memberships[0].estateId;
+        setSelectedEstateId(firstEstate);
+      }
     } catch (error) {
       // Refresh failed, clear tokens and redirect to login
       logout();
@@ -125,9 +134,19 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     setIsLoading(true);
     try {
       const response: any = await adminApiRequest("POST", "/api/admin/auth/login", { email, password });
+      
+      // Race-proof: Set tokens immediately before any queries can fire
+      setAdminToken(response.accessToken);
       setToken(response.accessToken);
       setUser(response.user);
       sessionStorage.setItem('admin_refresh_token', response.refreshToken);
+      
+      // Auto-select first estate for tenant scoping
+      if (response.user.memberships && response.user.memberships.length > 0) {
+        const firstEstate = response.user.memberships[0].estateId;
+        setSelectedEstateId(firstEstate);
+      }
+      
       return response;
     } catch (error) {
       throw error;
