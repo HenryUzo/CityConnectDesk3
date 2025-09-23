@@ -16,7 +16,6 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, ShoppingBag, LogOut, Search, Filter, Star, Clock, MapPin, ShoppingCart, Plus, Minus } from "lucide-react";
-import { LocationPicker } from "@/components/LocationPicker";
 
 // Marketplace data types
 interface CartItem {
