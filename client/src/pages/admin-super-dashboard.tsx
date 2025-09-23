@@ -16,6 +16,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -65,7 +67,9 @@ import {
   Eye,
   EyeOff,
   Tags,
-  ShoppingBag
+  ShoppingBag,
+  ChevronLeft,
+  ChevronRight
 } from "lucide-react";
 
 // Admin Context for JWT token management
@@ -2323,8 +2327,9 @@ export default function AdminSuperDashboard() {
             {activeTab === 'providers' && <ProvidersManagement />}
             {activeTab === 'categories' && <CategoriesManagement />}
             {activeTab === 'marketplace' && <MarketplaceManagement />}
+            {activeTab === 'orders' && <OrdersManagement />}
             
-            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'providers' && activeTab !== 'categories' && activeTab !== 'marketplace' && (
+            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'providers' && activeTab !== 'categories' && activeTab !== 'marketplace' && activeTab !== 'orders' && (
               <div className="text-center py-12">
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
                   {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Management
@@ -2349,4 +2354,663 @@ export default function AdminSuperDashboard() {
       </div>
     </div>
   );
-}
+};
+
+// Orders Management Component
+const OrdersManagement = () => {
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [disputeFilter, setDisputeFilter] = useState('all');
+  const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [priceRange, setPriceRange] = useState({ min: '', max: '' });
+  const [sortBy, setSortBy] = useState('createdAt');
+  const [sortOrder, setSortOrder] = useState('desc');
+  const [page, setPage] = useState(1);
+  const [limit] = useState(20);
+  const [selectedOrder, setSelectedOrder] = useState<any>(null);
+  const [showOrderDetails, setShowOrderDetails] = useState(false);
+  const [showDisputeModal, setShowDisputeModal] = useState(false);
+  const [disputeAction, setDisputeAction] = useState<'create' | 'resolve'>('create');
+  const [disputeForm, setDisputeForm] = useState({
+    reason: '',
+    description: '',
+    status: 'resolved',
+    resolution: '',
+    refundAmount: 0
+  });
+  
+  // Query parameters
+  const queryParams = {
+    search: search || undefined,
+    status: statusFilter === 'all' ? undefined : statusFilter,
+    hasDispute: disputeFilter === 'disputes' ? 'true' : disputeFilter === 'no-disputes' ? 'false' : undefined,
+    startDate: dateRange.start || undefined,
+    endDate: dateRange.end || undefined,
+    minTotal: priceRange.min ? Number(priceRange.min) : undefined,
+    maxTotal: priceRange.max ? Number(priceRange.max) : undefined,
+    page,
+    limit,
+    sortBy,
+    sortOrder
+  };
+
+  const { data: ordersData, isLoading: ordersLoading } = useQuery({
+    queryKey: ['/api/admin/orders', queryParams],
+    queryFn: () => adminApiRequest('GET', '/api/admin/orders', queryParams),
+  });
+
+  const { data: orderStats } = useQuery({
+    queryKey: ['/api/admin/orders/analytics/stats'],
+    queryFn: () => adminApiRequest('GET', '/api/admin/orders/analytics/stats'),
+  });
+
+  const updateOrderStatusMutation = useMutation({
+    mutationFn: ({ orderId, status }: { orderId: string, status: string }) => 
+      adminApiRequest('PATCH', `/api/admin/orders/${orderId}/status`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders/analytics/stats'] });
+      setShowOrderDetails(false);
+    },
+  });
+
+  const createDisputeMutation = useMutation({
+    mutationFn: ({ orderId, reason, description }: { orderId: string, reason: string, description?: string }) => 
+      adminApiRequest('POST', `/api/admin/orders/${orderId}/dispute`, { reason, description }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders'] });
+      setShowDisputeModal(false);
+      setDisputeForm({ reason: '', description: '', status: 'resolved', resolution: '', refundAmount: 0 });
+    },
+  });
+
+  const resolveDisputeMutation = useMutation({
+    mutationFn: ({ orderId, status, resolution, refundAmount }: { orderId: string, status: string, resolution: string, refundAmount?: number }) => 
+      adminApiRequest('PATCH', `/api/admin/orders/${orderId}/dispute`, { status, resolution, refundAmount }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders/analytics/stats'] });
+      setShowDisputeModal(false);
+      setDisputeForm({ reason: '', description: '', status: 'resolved', resolution: '', refundAmount: 0 });
+    },
+  });
+
+  const handleStatusChange = (orderId: string, status: string) => {
+    updateOrderStatusMutation.mutate({ orderId, status });
+  };
+
+  const handleCreateDispute = () => {
+    if (selectedOrder && disputeForm.reason) {
+      createDisputeMutation.mutate({
+        orderId: selectedOrder._id,
+        reason: disputeForm.reason,
+        description: disputeForm.description
+      });
+    }
+  };
+
+  const handleResolveDispute = () => {
+    if (selectedOrder && disputeForm.resolution) {
+      resolveDisputeMutation.mutate({
+        orderId: selectedOrder._id,
+        status: disputeForm.status as 'resolved' | 'rejected' | 'escalated',
+        resolution: disputeForm.resolution,
+        refundAmount: disputeForm.refundAmount || undefined
+      });
+    }
+  };
+
+  const resetFilters = () => {
+    setSearch('');
+    setStatusFilter('all');
+    setDisputeFilter('all');
+    setDateRange({ start: '', end: '' });
+    setPriceRange({ min: '', max: '' });
+    setPage(1);
+  };
+
+  const orders = ordersData?.orders || [];
+  const pagination = ordersData?.pagination;
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'pending': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200';
+      case 'processing': return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
+      case 'delivered': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+      case 'cancelled': return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
+      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
+    }
+  };
+
+  const getDisputeStatusColor = (status: string) => {
+    switch (status) {
+      case 'open': return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
+      case 'resolved': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+      case 'rejected': return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
+      case 'escalated': return 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200';
+      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header & Stats */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Orders Management</h2>
+          <p className="text-gray-600 dark:text-gray-400">Manage orders, track status, and resolve disputes</p>
+        </div>
+      </div>
+
+      {/* Statistics Cards */}
+      {orderStats && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center space-x-2">
+                <Package className="w-8 h-8 text-blue-600" />
+                <div>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Total Orders</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{orderStats.totalOrders}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center space-x-2">
+                <DollarSign className="w-8 h-8 text-green-600" />
+                <div>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Total Revenue</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">₦{orderStats.totalRevenue?.toLocaleString()}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center space-x-2">
+                <AlertTriangle className="w-8 h-8 text-orange-600" />
+                <div>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Disputed Orders</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{orderStats.disputedOrders}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center space-x-2">
+                <TrendingUp className="w-8 h-8 text-purple-600" />
+                <div>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Avg Order Value</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">₦{orderStats.avgOrderValue?.toFixed(0)}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Filters */}
+      <Card>
+        <CardContent className="p-6">
+          <div className="grid grid-cols-1 md:grid-cols-7 gap-4">
+            <div>
+              <Label htmlFor="search">Search Orders</Label>
+              <Input
+                id="search"
+                placeholder="Search by order ID, customer, vendor..."
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1); // Reset to first page when searching
+                }}
+                data-testid="input-search-orders"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="status-filter">Status</Label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All Statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="processing">Processing</SelectItem>
+                  <SelectItem value="delivered">Delivered</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label htmlFor="dispute-filter">Disputes</Label>
+              <Select value={disputeFilter} onValueChange={setDisputeFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All Orders" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Orders</SelectItem>
+                  <SelectItem value="disputes">With Disputes</SelectItem>
+                  <SelectItem value="no-disputes">No Disputes</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label htmlFor="start-date">Start Date</Label>
+              <Input
+                id="start-date"
+                type="date"
+                value={dateRange.start}
+                onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                data-testid="input-start-date"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="end-date">End Date</Label>
+              <Input
+                id="end-date"
+                type="date"
+                value={dateRange.end}
+                onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+                data-testid="input-end-date"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="min-price">Min Price (₦)</Label>
+              <Input
+                id="min-price"
+                type="number"
+                placeholder="0"
+                value={priceRange.min}
+                onChange={(e) => setPriceRange(prev => ({ ...prev, min: e.target.value }))}
+                data-testid="input-min-price"
+              />
+            </div>
+
+            <div className="flex items-end">
+              <Button variant="outline" onClick={resetFilters} className="w-full" data-testid="button-reset-filters">
+                <X className="w-4 h-4 mr-2" />
+                Reset
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Orders Table */}
+      <Card>
+        <CardContent className="p-0">
+          {ordersLoading ? (
+            <div className="text-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+              <p className="mt-2 text-gray-600 dark:text-gray-400">Loading orders...</p>
+            </div>
+          ) : orders.length === 0 ? (
+            <div className="text-center py-8">
+              <Package className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-600 dark:text-gray-400">No orders found</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 dark:bg-gray-700">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Order ID</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Customer</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Vendor</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Total</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Dispute</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Date</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                  {orders.map((order: any) => (
+                    <tr key={order._id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                      <td className="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
+                        #{order._id.slice(-8)}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-300">
+                        {order.buyer?.name || 'Unknown'}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-300">
+                        {order.vendor?.name || 'Unknown'}
+                      </td>
+                      <td className="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
+                        ₦{order.total.toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.status)}`}>
+                          {order.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        {order.dispute?.reason ? (
+                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getDisputeStatusColor(order.dispute.status)}`}>
+                            {order.dispute.status}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400">None</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-300">
+                        {new Date(order.createdAt).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-4 text-sm space-x-2">
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => {
+                            setSelectedOrder(order);
+                            setShowOrderDetails(true);
+                          }}
+                          data-testid={`button-view-order-${order._id}`}
+                        >
+                          <Eye className="w-4 h-4" />
+                        </Button>
+                        {order.status === 'delivered' && !order.dispute?.reason && (
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => {
+                              setSelectedOrder(order);
+                              setDisputeAction('create');
+                              setShowDisputeModal(true);
+                            }}
+                            data-testid={`button-create-dispute-${order._id}`}
+                          >
+                            <AlertTriangle className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {order.dispute?.reason && order.dispute.status === 'open' && (
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => {
+                              setSelectedOrder(order);
+                              setDisputeAction('resolve');
+                              setShowDisputeModal(true);
+                            }}
+                            data-testid={`button-resolve-dispute-${order._id}`}
+                          >
+                            <CheckCircle className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Pagination */}
+          {pagination && pagination.totalPages > 1 && (
+            <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  Showing {((pagination.page - 1) * pagination.limit) + 1} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} orders
+                </div>
+                <div className="flex space-x-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(Math.max(1, page - 1))}
+                    disabled={page === 1}
+                    data-testid="button-prev-page"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
+                    disabled={page === pagination.totalPages}
+                    data-testid="button-next-page"
+                  >
+                    Next
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Order Details Modal */}
+      <Dialog open={showOrderDetails} onOpenChange={setShowOrderDetails}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Order Details</DialogTitle>
+          </DialogHeader>
+          {selectedOrder && (
+            <div className="space-y-6">
+              {/* Order Info */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Order ID</Label>
+                  <p className="text-sm font-mono">#{selectedOrder._id}</p>
+                </div>
+                <div>
+                  <Label>Status</Label>
+                  <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(selectedOrder.status)}`}>
+                    {selectedOrder.status}
+                  </span>
+                </div>
+                <div>
+                  <Label>Customer</Label>
+                  <p className="text-sm">{selectedOrder.buyer?.name}</p>
+                </div>
+                <div>
+                  <Label>Vendor</Label>
+                  <p className="text-sm">{selectedOrder.vendor?.name}</p>
+                </div>
+                <div>
+                  <Label>Total Amount</Label>
+                  <p className="text-sm font-medium">₦{selectedOrder.total.toLocaleString()}</p>
+                </div>
+                <div>
+                  <Label>Date</Label>
+                  <p className="text-sm">{new Date(selectedOrder.createdAt).toLocaleString()}</p>
+                </div>
+              </div>
+
+              {/* Items */}
+              <div>
+                <Label>Order Items</Label>
+                <div className="mt-2 space-y-2">
+                  {selectedOrder.items.map((item: any, index: number) => (
+                    <div key={index} className="flex justify-between items-center p-3 border rounded-lg">
+                      <div>
+                        <p className="font-medium">{item.name}</p>
+                        <p className="text-sm text-gray-600">Quantity: {item.quantity}</p>
+                      </div>
+                      <p className="font-medium">₦{(item.price * item.quantity).toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Dispute Info */}
+              {selectedOrder.dispute?.reason && (
+                <div>
+                  <Label>Dispute Information</Label>
+                  <div className="mt-2 p-4 border rounded-lg bg-red-50 dark:bg-red-900/20">
+                    <div className="flex justify-between items-start mb-2">
+                      <p className="font-medium text-red-800 dark:text-red-200">Reason: {selectedOrder.dispute.reason}</p>
+                      <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getDisputeStatusColor(selectedOrder.dispute.status)}`}>
+                        {selectedOrder.dispute.status}
+                      </span>
+                    </div>
+                    {selectedOrder.dispute.resolvedAt && (
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                        Resolved: {new Date(selectedOrder.dispute.resolvedAt).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Status Actions */}
+              {['pending', 'processing'].includes(selectedOrder.status) && (
+                <div>
+                  <Label>Update Status</Label>
+                  <div className="mt-2 flex space-x-2">
+                    {selectedOrder.status === 'pending' && (
+                      <Button 
+                        onClick={() => handleStatusChange(selectedOrder._id, 'processing')}
+                        disabled={updateOrderStatusMutation.isPending}
+                        data-testid="button-mark-processing"
+                      >
+                        Mark as Processing
+                      </Button>
+                    )}
+                    {selectedOrder.status === 'processing' && (
+                      <Button 
+                        onClick={() => handleStatusChange(selectedOrder._id, 'delivered')}
+                        disabled={updateOrderStatusMutation.isPending}
+                        data-testid="button-mark-delivered"
+                      >
+                        Mark as Delivered
+                      </Button>
+                    )}
+                    <Button 
+                      variant="destructive"
+                      onClick={() => handleStatusChange(selectedOrder._id, 'cancelled')}
+                      disabled={updateOrderStatusMutation.isPending}
+                      data-testid="button-cancel-order"
+                    >
+                      Cancel Order
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Dispute Modal */}
+      <Dialog open={showDisputeModal} onOpenChange={setShowDisputeModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {disputeAction === 'create' ? 'Create Dispute' : 'Resolve Dispute'}
+            </DialogTitle>
+          </DialogHeader>
+          
+          {disputeAction === 'create' ? (
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="dispute-reason">Dispute Reason *</Label>
+                <Input
+                  id="dispute-reason"
+                  value={disputeForm.reason}
+                  onChange={(e) => setDisputeForm(prev => ({ ...prev, reason: e.target.value }))}
+                  placeholder="Brief reason for dispute"
+                  data-testid="input-dispute-reason"
+                />
+              </div>
+              <div>
+                <Label htmlFor="dispute-description">Description</Label>
+                <Textarea
+                  id="dispute-description"
+                  value={disputeForm.description}
+                  onChange={(e) => setDisputeForm(prev => ({ ...prev, description: e.target.value }))}
+                  placeholder="Detailed description of the issue"
+                  rows={3}
+                  data-testid="textarea-dispute-description"
+                />
+              </div>
+              <div className="flex justify-end space-x-2">
+                <Button 
+                  variant="outline" 
+                  onClick={() => setShowDisputeModal(false)}
+                  data-testid="button-cancel-dispute"
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  onClick={handleCreateDispute}
+                  disabled={!disputeForm.reason || createDisputeMutation.isPending}
+                  data-testid="button-create-dispute"
+                >
+                  Create Dispute
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="dispute-status">Resolution Status *</Label>
+                <Select value={disputeForm.status} onValueChange={(value) => setDisputeForm(prev => ({ ...prev, status: value }))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="resolved">Resolved</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
+                    <SelectItem value="escalated">Escalated</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="dispute-resolution">Resolution Details *</Label>
+                <Textarea
+                  id="dispute-resolution"
+                  value={disputeForm.resolution}
+                  onChange={(e) => setDisputeForm(prev => ({ ...prev, resolution: e.target.value }))}
+                  placeholder="Detailed resolution or action taken"
+                  rows={3}
+                  data-testid="textarea-dispute-resolution"
+                />
+              </div>
+              <div>
+                <Label htmlFor="refund-amount">Refund Amount (₦)</Label>
+                <Input
+                  id="refund-amount"
+                  type="number"
+                  value={disputeForm.refundAmount}
+                  onChange={(e) => setDisputeForm(prev => ({ ...prev, refundAmount: Number(e.target.value) }))}
+                  placeholder="0"
+                  min="0"
+                  max={selectedOrder?.total}
+                  data-testid="input-refund-amount"
+                />
+              </div>
+              <div className="flex justify-end space-x-2">
+                <Button 
+                  variant="outline" 
+                  onClick={() => setShowDisputeModal(false)}
+                  data-testid="button-cancel-resolve"
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  onClick={handleResolveDispute}
+                  disabled={!disputeForm.resolution || resolveDisputeMutation.isPending}
+                  data-testid="button-resolve-dispute"
+                >
+                  Resolve Dispute
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};

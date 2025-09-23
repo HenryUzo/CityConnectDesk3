@@ -996,6 +996,382 @@ router.get('/audit-logs',
   }
 );
 
+// Orders Management Routes
+router.get('/orders', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const { 
+      search,
+      status, 
+      buyerId, 
+      vendorId, 
+      startDate, 
+      endDate, 
+      minTotal, 
+      maxTotal,
+      hasDispute,
+      disputeStatus,
+      page = 1, 
+      limit = 20,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
+    const filter: any = {};
+    
+    // Estate scoping
+    if (req.currentEstate) {
+      filter.estateId = req.currentEstate.id;
+    } else if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      return res.status(400).json({ error: 'Estate context required' });
+    }
+
+    // Search functionality
+    if (search) {
+      filter.$or = [
+        { orderId: { $regex: search, $options: 'i' } },
+        { 'buyerInfo.name': { $regex: search, $options: 'i' } },
+        { 'buyerInfo.email': { $regex: search, $options: 'i' } },
+        { 'vendorInfo.name': { $regex: search, $options: 'i' } },
+        { 'vendorInfo.email': { $regex: search, $options: 'i' } },
+        { 'deliveryAddress.street': { $regex: search, $options: 'i' } },
+        { 'deliveryAddress.city': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Apply filters
+    if (status) filter.status = status;
+    if (buyerId) filter.buyerId = buyerId;
+    if (vendorId) filter.vendorId = vendorId;
+    if (hasDispute === 'true') filter['dispute.reason'] = { $exists: true };
+    if (disputeStatus) filter['dispute.status'] = disputeStatus;
+    
+    // Date range filter
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate as string);
+      if (endDate) filter.createdAt.$lte = new Date(endDate as string);
+    }
+    
+    // Price range filter
+    if (minTotal || maxTotal) {
+      filter.total = {};
+      if (minTotal) filter.total.$gte = Number(minTotal);
+      if (maxTotal) filter.total.$lte = Number(maxTotal);
+    }
+
+    // Pagination
+    const skip = (Number(page) - 1) * Number(limit);
+    const sortDirection = sortOrder === 'desc' ? -1 : 1;
+
+    // Get orders with pagination and populate user details
+    const [orders, totalCount] = await Promise.all([
+      adminDb.Order.find(filter)
+        .sort({ [sortBy as string]: sortDirection })
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
+      adminDb.Order.countDocuments(filter)
+    ]);
+
+    // Get user details for buyers and vendors
+    const userIds = [...new Set([...orders.map(o => o.buyerId), ...orders.map(o => o.vendorId)])];
+    const users = await adminDb.AdminUser.find({ _id: { $in: userIds } }).select('_id name email').lean();
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
+
+    // Enrich orders with user details
+    const enrichedOrders = orders.map(order => ({
+      ...order,
+      buyer: userMap.get(order.buyerId),
+      vendor: userMap.get(order.vendorId)
+    }));
+
+    res.json({
+      orders: enrichedOrders,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / Number(limit))
+      }
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/orders/:id', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const orderId = req.params.id;
+    
+    const order = await adminDb.Order.findById(orderId).lean();
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Estate scoping
+    if (req.currentEstate && order.estateId !== req.currentEstate.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    } else if (!req.currentEstate && req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      return res.status(400).json({ error: 'Estate context required' });
+    }
+
+    // Get buyer and vendor details
+    const [buyer, vendor] = await Promise.all([
+      adminDb.AdminUser.findById(order.buyerId).select('_id name email phone').lean(),
+      adminDb.AdminUser.findById(order.vendorId).select('_id name email phone').lean()
+    ]);
+
+    // Get marketplace items details
+    const itemIds = order.items.map(item => item.itemId);
+    const marketplaceItems = await adminDb.MarketplaceItem.find({ _id: { $in: itemIds } }).lean();
+    const itemMap = new Map(marketplaceItems.map(item => [item._id.toString(), item]));
+
+    // Enrich order items with marketplace details
+    const enrichedItems = order.items.map(item => ({
+      ...item,
+      marketplaceItem: itemMap.get(item.itemId)
+    }));
+
+    res.json({
+      ...order,
+      buyer,
+      vendor,
+      items: enrichedItems
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch('/orders/:id/status', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const orderId = req.params.id;
+    const { status } = z.object({
+      status: z.enum(['pending', 'processing', 'delivered', 'cancelled'])
+    }).parse(req.body);
+
+    const order = await adminDb.Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Estate scoping
+    if (req.currentEstate && order.estateId !== req.currentEstate.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    } else if (!req.currentEstate && req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      return res.status(400).json({ error: 'Estate context required' });
+    }
+
+    // Business logic for status changes
+    const currentStatus = order.status;
+    const validTransitions: Record<string, string[]> = {
+      'pending': ['processing', 'cancelled'],
+      'processing': ['delivered', 'cancelled'],
+      'delivered': [], // Final state
+      'cancelled': [] // Final state
+    };
+
+    if (!validTransitions[currentStatus]?.includes(status)) {
+      return res.status(400).json({ 
+        error: `Invalid status transition from ${currentStatus} to ${status}` 
+      });
+    }
+
+    order.status = status;
+    await order.save();
+
+    // Audit log
+    await auditAction(req.adminUser!.id, 'UPDATE_ORDER_STATUS', 'Order', orderId, {
+      oldStatus: currentStatus,
+      newStatus: status
+    });
+
+    res.json({ message: 'Order status updated successfully', order });
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+router.post('/orders/:id/dispute', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const orderId = req.params.id;
+    const { reason, description } = z.object({
+      reason: z.string().min(1).max(200),
+      description: z.string().min(10).max(1000).optional()
+    }).parse(req.body);
+
+    const order = await adminDb.Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Estate scoping
+    if (req.currentEstate && order.estateId !== req.currentEstate.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    } else if (!req.currentEstate && req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      return res.status(400).json({ error: 'Estate context required' });
+    }
+
+    // Check if dispute already exists
+    if (order.dispute?.reason) {
+      return res.status(400).json({ error: 'Dispute already exists for this order' });
+    }
+
+    // Only allow disputes for delivered orders
+    if (order.status !== 'delivered') {
+      return res.status(400).json({ error: 'Disputes can only be created for delivered orders' });
+    }
+
+    order.dispute = {
+      reason,
+      status: 'open',
+      resolvedAt: undefined
+    };
+    await order.save();
+
+    // Audit log
+    await auditAction(req.adminUser!.id, 'CREATE_ORDER_DISPUTE', 'Order', orderId, {
+      reason,
+      description
+    });
+
+    res.status(201).json({ message: 'Dispute created successfully', order });
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+router.patch('/orders/:id/dispute', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const orderId = req.params.id;
+    const { status, resolution, refundAmount } = z.object({
+      status: z.enum(['resolved', 'rejected', 'escalated']),
+      resolution: z.string().min(10).max(1000),
+      refundAmount: z.number().min(0).optional()
+    }).parse(req.body);
+
+    const order = await adminDb.Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Estate scoping
+    if (req.currentEstate && order.estateId !== req.currentEstate.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    } else if (!req.currentEstate && req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      return res.status(400).json({ error: 'Estate context required' });
+    }
+
+    // Check if dispute exists
+    if (!order.dispute?.reason) {
+      return res.status(400).json({ error: 'No dispute exists for this order' });
+    }
+
+    // Check if dispute is already resolved
+    if (order.dispute.status !== 'open') {
+      return res.status(400).json({ error: 'Dispute is already resolved' });
+    }
+
+    // Validate refund amount
+    if (refundAmount && refundAmount > order.total) {
+      return res.status(400).json({ error: 'Refund amount cannot exceed order total' });
+    }
+
+    order.dispute.status = status;
+    order.dispute.resolvedAt = status === 'resolved' ? new Date() : undefined;
+    await order.save();
+
+    // Audit log
+    await auditAction(req.adminUser!.id, 'RESOLVE_ORDER_DISPUTE', 'Order', orderId, {
+      disputeStatus: status,
+      resolution,
+      refundAmount
+    });
+
+    res.json({ message: 'Dispute resolved successfully', order });
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Orders Analytics
+router.get('/orders/analytics/stats', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    const filter: any = {};
+    
+    // Estate scoping
+    if (req.currentEstate) {
+      filter.estateId = req.currentEstate.id;
+    } else if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      return res.status(400).json({ error: 'Estate context required' });
+    }
+
+    // Date range filter
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate as string);
+      if (endDate) filter.createdAt.$lte = new Date(endDate as string);
+    }
+
+    // Get comprehensive order statistics
+    const [
+      totalOrders,
+      pendingOrders,
+      processingOrders,
+      deliveredOrders,
+      cancelledOrders,
+      totalRevenue,
+      disputedOrders,
+      avgOrderValue
+    ] = await Promise.all([
+      adminDb.Order.countDocuments(filter),
+      adminDb.Order.countDocuments({ ...filter, status: 'pending' }),
+      adminDb.Order.countDocuments({ ...filter, status: 'processing' }),
+      adminDb.Order.countDocuments({ ...filter, status: 'delivered' }),
+      adminDb.Order.countDocuments({ ...filter, status: 'cancelled' }),
+      adminDb.Order.aggregate([
+        { $match: { ...filter, status: 'delivered' } },
+        { $group: { _id: null, total: { $sum: '$total' } } }
+      ]),
+      adminDb.Order.countDocuments({ ...filter, 'dispute.reason': { $exists: true } }),
+      adminDb.Order.aggregate([
+        { $match: filter },
+        { $group: { _id: null, avgValue: { $avg: '$total' } } }
+      ])
+    ]);
+
+    res.json({
+      totalOrders,
+      ordersByStatus: {
+        pending: pendingOrders,
+        processing: processingOrders,
+        delivered: deliveredOrders,
+        cancelled: cancelledOrders
+      },
+      totalRevenue: totalRevenue[0]?.total || 0,
+      disputedOrders,
+      avgOrderValue: avgOrderValue[0]?.avgValue || 0,
+      disputeRate: totalOrders > 0 ? (disputedOrders / totalOrders * 100).toFixed(2) : 0
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Health Check
 router.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
