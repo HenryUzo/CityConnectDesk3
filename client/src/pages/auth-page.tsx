@@ -14,7 +14,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { ArrowLeft } from "lucide-react";
-import { LocationPicker } from "@/components/LocationPicker";
 
 const residentRegisterSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
@@ -438,11 +437,16 @@ export default function AuthPage() {
                               <FormItem className="space-y-1.5 sm:space-y-2">
                                 <FormLabel className="text-sm sm:text-base font-medium">Location (Block/Flat)</FormLabel>
                                 <FormControl>
-                                  <LocationPicker
-                                    value={field.value}
-                                    onChange={field.onChange}
-                                    placeholder="e.g., Block 5, Flat 3B or search area"
+                                  <Input
+                                    placeholder="e.g., Block 5, Flat 3B"
+                                    value={field.value.address}
+                                    onChange={(e) => field.onChange({
+                                      address: e.target.value,
+                                      latitude: undefined,
+                                      longitude: undefined
+                                    })}
                                     className="w-full"
+                                    data-testid="input-location"
                                   />
                                 </FormControl>
                                 <FormMessage className="text-xs sm:text-sm" />
