@@ -33,14 +33,17 @@ export default function ResidentDashboard() {
     setLocation("/");
   };
 
+  // Type the service requests properly
+  const typedServiceRequests = (serviceRequests as any[]) || [];
+
   const stats = {
-    active: serviceRequests.filter((r: any) => ['pending', 'assigned', 'in_progress'].includes(r.status)).length,
-    completed: serviceRequests.filter((r: any) => r.status === 'completed').length
+    active: typedServiceRequests.filter((r) => ['pending', 'assigned', 'in_progress'].includes(r.status)).length,
+    completed: typedServiceRequests.filter((r) => r.status === 'completed').length
   };
 
-  const recentActivity = serviceRequests
+  const recentActivity = typedServiceRequests
     .slice(0, 3)
-    .map((request: any) => ({
+    .map((request) => ({
       ...request,
       statusColor: request.status === 'completed' ? 'bg-green-100 text-green-800' :
                   request.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :

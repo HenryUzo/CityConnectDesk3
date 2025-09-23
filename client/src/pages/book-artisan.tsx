@@ -14,7 +14,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { ArrowLeft, Wrench, LogOut, Calendar } from "lucide-react";
-import { LocationPicker } from "@/components/LocationPicker";
 
 const artisanRequestSchema = z.object({
   category: z.enum([
@@ -38,9 +37,13 @@ const artisanRequestSchema = z.object({
 type ArtisanRequestFormData = z.infer<typeof artisanRequestSchema>;
 
 export default function BookArtisan() {
+  console.log('BookArtisan component rendering...');
+  
   const { user, logoutMutation } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  
+  console.log('BookArtisan user:', user);
 
   const form = useForm<ArtisanRequestFormData>({
     resolver: zodResolver(artisanRequestSchema),
@@ -260,11 +263,16 @@ export default function BookArtisan() {
                     <FormItem>
                       <FormLabel>Location Details</FormLabel>
                       <FormControl>
-                        <LocationPicker
-                          value={field.value}
-                          onChange={field.onChange}
-                          placeholder="e.g., Block 5, Flat 3B, or search area"
-                          className="w-full"
+                        <Input
+                          value={field.value.address || ''}
+                          onChange={(e) => field.onChange({ 
+                            address: e.target.value,
+                            latitude: undefined,
+                            longitude: undefined 
+                          })}
+                          placeholder="e.g., Block 5, Flat 3B, Estate Address"
+                          className="h-12 min-h-[44px] text-base"
+                          data-testid="input-location"
                         />
                       </FormControl>
                       <FormMessage />
