@@ -1,5 +1,6 @@
 import { z } from "zod";
 import mongoose, { Schema, Document } from "mongoose";
+import 'mongoose-geojson-schema';
 
 // Core Types and Enums
 export const UserRole = {
@@ -84,10 +85,7 @@ export const EstateSchema = new Schema<IEstate>({
   slug: { type: String, required: true, unique: true },
   description: String,
   address: { type: String, required: true },
-  coverage: {
-    type: { type: String, enum: ['Polygon'], required: true },
-    coordinates: { type: [[[Number]]], required: true }
-  },
+  coverage: { type: Schema.Types.Polygon, required: true },
   settings: {
     servicesEnabled: [String],
     marketplaceEnabled: { type: Boolean, default: true },

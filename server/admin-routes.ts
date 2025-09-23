@@ -36,10 +36,10 @@ const requireAdminDB = (req: AdminRequest, res: Response, next: NextFunction) =>
   next();
 };
 
-// Apply database gating to all routes except auth
+// Apply database gating to all routes except auth and setup
 router.use((req: AdminRequest, res: Response, next: NextFunction) => {
-  // Exempt auth routes from DB requirement
-  if (req.path.startsWith('/auth/')) {
+  // Exempt auth and setup routes from DB requirement
+  if (req.path.startsWith('/auth/') || req.path === '/setup') {
     return next();
   }
   // All other routes require admin DB
@@ -57,12 +57,14 @@ router.post('/setup', async (req, res) => {
       });
     }
 
-    // Check if super admin already exists
+    // Check if setup is already completed
     const existingSuperAdmin = await adminDb.AdminUser.findOne({ globalRole: UserRole.SUPER_ADMIN });
-    if (existingSuperAdmin) {
+    const existingEstate = await adminDb.Estate.findOne({ slug: 'default-estate' });
+
+    if (existingSuperAdmin && existingEstate) {
       return res.status(400).json({ 
         error: 'Setup already completed',
-        message: 'Super admin already exists. Use login instead.',
+        message: 'Super admin and default estate already exist. Use login instead.',
         loginCredentials: {
           email: existingSuperAdmin.email,
           note: 'Use your existing password'
@@ -70,22 +72,35 @@ router.post('/setup', async (req, res) => {
       });
     }
 
-    // Create default estate
-    const defaultEstate = new adminDb.Estate({
-      name: 'Default Estate',
-      slug: 'default-estate',
-      address: '123 Main Street, City, State 12345',
-      phone: '+1-555-0123',
-      email: 'admin@defaultestate.com',
-      isActive: true,
-      settings: {
-        timezone: 'UTC',
-        currency: 'USD',
-        allowMarketplace: true,
-        allowServiceRequests: true
-      }
-    });
-    await defaultEstate.save();
+    // Create default estate if it doesn't exist
+    let defaultEstate = existingEstate;
+    if (!defaultEstate) {
+      defaultEstate = new adminDb.Estate({
+        name: 'Default Estate',
+        slug: 'default-estate',
+        address: '123 Main Street, City, State 12345',
+        phone: '+1-555-0123',
+        email: 'admin@defaultestate.com',
+        isActive: true,
+        coverage: {
+          type: 'Polygon',
+          coordinates: [[
+            [-74.0059, 40.7128], // New York coordinates as example
+            [-74.0059, 40.7628],
+            [-73.9559, 40.7628],
+            [-73.9559, 40.7128],
+            [-74.0059, 40.7128]
+          ]]
+        },
+        settings: {
+          timezone: 'UTC',
+          currency: 'USD',
+          allowMarketplace: true,
+          allowServiceRequests: true
+        }
+      });
+      await defaultEstate.save();
+    }
 
     // Create super admin user
     const adminEmail = 'admin@example.com';
@@ -95,15 +110,10 @@ router.post('/setup', async (req, res) => {
     const superAdmin = new adminDb.AdminUser({
       email: adminEmail,
       name: 'Super Administrator',
+      phone: '+1-555-0100',
       passwordHash: hashedPassword,
       globalRole: UserRole.SUPER_ADMIN,
-      isActive: true,
-      isEmailVerified: true,
-      profile: {
-        firstName: 'Super',
-        lastName: 'Administrator',
-        phone: '+1-555-0100'
-      }
+      isActive: true
     });
     await superAdmin.save();
 

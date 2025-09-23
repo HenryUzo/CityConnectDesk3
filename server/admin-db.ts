@@ -38,6 +38,17 @@ class AdminDatabase {
     return this._isConnected;
   }
 
+  // Expose models as properties
+  Estate = Estate;
+  AdminUser = AdminUser;
+  Membership = Membership;
+  AdminProvider = AdminProvider;
+  AdminServiceRequest = AdminServiceRequest;
+  MarketplaceItem = MarketplaceItem;
+  Order = Order;
+  AdminCategory = AdminCategory;
+  AuditLog = AuditLog;
+
   async connect() {
     if (this._isConnected) return;
 
