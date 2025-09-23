@@ -670,7 +670,7 @@ router.get('/categories', requireAdminDB, authenticateAdmin, setEstateContext, r
   }
 });
 
-router.post('/categories', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+router.post('/categories', requireAdminDB, authenticateAdmin, setEstateContext, auditAction('CREATE', 'CATEGORY'), async (req: AdminRequest, res) => {
   try {
     // Validate request body with Zod
     const validatedData = createCategorySchema.parse(req.body);
@@ -704,12 +704,7 @@ router.post('/categories', requireAdminDB, authenticateAdmin, setEstateContext, 
     
     const category = await adminDb.createCategory(categoryData);
     
-    // Audit log
-    await auditAction(req.adminUser!.id, 'CREATE_CATEGORY', 'Category', category.id, {
-      scope,
-      estateId: categoryData.estateId,
-      name
-    });
+    // Audit logging handled by middleware
     
     res.status(201).json(category);
   } catch (error: any) {
@@ -721,7 +716,7 @@ router.post('/categories', requireAdminDB, authenticateAdmin, setEstateContext, 
   }
 });
 
-router.patch('/categories/:id', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+router.patch('/categories/:id', requireAdminDB, authenticateAdmin, setEstateContext, auditAction('UPDATE', 'CATEGORY'), async (req: AdminRequest, res) => {
   try {
     const categoryId = req.params.id;
     // Validate request body with Zod
@@ -756,8 +751,7 @@ router.patch('/categories/:id', requireAdminDB, authenticateAdmin, setEstateCont
       return res.status(404).json({ error: 'Category not found' });
     }
     
-    // Audit log
-    await auditAction(req.adminUser!.id, 'UPDATE_CATEGORY', 'Category', categoryId, updates);
+    // Audit logging handled by middleware
     
     res.json(category);
   } catch (error: any) {
@@ -765,7 +759,7 @@ router.patch('/categories/:id', requireAdminDB, authenticateAdmin, setEstateCont
   }
 });
 
-router.delete('/categories/:id', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+router.delete('/categories/:id', requireAdminDB, authenticateAdmin, setEstateContext, auditAction('DELETE', 'CATEGORY'), async (req: AdminRequest, res) => {
   try {
     const categoryId = req.params.id;
     
@@ -796,11 +790,7 @@ router.delete('/categories/:id', requireAdminDB, authenticateAdmin, setEstateCon
     // Soft delete by setting isActive to false
     const category = await adminDb.updateCategory(categoryId, { isActive: false });
     
-    // Audit log
-    await auditAction(req.adminUser!.id, 'DELETE_CATEGORY', 'Category', categoryId, {
-      name: existingCategory.name,
-      scope: existingCategory.scope
-    });
+    // Audit logging handled by middleware
     
     res.json({ message: 'Category deleted successfully' });
   } catch (error: any) {
@@ -847,7 +837,7 @@ router.get('/marketplace', requireAdminDB, authenticateAdmin, setEstateContext, 
   }
 });
 
-router.post('/marketplace', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+router.post('/marketplace', requireAdminDB, authenticateAdmin, setEstateContext, auditAction('CREATE', 'MARKETPLACE_ITEM'), async (req: AdminRequest, res) => {
   try {
     // Validate request body with Zod
     const validatedData = createMarketplaceItemSchema.parse(req.body);
@@ -870,13 +860,7 @@ router.post('/marketplace', requireAdminDB, authenticateAdmin, setEstateContext,
     
     const item = await adminDb.createMarketplaceItem(itemData);
     
-    // Audit log
-    await auditAction(req.adminUser!.id, 'CREATE_MARKETPLACE_ITEM', 'MarketplaceItem', item.id, {
-      name: itemData.name,
-      category: itemData.category,
-      price: itemData.price,
-      estateId: itemData.estateId
-    });
+    // Audit logging handled by middleware
     
     res.status(201).json(item);
   } catch (error: any) {
@@ -888,7 +872,7 @@ router.post('/marketplace', requireAdminDB, authenticateAdmin, setEstateContext,
   }
 });
 
-router.patch('/marketplace/:id', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+router.patch('/marketplace/:id', requireAdminDB, authenticateAdmin, setEstateContext, auditAction('UPDATE', 'MARKETPLACE_ITEM'), async (req: AdminRequest, res) => {
   try {
     const itemId = req.params.id;
     // Validate request body with Zod
@@ -917,8 +901,7 @@ router.patch('/marketplace/:id', requireAdminDB, authenticateAdmin, setEstateCon
       return res.status(404).json({ error: 'Marketplace item not found' });
     }
     
-    // Audit log
-    await auditAction(req.adminUser!.id, 'UPDATE_MARKETPLACE_ITEM', 'MarketplaceItem', itemId, validatedUpdates);
+    // Audit logging handled by middleware
     
     res.json(item);
   } catch (error: any) {
@@ -930,7 +913,7 @@ router.patch('/marketplace/:id', requireAdminDB, authenticateAdmin, setEstateCon
   }
 });
 
-router.delete('/marketplace/:id', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+router.delete('/marketplace/:id', requireAdminDB, authenticateAdmin, setEstateContext, auditAction('DELETE', 'MARKETPLACE_ITEM'), async (req: AdminRequest, res) => {
   try {
     const itemId = req.params.id;
     
@@ -955,11 +938,7 @@ router.delete('/marketplace/:id', requireAdminDB, authenticateAdmin, setEstateCo
     // Soft delete by setting isActive to false
     const item = await adminDb.updateMarketplaceItem(itemId, { isActive: false });
     
-    // Audit log
-    await auditAction(req.adminUser!.id, 'DELETE_MARKETPLACE_ITEM', 'MarketplaceItem', itemId, {
-      name: existingItem.name,
-      category: existingItem.category
-    });
+    // Audit logging handled by middleware
     
     res.json({ message: 'Marketplace item deleted successfully' });
   } catch (error: any) {
@@ -1074,7 +1053,7 @@ router.get('/orders', requireAdminDB, authenticateAdmin, setEstateContext, async
     ]);
 
     // Get user details for buyers and vendors
-    const userIds = [...new Set([...orders.map(o => o.buyerId), ...orders.map(o => o.vendorId)])];
+    const userIds = Array.from(new Set([...orders.map(o => o.buyerId), ...orders.map(o => o.vendorId)]));
     const users = await adminDb.AdminUser.find({ _id: { $in: userIds } }).select('_id name email').lean();
     const userMap = new Map(users.map(u => [u._id.toString(), u]));
 
@@ -1143,7 +1122,7 @@ router.get('/orders/:id', requireAdminDB, authenticateAdmin, setEstateContext, a
   }
 });
 
-router.patch('/orders/:id/status', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+router.patch('/orders/:id/status', requireAdminDB, authenticateAdmin, setEstateContext, auditAction('UPDATE_STATUS', 'ORDER'), async (req: AdminRequest, res) => {
   try {
     const orderId = req.params.id;
     const { status } = z.object({
@@ -1180,11 +1159,7 @@ router.patch('/orders/:id/status', requireAdminDB, authenticateAdmin, setEstateC
     order.status = status;
     await order.save();
 
-    // Audit log
-    await auditAction(req.adminUser!.id, 'UPDATE_ORDER_STATUS', 'Order', orderId, {
-      oldStatus: currentStatus,
-      newStatus: status
-    });
+    // Audit logging handled by middleware
 
     res.json({ message: 'Order status updated successfully', order });
   } catch (error: any) {
@@ -1196,7 +1171,7 @@ router.patch('/orders/:id/status', requireAdminDB, authenticateAdmin, setEstateC
   }
 });
 
-router.post('/orders/:id/dispute', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+router.post('/orders/:id/dispute', requireAdminDB, authenticateAdmin, setEstateContext, auditAction('CREATE_DISPUTE', 'ORDER'), async (req: AdminRequest, res) => {
   try {
     const orderId = req.params.id;
     const { reason, description } = z.object({
@@ -1233,11 +1208,7 @@ router.post('/orders/:id/dispute', requireAdminDB, authenticateAdmin, setEstateC
     };
     await order.save();
 
-    // Audit log
-    await auditAction(req.adminUser!.id, 'CREATE_ORDER_DISPUTE', 'Order', orderId, {
-      reason,
-      description
-    });
+    // Audit logging handled by middleware
 
     res.status(201).json({ message: 'Dispute created successfully', order });
   } catch (error: any) {
@@ -1249,7 +1220,7 @@ router.post('/orders/:id/dispute', requireAdminDB, authenticateAdmin, setEstateC
   }
 });
 
-router.patch('/orders/:id/dispute', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
+router.patch('/orders/:id/dispute', requireAdminDB, authenticateAdmin, setEstateContext, auditAction('RESOLVE_DISPUTE', 'ORDER'), async (req: AdminRequest, res) => {
   try {
     const orderId = req.params.id;
     const { status, resolution, refundAmount } = z.object({
@@ -1289,12 +1260,7 @@ router.patch('/orders/:id/dispute', requireAdminDB, authenticateAdmin, setEstate
     order.dispute.resolvedAt = status === 'resolved' ? new Date() : undefined;
     await order.save();
 
-    // Audit log
-    await auditAction(req.adminUser!.id, 'RESOLVE_ORDER_DISPUTE', 'Order', orderId, {
-      disputeStatus: status,
-      resolution,
-      refundAmount
-    });
+    // Audit logging handled by middleware
 
     res.json({ message: 'Dispute resolved successfully', order });
   } catch (error: any) {

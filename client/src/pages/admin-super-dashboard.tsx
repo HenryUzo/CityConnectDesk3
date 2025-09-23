@@ -1516,6 +1516,10 @@ const MarketplaceManagement = () => {
     enabled: true
   });
 
+  // Type-safe array access with fallback
+  const categoriesArray = Array.isArray(categories) ? categories : [];
+  const vendorsArray = Array.isArray(vendors) ? vendors : [];
+
   const createItemMutation = useMutation({
     mutationFn: (itemData: CreateMarketplaceItemInput) => 
       adminApiRequest('POST', '/api/admin/marketplace', itemData),
@@ -1602,10 +1606,12 @@ const MarketplaceManagement = () => {
     });
   };
 
-  const filteredItems = items?.filter((item: IMarketplaceItem) => {
+  // Type-safe items filtering with fallback
+  const itemsArray = Array.isArray(items) ? items as IMarketplaceItem[] : [];
+  const filteredItems = itemsArray.filter((item: IMarketplaceItem) => {
     return item.name?.toLowerCase().includes(search.toLowerCase()) ||
            item.description?.toLowerCase().includes(search.toLowerCase());
-  }) || [];
+  });
 
   if (isLoading) {
     return (
@@ -1657,8 +1663,10 @@ const MarketplaceManagement = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Categories</SelectItem>
-                {categories.map((category) => (
-                  <SelectItem key={category} value={category}>{category}</SelectItem>
+                {categoriesArray.map((category: any) => (
+                  <SelectItem key={category._id || category.id || category} value={category.key || category.name || category}>
+                    {category.name || category}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -1668,8 +1676,10 @@ const MarketplaceManagement = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Vendors</SelectItem>
-                {vendors.map((vendor) => (
-                  <SelectItem key={vendor} value={vendor}>{vendor}</SelectItem>
+                {vendorsArray.map((vendor: any) => (
+                  <SelectItem key={vendor._id || vendor.id || vendor} value={vendor._id || vendor.id || vendor}>
+                    {vendor.name || vendor.email || vendor}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>

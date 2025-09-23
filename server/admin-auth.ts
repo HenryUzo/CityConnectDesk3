@@ -315,7 +315,7 @@ const MAX_AUTH_ATTEMPTS = 5;
 const AUTH_WINDOW = 15 * 60 * 1000; // 15 minutes
 
 export const rateLimitAuth = (req: Request, res: Response, next: NextFunction) => {
-  const ip = req.ip;
+  const ip = req.ip || req.connection.remoteAddress || 'unknown';
   const now = Date.now();
   const attempts = authAttempts.get(ip);
 
