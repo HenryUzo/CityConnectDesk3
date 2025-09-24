@@ -37,8 +37,6 @@ const artisanRequestSchema = z.object({
 type ArtisanRequestFormData = z.infer<typeof artisanRequestSchema>;
 
 export default function BookArtisan() {
-  console.log("BookArtisan component is rendering");
-  
   const { user, logoutMutation } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();

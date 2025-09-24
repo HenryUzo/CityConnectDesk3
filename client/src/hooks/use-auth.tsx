@@ -37,7 +37,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loginMutation = useMutation({
     mutationFn: async (credentials: LoginData) => {
-      const res = await apiRequest("POST", "/api/login", credentials);
+      // Transform accessCode to username for backend compatibility
+      const loginData = credentials.accessCode 
+        ? { username: credentials.accessCode, password: "access_code_login" }
+        : { username: credentials.username, password: credentials.password };
+      
+      const res = await apiRequest("POST", "/api/login", loginData);
       return await res.json();
     },
     onSuccess: (user: SelectUser) => {
