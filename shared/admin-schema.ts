@@ -491,6 +491,27 @@ export const updateMarketplaceItemSchema = z.object({
   isActive: z.boolean().optional()
 });
 
+// Provider Schemas
+export const createProviderSchema = z.object({
+  name: z.string().min(1, "Name is required").max(100),
+  email: z.string().email("Invalid email format").max(255),
+  phone: z.string().max(20).optional(),
+  password: z.string().min(6, "Password must be at least 6 characters").max(100),
+  categories: z.array(z.enum(Object.values(ServiceCategory) as [string, ...string[]])).min(1, "At least one category is required"),
+  experience: z.number().int().min(0).max(50).optional().default(0),
+  description: z.string().max(1000).optional(),
+  isApproved: z.boolean().optional().default(true)
+});
+
+export const updateProviderSchema = z.object({
+  categories: z.array(z.enum(Object.values(ServiceCategory) as [string, ...string[]])).optional(),
+  experience: z.number().int().min(0).max(50).optional(),
+  description: z.string().max(1000).optional(),
+  isApproved: z.boolean().optional(),
+  rating: z.number().min(0).max(5).optional(),
+  totalJobs: z.number().int().min(0).optional()
+});
+
 // Type Exports
 export type Estate = IEstate;
 export type User = IUser;
@@ -510,3 +531,5 @@ export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
 export type CreateMarketplaceItemInput = z.infer<typeof createMarketplaceItemSchema>;
 export type UpdateMarketplaceItemInput = z.infer<typeof updateMarketplaceItemSchema>;
+export type CreateProviderInput = z.infer<typeof createProviderSchema>;
+export type UpdateProviderInput = z.infer<typeof updateProviderSchema>;

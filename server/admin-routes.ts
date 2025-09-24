@@ -12,6 +12,7 @@ import {
   rateLimitAuth,
   type AdminRequest
 } from './admin-auth';
+import { AdminUser } from './admin-db';
 import { 
   createEstateSchema, 
   createUserSchema, 
@@ -20,6 +21,7 @@ import {
   updateCategorySchema,
   createMarketplaceItemSchema,
   updateMarketplaceItemSchema,
+  createProviderSchema,
   UserRole 
 } from '../shared/admin-schema';
 
@@ -467,7 +469,75 @@ router.patch('/users/:id',
   }
 );
 
-// Provider Management Routes  
+// Provider Management Routes
+router.post('/providers', 
+  authenticateAdmin, 
+  setEstateContext,
+  requireEstateAdmin, 
+  auditAction('CREATE', 'PROVIDER'),
+  async (req: AdminRequest, res) => {
+    let createdUser: any = null;
+    
+    try {
+      // Validate input using Zod schema
+      const data = createProviderSchema.parse(req.body);
+      
+      // Hash password
+      const hashedPassword = await AdminAuthService.hashPassword(data.password);
+      
+      // First create the user account
+      createdUser = await adminDb.createUser({
+        name: data.name,
+        email: data.email,
+        phone: data.phone || '',
+        passwordHash: hashedPassword,
+        globalRole: 'provider'
+      });
+      
+      // Then create the provider profile
+      const provider = await adminDb.createProvider({
+        userId: createdUser._id.toString(),
+        categories: data.categories,
+        experience: data.experience || 0,
+        description: data.description || '',
+        isApproved: data.isApproved !== false, // Default to true unless explicitly false
+        rating: 0,
+        totalJobs: 0,
+        // Add current estate if not super admin
+        estates: req.adminUser?.globalRole !== UserRole.SUPER_ADMIN && req.currentEstate 
+          ? [req.currentEstate.id] 
+          : []
+      });
+      
+      res.status(201).json(provider);
+    } catch (error: any) {
+      // If provider creation failed but user was created, clean up the user
+      if (createdUser) {
+        try {
+          await AdminUser.findByIdAndDelete(createdUser._id);
+          console.log(`Cleaned up orphaned user ${createdUser._id} after provider creation failure`);
+        } catch (cleanupError) {
+          console.error(`Failed to cleanup user ${createdUser._id} after provider creation error:`, cleanupError);
+          console.error('Manual cleanup required for user:', createdUser._id);
+        }
+      }
+      
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          error: 'Validation error', 
+          details: error.errors.map((e: any) => `${e.path.join('.')}: ${e.message}`)
+        });
+      }
+      
+      if (error.code === 11000) {
+        res.status(400).json({ error: 'Email already exists' });
+      } else {
+        res.status(400).json({ error: error.message });
+      }
+    }
+  }
+);
+
 router.get('/providers', requireAdminDB, authenticateAdmin, setEstateContext, requireModerator, async (req: AdminRequest, res) => {
   try {
     const { approved, category, search, limit = 50, offset = 0 } = req.query;

@@ -9,8 +9,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { 
   createMarketplaceItemSchema, 
   updateMarketplaceItemSchema,
+  createProviderSchema,
   type CreateMarketplaceItemInput,
   type UpdateMarketplaceItemInput,
+  type CreateProviderInput,
   type IMarketplaceItem
 } from "@shared/admin-schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -987,6 +989,23 @@ const ProvidersManagement = () => {
   const [search, setSearch] = useState('');
   const [approvalFilter, setApprovalFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [showAddProvider, setShowAddProvider] = useState(false);
+  
+  const { toast } = useToast();
+  
+  const providerForm = useForm<CreateProviderInput>({
+    resolver: zodResolver(createProviderSchema),
+    defaultValues: {
+      name: '',
+      email: '',
+      phone: '',
+      password: '',
+      categories: [],
+      experience: 0,
+      description: '',
+      isApproved: true
+    }
+  });
   
   const { data: providers, isLoading } = useQuery({
     queryKey: ['/api/admin/providers', { search, approved: approvalFilter === 'all' ? undefined : approvalFilter, category: categoryFilter === 'all' ? undefined : categoryFilter }],
@@ -1000,13 +1019,49 @@ const ProvidersManagement = () => {
   const approveMutation = useMutation({
     mutationFn: ({ providerId, approved }: { providerId: string, approved: boolean }) => 
       adminApiRequest('PATCH', `/api/admin/providers/${providerId}/approve`, { approved }),
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/providers'] });
+      toast({ 
+        title: `Provider ${variables.approved ? 'approved' : 'rejected'} successfully`
+      });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error updating provider status", 
+        description: error.response?.data?.error || "Failed to update provider status",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const createProviderMutation = useMutation({
+    mutationFn: (providerData: CreateProviderInput) => 
+      adminApiRequest('POST', '/api/admin/providers', providerData),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/admin/providers'] });
+      setShowAddProvider(false);
+      providerForm.reset();
+      toast({ title: "Provider created successfully" });
     },
+    onError: (error: any) => {
+      const errorMessage = error.response?.data?.details?.length 
+        ? error.response.data.details.join(', ')
+        : error.response?.data?.error || "Failed to create provider";
+      
+      toast({ 
+        title: "Error creating provider", 
+        description: errorMessage,
+        variant: "destructive" 
+      });
+    }
   });
 
   const handleApproval = (providerId: string, approved: boolean) => {
     approveMutation.mutate({ providerId, approved });
+  };
+
+  const onSubmit = (data: CreateProviderInput) => {
+    createProviderMutation.mutate(data);
   };
 
   if (isLoading) {
@@ -1029,6 +1084,10 @@ const ProvidersManagement = () => {
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Provider Management</h1>
           <p className="text-gray-600 dark:text-gray-400">Approve and manage service providers</p>
         </div>
+        <Button onClick={() => setShowAddProvider(true)} data-testid="button-add-provider">
+          <Plus className="w-4 h-4 mr-2" />
+          Add Provider
+        </Button>
       </div>
 
       {/* Filters */}
@@ -1160,6 +1219,168 @@ const ProvidersManagement = () => {
           </Table>
         </CardContent>
       </Card>
+
+      {/* Add Provider Dialog */}
+      <Dialog open={showAddProvider} onOpenChange={(open) => {
+        setShowAddProvider(open);
+        if (!open) providerForm.reset();
+      }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Add New Service Provider</DialogTitle>
+            <DialogDescription>
+              Create a new service provider account. They will be automatically approved.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <Form {...providerForm}>
+            <form onSubmit={providerForm.handleSubmit(onSubmit)} className="space-y-6">
+              <div className="grid gap-4 py-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={providerForm.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Full Name *</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Enter provider name" {...field} data-testid="input-provider-name" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={providerForm.control}
+                    name="email"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Email *</FormLabel>
+                        <FormControl>
+                          <Input type="email" placeholder="Enter email address" {...field} data-testid="input-provider-email" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={providerForm.control}
+                    name="phone"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Phone Number</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Enter phone number" {...field} data-testid="input-provider-phone" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={providerForm.control}
+                    name="password"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Password *</FormLabel>
+                        <FormControl>
+                          <Input type="password" placeholder="Enter password" {...field} data-testid="input-provider-password" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                
+                <FormField
+                  control={providerForm.control}
+                  name="experience"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Years of Experience</FormLabel>
+                      <FormControl>
+                        <Input 
+                          type="number" 
+                          placeholder="Enter years of experience" 
+                          {...field}
+                          onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                          data-testid="input-provider-experience" 
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                
+                <FormField
+                  control={providerForm.control}
+                  name="description"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Description</FormLabel>
+                      <FormControl>
+                        <Textarea placeholder="Brief description of services offered" {...field} data-testid="textarea-provider-description" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                
+                <FormField
+                  control={providerForm.control}
+                  name="categories"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Service Categories *</FormLabel>
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        {['electrician', 'plumber', 'carpenter', 'market_runner'].map((category) => (
+                          <div key={category} className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id={`category-${category}`}
+                              checked={field.value?.includes(category) || false}
+                              onChange={(e) => {
+                                const updatedCategories = e.target.checked
+                                  ? [...(field.value || []), category]
+                                  : (field.value || []).filter(c => c !== category);
+                                field.onChange(updatedCategories);
+                              }}
+                              data-testid={`checkbox-category-${category}`}
+                            />
+                            <Label htmlFor={`category-${category}`} className="cursor-pointer">
+                              {category.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                            </Label>
+                          </div>
+                        ))}
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <DialogFooter>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={() => setShowAddProvider(false)}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit"
+                  disabled={createProviderMutation.isPending}
+                  data-testid="button-submit-provider"
+                >
+                  {createProviderMutation.isPending ? 'Creating...' : 'Create Provider'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
