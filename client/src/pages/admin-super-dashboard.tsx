@@ -473,9 +473,19 @@ const UsersManagement = () => {
   const toggleUserStatusMutation = useMutation({
     mutationFn: ({ userId, isActive }: { userId: string, isActive: boolean }) => 
       adminApiRequest('PATCH', `/api/admin/users/${userId}`, { isActive }),
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
+      toast({ 
+        title: `User ${variables.isActive ? 'activated' : 'deactivated'} successfully`
+      });
     },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error updating user status", 
+        description: error.response?.data?.error || "Failed to update user status",
+        variant: "destructive" 
+      });
+    }
   });
 
   const createUserMutation = useMutation({
@@ -485,7 +495,15 @@ const UsersManagement = () => {
       queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
       setShowAddUser(false);
       resetForm();
+      toast({ title: "User created successfully" });
     },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error creating user", 
+        description: error.response?.data?.error || "Failed to create user",
+        variant: "destructive" 
+      });
+    }
   });
 
   const updateUserMutation = useMutation({
@@ -495,7 +513,15 @@ const UsersManagement = () => {
       queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
       setEditingUser(null);
       resetForm();
+      toast({ title: "User updated successfully" });
     },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error updating user", 
+        description: error.response?.data?.error || "Failed to update user",
+        variant: "destructive" 
+      });
+    }
   });
 
   const handleToggleUserStatus = (userId: string, currentStatus: boolean) => {
@@ -521,15 +547,32 @@ const UsersManagement = () => {
     mutationFn: (membershipData: any) => 
       adminApiRequest('POST', '/api/admin/memberships', membershipData),
     onSuccess: () => {
+      // Invalidate all relevant queries to ensure UI consistency
       queryClient.invalidateQueries({ queryKey: ['/api/admin/memberships'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
+      
+      // Reset form state
+      setNewMembership({ estateId: '', role: '' });
+      
+      toast({ title: "Estate membership added successfully" });
     },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error adding membership", 
+        description: error.response?.data?.error || "Failed to add membership",
+        variant: "destructive" 
+      });
+    }
   });
 
   const deleteMembershipMutation = useMutation({
     mutationFn: ({ userId, estateId }: { userId: string, estateId: string }) => 
       adminApiRequest('DELETE', `/api/admin/memberships/${userId}/${estateId}`),
     onSuccess: () => {
+      // Invalidate all relevant queries to ensure UI consistency
       queryClient.invalidateQueries({ queryKey: ['/api/admin/memberships'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
+      
       toast({ title: "Membership removed successfully" });
     },
     onError: (error: any) => {
@@ -554,6 +597,21 @@ const UsersManagement = () => {
 
   const handleAddMembership = (estateId: string, role: string) => {
     if (!membershipUser) return;
+    
+    // Check for duplicate membership
+    const existingMembership = userMemberships?.find(
+      (membership: any) => membership.estateId === estateId
+    );
+    
+    if (existingMembership) {
+      toast({ 
+        title: "Duplicate membership", 
+        description: "User is already a member of this estate",
+        variant: "destructive" 
+      });
+      return;
+    }
+    
     createMembershipMutation.mutate({
       userId: membershipUser._id,
       estateId,
