@@ -29,9 +29,11 @@ function Router() {
       <Route path="/admin/login">
         <Redirect to="/admin-dashboard" />
       </Route>
-      <AdminAuthProvider>
-        <Route path="/admin-dashboard" component={AdminSuperDashboard} />
-      </AdminAuthProvider>
+      <Route path="/admin-dashboard">
+        <AdminAuthProvider>
+          <AdminSuperDashboard />
+        </AdminAuthProvider>
+      </Route>
       <ProtectedRoute path="/book-artisan" component={BookArtisan} />
       <ProtectedRoute path="/book-market-run" component={BookMarketRun} />
       <ProtectedRoute path="/track-orders" component={TrackOrders} />
