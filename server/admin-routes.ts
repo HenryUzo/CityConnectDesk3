@@ -13,6 +13,7 @@ import {
   type AdminRequest
 } from './admin-auth';
 import { AdminUser } from './admin-db';
+import { storage } from './storage'; // Bridge to PostgreSQL system
 import { 
   createEstateSchema, 
   createUserSchema, 
@@ -1407,6 +1408,336 @@ router.get('/orders/analytics/stats', requireAdminDB, authenticateAdmin, setEsta
     res.status(500).json({ error: error.message });
   }
 });
+
+// ============================================================================
+// BRIDGE API ENDPOINTS - Connect Admin System with PostgreSQL Resident/Provider Data
+// ============================================================================
+
+// Bridge: Get all service requests from PostgreSQL system
+router.get('/bridge/service-requests', 
+  authenticateAdmin, 
+  setEstateContext, 
+  requireEstateAdmin, 
+  async (req: AdminRequest, res) => {
+    try {
+      const { status, category, residentId, providerId } = req.query;
+      
+      // Estate scoping: Get user IDs for current estate
+      let allowedUserIds: Set<string> = new Set();
+      
+      if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN && !req.currentEstate) {
+        // Super admin without estate context can see all data
+        // Leave allowedUserIds empty to indicate no filtering needed
+      } else if (req.currentEstate) {
+        // Get all users (residents and providers) for this estate from MongoDB
+        const estateMembers = await adminDb.getEstateMemberships(req.currentEstate.id);
+        allowedUserIds = new Set(estateMembers.map(m => m.userId));
+      } else {
+        return res.status(400).json({ error: 'Estate context required for non-super admin users' });
+      }
+      
+      // Get all service requests from PostgreSQL
+      let requests = await storage.getAllServiceRequests();
+      
+      // Apply estate filtering unless super admin viewing global data
+      if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN && !req.currentEstate) {
+        // Super admin without estate context - no filtering needed
+      } else {
+        // Estate admin or super admin with estate context - apply filtering
+        requests = requests.filter(r => 
+          allowedUserIds.has(r.residentId) || 
+          (r.providerId && allowedUserIds.has(r.providerId))
+        );
+      }
+      
+      // Apply filters if provided
+      if (status) {
+        requests = requests.filter(r => r.status === status);
+      }
+      if (category) {
+        requests = requests.filter(r => r.category === category);
+      }
+      if (residentId) {
+        requests = requests.filter(r => r.residentId === residentId);
+      }
+      if (providerId) {
+        requests = requests.filter(r => r.providerId === providerId);
+      }
+      
+      // Enrich with user data
+      const enrichedRequests = await Promise.all(
+        requests.map(async (request) => {
+          const resident = await storage.getUser(request.residentId);
+          const provider = request.providerId ? await storage.getUser(request.providerId) : null;
+          
+          return {
+            ...request,
+            residentName: resident?.name || 'Unknown Resident',
+            residentEmail: resident?.email || '',
+            residentPhone: resident?.phone || '',
+            providerName: provider?.name || null,
+            providerEmail: provider?.email || null,
+            providerPhone: provider?.phone || null,
+          };
+        })
+      );
+      
+      res.json(enrichedRequests);
+    } catch (error: any) {
+      console.error('Bridge service requests error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// Bridge: Get all residents and providers from PostgreSQL system
+router.get('/bridge/users', 
+  authenticateAdmin, 
+  setEstateContext, 
+  requireEstateAdmin, 
+  async (req: AdminRequest, res) => {
+    try {
+      const { role, search, status } = req.query;
+      
+      // Estate scoping: Get user IDs for current estate
+      let allowedUserIds: Set<string> = new Set();
+      
+      if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN && !req.currentEstate) {
+        // Super admin without estate context can see all data
+        // Leave allowedUserIds empty to indicate no filtering needed
+      } else if (req.currentEstate) {
+        // Get all users (residents and providers) for this estate from MongoDB
+        const estateMembers = await adminDb.getEstateMemberships(req.currentEstate.id);
+        allowedUserIds = new Set(estateMembers.map(m => m.userId));
+      } else {
+        return res.status(400).json({ error: 'Estate context required for non-super admin users' });
+      }
+      
+      // Get users by role or all users
+      let users = role ? await storage.getUsers(role as string) : await storage.getUsers();
+      
+      // Apply estate filtering unless super admin viewing global data
+      if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN && !req.currentEstate) {
+        // Super admin without estate context - no filtering needed
+      } else {
+        // Estate admin or super admin with estate context - apply filtering
+        users = users.filter(user => allowedUserIds.has(user.id));
+      }
+      
+      // Apply filters
+      if (search) {
+        const searchTerm = (search as string).toLowerCase();
+        users = users.filter(user => 
+          user.name.toLowerCase().includes(searchTerm) ||
+          user.email.toLowerCase().includes(searchTerm) ||
+          (user.phone && user.phone.includes(searchTerm))
+        );
+      }
+      
+      if (status === 'active') {
+        users = users.filter(user => user.isActive);
+      } else if (status === 'inactive') {
+        users = users.filter(user => !user.isActive);
+      }
+      
+      // For providers, get additional data like pending approvals
+      if (role === 'provider') {
+        const enrichedUsers = users.map(user => ({
+          ...user,
+          isPending: !user.isApproved,
+          totalJobs: 0, // This could be calculated from service requests
+        }));
+        res.json(enrichedUsers);
+      } else {
+        res.json(users);
+      }
+    } catch (error: any) {
+      console.error('Bridge users error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// Bridge: Get user statistics from PostgreSQL system
+router.get('/bridge/stats', 
+  authenticateAdmin, 
+  setEstateContext, 
+  requireEstateAdmin, 
+  async (req: AdminRequest, res) => {
+    try {
+      // Estate scoping: Get user IDs for current estate
+      let allowedUserIds: Set<string> = new Set();
+      let estateScoped = false;
+      
+      if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN && !req.currentEstate) {
+        // Super admin without estate context can see all data
+        estateScoped = false;
+      } else if (req.currentEstate) {
+        // Get all users (residents and providers) for this estate from MongoDB
+        const estateMembers = await adminDb.getEstateMemberships(req.currentEstate.id);
+        allowedUserIds = new Set(estateMembers.map(m => m.userId));
+        estateScoped = true;
+      } else {
+        return res.status(400).json({ error: 'Estate context required for non-super admin users' });
+      }
+      
+      // Get additional detailed statistics
+      const [
+        allUsers,
+        serviceRequests,
+      ] = await Promise.all([
+        storage.getUsers(),
+        storage.getAllServiceRequests(),
+      ]);
+      
+      // Filter data by estate based on admin role and context
+      const filteredUsers = (req.adminUser?.globalRole === UserRole.SUPER_ADMIN && !req.currentEstate) ? 
+        allUsers : 
+        allUsers.filter(user => allowedUserIds.has(user.id));
+        
+      const filteredServiceRequests = (req.adminUser?.globalRole === UserRole.SUPER_ADMIN && !req.currentEstate) ? 
+        serviceRequests : 
+        serviceRequests.filter(r => 
+          allowedUserIds.has(r.residentId) || 
+          (r.providerId && allowedUserIds.has(r.providerId))
+        );
+      
+      // Calculate service request statistics using filtered data
+      const serviceStats = {
+        total: filteredServiceRequests.length,
+        pending: filteredServiceRequests.filter(r => r.status === 'pending').length,
+        assigned: filteredServiceRequests.filter(r => r.status === 'assigned').length,
+        inProgress: filteredServiceRequests.filter(r => r.status === 'in_progress').length,
+        completed: filteredServiceRequests.filter(r => r.status === 'completed').length,
+        cancelled: filteredServiceRequests.filter(r => r.status === 'cancelled').length,
+      };
+      
+      // Calculate user activity using filtered data
+      const userStats = {
+        totalUsers: filteredUsers.length,
+        totalResidents: filteredUsers.filter(u => u.role === 'resident').length,
+        totalProviders: filteredUsers.filter(u => u.role === 'provider').length,
+        totalRequests: filteredServiceRequests.length,
+        activeRequests: filteredServiceRequests.filter(r => r.status === 'pending').length,
+        pendingApprovals: filteredUsers.filter(u => u.role === 'provider' && !u.isApproved).length,
+        activeUsers: filteredUsers.filter(u => u.isActive).length,
+        inactiveUsers: filteredUsers.filter(u => !u.isActive).length,
+        approvedProviders: filteredUsers.filter(u => u.role === 'provider' && u.isApproved).length,
+        pendingProviders: filteredUsers.filter(u => u.role === 'provider' && !u.isApproved).length,
+      };
+      
+      res.json({
+        users: userStats,
+        serviceRequests: serviceStats,
+        lastUpdated: new Date().toISOString(),
+        source: 'postgresql_bridge'
+      });
+    } catch (error: any) {
+      console.error('Bridge stats error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// Bridge: Approve/reject providers in PostgreSQL system
+router.patch('/bridge/providers/:id/approval', 
+  authenticateAdmin, 
+  setEstateContext, 
+  requireEstateAdmin,
+  auditAction('UPDATE', 'PROVIDER'),
+  async (req: AdminRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { approved, reason } = req.body;
+      
+      if (typeof approved !== 'boolean') {
+        return res.status(400).json({ error: 'approved field must be a boolean' });
+      }
+      
+      // Estate scoping: Check if this provider belongs to the current estate
+      if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN && req.currentEstate) {
+        const estateMembers = await adminDb.getEstateMemberships(req.currentEstate.id);
+        const allowedUserIds = new Set(estateMembers.map(m => m.userId));
+        
+        if (!allowedUserIds.has(id)) {
+          return res.status(403).json({ error: 'Provider not found in your estate' });
+        }
+      }
+      
+      // Update provider approval status in PostgreSQL
+      const updatedProvider = await storage.updateUser(id, { 
+        isApproved: approved,
+        updatedAt: new Date()
+      });
+      
+      if (!updatedProvider) {
+        return res.status(404).json({ error: 'Provider not found' });
+      }
+      
+      // Log the action
+      console.log(`Provider ${id} ${approved ? 'approved' : 'rejected'} by admin ${req.adminUser?.email}${reason ? ` - Reason: ${reason}` : ''}`);
+      
+      res.json({
+        message: `Provider ${approved ? 'approved' : 'rejected'} successfully`,
+        provider: updatedProvider
+      });
+    } catch (error: any) {
+      console.error('Bridge provider approval error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// Bridge: Get user wallets and transactions from PostgreSQL system
+router.get('/bridge/users/:id/wallet', 
+  authenticateAdmin, 
+  setEstateContext, 
+  requireEstateAdmin, 
+  async (req: AdminRequest, res) => {
+    try {
+      const { id } = req.params;
+      
+      // Estate scoping: Check if this user belongs to the current estate
+      if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN && req.currentEstate) {
+        const estateMembers = await adminDb.getEstateMemberships(req.currentEstate.id);
+        const allowedUserIds = new Set(estateMembers.map(m => m.userId));
+        
+        if (!allowedUserIds.has(id)) {
+          return res.status(403).json({ error: 'User not found in your estate' });
+        }
+      }
+      
+      // Get user details
+      const user = await storage.getUser(id);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      
+      // Get wallet information
+      const wallet = await storage.getWalletByUserId(id);
+      if (!wallet) {
+        return res.json({ 
+          user: { id: user.id, name: user.name, email: user.email },
+          wallet: null,
+          transactions: [],
+          message: 'No wallet found for this user'
+        });
+      }
+      
+      // Get transactions
+      const transactions = await storage.getTransactionsByWallet(wallet.id);
+      
+      res.json({
+        user: { id: user.id, name: user.name, email: user.email, role: user.role },
+        wallet,
+        transactions
+      });
+    } catch (error: any) {
+      console.error('Bridge wallet error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
 
 // Health Check
 router.get('/health', (req, res) => {

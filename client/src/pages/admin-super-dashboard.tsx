@@ -2662,6 +2662,137 @@ const RecentActivity = () => {
   );
 };
 
+// PostgreSQL Bridge Stats Component - Shows data from resident/provider system
+const PostgreSQLBridgeStats = () => {
+  const { data: bridgeStats, isLoading } = useQuery({
+    queryKey: ['/api/admin/bridge/stats'],
+    queryFn: () => adminApiRequest('GET', '/api/admin/bridge/stats'),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-foreground">Resident & Provider System Data</h3>
+          <Badge variant="secondary">PostgreSQL</Badge>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-6">
+                <div className="animate-pulse">
+                  <div className="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
+                  <div className="h-8 bg-gray-200 rounded w-1/3 mb-2"></div>
+                  <div className="h-3 bg-gray-200 rounded w-2/3"></div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const bridgeStatCards = [
+    {
+      title: 'Total Residents',
+      value: bridgeStats?.users?.totalResidents || 0,
+      icon: Users,
+      description: 'Active residents in the system',
+      color: 'text-blue-600'
+    },
+    {
+      title: 'Service Providers',
+      value: bridgeStats?.users?.totalProviders || 0,
+      icon: UserCheck,
+      description: 'Registered service providers',
+      color: 'text-green-600'
+    },
+    {
+      title: 'Service Requests',
+      value: bridgeStats?.serviceRequests?.total || 0,
+      icon: ClipboardList,
+      description: 'Total service requests',
+      color: 'text-purple-600'
+    },
+    {
+      title: 'Pending Approvals',
+      value: bridgeStats?.users?.pendingProviders || 0,
+      icon: AlertTriangle,
+      description: 'Providers awaiting approval',
+      color: 'text-orange-600'
+    },
+  ];
+
+  const requestStatusData = bridgeStats?.serviceRequests ? [
+    { label: 'Pending', value: bridgeStats.serviceRequests.pending, color: 'bg-yellow-500' },
+    { label: 'In Progress', value: bridgeStats.serviceRequests.inProgress, color: 'bg-blue-500' },
+    { label: 'Completed', value: bridgeStats.serviceRequests.completed, color: 'bg-green-500' },
+    { label: 'Cancelled', value: bridgeStats.serviceRequests.cancelled, color: 'bg-red-500' },
+  ] : [];
+
+  return (
+    <div className="mb-8">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-foreground">Resident & Provider System Data</h3>
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary">PostgreSQL</Badge>
+          <Badge variant="outline">Live Data</Badge>
+        </div>
+      </div>
+      
+      {/* Bridge Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+        {bridgeStatCards.map((stat, index) => {
+          const Icon = stat.icon;
+          return (
+            <Card key={index} className="border-l-4 border-l-blue-500">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">
+                      {stat.title}
+                    </p>
+                    <p className={`text-2xl font-bold ${stat.color}`} data-testid={`bridge-stat-${stat.title.toLowerCase().replace(' ', '-')}`}>
+                      {stat.value}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {stat.description}
+                    </p>
+                  </div>
+                  <div className="bg-blue-50 p-3 rounded-lg">
+                    <Icon className="w-6 h-6 text-blue-600" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* Service Request Status Breakdown */}
+      {requestStatusData.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Service Request Status Breakdown</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {requestStatusData.map((status, index) => (
+                <div key={index} className="text-center">
+                  <div className={`w-full h-2 ${status.color} rounded-full mb-2`}></div>
+                  <p className="text-sm font-medium">{status.label}</p>
+                  <p className="text-lg font-bold">{status.value}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+};
+
 // Dashboard Stats Component
 const DashboardStats = () => {
   const { data: stats, isLoading } = useQuery({
@@ -2806,6 +2937,8 @@ export default function AdminSuperDashboard() {
                 </div>
 
                 <DashboardStats />
+
+                <PostgreSQLBridgeStats />
 
                 {/* Recent Activity */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
