@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Form,
   FormControl,
@@ -69,7 +70,10 @@ import {
   Tags,
   ShoppingBag,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Download,
+  Calendar,
+  Clock
 } from "lucide-react";
 
 // Admin Context for JWT token management
@@ -442,6 +446,9 @@ const UsersManagement = () => {
   });
   const [showMemberships, setShowMemberships] = useState(false);
   const [membershipUser, setMembershipUser] = useState<any>(null);
+  const [newMembership, setNewMembership] = useState({ estateId: '', role: '' });
+  
+  const { toast } = useToast();
   
   const { data: users, isLoading } = useQuery({
     queryKey: ['/api/admin/users', { search, globalRole: roleFilter === 'all' ? undefined : roleFilter }],
@@ -454,6 +461,7 @@ const UsersManagement = () => {
   const { data: estates } = useQuery({
     queryKey: ['/api/admin/estates'],
     queryFn: () => adminApiRequest('GET', '/api/admin/estates'),
+    enabled: showMemberships, // Only load when needed
   });
 
   const { data: userMemberships } = useQuery({
@@ -517,12 +525,20 @@ const UsersManagement = () => {
     },
   });
 
-  const updateMembershipMutation = useMutation({
-    mutationFn: ({ userId, estateId, membershipData }: { userId: string, estateId: string, membershipData: any }) => 
-      adminApiRequest('PATCH', `/api/admin/memberships/${userId}/${estateId}`, membershipData),
+  const deleteMembershipMutation = useMutation({
+    mutationFn: ({ userId, estateId }: { userId: string, estateId: string }) => 
+      adminApiRequest('DELETE', `/api/admin/memberships/${userId}/${estateId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/admin/memberships'] });
+      toast({ title: "Membership removed successfully" });
     },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error removing membership", 
+        description: error.response?.data?.error || "Failed to remove membership",
+        variant: "destructive" 
+      });
+    }
   });
 
   const handleSubmit = () => {
@@ -559,7 +575,8 @@ const UsersManagement = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <TooltipProvider>
+      <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">User Management</h1>
@@ -644,34 +661,57 @@ const UsersManagement = () => {
                   </TableCell>
                   <TableCell>
                     <div className="flex space-x-2">
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => handleOpenEditDialog(user)}
-                        data-testid={`button-edit-user-${user._id}`}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => {
-                          setMembershipUser(user);
-                          setShowMemberships(true);
-                        }}
-                        data-testid={`button-estates-user-${user._id}`}
-                      >
-                        <Building2 className="w-4 h-4" />
-                      </Button>
-                      <Button 
-                        variant={user.isActive ? "destructive" : "default"} 
-                        size="sm"
-                        onClick={() => handleToggleUserStatus(user._id, user.isActive)}
-                        disabled={toggleUserStatusMutation.isPending}
-                        data-testid={`button-toggle-user-${user._id}`}
-                      >
-                        {user.isActive ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => handleOpenEditDialog(user)}
+                            data-testid={`button-edit-user-${user._id}`}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Edit user details</p>
+                        </TooltipContent>
+                      </Tooltip>
+                      
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => {
+                              setMembershipUser(user);
+                              setShowMemberships(true);
+                            }}
+                            data-testid={`button-estates-user-${user._id}`}
+                          >
+                            <Building2 className="w-4 h-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Manage estate memberships</p>
+                        </TooltipContent>
+                      </Tooltip>
+                      
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant={user.isActive ? "destructive" : "default"} 
+                            size="sm"
+                            onClick={() => handleToggleUserStatus(user._id, user.isActive)}
+                            disabled={toggleUserStatusMutation.isPending}
+                            data-testid={`button-toggle-user-${user._id}`}
+                          >
+                            {user.isActive ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>{user.isActive ? 'Deactivate user' : 'Activate user'}</p>
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -802,10 +842,11 @@ const UsersManagement = () => {
                     <Button
                       variant="destructive"
                       size="sm"
-                      disabled={updateMembershipMutation.isPending}
+                      onClick={() => deleteMembershipMutation.mutate({ userId: membership.userId, estateId: membership.estateId })}
+                      disabled={deleteMembershipMutation.isPending}
                       data-testid={`button-remove-membership-${membership.estateId}`}
                     >
-                      Remove
+                      {deleteMembershipMutation.isPending ? 'Removing...' : 'Remove'}
                     </Button>
                   </div>
                 ))}
@@ -821,7 +862,10 @@ const UsersManagement = () => {
             <div>
               <h4 className="font-medium mb-3">Add Estate Membership</h4>
               <div className="flex space-x-2">
-                <Select>
+                <Select 
+                  value={newMembership.estateId} 
+                  onValueChange={(value) => setNewMembership({ ...newMembership, estateId: value })}
+                >
                   <SelectTrigger className="flex-1" data-testid="select-estate">
                     <SelectValue placeholder="Select Estate" />
                   </SelectTrigger>
@@ -833,7 +877,10 @@ const UsersManagement = () => {
                     ))}
                   </SelectContent>
                 </Select>
-                <Select>
+                <Select 
+                  value={newMembership.role} 
+                  onValueChange={(value) => setNewMembership({ ...newMembership, role: value })}
+                >
                   <SelectTrigger className="w-40" data-testid="select-estate-role">
                     <SelectValue placeholder="Select Role" />
                   </SelectTrigger>
@@ -845,7 +892,13 @@ const UsersManagement = () => {
                   </SelectContent>
                 </Select>
                 <Button
-                  disabled={createMembershipMutation.isPending}
+                  onClick={() => {
+                    if (newMembership.estateId && newMembership.role) {
+                      handleAddMembership(newMembership.estateId, newMembership.role);
+                      setNewMembership({ estateId: '', role: '' }); // Reset form
+                    }
+                  }}
+                  disabled={createMembershipMutation.isPending || !newMembership.estateId || !newMembership.role}
                   data-testid="button-add-membership"
                 >
                   {createMembershipMutation.isPending ? 'Adding...' : 'Add'}
@@ -866,7 +919,8 @@ const UsersManagement = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+      </div>
+    </TooltipProvider>
   );
 };
 
@@ -1067,6 +1121,7 @@ const CategoriesManagement = () => {
   });
   
   const { user } = useAdminAuth();
+  const { toast } = useToast();
   const isSuperAdmin = user?.globalRole === 'super_admin';
   
   const { data: categories, isLoading } = useQuery({
@@ -1129,8 +1184,6 @@ const CategoriesManagement = () => {
       });
     }
   });
-
-  const { toast } = useToast();
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2109,6 +2162,227 @@ const MarketplaceManagement = () => {
   );
 };
 
+// Recent Activity Component
+const RecentActivity = () => {
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [search, setSearch] = useState('');
+  const [limit, setLimit] = useState(10);
+  
+  const { data: activities, isLoading } = useQuery({
+    queryKey: ['/api/admin/audit-logs', { limit, search, dateFrom, dateTo }],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (search) params.append('search', search);
+      if (dateFrom) params.append('dateFrom', dateFrom);
+      if (dateTo) params.append('dateTo', dateTo);
+      params.append('limit', limit.toString());
+      
+      const queryString = params.toString();
+      return adminApiRequest('GET', `/api/admin/audit-logs${queryString ? '?' + queryString : ''}`);
+    },
+  });
+
+  const exportToCsv = () => {
+    if (!activities || activities.length === 0) return;
+    
+    const headers = ['Date', 'User', 'Action', 'Target', 'Details'];
+    const csvContent = [
+      headers.join(','),
+      ...activities.map((activity: any) => [
+        new Date(activity.createdAt).toLocaleString(),
+        activity.user?.name || 'System',
+        activity.action || '',
+        activity.target || '',
+        activity.details?.replace(/,/g, ';') || ''
+      ].map(field => `"${field}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `activity-logs-${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const getActivityIcon = (action: string) => {
+    switch (action?.toLowerCase()) {
+      case 'create':
+      case 'register':
+        return <Plus className="w-4 h-4 text-green-600" />;
+      case 'update':
+      case 'edit':
+        return <Edit className="w-4 h-4 text-blue-600" />;
+      case 'delete':
+      case 'remove':
+        return <XCircle className="w-4 h-4 text-red-600" />;
+      case 'approve':
+        return <CheckCircle className="w-4 h-4 text-green-600" />;
+      case 'reject':
+        return <XCircle className="w-4 h-4 text-orange-600" />;
+      case 'login':
+        return <LogOut className="w-4 h-4 text-purple-600" />;
+      default:
+        return <ClipboardList className="w-4 h-4 text-gray-600" />;
+    }
+  };
+
+  const getActivityBgColor = (action: string) => {
+    switch (action?.toLowerCase()) {
+      case 'create':
+      case 'register':
+      case 'approve':
+        return 'bg-green-100';
+      case 'update':
+      case 'edit':
+        return 'bg-blue-100';
+      case 'delete':
+      case 'remove':
+        return 'bg-red-100';
+      case 'reject':
+        return 'bg-orange-100';
+      case 'login':
+        return 'bg-purple-100';
+      default:
+        return 'bg-gray-100';
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            <Clock className="w-5 h-5" />
+            Recent Activity
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={exportToCsv}
+              disabled={!activities || activities.length === 0}
+              data-testid="button-export-activity"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Export CSV
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {/* Filters */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+          <div>
+            <Label htmlFor="dateFrom" className="text-sm">From Date</Label>
+            <Input
+              id="dateFrom"
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="mt-1"
+              data-testid="input-date-from"
+            />
+          </div>
+          <div>
+            <Label htmlFor="dateTo" className="text-sm">To Date</Label>
+            <Input
+              id="dateTo"
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="mt-1"
+              data-testid="input-date-to"
+            />
+          </div>
+          <div>
+            <Label htmlFor="activitySearch" className="text-sm">Search</Label>
+            <Input
+              id="activitySearch"
+              placeholder="Search activities..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="mt-1"
+              data-testid="input-search-activity"
+            />
+          </div>
+          <div>
+            <Label htmlFor="limit" className="text-sm">Show Records</Label>
+            <Select value={limit.toString()} onValueChange={(value) => setLimit(Number(value))}>
+              <SelectTrigger className="mt-1" data-testid="select-activity-limit">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="25">25</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {/* Activity List */}
+        <div className="space-y-3">
+          {isLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center space-x-4 animate-pulse">
+                  <div className="w-8 h-8 bg-gray-200 rounded-full"></div>
+                  <div className="flex-1 space-y-1">
+                    <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                    <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : activities && activities.length > 0 ? (
+            activities.map((activity: any, index: number) => (
+              <div key={activity._id || index} className="flex items-center space-x-4 p-3 hover:bg-gray-50 rounded-lg">
+                <div className={`w-8 h-8 ${getActivityBgColor(activity.action)} rounded-full flex items-center justify-center`}>
+                  {getActivityIcon(activity.action)}
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-medium" data-testid={`activity-action-${index}`}>
+                    {activity.action || 'Unknown action'} {activity.target && `- ${activity.target}`}
+                  </p>
+                  <p className="text-xs text-muted-foreground" data-testid={`activity-details-${index}`}>
+                    {activity.user?.name || 'System'} • {activity.details || 'No details'} • {' '}
+                    {activity.createdAt ? new Date(activity.createdAt).toLocaleString() : 'Unknown time'}
+                  </p>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              <ClipboardList className="w-8 h-8 mx-auto mb-2 text-gray-400" />
+              <p>No recent activity found</p>
+              {(dateFrom || dateTo || search) && (
+                <Button 
+                  variant="link" 
+                  size="sm" 
+                  onClick={() => {
+                    setDateFrom('');
+                    setDateTo('');
+                    setSearch('');
+                  }}
+                  className="mt-2"
+                >
+                  Clear filters
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
 // Dashboard Stats Component
 const DashboardStats = () => {
   const { data: stats, isLoading } = useQuery({
@@ -2256,42 +2530,7 @@ export default function AdminSuperDashboard() {
 
                 {/* Recent Activity */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Recent Activity</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        <div className="flex items-center space-x-4">
-                          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                            <Users className="w-4 h-4 text-blue-600" />
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-sm font-medium">New user registered</p>
-                            <p className="text-xs text-muted-foreground">Lekki Estate - 2 minutes ago</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center space-x-4">
-                          <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-                            <ClipboardList className="w-4 h-4 text-green-600" />
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-sm font-medium">Service request completed</p>
-                            <p className="text-xs text-muted-foreground">Victoria Island - 15 minutes ago</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center space-x-4">
-                          <div className="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center">
-                            <AlertTriangle className="w-4 h-4 text-orange-600" />
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-sm font-medium">Provider approval pending</p>
-                            <p className="text-xs text-muted-foreground">Ikoyi Estate - 1 hour ago</p>
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <RecentActivity />
 
                   <Card>
                     <CardHeader>
@@ -2334,12 +2573,13 @@ export default function AdminSuperDashboard() {
             )}
 
             {activeTab === 'users' && <UsersManagement />}
+            {activeTab === 'estates' && <EstatesManagement />}
             {activeTab === 'providers' && <ProvidersManagement />}
             {activeTab === 'categories' && <CategoriesManagement />}
             {activeTab === 'marketplace' && <MarketplaceManagement />}
             {activeTab === 'orders' && <OrdersManagement />}
             
-            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'providers' && activeTab !== 'categories' && activeTab !== 'marketplace' && activeTab !== 'orders' && (
+            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'estates' && activeTab !== 'providers' && activeTab !== 'categories' && activeTab !== 'marketplace' && activeTab !== 'orders' && (
               <div className="text-center py-12">
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
                   {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Management
@@ -2362,6 +2602,361 @@ export default function AdminSuperDashboard() {
           </div>
         </div>
       </div>
+    </div>
+  );
+};
+
+// Estates Management Component  
+const EstatesManagement = () => {
+  const [search, setSearch] = useState('');
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [editingEstate, setEditingEstate] = useState<any>(null);
+  const [formData, setFormData] = useState({
+    name: '',
+    slug: '',
+    description: '',
+    address: '',
+    settings: {
+      servicesEnabled: [],
+      marketplaceEnabled: true,
+      paymentMethods: [],
+      deliveryRules: {}
+    }
+  });
+  
+  const { user } = useAdminAuth();
+  const { toast } = useToast();
+  const isSuperAdmin = user?.globalRole === 'super_admin';
+
+  const { data: estates, isLoading } = useQuery({
+    queryKey: ['/api/admin/estates', { search }],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (search) params.append('search', search);
+      const queryString = params.toString();
+      return adminApiRequest('GET', `/api/admin/estates${queryString ? '?' + queryString : ''}`);
+    },
+  });
+
+  const createEstateMutation = useMutation({
+    mutationFn: (estateData: any) => 
+      adminApiRequest('POST', '/api/admin/estates', estateData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/estates'] });
+      setIsCreateDialogOpen(false);
+      resetForm();
+      toast({ title: "Estate created successfully" });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error creating estate", 
+        description: error.response?.data?.error || "Failed to create estate",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const updateEstateMutation = useMutation({
+    mutationFn: ({ id, ...data }: any) => 
+      adminApiRequest('PATCH', `/api/admin/estates/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/estates'] });
+      setEditingEstate(null);
+      resetForm();
+      toast({ title: "Estate updated successfully" });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error updating estate", 
+        description: error.response?.data?.error || "Failed to update estate",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const deleteEstateMutation = useMutation({
+    mutationFn: (estateId: string) => 
+      adminApiRequest('DELETE', `/api/admin/estates/${estateId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/estates'] });
+      toast({ title: "Estate deleted successfully" });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Error deleting estate", 
+        description: error.response?.data?.error || "Failed to delete estate",
+        variant: "destructive" 
+      });
+    }
+  });
+
+  const resetForm = () => {
+    setFormData({
+      name: '',
+      slug: '',
+      description: '',
+      address: '',
+      settings: {
+        servicesEnabled: [],
+        marketplaceEnabled: true,
+        paymentMethods: [],
+        deliveryRules: {}
+      }
+    });
+  };
+
+  const handleEdit = (estate: any) => {
+    setEditingEstate(estate);
+    setFormData({
+      name: estate.name || '',
+      slug: estate.slug || '',
+      description: estate.description || '',
+      address: estate.address || '',
+      settings: estate.settings || {
+        servicesEnabled: [],
+        marketplaceEnabled: true,
+        paymentMethods: [],
+        deliveryRules: {}
+      }
+    });
+  };
+
+  const handleSubmit = () => {
+    if (editingEstate) {
+      updateEstateMutation.mutate({ id: editingEstate._id, ...formData });
+    } else {
+      createEstateMutation.mutate({
+        ...formData,
+        coverage: {
+          type: 'Polygon',
+          coordinates: [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] // Default polygon
+        }
+      });
+    }
+  };
+
+  const handleDelete = (estateId: string) => {
+    if (confirm('Are you sure you want to delete this estate?')) {
+      deleteEstateMutation.mutate(estateId);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Estate Management</h1>
+          <p className="text-gray-600 dark:text-gray-400">Manage estates and their configurations</p>
+        </div>
+        {isSuperAdmin && (
+          <Button onClick={() => setIsCreateDialogOpen(true)} data-testid="button-add-estate">
+            <Plus className="w-4 h-4 mr-2" />
+            Add Estate
+          </Button>
+        )}
+      </div>
+
+      {/* Search Bar */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+            <Input
+              placeholder="Search estates..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-10"
+              data-testid="input-search-estates"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Estates Table */}
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Address</TableHead>
+                <TableHead>Marketplace</TableHead>
+                <TableHead>Services</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <TableRow key={i}>
+                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
+                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
+                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
+                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
+                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
+                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
+                  </TableRow>
+                ))
+              ) : estates && estates.length > 0 ? (
+                estates.map((estate: any) => (
+                  <TableRow key={estate._id}>
+                    <TableCell className="font-medium" data-testid={`estate-name-${estate._id}`}>
+                      {estate.name}
+                    </TableCell>
+                    <TableCell data-testid={`estate-address-${estate._id}`}>
+                      {estate.address}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={estate.settings?.marketplaceEnabled ? "default" : "secondary"}>
+                        {estate.settings?.marketplaceEnabled ? "Enabled" : "Disabled"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm text-muted-foreground">
+                        {estate.settings?.servicesEnabled?.length || 0} services
+                      </span>
+                    </TableCell>
+                    <TableCell data-testid={`estate-created-${estate._id}`}>
+                      {new Date(estate.createdAt).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex space-x-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleEdit(estate)}
+                          data-testid={`button-edit-estate-${estate._id}`}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        {isSuperAdmin && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDelete(estate._id)}
+                            data-testid={`button-delete-estate-${estate._id}`}
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                    No estates found
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Create/Edit Dialog */}
+      <Dialog open={isCreateDialogOpen || !!editingEstate} onOpenChange={() => {
+        setIsCreateDialogOpen(false);
+        setEditingEstate(null);
+        resetForm();
+      }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{editingEstate ? 'Edit Estate' : 'Create New Estate'}</DialogTitle>
+            <DialogDescription>
+              {editingEstate ? 'Update estate information' : 'Add a new estate to the platform'}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="estateName">Estate Name</Label>
+                <Input
+                  id="estateName"
+                  placeholder="Enter estate name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  data-testid="input-estate-name"
+                />
+              </div>
+              <div>
+                <Label htmlFor="estateSlug">Slug</Label>
+                <Input
+                  id="estateSlug"
+                  placeholder="estate-slug"
+                  value={formData.slug}
+                  onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
+                  data-testid="input-estate-slug"
+                />
+              </div>
+            </div>
+            
+            <div>
+              <Label htmlFor="estateAddress">Address</Label>
+              <Input
+                id="estateAddress"
+                placeholder="Enter estate address"
+                value={formData.address}
+                onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                data-testid="input-estate-address"
+              />
+            </div>
+            
+            <div>
+              <Label htmlFor="estateDescription">Description</Label>
+              <Textarea
+                id="estateDescription"
+                placeholder="Enter estate description"
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                data-testid="textarea-estate-description"
+              />
+            </div>
+            
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                id="marketplaceEnabled"
+                checked={formData.settings.marketplaceEnabled}
+                onChange={(e) => setFormData({ 
+                  ...formData, 
+                  settings: { ...formData.settings, marketplaceEnabled: e.target.checked }
+                })}
+                data-testid="checkbox-marketplace-enabled"
+              />
+              <Label htmlFor="marketplaceEnabled">Enable Marketplace</Label>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button 
+              type="button" 
+              variant="outline" 
+              onClick={() => {
+                setIsCreateDialogOpen(false);
+                setEditingEstate(null);
+                resetForm();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button 
+              type="button" 
+              onClick={handleSubmit}
+              disabled={createEstateMutation.isPending || updateEstateMutation.isPending}
+              data-testid="button-submit-estate"
+            >
+              {createEstateMutation.isPending || updateEstateMutation.isPending ? 
+                'Saving...' : 
+                editingEstate ? 'Update Estate' : 'Create Estate'
+              }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
