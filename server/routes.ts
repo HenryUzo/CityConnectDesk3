@@ -5,8 +5,12 @@ import { storage } from "./storage";
 import { insertServiceRequestSchema, residentLoginSchema, providerLoginSchema } from "@shared/schema";
 import { z } from "zod";
 import adminRoutes from "./admin-routes";
+import { ObjectId } from "mongodb"; // put this import at the very top of the file if not already there
 
 export async function registerRoutes(app: Express): Promise<Server> {
+
+
+  
   // Setup authentication routes
   setupAuth(app);
 
@@ -129,6 +133,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/admin/providers", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { search, approved, category } = req.query;
+
+      const providers = await storage.getProviders({
+        search: search as string,
+        approved: approved !== undefined ? approved === "true" : undefined,
+        category: category as string,
+      });
+
+      res.json(providers);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+
   app.get("/api/admin/providers/pending", async (req, res, next) => {
     try {
       if (!req.isAuthenticated() || req.user?.role !== "admin") {
@@ -174,6 +199,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Admin: Get a specific service request by ID
+  app.get("/api/admin/service-requests/:id", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const request = await storage.getServiceRequest(id);
+
+      if (!request) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      res.json(request);
+    } catch (error) {
+      console.error("Error fetching service request for admin:", error);
+      next(error);
+    }
+  });
+
+
   // Access Code Generation Route (for testing)
   app.post("/api/generate-access-code", async (req, res, next) => {
     try {
@@ -188,7 +235,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       next(error);
     }
   });
+  
+ 
 
+  // Resident: Get a specific service request by ID
+  app.get("/api/service-requests/:id", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated() || req.user?.role !== "resident") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid service request ID" });
+      }
+
+      const request = await storage.getServiceRequest(id);
+       
+
+      if (!request) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      res.json(request);
+    } catch (error) {
+      console.error("Error fetching service request:", error);
+      next(error);
+    }
+  });
+
+  
+  
   const httpServer = createServer(app);
   return httpServer;
 }
+

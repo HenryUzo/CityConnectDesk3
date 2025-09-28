@@ -30,11 +30,18 @@ async function comparePasswords(supplied: string, stored: string) {
 
 export function setupAuth(app: Express) {
   const sessionSettings: session.SessionOptions = {
-    secret: process.env.SESSION_SECRET!,
+    secret: process.env.SESSION_SECRET || "dev_secret",
     resave: false,
     saveUninitialized: false,
     store: storage.sessionStore,
+    cookie: {
+      httpOnly: true,          // cookie not accessible to JS
+      secure: false,           // Replit dev runs behind http -> must be false
+      sameSite: "lax",         // prevents most CSRF issues but still works cross-site
+      maxAge: 1000 * 60 * 60,  // 1 hour session
+    },
   };
+
 
   app.set("trust proxy", 1);
   app.use(session(sessionSettings));

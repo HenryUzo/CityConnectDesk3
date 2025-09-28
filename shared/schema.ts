@@ -1,8 +1,9 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, integer, decimal, boolean, pgEnum, doublePrecision } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, decimal, boolean, pgEnum, doublePrecision, jsonb, uuid } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+
 
 // Enums
 export const userRoleEnum = pgEnum("user_role", ["resident", "provider", "admin"]);
@@ -45,6 +46,7 @@ export const users = pgTable("users", {
   rating: decimal("rating", { precision: 3, scale: 2 }).default("0"),
   isActive: boolean("is_active").notNull().default(true),
   isApproved: boolean("is_approved").notNull().default(true), // for providers
+  categories: varchar("categories", { length: 100 }).array(), // for providers
   serviceCategory: serviceCategoryEnum("service_category"), // for providers
   experience: integer("experience"), // years of experience for providers
   location: text("location"), // building/block info for residents
@@ -93,6 +95,8 @@ export const transactions = pgTable("transactions", {
   description: text("description"),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+
 
 // Relations
 export const usersRelations = relations(users, ({ many, one }) => ({
@@ -182,6 +186,14 @@ export const providerLoginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
 });
+
+// Sessions
+export const session = pgTable("session", {
+  sid: varchar("sid", { length: 255 }).primaryKey(),
+  sess: jsonb("sess").notNull(),
+  expire: timestamp("expire", { mode: "date" }).notNull(),
+});
+
 
 export type ResidentLoginData = z.infer<typeof residentLoginSchema>;
 export type ProviderLoginData = z.infer<typeof providerLoginSchema>;

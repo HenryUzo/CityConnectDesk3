@@ -133,6 +133,32 @@ export class DatabaseStorage implements IStorage {
     return requests;
   }
 
+  async getProviders(filters?: { search?: string; approved?: boolean; category?: string }) {
+    const conditions: any[] = [eq(users.role, "provider")];
+
+    if (filters?.approved !== undefined) {
+      conditions.push(eq(users.isApproved, filters.approved));
+    }
+
+    if (filters?.search) {
+      conditions.push(sql`${users.name} ILIKE ${'%' + filters.search + '%'}`);
+    }
+
+    if (filters?.category) {
+      // we'll come back to this field (see #2 below)
+      conditions.push(sql`${users.categories} @> ARRAY[${filters.category}]::varchar[]`);
+    }
+
+    return await db
+      .select()
+      .from(users)
+      .where(and(...conditions))
+      .orderBy(desc(users.createdAt));
+  }
+
+
+
+
   async getAvailableServiceRequests(category?: string): Promise<ServiceRequest[]> {
     if (category) {
       const requests = await db
