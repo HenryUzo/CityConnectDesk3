@@ -57,7 +57,7 @@ export default function AdminDashboard() {
 
   // Stats
   const { data: stats } = useQuery<Stats>({
-    queryKey: ["/api/admin/stats"],
+    queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/stats`],
   });
 
   // All users (auto-refresh)
