@@ -15,21 +15,45 @@ function resolveUrlFromQueryKey(queryKey: readonly unknown[]): string {
   return `${BASE}${path}`;
 }
 
+function getAuthHeaders() {
+  const token =
+    sessionStorage.getItem("admin_access_token") ||
+    localStorage.getItem("admin_jwt") ||
+    localStorage.getItem("jwt") ||
+    localStorage.getItem("token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export async function apiRequest(
   method: string,
   url: string,
-  data?: unknown,
+  data?: unknown | undefined,
 ): Promise<Response> {
-  const finalUrl = url.startsWith("http") ? url : resolveUrlFromQueryKey([url]);
+  const finalUrl = url.startsWith("http")
+    ? url
+    : `${import.meta.env.VITE_API_URL}${url}`;
+
+  // Build headers safely
+  const headers: Record<string, string> = {};
+  const token = localStorage.getItem("admin_jwt");
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  if (data) {
+    headers["Content-Type"] = "application/json";
+  }
+
   const res = await fetch(finalUrl, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers, // ✅ now always a Record<string,string>
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
+
   await throwIfResNotOk(res, finalUrl);
   return res;
 }
+
 
 type UnauthorizedBehavior = "returnNull" | "throw";
 

@@ -4,6 +4,7 @@ import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { AdminAPI } from "@/lib/adminApi";
 
 type RequestStatus = "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
 
@@ -14,35 +15,41 @@ interface ServiceRequest {
   status: RequestStatus;
   providerId?: string;
   createdAt: string;
-  billedAmount?: string;
+  billedAmount?: string | number;
 }
 
 export default function ArtisanRequestsPanel() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<RequestStatus | "all">("pending");
 
-  // Build a PATH-ONLY url (let queryClient.ts add the base)
-  const path = useMemo(() => {
-    const sp = new URLSearchParams();
-    if (status !== "all") sp.set("status", status);
-    if (q.trim()) sp.set("q", q.trim());
-    const qs = sp.toString();
-    return `/api/super-admin/service-requests${qs ? `?${qs}` : ""}`;
-  }, [status, q]);
-
+  // SERVER accepts status/category/providerId/residentId; it doesn't support "q"
+  // We'll do client-side text filtering for q.
   const {
     data,
     isLoading,
     isError,
     error,
-    refetch,
     isFetching,
+    refetch,
   } = useQuery<ServiceRequest[]>({
-    queryKey: [path],            // IMPORTANT: path only; the queryClient resolver prefixes VITE_API_URL
+    queryKey: ["bridge-service-requests", status],
+    queryFn: async () => {
+      const params = status !== "all" ? { status } : undefined;
+      // ✅ Uses AdminAPI, which adds Authorization + x-estate-id headers
+      return AdminAPI.bridge.getServiceRequests(params);
+    },
     refetchInterval: 5000,
   });
 
-  const requests = data ?? [];
+  const requests = useMemo(() => {
+    const list = data ?? [];
+    const ql = q.trim().toLowerCase();
+    if (!ql) return list;
+    return list.filter((r) =>
+      (r.description || "").toLowerCase().includes(ql) ||
+      (r.category || "").toLowerCase().includes(ql)
+    );
+  }, [data, q]);
 
   return (
     <Card>
@@ -63,7 +70,7 @@ export default function ArtisanRequestsPanel() {
               <option value="all">All</option>
             </select>
             <Input
-              placeholder="Search description..."
+              placeholder="Search description or category…"
               className="w-64"
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -88,8 +95,8 @@ export default function ArtisanRequestsPanel() {
               {(error as any)?.message || "Unknown error"}
             </div>
             <div className="text-xs text-red-600 mt-2">
-              If you see <code>401</code> or <code>403</code>, make sure you’re logged in as <b>SUPER_ADMIN</b>
-              and that your frontend can send cookies to the API (CORS with credentials).
+              If this says <code>401</code> or <code>403</code>, make sure you’re logged in as a{' '}
+              <b>SUPER_ADMIN / Estate Admin</b> and that an estate is selected (the page auto-selects your first estate).
             </div>
           </div>
         )}
