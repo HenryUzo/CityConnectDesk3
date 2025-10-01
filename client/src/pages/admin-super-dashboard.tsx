@@ -249,11 +249,19 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
   };
 
   const logout = () => {
-    sessionStorage.removeItem("admin_refresh_token");
+    // Clear tokens everywhere
+    setAdminToken(null);               // <- ensures adminApi stops sending Authorization
     setToken(null);
     setUser(null);
+
+    sessionStorage.removeItem("admin_refresh_token");
+    sessionStorage.removeItem("admin_access_token");
+    localStorage.removeItem("admin_jwt");
+
+    // Bounce back to login
     setLocation("/");
   };
+
 
   return (
     <AdminAuthContext.Provider

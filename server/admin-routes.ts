@@ -223,6 +223,22 @@ router.post('/auth/logout', authenticateAdmin, async (req: AdminRequest, res) =>
   res.json({ success: true });
 });
 
+// --- Admin "me" endpoint (used by admin dashboard/auth hook)
+router.get("/me", authenticateAdmin, setEstateContext, (req: AdminRequest, res: Response) => {
+  // authenticateAdmin populates req.adminUser
+  // setEstateContext optionally populates req.currentEstate based on header x-estate-id
+  res.json({
+    id: req.adminUser?.id,
+    email: req.adminUser?.email,
+    name: req.adminUser?.name,
+    globalRole: req.adminUser?.globalRole,
+    memberships: req.adminUser?.memberships ?? [],
+    // helpful for the UI to know which estate is active (or null if none)
+    currentEstate: req.currentEstate ?? null,
+  });
+});
+
+
 // Dashboard Stats Routes
 router.get('/dashboard/stats', requireAdminDB, authenticateAdmin, setEstateContext, async (req: AdminRequest, res) => {
   try {
