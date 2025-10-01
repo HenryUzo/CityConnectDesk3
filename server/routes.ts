@@ -3,8 +3,9 @@ import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
 import { insertServiceRequestSchema, residentLoginSchema, providerLoginSchema } from "@shared/schema";
-import { z } from "zod";
+import { z } from "zod";    
 import adminRoutes from "./admin-routes";
+import superAdminRoutes from "./super-admin-routes";
 import { ObjectId } from "mongodb"; // put this import at the very top of the file if not already there
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -16,6 +17,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Admin routes for the multi-tenant admin dashboard
   app.use("/api/admin", adminRoutes);
+
+  app.use("/api/super-admin", superAdminRoutes);
 
   // Service Requests Routes
   app.post("/api/service-requests", async (req, res, next) => {

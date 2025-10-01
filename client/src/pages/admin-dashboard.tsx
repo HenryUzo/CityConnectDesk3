@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
+
 import { 
   LogOut, 
   Users, 
@@ -62,19 +64,19 @@ export default function AdminDashboard() {
 
   // All users (auto-refresh)
   const { data: allUsers = [] } = useQuery<User[]>({
-    queryKey: ["/api/admin/users"],
+    queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/users`],
     refetchInterval: 5000,
   });
 
   // All requests (auto-refresh)
   const { data: allRequests = [] } = useQuery<ServiceRequest[]>({
-    queryKey: ["/api/service-requests"],
+    queryKey: [`${import.meta.env.VITE_API_URL}/api/service-requests`],
     refetchInterval: 5000,
   });
 
   // Pending providers (auto-refresh)
   const { data: pendingProviders = [] } = useQuery<User[]>({
-    queryKey: ["/api/admin/providers/pending"],
+    queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/providers/pending`],
     refetchInterval: 5000,
   });
 

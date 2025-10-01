@@ -32,6 +32,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
+
 import {
   Table,
   TableBody,
@@ -98,6 +100,7 @@ import {
   Eye,
   EyeOff,
   Tags,
+  Wrench,
   ShoppingBag,
   ChevronLeft,
   ChevronRight,
@@ -372,12 +375,14 @@ const AdminSidebar = ({
     { id: "providers", label: "Providers", icon: UserCheck },
     { id: "categories", label: "Categories", icon: Tags },
     { id: "marketplace", label: "Marketplace", icon: ShoppingBag },
+     { id: "artisanRequests", label: "Book an Artisan", icon: Wrench },
     { id: "requests", label: "Service Requests", icon: ClipboardList },
     { id: "orders", label: "Orders", icon: Package },
     { id: "analytics", label: "Analytics", icon: FileBarChart },
     { id: "notifications", label: "Notifications", icon: MessageSquare },
     { id: "settings", label: "Settings", icon: Settings },
     { id: "audit", label: "Audit Logs", icon: Shield },
+
   ];
 
   const isSuperAdmin = user?.globalRole === "super_admin";
@@ -509,7 +514,7 @@ const UsersManagement = () => {
 
   const { data: users, isLoading } = useQuery({
     queryKey: [
-      "/api/admin/users",
+      "${import.meta.env.VITE_API_URL}/api/admin/users",
       { search, globalRole: roleFilter === "all" ? undefined : roleFilter },
     ],
     queryFn: () =>
@@ -520,13 +525,13 @@ const UsersManagement = () => {
   });
 
   const { data: estates } = useQuery({
-    queryKey: ["/api/admin/estates"],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/estates"],
     queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
     enabled: showMemberships, // Only load when needed
   });
 
   const { data: userMemberships } = useQuery({
-    queryKey: ["/api/admin/memberships", membershipUser?._id],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/memberships", membershipUser?._id],
     queryFn: () =>
       membershipUser
         ? adminApiRequest(
@@ -1660,7 +1665,7 @@ const CategoriesManagement = () => {
   const isSuperAdmin = user?.globalRole === "super_admin";
 
   const { data: categories, isLoading } = useQuery({
-    queryKey: ["/api/admin/categories", { scope: scopeFilter }],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/categories", { scope: scopeFilter }],
     queryFn: () => {
       const params = new URLSearchParams();
       if (scopeFilter !== "all") params.set("scope", scopeFilter);
@@ -2157,7 +2162,7 @@ const MarketplaceManagement = () => {
   // Use hierarchical query keys and default fetcher
   const { data: items, isLoading } = useQuery({
     queryKey: [
-      "/api/admin/marketplace",
+      "${import.meta.env.VITE_API_URL}/api/admin/marketplace",
       { category: categoryFilter, vendor: vendorFilter, search },
     ],
     enabled: true,
@@ -2165,12 +2170,12 @@ const MarketplaceManagement = () => {
 
   // Get categories and vendors for filtering
   const { data: categories } = useQuery({
-    queryKey: ["/api/admin/categories"],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/categories"],
     enabled: true,
   });
 
   const { data: vendors } = useQuery({
-    queryKey: ["/api/admin/providers"],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/providers"],
     enabled: true,
   });
 
@@ -2182,7 +2187,7 @@ const MarketplaceManagement = () => {
     mutationFn: (itemData: CreateMarketplaceItemInput) =>
       adminApiRequest("POST", "/api/admin/marketplace", itemData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/marketplace"] });
+      queryClient.invalidateQueries({ queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/marketplace"] });
       setIsCreateDialogOpen(false);
       createForm.reset();
       toast({ title: "Marketplace item created successfully" });
@@ -3066,7 +3071,7 @@ const RecentActivity = () => {
 // PostgreSQL Bridge Stats Component - Shows data from resident/provider system
 const PostgreSQLBridgeStats = () => {
   const { data: bridgeStats, isLoading } = useQuery({
-    queryKey: ["/api/admin/bridge/stats"],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/bridge/stats"],
     queryFn: () => adminApiRequest("GET", "/api/admin/bridge/stats"),
   });
 
@@ -3226,7 +3231,7 @@ const PostgreSQLBridgeStats = () => {
 // Dashboard Stats Component
 const DashboardStats = () => {
   const { data: stats, isLoading } = useQuery({
-    queryKey: ["/api/admin/dashboard/stats"],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/dashboard/stats"],
     queryFn: () => adminApiRequest("GET", "/api/admin/dashboard/stats"),
   });
 
@@ -3329,6 +3334,7 @@ export default function AdminSuperDashboard() {
   }
 
   return (
+    
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <div className="flex">
         {/* Sidebar */}
@@ -3436,8 +3442,9 @@ export default function AdminSuperDashboard() {
             {activeTab === "estates" && <EstatesManagement />}
             {activeTab === "providers" && <ProvidersManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
-            {activeTab === "marketplace" && <MarketplaceManagement />}
             {activeTab === "orders" && <OrdersManagement />}
+
+            {activeTab === "artisanRequests" && <ArtisanRequestsPanel />}
 
             {activeTab !== "dashboard" &&
               activeTab !== "users" &&
@@ -3472,6 +3479,7 @@ export default function AdminSuperDashboard() {
         </div>
       </div>
     </div>
+    
   );
 }
 
@@ -3498,7 +3506,7 @@ const EstatesManagement = () => {
   const isSuperAdmin = user?.globalRole === "super_admin";
 
   const { data: estates, isLoading } = useQuery({
-    queryKey: ["/api/admin/estates", { search }],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/estates", { search }],
     queryFn: () => {
       const params = new URLSearchParams();
       if (search) params.append("search", search);
@@ -3514,7 +3522,7 @@ const EstatesManagement = () => {
     mutationFn: (estateData: any) =>
       adminApiRequest("POST", "/api/admin/estates", estateData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/estates"] });
+      queryClient.invalidateQueries({ queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/estates"] });
       setIsCreateDialogOpen(false);
       resetForm();
       toast({ title: "Estate created successfully" });
@@ -3532,7 +3540,7 @@ const EstatesManagement = () => {
     mutationFn: ({ id, ...data }: any) =>
       adminApiRequest("PATCH", `/api/admin/estates/${id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/estates"] });
+      queryClient.invalidateQueries({ queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/estates"] });
       setEditingEstate(null);
       resetForm();
       toast({ title: "Estate updated successfully" });
@@ -3550,7 +3558,7 @@ const EstatesManagement = () => {
     mutationFn: (estateId: string) =>
       adminApiRequest("DELETE", `/api/admin/estates/${estateId}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/estates"] });
+      queryClient.invalidateQueries({ queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/estates"] });
       toast({ title: "Estate deleted successfully" });
     },
     onError: (error: any) => {
@@ -3943,12 +3951,12 @@ const OrdersManagement = () => {
   };
 
   const { data: ordersData, isLoading: ordersLoading } = useQuery({
-    queryKey: ["/api/admin/orders", queryParams],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/orders", queryParams],
     queryFn: () => adminApiRequest("GET", "/api/admin/orders", queryParams),
   });
 
   const { data: orderStats } = useQuery({
-    queryKey: ["/api/admin/orders/analytics/stats"],
+    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/orders/analytics/stats"],
     queryFn: () => adminApiRequest("GET", "/api/admin/orders/analytics/stats"),
   });
 
@@ -3958,9 +3966,9 @@ const OrdersManagement = () => {
         status,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/orders"] });
       queryClient.invalidateQueries({
-        queryKey: ["/api/admin/orders/analytics/stats"],
+        queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/orders/analytics/stats"],
       });
       setShowOrderDetails(false);
     },
@@ -3981,7 +3989,7 @@ const OrdersManagement = () => {
         description,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/orders"] });
       setShowDisputeModal(false);
       setDisputeForm({
         reason: "",
@@ -4011,9 +4019,9 @@ const OrdersManagement = () => {
         refundAmount,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/orders"] });
       queryClient.invalidateQueries({
-        queryKey: ["/api/admin/orders/analytics/stats"],
+        queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/orders/analytics/stats"],
       });
       setShowDisputeModal(false);
       setDisputeForm({
