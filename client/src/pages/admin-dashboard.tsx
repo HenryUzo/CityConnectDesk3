@@ -1,7 +1,7 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card"; // removed CardTitle
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -20,25 +20,65 @@ import {
   X
 } from "lucide-react";
 
+// ---------- Interfaces ----------
+interface Stats {
+  totalUsers: number;
+  totalProviders: number;
+  totalRequests: number;
+  pendingApprovals: number;
+}
+
+interface User {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: "resident" | "provider" | "admin";
+  isActive: boolean;
+  location?: string;
+  createdAt: string;
+  serviceCategory?: string;
+  experience?: number;
+  rating?: number;
+  isApproved?: boolean;
+}
+
+interface ServiceRequest {
+  id: string;
+  category: string;
+  status: "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
+  createdAt: string;
+  providerId?: string;
+}
+
 export default function AdminDashboard() {
-  const { user, logoutMutation } = useAuth();
+  const { logoutMutation } = useAuth();
   const { toast } = useToast();
 
-  const { data: stats } = useQuery({
+  // Stats
+  const { data: stats } = useQuery<Stats>({
     queryKey: ["/api/admin/stats"],
   });
 
-  const { data: allUsers = [] } = useQuery({
+  // All users (auto-refresh)
+  const { data: allUsers = [] } = useQuery<User[]>({
     queryKey: ["/api/admin/users"],
+    refetchInterval: 5000,
   });
 
-  const { data: allRequests = [] } = useQuery({
+  // All requests (auto-refresh)
+  const { data: allRequests = [] } = useQuery<ServiceRequest[]>({
     queryKey: ["/api/service-requests"],
+    refetchInterval: 5000,
   });
 
-  const { data: pendingProviders = [] } = useQuery({
+  // Pending providers (auto-refresh)
+  const { data: pendingProviders = [] } = useQuery<User[]>({
     queryKey: ["/api/admin/providers/pending"],
+    refetchInterval: 5000,
   });
+
+
 
   const approveProviderMutation = useMutation({
     mutationFn: async (providerId: string) => {

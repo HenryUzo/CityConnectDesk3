@@ -1,19 +1,29 @@
-import { useState, useEffect, createContext, useContext, ReactNode } from "react";
+import {
+  useState,
+  useEffect,
+  createContext,
+  useContext,
+  ReactNode,
+} from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
-import { adminApiRequest, setAdminToken, setCurrentEstate } from "@/lib/adminApi";
+import {
+  adminApiRequest,
+  setAdminToken,
+  setCurrentEstate,
+} from "@/lib/adminApi";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { 
-  createMarketplaceItemSchema, 
+import {
+  createMarketplaceItemSchema,
   updateMarketplaceItemSchema,
   createProviderSchema,
   type CreateMarketplaceItemInput,
   type UpdateMarketplaceItemInput,
   type CreateProviderInput,
-  type IMarketplaceItem
+  type IMarketplaceItem,
 } from "@shared/admin-schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,9 +32,27 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Form,
   FormControl,
@@ -41,7 +69,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { 
+import {
   LayoutDashboard,
   Users,
   Building2,
@@ -75,7 +103,7 @@ import {
   ChevronRight,
   Download,
   Calendar,
-  Clock
+  Clock,
 } from "lucide-react";
 
 // Admin Context for JWT token management
@@ -107,7 +135,7 @@ const AdminAuthContext = createContext<AdminAuthContextType | null>(null);
 export const useAdminAuth = () => {
   const context = useContext(AdminAuthContext);
   if (!context) {
-    throw new Error('useAdminAuth must be used within AdminAuthProvider');
+    throw new Error("useAdminAuth must be used within AdminAuthProvider");
   }
   return context;
 };
@@ -138,35 +166,46 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     const handleAuthFailure = () => {
       logout();
     };
-    window.addEventListener('admin-auth-failed', handleAuthFailure);
-    return () => window.removeEventListener('admin-auth-failed', handleAuthFailure);
+    window.addEventListener("admin-auth-failed", handleAuthFailure);
+    return () =>
+      window.removeEventListener("admin-auth-failed", handleAuthFailure);
   }, []);
 
   // Auto-refresh token on mount if refresh token exists
   useEffect(() => {
-    const refreshTokenFromStorage = sessionStorage.getItem('admin_refresh_token');
+    const refreshTokenFromStorage = sessionStorage.getItem(
+      "admin_refresh_token",
+    );
     if (refreshTokenFromStorage && !token) {
       refreshToken();
     }
   }, []);
 
   const refreshToken = async () => {
-    const refreshTokenValue = sessionStorage.getItem('admin_refresh_token');
+    const refreshTokenValue = sessionStorage.getItem("admin_refresh_token");
     if (!refreshTokenValue) return;
 
     try {
-      const response: any = await adminApiRequest("POST", "/api/admin/auth/refresh", { 
-        refreshToken: refreshTokenValue 
-      });
-      
+      const response: any = await adminApiRequest(
+        "POST",
+        "/api/admin/auth/refresh",
+        {
+          refreshToken: refreshTokenValue,
+        },
+      );
+
       // Race-proof: Set tokens immediately
       setAdminToken(response.accessToken);
       setToken(response.accessToken);
       setUser(response.user);
-      sessionStorage.setItem('admin_refresh_token', response.refreshToken);
-      
+      sessionStorage.setItem("admin_refresh_token", response.refreshToken);
+
       // Restore estate selection if user has memberships
-      if (response.user.memberships && response.user.memberships.length > 0 && !selectedEstateId) {
+      if (
+        response.user.memberships &&
+        response.user.memberships.length > 0 &&
+        !selectedEstateId
+      ) {
         const firstEstate = response.user.memberships[0].estateId;
         setSelectedEstateId(firstEstate);
       }
@@ -179,20 +218,25 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
   const login = async (email: string, password: string) => {
     setIsLoading(true);
     try {
-      const response: any = await adminApiRequest("POST", "/api/admin/auth/login", { email, password });
-      
+      const response: any = await adminApiRequest(
+        "POST",
+        "/api/admin/auth/login",
+        { email, password },
+      );
+
       // Race-proof: Set tokens immediately before any queries can fire
       setAdminToken(response.accessToken);
       setToken(response.accessToken);
       setUser(response.user);
-      sessionStorage.setItem('admin_refresh_token', response.refreshToken);
-      
+      sessionStorage.setItem("admin_refresh_token", response.refreshToken);
+      sessionStorage.setItem("admin_access_token", response.accessToken);
+
       // Auto-select first estate for tenant scoping
       if (response.user.memberships && response.user.memberships.length > 0) {
         const firstEstate = response.user.memberships[0].estateId;
         setSelectedEstateId(firstEstate);
       }
-      
+
       return response;
     } catch (error) {
       throw error;
@@ -202,23 +246,25 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
   };
 
   const logout = () => {
-    sessionStorage.removeItem('admin_refresh_token');
+    sessionStorage.removeItem("admin_refresh_token");
     setToken(null);
     setUser(null);
-    setLocation('/');
+    setLocation("/");
   };
 
   return (
-    <AdminAuthContext.Provider value={{ 
-      user, 
-      token, 
-      selectedEstateId, 
-      setSelectedEstateId, 
-      login, 
-      logout, 
-      isLoading, 
-      refreshToken 
-    }}>
+    <AdminAuthContext.Provider
+      value={{
+        user,
+        token,
+        selectedEstateId,
+        setSelectedEstateId,
+        login,
+        logout,
+        isLoading,
+        refreshToken,
+      }}
+    >
       {children}
     </AdminAuthContext.Provider>
   );
@@ -228,8 +274,8 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
 
 // Admin Login Component
 const AdminLogin = () => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAdminAuth();
   const { toast } = useToast();
@@ -245,7 +291,7 @@ const AdminLogin = () => {
         title: "Login Successful",
         description: "Welcome to CityConnect Admin Dashboard",
       });
-      setLocation('/admin-dashboard');
+      setLocation("/admin-dashboard");
     } catch (error: any) {
       toast({
         title: "Login Failed",
@@ -264,9 +310,7 @@ const AdminLogin = () => {
           <CardTitle className="text-2xl font-bold text-primary">
             CityConnect Admin
           </CardTitle>
-          <p className="text-muted-foreground">
-            Multi-tenant Admin Dashboard
-          </p>
+          <p className="text-muted-foreground">Multi-tenant Admin Dashboard</p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleLogin} className="space-y-4">
@@ -292,13 +336,13 @@ const AdminLogin = () => {
                 data-testid="input-admin-password"
               />
             </div>
-            <Button 
-              type="submit" 
-              className="w-full" 
+            <Button
+              type="submit"
+              className="w-full"
               disabled={isLoading}
               data-testid="button-admin-login"
             >
-              {isLoading ? 'Signing in...' : 'Sign In'}
+              {isLoading ? "Signing in..." : "Sign In"}
             </Button>
           </form>
         </CardContent>
@@ -308,7 +352,12 @@ const AdminLogin = () => {
 };
 
 // Sidebar Navigation
-const AdminSidebar = ({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }: {
+const AdminSidebar = ({
+  activeTab,
+  setActiveTab,
+  isMobileOpen,
+  setIsMobileOpen,
+}: {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   isMobileOpen: boolean;
@@ -317,39 +366,41 @@ const AdminSidebar = ({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }
   const { user, logout } = useAdminAuth();
 
   const menuItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'estates', label: 'Estates', icon: Building2 },
-    { id: 'users', label: 'Users', icon: Users },
-    { id: 'providers', label: 'Providers', icon: UserCheck },
-    { id: 'categories', label: 'Categories', icon: Tags },
-    { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
-    { id: 'requests', label: 'Service Requests', icon: ClipboardList },
-    { id: 'orders', label: 'Orders', icon: Package },
-    { id: 'analytics', label: 'Analytics', icon: FileBarChart },
-    { id: 'notifications', label: 'Notifications', icon: MessageSquare },
-    { id: 'settings', label: 'Settings', icon: Settings },
-    { id: 'audit', label: 'Audit Logs', icon: Shield },
+    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "estates", label: "Estates", icon: Building2 },
+    { id: "users", label: "Users", icon: Users },
+    { id: "providers", label: "Providers", icon: UserCheck },
+    { id: "categories", label: "Categories", icon: Tags },
+    { id: "marketplace", label: "Marketplace", icon: ShoppingBag },
+    { id: "requests", label: "Service Requests", icon: ClipboardList },
+    { id: "orders", label: "Orders", icon: Package },
+    { id: "analytics", label: "Analytics", icon: FileBarChart },
+    { id: "notifications", label: "Notifications", icon: MessageSquare },
+    { id: "settings", label: "Settings", icon: Settings },
+    { id: "audit", label: "Audit Logs", icon: Shield },
   ];
 
-  const isSuperAdmin = user?.globalRole === 'super_admin';
+  const isSuperAdmin = user?.globalRole === "super_admin";
 
   return (
     <>
       {/* Mobile backdrop */}
       {isMobileOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
           onClick={() => setIsMobileOpen(false)}
         />
       )}
-      
+
       {/* Sidebar */}
-      <div className={`
+      <div
+        className={`
         fixed left-0 top-0 h-full w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 z-50
         transform transition-transform duration-300 ease-in-out
-        ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}
+        ${isMobileOpen ? "translate-x-0" : "-translate-x-full"}
         lg:translate-x-0 lg:relative lg:z-0
-      `}>
+      `}
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
@@ -376,7 +427,7 @@ const AdminSidebar = ({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }
                 {user?.name}
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                {user?.globalRole?.replace('_', ' ').toUpperCase()}
+                {user?.globalRole?.replace("_", " ").toUpperCase()}
               </p>
             </div>
           </div>
@@ -387,9 +438,9 @@ const AdminSidebar = ({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }
           {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
-            
+
             // Hide estate-specific features for non-super admins without proper access
-            if (!isSuperAdmin && ['estates', 'audit'].includes(item.id)) {
+            if (!isSuperAdmin && ["estates", "audit"].includes(item.id)) {
               return null;
             }
 
@@ -402,9 +453,10 @@ const AdminSidebar = ({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }
                 }}
                 className={`
                   w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors
-                  ${isActive 
-                    ? 'bg-primary text-primary-foreground' 
-                    : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  ${
+                    isActive
+                      ? "bg-primary text-primary-foreground"
+                      : "text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
                   }
                 `}
                 data-testid={`nav-${item.id}`}
@@ -435,95 +487,109 @@ const AdminSidebar = ({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }
 
 // Users Management Component
 const UsersManagement = () => {
-  const [search, setSearch] = useState('');
-  const [roleFilter, setRoleFilter] = useState('all');
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
   const [editingUser, setEditingUser] = useState<any>(null);
   const [showAddUser, setShowAddUser] = useState(false);
   const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    password: '',
-    globalRole: ''
+    name: "",
+    email: "",
+    phone: "",
+    password: "",
+    globalRole: "",
   });
   const [showMemberships, setShowMemberships] = useState(false);
   const [membershipUser, setMembershipUser] = useState<any>(null);
-  const [newMembership, setNewMembership] = useState({ estateId: '', role: '' });
-  
+  const [newMembership, setNewMembership] = useState({
+    estateId: "",
+    role: "",
+  });
+
   const { toast } = useToast();
-  
+
   const { data: users, isLoading } = useQuery({
-    queryKey: ['/api/admin/users', { search, globalRole: roleFilter === 'all' ? undefined : roleFilter }],
-    queryFn: () => adminApiRequest('GET', '/api/admin/users', {
-      search: search || undefined,
-      globalRole: roleFilter === 'all' ? undefined : roleFilter
-    }),
+    queryKey: [
+      "/api/admin/users",
+      { search, globalRole: roleFilter === "all" ? undefined : roleFilter },
+    ],
+    queryFn: () =>
+      adminApiRequest("GET", "/api/admin/users", {
+        search: search || undefined,
+        globalRole: roleFilter === "all" ? undefined : roleFilter,
+      }),
   });
 
   const { data: estates } = useQuery({
-    queryKey: ['/api/admin/estates'],
-    queryFn: () => adminApiRequest('GET', '/api/admin/estates'),
+    queryKey: ["/api/admin/estates"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
     enabled: showMemberships, // Only load when needed
   });
 
   const { data: userMemberships } = useQuery({
-    queryKey: ['/api/admin/memberships', membershipUser?._id],
-    queryFn: () => membershipUser ? adminApiRequest('GET', `/api/admin/users/${membershipUser._id}/memberships`) : [],
-    enabled: !!membershipUser
+    queryKey: ["/api/admin/memberships", membershipUser?._id],
+    queryFn: () =>
+      membershipUser
+        ? adminApiRequest(
+            "GET",
+            `/api/admin/users/${membershipUser._id}/memberships`,
+          )
+        : [],
+    enabled: !!membershipUser,
   });
 
   const toggleUserStatusMutation = useMutation({
-    mutationFn: ({ userId, isActive }: { userId: string, isActive: boolean }) => 
-      adminApiRequest('PATCH', `/api/admin/users/${userId}`, { isActive }),
+    mutationFn: ({ userId, isActive }: { userId: string; isActive: boolean }) =>
+      adminApiRequest("PATCH", `/api/admin/users/${userId}`, { isActive }),
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
-      toast({ 
-        title: `User ${variables.isActive ? 'activated' : 'deactivated'} successfully`
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({
+        title: `User ${variables.isActive ? "activated" : "deactivated"} successfully`,
       });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error updating user status", 
-        description: error.response?.data?.error || "Failed to update user status",
-        variant: "destructive" 
+      toast({
+        title: "Error updating user status",
+        description:
+          error.response?.data?.error || "Failed to update user status",
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const createUserMutation = useMutation({
-    mutationFn: (userData: any) => 
-      adminApiRequest('POST', '/api/admin/users', userData),
+    mutationFn: (userData: any) =>
+      adminApiRequest("POST", "/api/admin/users", userData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       setShowAddUser(false);
       resetForm();
       toast({ title: "User created successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error creating user", 
+      toast({
+        title: "Error creating user",
         description: error.response?.data?.error || "Failed to create user",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const updateUserMutation = useMutation({
-    mutationFn: ({ userId, userData }: { userId: string, userData: any }) => 
-      adminApiRequest('PATCH', `/api/admin/users/${userId}`, userData),
+    mutationFn: ({ userId, userData }: { userId: string; userData: any }) =>
+      adminApiRequest("PATCH", `/api/admin/users/${userId}`, userData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       setEditingUser(null);
       resetForm();
       toast({ title: "User updated successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error updating user", 
+      toast({
+        title: "Error updating user",
         description: error.response?.data?.error || "Failed to update user",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const handleToggleUserStatus = (userId: string, currentStatus: boolean) => {
@@ -531,59 +597,66 @@ const UsersManagement = () => {
   };
 
   const resetForm = () => {
-    setFormData({ name: '', email: '', phone: '', password: '', globalRole: '' });
+    setFormData({
+      name: "",
+      email: "",
+      phone: "",
+      password: "",
+      globalRole: "",
+    });
   };
 
   const handleOpenEditDialog = (user: any) => {
     setEditingUser(user);
     setFormData({
-      name: user.name || '',
-      email: user.email || '',
-      phone: user.phone || '',
-      password: '',
-      globalRole: user.globalRole || ''
+      name: user.name || "",
+      email: user.email || "",
+      phone: user.phone || "",
+      password: "",
+      globalRole: user.globalRole || "",
     });
   };
 
   const createMembershipMutation = useMutation({
-    mutationFn: (membershipData: any) => 
-      adminApiRequest('POST', '/api/admin/memberships', membershipData),
+    mutationFn: (membershipData: any) =>
+      adminApiRequest("POST", "/api/admin/memberships", membershipData),
     onSuccess: () => {
       // Invalidate all relevant queries to ensure UI consistency
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/memberships'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
-      
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/memberships"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+
       // Reset form state
-      setNewMembership({ estateId: '', role: '' });
-      
+      setNewMembership({ estateId: "", role: "" });
+
       toast({ title: "Estate membership added successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error adding membership", 
+      toast({
+        title: "Error adding membership",
         description: error.response?.data?.error || "Failed to add membership",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const deleteMembershipMutation = useMutation({
-    mutationFn: ({ userId, estateId }: { userId: string, estateId: string }) => 
-      adminApiRequest('DELETE', `/api/admin/memberships/${userId}/${estateId}`),
+    mutationFn: ({ userId, estateId }: { userId: string; estateId: string }) =>
+      adminApiRequest("DELETE", `/api/admin/memberships/${userId}/${estateId}`),
     onSuccess: () => {
       // Invalidate all relevant queries to ensure UI consistency
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/memberships'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/users'] });
-      
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/memberships"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+
       toast({ title: "Membership removed successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error removing membership", 
-        description: error.response?.data?.error || "Failed to remove membership",
-        variant: "destructive" 
+      toast({
+        title: "Error removing membership",
+        description:
+          error.response?.data?.error || "Failed to remove membership",
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const handleSubmit = () => {
@@ -599,25 +672,25 @@ const UsersManagement = () => {
 
   const handleAddMembership = (estateId: string, role: string) => {
     if (!membershipUser) return;
-    
+
     // Check for duplicate membership
     const existingMembership = userMemberships?.find(
-      (membership: any) => membership.estateId === estateId
+      (membership: any) => membership.estateId === estateId,
     );
-    
+
     if (existingMembership) {
-      toast({ 
-        title: "Duplicate membership", 
+      toast({
+        title: "Duplicate membership",
         description: "User is already a member of this estate",
-        variant: "destructive" 
+        variant: "destructive",
       });
       return;
     }
-    
+
     createMembershipMutation.mutate({
       userId: membershipUser._id,
       estateId,
-      role
+      role,
     });
   };
 
@@ -627,7 +700,10 @@ const UsersManagement = () => {
         <div className="h-8 bg-gray-200 rounded w-1/4 animate-pulse"></div>
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-16 bg-gray-200 rounded animate-pulse"></div>
+            <div
+              key={i}
+              className="h-16 bg-gray-200 rounded animate-pulse"
+            ></div>
           ))}
         </div>
       </div>
@@ -637,348 +713,427 @@ const UsersManagement = () => {
   return (
     <TooltipProvider>
       <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">User Management</h1>
-          <p className="text-gray-600 dark:text-gray-400">Manage users and their estate assignments</p>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+              User Management
+            </h1>
+            <p className="text-gray-600 dark:text-gray-400">
+              Manage users and their estate assignments
+            </p>
+          </div>
+          <Button
+            className="bg-primary hover:bg-primary/90"
+            onClick={() => setShowAddUser(true)}
+            data-testid="button-add-user"
+          >
+            <UserPlus className="w-4 h-4 mr-2" />
+            Add User
+          </Button>
         </div>
-        <Button 
-          className="bg-primary hover:bg-primary/90" 
-          onClick={() => setShowAddUser(true)}
-          data-testid="button-add-user"
-        >
-          <UserPlus className="w-4 h-4 mr-2" />
-          Add User
-        </Button>
-      </div>
 
-      {/* Filters */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                <Input
-                  placeholder="Search users by name or email..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-10"
-                  data-testid="input-search-users"
-                />
+        {/* Filters */}
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="flex-1">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <Input
+                    placeholder="Search users by name or email..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="pl-10"
+                    data-testid="input-search-users"
+                  />
+                </div>
               </div>
+              <Select value={roleFilter} onValueChange={setRoleFilter}>
+                <SelectTrigger
+                  className="w-48"
+                  data-testid="select-role-filter"
+                >
+                  <SelectValue placeholder="Filter by role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Roles</SelectItem>
+                  <SelectItem value="resident">Resident</SelectItem>
+                  <SelectItem value="provider">Provider</SelectItem>
+                  <SelectItem value="estate_admin">Estate Admin</SelectItem>
+                  <SelectItem value="moderator">Moderator</SelectItem>
+                  <SelectItem value="super_admin">Super Admin</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-            <Select value={roleFilter} onValueChange={setRoleFilter}>
-              <SelectTrigger className="w-48" data-testid="select-role-filter">
-                <SelectValue placeholder="Filter by role" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Roles</SelectItem>
-                <SelectItem value="resident">Resident</SelectItem>
-                <SelectItem value="provider">Provider</SelectItem>
-                <SelectItem value="estate_admin">Estate Admin</SelectItem>
-                <SelectItem value="moderator">Moderator</SelectItem>
-                <SelectItem value="super_admin">Super Admin</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
 
-      {/* Users Table */}
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Last Active</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {users?.map((user: any) => (
-                <TableRow key={user._id} data-testid={`row-user-${user._id}`}>
-                  <TableCell className="font-medium">{user.name}</TableCell>
-                  <TableCell>{user.email}</TableCell>
-                  <TableCell>{user.phone}</TableCell>
-                  <TableCell>
-                    <Badge variant={user.globalRole === 'super_admin' ? 'default' : 'secondary'}>
-                      {user.globalRole || 'User'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={user.isActive ? 'default' : 'destructive'}>
-                      {user.isActive ? 'Active' : 'Inactive'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString() : 'Never'}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex space-x-2">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => handleOpenEditDialog(user)}
-                            data-testid={`button-edit-user-${user._id}`}
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Edit user details</p>
-                        </TooltipContent>
-                      </Tooltip>
-                      
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => {
-                              setMembershipUser(user);
-                              setShowMemberships(true);
-                            }}
-                            data-testid={`button-estates-user-${user._id}`}
-                          >
-                            <Building2 className="w-4 h-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Manage estate memberships</p>
-                        </TooltipContent>
-                      </Tooltip>
-                      
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button 
-                            variant={user.isActive ? "destructive" : "default"} 
-                            size="sm"
-                            onClick={() => handleToggleUserStatus(user._id, user.isActive)}
-                            disabled={toggleUserStatusMutation.isPending}
-                            data-testid={`button-toggle-user-${user._id}`}
-                          >
-                            {user.isActive ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>{user.isActive ? 'Deactivate user' : 'Activate user'}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {(!users || users.length === 0) && (
+        {/* Users Table */}
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8 text-gray-500">
-                    No users found
-                  </TableCell>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Last Active</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      {/* Add/Edit User Dialog */}
-      <Dialog open={showAddUser || editingUser !== null} onOpenChange={(open) => {
-        if (!open) {
-          setShowAddUser(false);
-          setEditingUser(null);
-        }
-      }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {editingUser ? 'Edit User' : 'Add New User'}
-            </DialogTitle>
-            <DialogDescription>
-              {editingUser ? 'Update user information and permissions.' : 'Create a new user account.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <Input 
-              placeholder="Full Name" 
-              value={formData.name}
-              onChange={(e) => setFormData({...formData, name: e.target.value})}
-              data-testid="input-user-name" 
-            />
-            <Input 
-              placeholder="Email Address" 
-              type="email" 
-              value={formData.email}
-              onChange={(e) => setFormData({...formData, email: e.target.value})}
-              data-testid="input-user-email" 
-            />
-            <Input 
-              placeholder="Phone Number" 
-              value={formData.phone}
-              onChange={(e) => setFormData({...formData, phone: e.target.value})}
-              data-testid="input-user-phone" 
-            />
-            {!editingUser && (
-              <Input 
-                placeholder="Password" 
-                type="password" 
-                value={formData.password}
-                onChange={(e) => setFormData({...formData, password: e.target.value})}
-                data-testid="input-user-password" 
-              />
-            )}
-            <Select value={formData.globalRole} onValueChange={(value) => setFormData({...formData, globalRole: value})}>
-              <SelectTrigger data-testid="select-user-role">
-                <SelectValue placeholder="Select Role" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">No Global Role</SelectItem>
-                <SelectItem value="resident">Resident</SelectItem>
-                <SelectItem value="provider">Provider</SelectItem>
-                <SelectItem value="estate_admin">Estate Admin</SelectItem>
-                <SelectItem value="moderator">Moderator</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowAddUser(false);
-                setEditingUser(null);
-                resetForm();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button 
-              onClick={handleSubmit}
-              disabled={createUserMutation.isPending || updateUserMutation.isPending}
-              data-testid="button-save-user"
-            >
-              {createUserMutation.isPending || updateUserMutation.isPending 
-                ? 'Saving...' 
-                : (editingUser ? 'Update User' : 'Create User')
-              }
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Estate Membership Management Dialog */}
-      <Dialog open={showMemberships} onOpenChange={setShowMemberships}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>
-              Manage Estate Memberships - {membershipUser?.name}
-            </DialogTitle>
-            <DialogDescription>
-              Assign or remove this user from estates and manage their roles.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            {/* Current Memberships */}
-            <div className="mb-6">
-              <h4 className="font-medium mb-3">Current Estate Memberships</h4>
-              <div className="space-y-2 max-h-40 overflow-y-auto">
-                {userMemberships?.map((membership: any) => (
-                  <div
-                    key={`${membership.userId}-${membership.estateId}`}
-                    className="flex items-center justify-between p-3 border rounded-lg"
-                    data-testid={`membership-${membership.estateId}`}
-                  >
-                    <div>
-                      <span className="font-medium">Estate {membership.estateId}</span>
-                      <Badge variant="secondary" className="ml-2">
-                        {membership.role}
+              </TableHeader>
+              <TableBody>
+                {users?.map((user: any) => (
+                  <TableRow key={user._id} data-testid={`row-user-${user._id}`}>
+                    <TableCell className="font-medium">{user.name}</TableCell>
+                    <TableCell>{user.email}</TableCell>
+                    <TableCell>{user.phone}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          user.globalRole === "super_admin"
+                            ? "default"
+                            : "secondary"
+                        }
+                      >
+                        {user.globalRole || "User"}
                       </Badge>
-                    </div>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => deleteMembershipMutation.mutate({ userId: membership.userId, estateId: membership.estateId })}
-                      disabled={deleteMembershipMutation.isPending}
-                      data-testid={`button-remove-membership-${membership.estateId}`}
-                    >
-                      {deleteMembershipMutation.isPending ? 'Removing...' : 'Remove'}
-                    </Button>
-                  </div>
-                ))}
-                {(!userMemberships || userMemberships.length === 0) && (
-                  <p className="text-muted-foreground text-center py-4">
-                    No estate memberships found
-                  </p>
-                )}
-              </div>
-            </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={user.isActive ? "default" : "destructive"}
+                      >
+                        {user.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {user.lastLoginAt
+                        ? new Date(user.lastLoginAt).toLocaleDateString()
+                        : "Never"}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex space-x-2">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleOpenEditDialog(user)}
+                              data-testid={`button-edit-user-${user._id}`}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Edit user details</p>
+                          </TooltipContent>
+                        </Tooltip>
 
-            {/* Add New Membership */}
-            <div>
-              <h4 className="font-medium mb-3">Add Estate Membership</h4>
-              <div className="flex space-x-2">
-                <Select 
-                  value={newMembership.estateId} 
-                  onValueChange={(value) => setNewMembership({ ...newMembership, estateId: value })}
-                >
-                  <SelectTrigger className="flex-1" data-testid="select-estate">
-                    <SelectValue placeholder="Select Estate" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {estates?.map((estate: any) => (
-                      <SelectItem key={estate._id} value={estate._id}>
-                        {estate.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select 
-                  value={newMembership.role} 
-                  onValueChange={(value) => setNewMembership({ ...newMembership, role: value })}
-                >
-                  <SelectTrigger className="w-40" data-testid="select-estate-role">
-                    <SelectValue placeholder="Select Role" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="resident">Resident</SelectItem>
-                    <SelectItem value="provider">Provider</SelectItem>
-                    <SelectItem value="estate_admin">Estate Admin</SelectItem>
-                    <SelectItem value="moderator">Moderator</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button
-                  onClick={() => {
-                    if (newMembership.estateId && newMembership.role) {
-                      handleAddMembership(newMembership.estateId, newMembership.role);
-                      setNewMembership({ estateId: '', role: '' }); // Reset form
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setMembershipUser(user);
+                                setShowMemberships(true);
+                              }}
+                              data-testid={`button-estates-user-${user._id}`}
+                            >
+                              <Building2 className="w-4 h-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Manage estate memberships</p>
+                          </TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant={
+                                user.isActive ? "destructive" : "default"
+                              }
+                              size="sm"
+                              onClick={() =>
+                                handleToggleUserStatus(user._id, user.isActive)
+                              }
+                              disabled={toggleUserStatusMutation.isPending}
+                              data-testid={`button-toggle-user-${user._id}`}
+                            >
+                              {user.isActive ? (
+                                <XCircle className="w-4 h-4" />
+                              ) : (
+                                <CheckCircle className="w-4 h-4" />
+                              )}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>
+                              {user.isActive
+                                ? "Deactivate user"
+                                : "Activate user"}
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(!users || users.length === 0) && (
+                  <TableRow>
+                    <TableCell
+                      colSpan={7}
+                      className="text-center py-8 text-gray-500"
+                    >
+                      No users found
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        {/* Add/Edit User Dialog */}
+        <Dialog
+          open={showAddUser || editingUser !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setShowAddUser(false);
+              setEditingUser(null);
+            }
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                {editingUser ? "Edit User" : "Add New User"}
+              </DialogTitle>
+              <DialogDescription>
+                {editingUser
+                  ? "Update user information and permissions."
+                  : "Create a new user account."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <Input
+                placeholder="Full Name"
+                value={formData.name}
+                onChange={(e) =>
+                  setFormData({ ...formData, name: e.target.value })
+                }
+                data-testid="input-user-name"
+              />
+              <Input
+                placeholder="Email Address"
+                type="email"
+                value={formData.email}
+                onChange={(e) =>
+                  setFormData({ ...formData, email: e.target.value })
+                }
+                data-testid="input-user-email"
+              />
+              <Input
+                placeholder="Phone Number"
+                value={formData.phone}
+                onChange={(e) =>
+                  setFormData({ ...formData, phone: e.target.value })
+                }
+                data-testid="input-user-phone"
+              />
+              {!editingUser && (
+                <Input
+                  placeholder="Password"
+                  type="password"
+                  value={formData.password}
+                  onChange={(e) =>
+                    setFormData({ ...formData, password: e.target.value })
+                  }
+                  data-testid="input-user-password"
+                />
+              )}
+              <Select
+                value={formData.globalRole}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, globalRole: value })
+                }
+              >
+                <SelectTrigger data-testid="select-user-role">
+                  <SelectValue placeholder="Select Role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">No Global Role</SelectItem>
+                  <SelectItem value="resident">Resident</SelectItem>
+                  <SelectItem value="provider">Provider</SelectItem>
+                  <SelectItem value="estate_admin">Estate Admin</SelectItem>
+                  <SelectItem value="moderator">Moderator</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowAddUser(false);
+                  setEditingUser(null);
+                  resetForm();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSubmit}
+                disabled={
+                  createUserMutation.isPending || updateUserMutation.isPending
+                }
+                data-testid="button-save-user"
+              >
+                {createUserMutation.isPending || updateUserMutation.isPending
+                  ? "Saving..."
+                  : editingUser
+                    ? "Update User"
+                    : "Create User"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Estate Membership Management Dialog */}
+        <Dialog open={showMemberships} onOpenChange={setShowMemberships}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>
+                Manage Estate Memberships - {membershipUser?.name}
+              </DialogTitle>
+              <DialogDescription>
+                Assign or remove this user from estates and manage their roles.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="py-4">
+              {/* Current Memberships */}
+              <div className="mb-6">
+                <h4 className="font-medium mb-3">Current Estate Memberships</h4>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {userMemberships?.map((membership: any) => (
+                    <div
+                      key={`${membership.userId}-${membership.estateId}`}
+                      className="flex items-center justify-between p-3 border rounded-lg"
+                      data-testid={`membership-${membership.estateId}`}
+                    >
+                      <div>
+                        <span className="font-medium">
+                          Estate {membership.estateId}
+                        </span>
+                        <Badge variant="secondary" className="ml-2">
+                          {membership.role}
+                        </Badge>
+                      </div>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() =>
+                          deleteMembershipMutation.mutate({
+                            userId: membership.userId,
+                            estateId: membership.estateId,
+                          })
+                        }
+                        disabled={deleteMembershipMutation.isPending}
+                        data-testid={`button-remove-membership-${membership.estateId}`}
+                      >
+                        {deleteMembershipMutation.isPending
+                          ? "Removing..."
+                          : "Remove"}
+                      </Button>
+                    </div>
+                  ))}
+                  {(!userMemberships || userMemberships.length === 0) && (
+                    <p className="text-muted-foreground text-center py-4">
+                      No estate memberships found
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Add New Membership */}
+              <div>
+                <h4 className="font-medium mb-3">Add Estate Membership</h4>
+                <div className="flex space-x-2">
+                  <Select
+                    value={newMembership.estateId}
+                    onValueChange={(value) =>
+                      setNewMembership({ ...newMembership, estateId: value })
                     }
-                  }}
-                  disabled={createMembershipMutation.isPending || !newMembership.estateId || !newMembership.role}
-                  data-testid="button-add-membership"
-                >
-                  {createMembershipMutation.isPending ? 'Adding...' : 'Add'}
-                </Button>
+                  >
+                    <SelectTrigger
+                      className="flex-1"
+                      data-testid="select-estate"
+                    >
+                      <SelectValue placeholder="Select Estate" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {estates?.map((estate: any) => (
+                        <SelectItem key={estate._id} value={estate._id}>
+                          {estate.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={newMembership.role}
+                    onValueChange={(value) =>
+                      setNewMembership({ ...newMembership, role: value })
+                    }
+                  >
+                    <SelectTrigger
+                      className="w-40"
+                      data-testid="select-estate-role"
+                    >
+                      <SelectValue placeholder="Select Role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="resident">Resident</SelectItem>
+                      <SelectItem value="provider">Provider</SelectItem>
+                      <SelectItem value="estate_admin">Estate Admin</SelectItem>
+                      <SelectItem value="moderator">Moderator</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    onClick={() => {
+                      if (newMembership.estateId && newMembership.role) {
+                        handleAddMembership(
+                          newMembership.estateId,
+                          newMembership.role,
+                        );
+                        setNewMembership({ estateId: "", role: "" }); // Reset form
+                      }
+                    }}
+                    disabled={
+                      createMembershipMutation.isPending ||
+                      !newMembership.estateId ||
+                      !newMembership.role
+                    }
+                    data-testid="button-add-membership"
+                  >
+                    {createMembershipMutation.isPending ? "Adding..." : "Add"}
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowMemberships(false);
-                setMembershipUser(null);
-              }}
-            >
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowMemberships(false);
+                  setMembershipUser(null);
+                }}
+              >
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </TooltipProvider>
   );
@@ -986,74 +1141,91 @@ const UsersManagement = () => {
 
 // Providers Management Component
 const ProvidersManagement = () => {
-  const [search, setSearch] = useState('');
-  const [approvalFilter, setApprovalFilter] = useState('all');
-  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [search, setSearch] = useState("");
+  const [approvalFilter, setApprovalFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [showAddProvider, setShowAddProvider] = useState(false);
-  
+
   const { toast } = useToast();
-  
+
   const providerForm = useForm<CreateProviderInput>({
     resolver: zodResolver(createProviderSchema),
     defaultValues: {
-      name: '',
-      email: '',
-      phone: '',
-      password: '',
+      name: "",
+      email: "",
+      phone: "",
+      password: "",
       categories: [],
       experience: 0,
-      description: '',
-      isApproved: true
-    }
+      description: "",
+      isApproved: true,
+    },
   });
-  
+
   const { data: providers, isLoading } = useQuery({
-    queryKey: ['/api/admin/providers', { search, approved: approvalFilter === 'all' ? undefined : approvalFilter, category: categoryFilter === 'all' ? undefined : categoryFilter }],
-    queryFn: () => adminApiRequest('GET', '/api/admin/providers', {
-      search: search || undefined,
-      approved: approvalFilter === 'all' ? undefined : approvalFilter,
-      category: categoryFilter === 'all' ? undefined : categoryFilter
-    }),
+    queryKey: [
+      "/api/admin/providers",
+      {
+        search,
+        approved: approvalFilter === "all" ? undefined : approvalFilter,
+        category: categoryFilter === "all" ? undefined : categoryFilter,
+      },
+    ],
+    queryFn: () =>
+      adminApiRequest("GET", "/api/admin/providers", {
+        search: search || undefined,
+        approved: approvalFilter === "all" ? undefined : approvalFilter,
+        category: categoryFilter === "all" ? undefined : categoryFilter,
+      }),
   });
 
   const approveMutation = useMutation({
-    mutationFn: ({ providerId, approved }: { providerId: string, approved: boolean }) => 
-      adminApiRequest('PATCH', `/api/admin/providers/${providerId}/approve`, { approved }),
+    mutationFn: ({
+      providerId,
+      approved,
+    }: {
+      providerId: string;
+      approved: boolean;
+    }) =>
+      adminApiRequest("PATCH", `/api/admin/providers/${providerId}/approve`, {
+        approved,
+      }),
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/providers'] });
-      toast({ 
-        title: `Provider ${variables.approved ? 'approved' : 'rejected'} successfully`
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/providers"] });
+      toast({
+        title: `Provider ${variables.approved ? "approved" : "rejected"} successfully`,
       });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error updating provider status", 
-        description: error.response?.data?.error || "Failed to update provider status",
-        variant: "destructive" 
+      toast({
+        title: "Error updating provider status",
+        description:
+          error.response?.data?.error || "Failed to update provider status",
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const createProviderMutation = useMutation({
-    mutationFn: (providerData: CreateProviderInput) => 
-      adminApiRequest('POST', '/api/admin/providers', providerData),
+    mutationFn: (providerData: CreateProviderInput) =>
+      adminApiRequest("POST", "/api/admin/providers", providerData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/providers'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/providers"] });
       setShowAddProvider(false);
       providerForm.reset();
       toast({ title: "Provider created successfully" });
     },
     onError: (error: any) => {
-      const errorMessage = error.response?.data?.details?.length 
-        ? error.response.data.details.join(', ')
+      const errorMessage = error.response?.data?.details?.length
+        ? error.response.data.details.join(", ")
         : error.response?.data?.error || "Failed to create provider";
-      
-      toast({ 
-        title: "Error creating provider", 
+
+      toast({
+        title: "Error creating provider",
         description: errorMessage,
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const handleApproval = (providerId: string, approved: boolean) => {
@@ -1070,7 +1242,10 @@ const ProvidersManagement = () => {
         <div className="h-8 bg-gray-200 rounded w-1/4 animate-pulse"></div>
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-16 bg-gray-200 rounded animate-pulse"></div>
+            <div
+              key={i}
+              className="h-16 bg-gray-200 rounded animate-pulse"
+            ></div>
           ))}
         </div>
       </div>
@@ -1081,10 +1256,17 @@ const ProvidersManagement = () => {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Provider Management</h1>
-          <p className="text-gray-600 dark:text-gray-400">Approve and manage service providers</p>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            Provider Management
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400">
+            Approve and manage service providers
+          </p>
         </div>
-        <Button onClick={() => setShowAddProvider(true)} data-testid="button-add-provider">
+        <Button
+          onClick={() => setShowAddProvider(true)}
+          data-testid="button-add-provider"
+        >
           <Plus className="w-4 h-4 mr-2" />
           Add Provider
         </Button>
@@ -1107,7 +1289,10 @@ const ProvidersManagement = () => {
               </div>
             </div>
             <Select value={approvalFilter} onValueChange={setApprovalFilter}>
-              <SelectTrigger className="w-48" data-testid="select-approval-filter">
+              <SelectTrigger
+                className="w-48"
+                data-testid="select-approval-filter"
+              >
                 <SelectValue placeholder="Filter by approval" />
               </SelectTrigger>
               <SelectContent>
@@ -1117,7 +1302,10 @@ const ProvidersManagement = () => {
               </SelectContent>
             </Select>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-48" data-testid="select-category-filter">
+              <SelectTrigger
+                className="w-48"
+                data-testid="select-category-filter"
+              >
                 <SelectValue placeholder="Filter by category" />
               </SelectTrigger>
               <SelectContent>
@@ -1149,15 +1337,26 @@ const ProvidersManagement = () => {
             </TableHeader>
             <TableBody>
               {providers?.map((provider: any) => (
-                <TableRow key={provider._id} data-testid={`row-provider-${provider._id}`}>
-                  <TableCell className="font-medium">{provider.userId}</TableCell>
+                <TableRow
+                  key={provider._id}
+                  data-testid={`row-provider-${provider._id}`}
+                >
+                  <TableCell className="font-medium">
+                    {provider.userId}
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
-                      {provider.categories?.slice(0, 2).map((category: string) => (
-                        <Badge key={category} variant="outline" className="text-xs">
-                          {category.replace('_', ' ')}
-                        </Badge>
-                      ))}
+                      {provider.categories
+                        ?.slice(0, 2)
+                        .map((category: string) => (
+                          <Badge
+                            key={category}
+                            variant="outline"
+                            className="text-xs"
+                          >
+                            {category.replace("_", " ")}
+                          </Badge>
+                        ))}
                       {provider.categories?.length > 2 && (
                         <Badge variant="outline" className="text-xs">
                           +{provider.categories.length - 2} more
@@ -1169,20 +1368,22 @@ const ProvidersManagement = () => {
                   <TableCell>
                     <div className="flex items-center">
                       <Star className="w-4 h-4 fill-yellow-400 text-yellow-400 mr-1" />
-                      {provider.rating?.toFixed(1) || 'N/A'}
+                      {provider.rating?.toFixed(1) || "N/A"}
                     </div>
                   </TableCell>
                   <TableCell>{provider.totalJobs}</TableCell>
                   <TableCell>
-                    <Badge variant={provider.isApproved ? 'default' : 'destructive'}>
-                      {provider.isApproved ? 'Approved' : 'Pending'}
+                    <Badge
+                      variant={provider.isApproved ? "default" : "destructive"}
+                    >
+                      {provider.isApproved ? "Approved" : "Pending"}
                     </Badge>
                   </TableCell>
                   <TableCell>
                     <div className="flex space-x-2">
                       {!provider.isApproved ? (
-                        <Button 
-                          variant="default" 
+                        <Button
+                          variant="default"
                           size="sm"
                           onClick={() => handleApproval(provider._id, true)}
                           disabled={approveMutation.isPending}
@@ -1191,8 +1392,8 @@ const ProvidersManagement = () => {
                           <CheckCircle className="w-4 h-4" />
                         </Button>
                       ) : (
-                        <Button 
-                          variant="destructive" 
+                        <Button
+                          variant="destructive"
                           size="sm"
                           onClick={() => handleApproval(provider._id, false)}
                           disabled={approveMutation.isPending}
@@ -1201,7 +1402,11 @@ const ProvidersManagement = () => {
                           <XCircle className="w-4 h-4" />
                         </Button>
                       )}
-                      <Button variant="outline" size="sm" data-testid={`button-edit-provider-${provider._id}`}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        data-testid={`button-edit-provider-${provider._id}`}
+                      >
                         <Edit className="w-4 h-4" />
                       </Button>
                     </div>
@@ -1210,7 +1415,10 @@ const ProvidersManagement = () => {
               ))}
               {(!providers || providers.length === 0) && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8 text-gray-500">
+                  <TableCell
+                    colSpan={7}
+                    className="text-center py-8 text-gray-500"
+                  >
                     No providers found
                   </TableCell>
                 </TableRow>
@@ -1221,20 +1429,27 @@ const ProvidersManagement = () => {
       </Card>
 
       {/* Add Provider Dialog */}
-      <Dialog open={showAddProvider} onOpenChange={(open) => {
-        setShowAddProvider(open);
-        if (!open) providerForm.reset();
-      }}>
+      <Dialog
+        open={showAddProvider}
+        onOpenChange={(open) => {
+          setShowAddProvider(open);
+          if (!open) providerForm.reset();
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Add New Service Provider</DialogTitle>
             <DialogDescription>
-              Create a new service provider account. They will be automatically approved.
+              Create a new service provider account. They will be automatically
+              approved.
             </DialogDescription>
           </DialogHeader>
-          
+
           <Form {...providerForm}>
-            <form onSubmit={providerForm.handleSubmit(onSubmit)} className="space-y-6">
+            <form
+              onSubmit={providerForm.handleSubmit(onSubmit)}
+              className="space-y-6"
+            >
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-2 gap-4">
                   <FormField
@@ -1244,7 +1459,11 @@ const ProvidersManagement = () => {
                       <FormItem>
                         <FormLabel>Full Name *</FormLabel>
                         <FormControl>
-                          <Input placeholder="Enter provider name" {...field} data-testid="input-provider-name" />
+                          <Input
+                            placeholder="Enter provider name"
+                            {...field}
+                            data-testid="input-provider-name"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -1257,14 +1476,19 @@ const ProvidersManagement = () => {
                       <FormItem>
                         <FormLabel>Email *</FormLabel>
                         <FormControl>
-                          <Input type="email" placeholder="Enter email address" {...field} data-testid="input-provider-email" />
+                          <Input
+                            type="email"
+                            placeholder="Enter email address"
+                            {...field}
+                            data-testid="input-provider-email"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
                 </div>
-                
+
                 <div className="grid grid-cols-2 gap-4">
                   <FormField
                     control={providerForm.control}
@@ -1273,7 +1497,11 @@ const ProvidersManagement = () => {
                       <FormItem>
                         <FormLabel>Phone Number</FormLabel>
                         <FormControl>
-                          <Input placeholder="Enter phone number" {...field} data-testid="input-provider-phone" />
+                          <Input
+                            placeholder="Enter phone number"
+                            {...field}
+                            data-testid="input-provider-phone"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -1286,14 +1514,19 @@ const ProvidersManagement = () => {
                       <FormItem>
                         <FormLabel>Password *</FormLabel>
                         <FormControl>
-                          <Input type="password" placeholder="Enter password" {...field} data-testid="input-provider-password" />
+                          <Input
+                            type="password"
+                            placeholder="Enter password"
+                            {...field}
+                            data-testid="input-provider-password"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
                 </div>
-                
+
                 <FormField
                   control={providerForm.control}
                   name="experience"
@@ -1301,19 +1534,21 @@ const ProvidersManagement = () => {
                     <FormItem>
                       <FormLabel>Years of Experience</FormLabel>
                       <FormControl>
-                        <Input 
-                          type="number" 
-                          placeholder="Enter years of experience" 
+                        <Input
+                          type="number"
+                          placeholder="Enter years of experience"
                           {...field}
-                          onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
-                          data-testid="input-provider-experience" 
+                          onChange={(e) =>
+                            field.onChange(parseInt(e.target.value) || 0)
+                          }
+                          data-testid="input-provider-experience"
                         />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
-                
+
                 <FormField
                   control={providerForm.control}
                   name="description"
@@ -1321,13 +1556,17 @@ const ProvidersManagement = () => {
                     <FormItem>
                       <FormLabel>Description</FormLabel>
                       <FormControl>
-                        <Textarea placeholder="Brief description of services offered" {...field} data-testid="textarea-provider-description" />
+                        <Textarea
+                          placeholder="Brief description of services offered"
+                          {...field}
+                          data-testid="textarea-provider-description"
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
-                
+
                 <FormField
                   control={providerForm.control}
                   name="categories"
@@ -1335,8 +1574,16 @@ const ProvidersManagement = () => {
                     <FormItem>
                       <FormLabel>Service Categories *</FormLabel>
                       <div className="grid grid-cols-2 gap-2 mt-2">
-                        {['electrician', 'plumber', 'carpenter', 'market_runner'].map((category) => (
-                          <div key={category} className="flex items-center space-x-2">
+                        {[
+                          "electrician",
+                          "plumber",
+                          "carpenter",
+                          "market_runner",
+                        ].map((category) => (
+                          <div
+                            key={category}
+                            className="flex items-center space-x-2"
+                          >
                             <input
                               type="checkbox"
                               id={`category-${category}`}
@@ -1344,13 +1591,20 @@ const ProvidersManagement = () => {
                               onChange={(e) => {
                                 const updatedCategories = e.target.checked
                                   ? [...(field.value || []), category]
-                                  : (field.value || []).filter(c => c !== category);
+                                  : (field.value || []).filter(
+                                      (c) => c !== category,
+                                    );
                                 field.onChange(updatedCategories);
                               }}
                               data-testid={`checkbox-category-${category}`}
                             />
-                            <Label htmlFor={`category-${category}`} className="cursor-pointer">
-                              {category.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                            <Label
+                              htmlFor={`category-${category}`}
+                              className="cursor-pointer"
+                            >
+                              {category
+                                .replace("_", " ")
+                                .replace(/\b\w/g, (l) => l.toUpperCase())}
                             </Label>
                           </div>
                         ))}
@@ -1362,19 +1616,21 @@ const ProvidersManagement = () => {
               </div>
 
               <DialogFooter>
-                <Button 
-                  type="button" 
-                  variant="outline" 
+                <Button
+                  type="button"
+                  variant="outline"
                   onClick={() => setShowAddProvider(false)}
                 >
                   Cancel
                 </Button>
-                <Button 
+                <Button
                   type="submit"
                   disabled={createProviderMutation.isPending}
                   data-testid="button-submit-provider"
                 >
-                  {createProviderMutation.isPending ? 'Creating...' : 'Create Provider'}
+                  {createProviderMutation.isPending
+                    ? "Creating..."
+                    : "Create Provider"}
                 </Button>
               </DialogFooter>
             </form>
@@ -1387,88 +1643,91 @@ const ProvidersManagement = () => {
 
 // Categories Management Component
 const CategoriesManagement = () => {
-  const [search, setSearch] = useState('');
-  const [scopeFilter, setScopeFilter] = useState('all');
+  const [search, setSearch] = useState("");
+  const [scopeFilter, setScopeFilter] = useState("all");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<any>(null);
   const [formData, setFormData] = useState({
-    name: '',
-    key: '',
-    description: '',
-    icon: '',
-    scope: 'estate'
+    name: "",
+    key: "",
+    description: "",
+    icon: "",
+    scope: "estate",
   });
-  
+
   const { user } = useAdminAuth();
   const { toast } = useToast();
-  const isSuperAdmin = user?.globalRole === 'super_admin';
-  
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
   const { data: categories, isLoading } = useQuery({
-    queryKey: ['/api/admin/categories', { scope: scopeFilter }],
+    queryKey: ["/api/admin/categories", { scope: scopeFilter }],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (scopeFilter !== 'all') params.set('scope', scopeFilter);
-      return adminApiRequest('GET', `/api/admin/categories?${params.toString()}`);
-    }
+      if (scopeFilter !== "all") params.set("scope", scopeFilter);
+      return adminApiRequest(
+        "GET",
+        `/api/admin/categories?${params.toString()}`,
+      );
+    },
   });
 
   const createCategoryMutation = useMutation({
-    mutationFn: (categoryData: any) => 
-      adminApiRequest('POST', '/api/admin/categories', categoryData),
+    mutationFn: (categoryData: any) =>
+      adminApiRequest("POST", "/api/admin/categories", categoryData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/categories'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
       setIsCreateDialogOpen(false);
       resetForm();
       toast({ title: "Category created successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error creating category", 
+      toast({
+        title: "Error creating category",
         description: error.response?.data?.error || "Failed to create category",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const updateCategoryMutation = useMutation({
-    mutationFn: ({ id, ...data }: any) => 
-      adminApiRequest('PATCH', `/api/admin/categories/${id}`, data),
+    mutationFn: ({ id, ...data }: any) =>
+      adminApiRequest("PATCH", `/api/admin/categories/${id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/categories'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
       setEditingCategory(null);
       resetForm();
       toast({ title: "Category updated successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error updating category", 
+      toast({
+        title: "Error updating category",
         description: error.response?.data?.error || "Failed to update category",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const deleteCategoryMutation = useMutation({
-    mutationFn: (categoryId: string) => 
-      adminApiRequest('DELETE', `/api/admin/categories/${categoryId}`),
+    mutationFn: (categoryId: string) =>
+      adminApiRequest("DELETE", `/api/admin/categories/${categoryId}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/categories'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
       toast({ title: "Category deleted successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error deleting category", 
+      toast({
+        title: "Error deleting category",
         description: error.response?.data?.error || "Failed to delete category",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const categoryData = {
       ...formData,
-      key: formData.key || formData.name.toLowerCase().replace(/\s+/g, '_')
+      key: formData.key || formData.name.toLowerCase().replace(/\s+/g, "_"),
     };
     createCategoryMutation.mutate(categoryData);
   };
@@ -1481,30 +1740,43 @@ const CategoriesManagement = () => {
   };
 
   const handleDeleteCategory = (categoryId: string) => {
-    if (confirm('Are you sure you want to delete this category? This action cannot be undone.')) {
+    if (
+      confirm(
+        "Are you sure you want to delete this category? This action cannot be undone.",
+      )
+    ) {
       deleteCategoryMutation.mutate(categoryId);
     }
   };
 
   const resetForm = () => {
-    setFormData({ name: '', key: '', description: '', icon: '', scope: 'estate' });
+    setFormData({
+      name: "",
+      key: "",
+      description: "",
+      icon: "",
+      scope: "estate",
+    });
   };
 
   const handleOpenEditDialog = (category: any) => {
     setEditingCategory(category);
     setFormData({
-      name: category.name || '',
-      key: category.key || '',
-      description: category.description || '',
-      icon: category.icon || '',
-      scope: category.scope || 'estate'
+      name: category.name || "",
+      key: category.key || "",
+      description: category.description || "",
+      icon: category.icon || "",
+      scope: category.scope || "estate",
     });
   };
 
-  const filteredCategories = categories?.filter((category: any) => {
-    return category.name?.toLowerCase().includes(search.toLowerCase()) ||
-           category.key?.toLowerCase().includes(search.toLowerCase());
-  }) || [];
+  const filteredCategories =
+    categories?.filter((category: any) => {
+      return (
+        category.name?.toLowerCase().includes(search.toLowerCase()) ||
+        category.key?.toLowerCase().includes(search.toLowerCase())
+      );
+    }) || [];
 
   if (isLoading) {
     return (
@@ -1512,7 +1784,10 @@ const CategoriesManagement = () => {
         <div className="h-8 bg-gray-200 rounded w-1/4 animate-pulse"></div>
         <div className="space-y-2">
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-16 bg-gray-200 rounded animate-pulse"></div>
+            <div
+              key={i}
+              className="h-16 bg-gray-200 rounded animate-pulse"
+            ></div>
           ))}
         </div>
       </div>
@@ -1524,10 +1799,14 @@ const CategoriesManagement = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Service Categories</h1>
-          <p className="text-gray-600 dark:text-gray-300">Manage global and estate-specific service categories</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            Service Categories
+          </h1>
+          <p className="text-gray-600 dark:text-gray-300">
+            Manage global and estate-specific service categories
+          </p>
         </div>
-        <Button 
+        <Button
           onClick={() => setIsCreateDialogOpen(true)}
           className="mt-4 sm:mt-0"
           data-testid="button-create-category"
@@ -1551,7 +1830,10 @@ const CategoriesManagement = () => {
               />
             </div>
             <Select value={scopeFilter} onValueChange={setScopeFilter}>
-              <SelectTrigger className="w-full sm:w-48" data-testid="select-scope-filter">
+              <SelectTrigger
+                className="w-full sm:w-48"
+                data-testid="select-scope-filter"
+              >
                 <SelectValue placeholder="Filter by scope" />
               </SelectTrigger>
               <SelectContent>
@@ -1580,11 +1862,19 @@ const CategoriesManagement = () => {
             </TableHeader>
             <TableBody>
               {filteredCategories.map((category: any) => (
-                <TableRow key={category._id} data-testid={`row-category-${category._id}`}>
+                <TableRow
+                  key={category._id}
+                  data-testid={`row-category-${category._id}`}
+                >
                   <TableCell>
                     <div className="flex items-center space-x-2">
-                      {category.icon && <span className="text-lg">{category.icon}</span>}
-                      <span className="font-medium" data-testid={`text-category-name-${category._id}`}>
+                      {category.icon && (
+                        <span className="text-lg">{category.icon}</span>
+                      )}
+                      <span
+                        className="font-medium"
+                        data-testid={`text-category-name-${category._id}`}
+                      >
                         {category.name}
                       </span>
                     </div>
@@ -1595,16 +1885,22 @@ const CategoriesManagement = () => {
                     </code>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={category.scope === 'global' ? 'default' : 'secondary'}>
+                    <Badge
+                      variant={
+                        category.scope === "global" ? "default" : "secondary"
+                      }
+                    >
                       {category.scope}
                     </Badge>
                   </TableCell>
                   <TableCell className="max-w-xs truncate">
-                    {category.description || '-'}
+                    {category.description || "-"}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={category.isActive ? 'default' : 'secondary'}>
-                      {category.isActive ? 'Active' : 'Inactive'}
+                    <Badge
+                      variant={category.isActive ? "default" : "secondary"}
+                    >
+                      {category.isActive ? "Active" : "Inactive"}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -1641,7 +1937,10 @@ const CategoriesManagement = () => {
           <DialogHeader>
             <DialogTitle>Create New Category</DialogTitle>
             <DialogDescription>
-              Add a new service category for {isSuperAdmin ? 'global use or estate-specific use' : 'your estate'}
+              Add a new service category for{" "}
+              {isSuperAdmin
+                ? "global use or estate-specific use"
+                : "your estate"}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreateSubmit} className="space-y-4">
@@ -1649,7 +1948,9 @@ const CategoriesManagement = () => {
               <label className="text-sm font-medium">Name</label>
               <Input
                 value={formData.name}
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                onChange={(e) =>
+                  setFormData({ ...formData, name: e.target.value })
+                }
                 placeholder="Category name"
                 required
                 data-testid="input-category-name"
@@ -1659,7 +1960,9 @@ const CategoriesManagement = () => {
               <label className="text-sm font-medium">Key</label>
               <Input
                 value={formData.key}
-                onChange={(e) => setFormData({...formData, key: e.target.value})}
+                onChange={(e) =>
+                  setFormData({ ...formData, key: e.target.value })
+                }
                 placeholder="category_key (auto-generated if empty)"
                 data-testid="input-category-key"
               />
@@ -1668,7 +1971,9 @@ const CategoriesManagement = () => {
               <label className="text-sm font-medium">Description</label>
               <Input
                 value={formData.description}
-                onChange={(e) => setFormData({...formData, description: e.target.value})}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
                 placeholder="Optional description"
                 data-testid="input-category-description"
               />
@@ -1677,7 +1982,9 @@ const CategoriesManagement = () => {
               <label className="text-sm font-medium">Icon</label>
               <Input
                 value={formData.icon}
-                onChange={(e) => setFormData({...formData, icon: e.target.value})}
+                onChange={(e) =>
+                  setFormData({ ...formData, icon: e.target.value })
+                }
                 placeholder="🔧 (optional emoji icon)"
                 data-testid="input-category-icon"
               />
@@ -1685,7 +1992,12 @@ const CategoriesManagement = () => {
             {isSuperAdmin && (
               <div>
                 <label className="text-sm font-medium">Scope</label>
-                <Select value={formData.scope} onValueChange={(value) => setFormData({...formData, scope: value})}>
+                <Select
+                  value={formData.scope}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, scope: value })
+                  }
+                >
                   <SelectTrigger data-testid="select-category-scope">
                     <SelectValue />
                   </SelectTrigger>
@@ -1697,9 +2009,9 @@ const CategoriesManagement = () => {
               </div>
             )}
             <DialogFooter>
-              <Button 
-                type="button" 
-                variant="outline" 
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => {
                   setIsCreateDialogOpen(false);
                   resetForm();
@@ -1707,12 +2019,14 @@ const CategoriesManagement = () => {
               >
                 Cancel
               </Button>
-              <Button 
-                type="submit" 
+              <Button
+                type="submit"
                 disabled={createCategoryMutation.isPending}
                 data-testid="button-submit-create-category"
               >
-                {createCategoryMutation.isPending ? 'Creating...' : 'Create Category'}
+                {createCategoryMutation.isPending
+                  ? "Creating..."
+                  : "Create Category"}
               </Button>
             </DialogFooter>
           </form>
@@ -1720,25 +2034,28 @@ const CategoriesManagement = () => {
       </Dialog>
 
       {/* Edit Category Dialog */}
-      <Dialog open={!!editingCategory} onOpenChange={(open) => {
-        if (!open) {
-          setEditingCategory(null);
-          resetForm();
-        }
-      }}>
+      <Dialog
+        open={!!editingCategory}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingCategory(null);
+            resetForm();
+          }
+        }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Edit Category</DialogTitle>
-            <DialogDescription>
-              Update the category details
-            </DialogDescription>
+            <DialogDescription>Update the category details</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleEditSubmit} className="space-y-4">
             <div>
               <label className="text-sm font-medium">Name</label>
               <Input
                 value={formData.name}
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                onChange={(e) =>
+                  setFormData({ ...formData, name: e.target.value })
+                }
                 placeholder="Category name"
                 required
                 data-testid="input-edit-category-name"
@@ -1748,7 +2065,9 @@ const CategoriesManagement = () => {
               <label className="text-sm font-medium">Description</label>
               <Input
                 value={formData.description}
-                onChange={(e) => setFormData({...formData, description: e.target.value})}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
                 placeholder="Optional description"
                 data-testid="input-edit-category-description"
               />
@@ -1757,15 +2076,17 @@ const CategoriesManagement = () => {
               <label className="text-sm font-medium">Icon</label>
               <Input
                 value={formData.icon}
-                onChange={(e) => setFormData({...formData, icon: e.target.value})}
+                onChange={(e) =>
+                  setFormData({ ...formData, icon: e.target.value })
+                }
                 placeholder="🔧 (optional emoji icon)"
                 data-testid="input-edit-category-icon"
               />
             </div>
             <DialogFooter>
-              <Button 
-                type="button" 
-                variant="outline" 
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => {
                   setEditingCategory(null);
                   resetForm();
@@ -1773,12 +2094,14 @@ const CategoriesManagement = () => {
               >
                 Cancel
               </Button>
-              <Button 
-                type="submit" 
+              <Button
+                type="submit"
                 disabled={updateCategoryMutation.isPending}
                 data-testid="button-submit-edit-category"
               >
-                {updateCategoryMutation.isPending ? 'Updating...' : 'Update Category'}
+                {updateCategoryMutation.isPending
+                  ? "Updating..."
+                  : "Update Category"}
               </Button>
             </DialogFooter>
           </form>
@@ -1788,64 +2111,67 @@ const CategoriesManagement = () => {
   );
 };
 
-// Marketplace Management Component  
+// Marketplace Management Component
 const MarketplaceManagement = () => {
-  const [search, setSearch] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('all');
-  const [vendorFilter, setVendorFilter] = useState('all');
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [vendorFilter, setVendorFilter] = useState("all");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<IMarketplaceItem | null>(null);
-  
+
   const { user } = useAdminAuth();
   const { toast } = useToast();
-  
+
   // Create form with proper Zod validation
   const createForm = useForm<CreateMarketplaceItemInput>({
     resolver: zodResolver(createMarketplaceItemSchema),
     defaultValues: {
-      vendorId: '',
-      name: '',
-      description: '',
+      vendorId: "",
+      name: "",
+      description: "",
       price: 0,
-      currency: 'NGN',
-      category: '',
-      subcategory: '',
+      currency: "NGN",
+      category: "",
+      subcategory: "",
       stock: 0,
-      images: []
-    }
+      images: [],
+    },
   });
 
   // Edit form with proper Zod validation
   const editForm = useForm<UpdateMarketplaceItemInput>({
     resolver: zodResolver(updateMarketplaceItemSchema),
     defaultValues: {
-      vendorId: '',
-      name: '',
-      description: '',
+      vendorId: "",
+      name: "",
+      description: "",
       price: 0,
-      currency: 'NGN',
-      category: '',
-      subcategory: '',
+      currency: "NGN",
+      category: "",
+      subcategory: "",
       stock: 0,
-      images: []
-    }
+      images: [],
+    },
   });
-  
+
   // Use hierarchical query keys and default fetcher
   const { data: items, isLoading } = useQuery({
-    queryKey: ['/api/admin/marketplace', { category: categoryFilter, vendor: vendorFilter, search }],
-    enabled: true
+    queryKey: [
+      "/api/admin/marketplace",
+      { category: categoryFilter, vendor: vendorFilter, search },
+    ],
+    enabled: true,
   });
 
   // Get categories and vendors for filtering
   const { data: categories } = useQuery({
-    queryKey: ['/api/admin/categories'],
-    enabled: true
+    queryKey: ["/api/admin/categories"],
+    enabled: true,
   });
 
   const { data: vendors } = useQuery({
-    queryKey: ['/api/admin/providers'], 
-    enabled: true
+    queryKey: ["/api/admin/providers"],
+    enabled: true,
   });
 
   // Type-safe array access with fallback
@@ -1853,55 +2179,58 @@ const MarketplaceManagement = () => {
   const vendorsArray = Array.isArray(vendors) ? vendors : [];
 
   const createItemMutation = useMutation({
-    mutationFn: (itemData: CreateMarketplaceItemInput) => 
-      adminApiRequest('POST', '/api/admin/marketplace', itemData),
+    mutationFn: (itemData: CreateMarketplaceItemInput) =>
+      adminApiRequest("POST", "/api/admin/marketplace", itemData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/marketplace'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/marketplace"] });
       setIsCreateDialogOpen(false);
       createForm.reset();
       toast({ title: "Marketplace item created successfully" });
     },
     onError: (error: Error & { response?: { data?: { error?: string } } }) => {
-      toast({ 
-        title: "Error creating marketplace item", 
+      toast({
+        title: "Error creating marketplace item",
         description: error.response?.data?.error || "Failed to create item",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const updateItemMutation = useMutation({
-    mutationFn: ({ id, ...data }: { id: string } & UpdateMarketplaceItemInput) => 
-      adminApiRequest('PATCH', `/api/admin/marketplace/${id}`, data),
+    mutationFn: ({
+      id,
+      ...data
+    }: { id: string } & UpdateMarketplaceItemInput) =>
+      adminApiRequest("PATCH", `/api/admin/marketplace/${id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/marketplace'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/marketplace"] });
       setEditingItem(null);
       editForm.reset();
       toast({ title: "Marketplace item updated successfully" });
     },
     onError: (error: Error & { response?: { data?: { error?: string } } }) => {
-      toast({ 
-        title: "Error updating marketplace item", 
+      toast({
+        title: "Error updating marketplace item",
         description: error.response?.data?.error || "Failed to update item",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const deleteItemMutation = useMutation({
-    mutationFn: (itemId: string) => 
-      adminApiRequest('DELETE', `/api/admin/marketplace/${itemId}`),
+    mutationFn: (itemId: string) =>
+      adminApiRequest("DELETE", `/api/admin/marketplace/${itemId}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/marketplace'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/marketplace"] });
       toast({ title: "Marketplace item deleted successfully" });
     },
     onError: (error: Error & { response?: { data?: { error?: string } } }) => {
-      toast({ 
-        title: "Error deleting marketplace item", 
+      toast({
+        title: "Error deleting marketplace item",
         description: error.response?.data?.error || "Failed to delete item",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const handleCreateSubmit = (data: CreateMarketplaceItemInput) => {
@@ -1912,13 +2241,17 @@ const MarketplaceManagement = () => {
     if (editingItem) {
       updateItemMutation.mutate({
         id: editingItem._id,
-        ...data
+        ...data,
       });
     }
   };
 
   const handleDeleteItem = (itemId: string) => {
-    if (confirm('Are you sure you want to delete this marketplace item? This action cannot be undone.')) {
+    if (
+      confirm(
+        "Are you sure you want to delete this marketplace item? This action cannot be undone.",
+      )
+    ) {
       deleteItemMutation.mutate(itemId);
     }
   };
@@ -1926,23 +2259,25 @@ const MarketplaceManagement = () => {
   const handleOpenEditDialog = (item: IMarketplaceItem) => {
     setEditingItem(item);
     editForm.reset({
-      vendorId: item.vendorId || '',
-      name: item.name || '',
-      description: item.description || '',
+      vendorId: item.vendorId || "",
+      name: item.name || "",
+      description: item.description || "",
       price: item.price || 0,
-      currency: item.currency || 'NGN',
-      category: item.category || '',
-      subcategory: item.subcategory || '',
+      currency: item.currency || "NGN",
+      category: item.category || "",
+      subcategory: item.subcategory || "",
       stock: item.stock || 0,
-      images: item.images || []
+      images: item.images || [],
     });
   };
 
   // Type-safe items filtering with fallback
-  const itemsArray = Array.isArray(items) ? items as IMarketplaceItem[] : [];
+  const itemsArray = Array.isArray(items) ? (items as IMarketplaceItem[]) : [];
   const filteredItems = itemsArray.filter((item: IMarketplaceItem) => {
-    return item.name?.toLowerCase().includes(search.toLowerCase()) ||
-           item.description?.toLowerCase().includes(search.toLowerCase());
+    return (
+      item.name?.toLowerCase().includes(search.toLowerCase()) ||
+      item.description?.toLowerCase().includes(search.toLowerCase())
+    );
   });
 
   if (isLoading) {
@@ -1951,7 +2286,10 @@ const MarketplaceManagement = () => {
         <div className="h-8 bg-gray-200 rounded w-1/4 animate-pulse"></div>
         <div className="space-y-2">
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-20 bg-gray-200 rounded animate-pulse"></div>
+            <div
+              key={i}
+              className="h-20 bg-gray-200 rounded animate-pulse"
+            ></div>
           ))}
         </div>
       </div>
@@ -1963,10 +2301,14 @@ const MarketplaceManagement = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Marketplace Management</h1>
-          <p className="text-gray-600 dark:text-gray-300">Manage marketplace items for food runs and groceries</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            Marketplace Management
+          </h1>
+          <p className="text-gray-600 dark:text-gray-300">
+            Manage marketplace items for food runs and groceries
+          </p>
         </div>
-        <Button 
+        <Button
           onClick={() => setIsCreateDialogOpen(true)}
           className="mt-4 sm:mt-0"
           data-testid="button-create-marketplace-item"
@@ -1990,26 +2332,38 @@ const MarketplaceManagement = () => {
               />
             </div>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-full lg:w-48" data-testid="select-category-filter">
+              <SelectTrigger
+                className="w-full lg:w-48"
+                data-testid="select-category-filter"
+              >
                 <SelectValue placeholder="Filter by category" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Categories</SelectItem>
                 {categoriesArray.map((category: any) => (
-                  <SelectItem key={category._id || category.id || category} value={category.key || category.name || category}>
+                  <SelectItem
+                    key={category._id || category.id || category}
+                    value={category.key || category.name || category}
+                  >
                     {category.name || category}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <Select value={vendorFilter} onValueChange={setVendorFilter}>
-              <SelectTrigger className="w-full lg:w-48" data-testid="select-vendor-filter">
+              <SelectTrigger
+                className="w-full lg:w-48"
+                data-testid="select-vendor-filter"
+              >
                 <SelectValue placeholder="Filter by vendor" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Vendors</SelectItem>
                 {vendorsArray.map((vendor: any) => (
-                  <SelectItem key={vendor._id || vendor.id || vendor} value={vendor._id || vendor.id || vendor}>
+                  <SelectItem
+                    key={vendor._id || vendor.id || vendor}
+                    value={vendor._id || vendor.id || vendor}
+                  >
                     {vendor.name || vendor.email || vendor}
                   </SelectItem>
                 ))}
@@ -2040,14 +2394,17 @@ const MarketplaceManagement = () => {
                   <TableCell>
                     <div className="flex items-center space-x-3">
                       {item.images?.[0] && (
-                        <img 
-                          src={item.images[0]} 
+                        <img
+                          src={item.images[0]}
                           alt={item.name}
                           className="w-10 h-10 object-cover rounded"
                         />
                       )}
                       <div>
-                        <div className="font-medium" data-testid={`text-item-name-${item._id}`}>
+                        <div
+                          className="font-medium"
+                          data-testid={`text-item-name-${item._id}`}
+                        >
                           {item.name}
                         </div>
                         {item.description && (
@@ -2062,7 +2419,9 @@ const MarketplaceManagement = () => {
                     <div>
                       <Badge variant="outline">{item.category}</Badge>
                       {item.subcategory && (
-                        <div className="text-xs text-gray-500 mt-1">{item.subcategory}</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {item.subcategory}
+                        </div>
                       )}
                     </div>
                   </TableCell>
@@ -2072,7 +2431,7 @@ const MarketplaceManagement = () => {
                     </span>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={item.stock > 0 ? 'default' : 'secondary'}>
+                    <Badge variant={item.stock > 0 ? "default" : "secondary"}>
                       {item.stock} units
                     </Badge>
                   </TableCell>
@@ -2082,8 +2441,8 @@ const MarketplaceManagement = () => {
                     </code>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={item.isActive ? 'default' : 'secondary'}>
-                      {item.isActive ? 'Active' : 'Inactive'}
+                    <Badge variant={item.isActive ? "default" : "secondary"}>
+                      {item.isActive ? "Active" : "Inactive"}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -2124,7 +2483,10 @@ const MarketplaceManagement = () => {
             </DialogDescription>
           </DialogHeader>
           <Form {...createForm}>
-            <form onSubmit={createForm.handleSubmit(handleCreateSubmit)} className="space-y-4">
+            <form
+              onSubmit={createForm.handleSubmit(handleCreateSubmit)}
+              className="space-y-4"
+            >
               <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={createForm.control}
@@ -2209,7 +2571,9 @@ const MarketplaceManagement = () => {
                           placeholder="2500"
                           data-testid="input-price"
                           {...field}
-                          onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                          onChange={(e) =>
+                            field.onChange(parseFloat(e.target.value) || 0)
+                          }
                         />
                       </FormControl>
                       <FormMessage />
@@ -2228,7 +2592,9 @@ const MarketplaceManagement = () => {
                           placeholder="50"
                           data-testid="input-stock"
                           {...field}
-                          onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                          onChange={(e) =>
+                            field.onChange(parseInt(e.target.value) || 0)
+                          }
                         />
                       </FormControl>
                       <FormMessage />
@@ -2254,9 +2620,9 @@ const MarketplaceManagement = () => {
                 )}
               />
               <DialogFooter>
-                <Button 
-                  type="button" 
-                  variant="outline" 
+                <Button
+                  type="button"
+                  variant="outline"
                   onClick={() => {
                     setIsCreateDialogOpen(false);
                     createForm.reset();
@@ -2264,12 +2630,12 @@ const MarketplaceManagement = () => {
                 >
                   Cancel
                 </Button>
-                <Button 
-                  type="submit" 
+                <Button
+                  type="submit"
                   disabled={createItemMutation.isPending}
                   data-testid="button-submit-create-item"
                 >
-                  {createItemMutation.isPending ? 'Creating...' : 'Create Item'}
+                  {createItemMutation.isPending ? "Creating..." : "Create Item"}
                 </Button>
               </DialogFooter>
             </form>
@@ -2278,21 +2644,25 @@ const MarketplaceManagement = () => {
       </Dialog>
 
       {/* Edit Item Dialog */}
-      <Dialog open={!!editingItem} onOpenChange={(open) => {
-        if (!open) {
-          setEditingItem(null);
-          editForm.reset();
-        }
-      }}>
+      <Dialog
+        open={!!editingItem}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingItem(null);
+            editForm.reset();
+          }
+        }}
+      >
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit Marketplace Item</DialogTitle>
-            <DialogDescription>
-              Update the item details
-            </DialogDescription>
+            <DialogDescription>Update the item details</DialogDescription>
           </DialogHeader>
           <Form {...editForm}>
-            <form onSubmit={editForm.handleSubmit(handleEditSubmit)} className="space-y-4">
+            <form
+              onSubmit={editForm.handleSubmit(handleEditSubmit)}
+              className="space-y-4"
+            >
               <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={editForm.control}
@@ -2301,10 +2671,7 @@ const MarketplaceManagement = () => {
                     <FormItem>
                       <FormLabel>Vendor ID</FormLabel>
                       <FormControl>
-                        <Input
-                          data-testid="input-edit-vendor-id"
-                          {...field}
-                        />
+                        <Input data-testid="input-edit-vendor-id" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -2317,10 +2684,7 @@ const MarketplaceManagement = () => {
                     <FormItem>
                       <FormLabel>Category</FormLabel>
                       <FormControl>
-                        <Input
-                          data-testid="input-edit-category"
-                          {...field}
-                        />
+                        <Input data-testid="input-edit-category" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -2334,10 +2698,7 @@ const MarketplaceManagement = () => {
                   <FormItem>
                     <FormLabel>Item Name</FormLabel>
                     <FormControl>
-                      <Input
-                        data-testid="input-edit-item-name"
-                        {...field}
-                      />
+                      <Input data-testid="input-edit-item-name" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -2350,10 +2711,7 @@ const MarketplaceManagement = () => {
                   <FormItem>
                     <FormLabel>Description</FormLabel>
                     <FormControl>
-                      <Input
-                        data-testid="input-edit-description"
-                        {...field}
-                      />
+                      <Input data-testid="input-edit-description" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -2372,7 +2730,9 @@ const MarketplaceManagement = () => {
                           step="0.01"
                           data-testid="input-edit-price"
                           {...field}
-                          onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                          onChange={(e) =>
+                            field.onChange(parseFloat(e.target.value) || 0)
+                          }
                         />
                       </FormControl>
                       <FormMessage />
@@ -2390,7 +2750,9 @@ const MarketplaceManagement = () => {
                           type="number"
                           data-testid="input-edit-stock"
                           {...field}
-                          onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                          onChange={(e) =>
+                            field.onChange(parseInt(e.target.value) || 0)
+                          }
                         />
                       </FormControl>
                       <FormMessage />
@@ -2405,19 +2767,16 @@ const MarketplaceManagement = () => {
                   <FormItem>
                     <FormLabel>Subcategory (Optional)</FormLabel>
                     <FormControl>
-                      <Input
-                        data-testid="input-edit-subcategory"
-                        {...field}
-                      />
+                      <Input data-testid="input-edit-subcategory" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
               <DialogFooter>
-                <Button 
-                  type="button" 
-                  variant="outline" 
+                <Button
+                  type="button"
+                  variant="outline"
                   onClick={() => {
                     setEditingItem(null);
                     editForm.reset();
@@ -2425,12 +2784,12 @@ const MarketplaceManagement = () => {
                 >
                   Cancel
                 </Button>
-                <Button 
-                  type="submit" 
+                <Button
+                  type="submit"
                   disabled={updateItemMutation.isPending}
                   data-testid="button-submit-edit-item"
                 >
-                  {updateItemMutation.isPending ? 'Updating...' : 'Update Item'}
+                  {updateItemMutation.isPending ? "Updating..." : "Update Item"}
                 </Button>
               </DialogFooter>
             </form>
@@ -2443,46 +2802,56 @@ const MarketplaceManagement = () => {
 
 // Recent Activity Component
 const RecentActivity = () => {
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(10);
-  
+
   const { data: activities, isLoading } = useQuery({
-    queryKey: ['/api/admin/audit-logs', { limit, search, dateFrom, dateTo }],
+    queryKey: ["/api/admin/audit-logs", { limit, search, dateFrom, dateTo }],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (search) params.append('search', search);
-      if (dateFrom) params.append('dateFrom', dateFrom);
-      if (dateTo) params.append('dateTo', dateTo);
-      params.append('limit', limit.toString());
-      
+      if (search) params.append("search", search);
+      if (dateFrom) params.append("dateFrom", dateFrom);
+      if (dateTo) params.append("dateTo", dateTo);
+      params.append("limit", limit.toString());
+
       const queryString = params.toString();
-      return adminApiRequest('GET', `/api/admin/audit-logs${queryString ? '?' + queryString : ''}`);
+      return adminApiRequest(
+        "GET",
+        `/api/admin/audit-logs${queryString ? "?" + queryString : ""}`,
+      );
     },
   });
 
   const exportToCsv = () => {
     if (!activities || activities.length === 0) return;
-    
-    const headers = ['Date', 'User', 'Action', 'Target', 'Details'];
-    const csvContent = [
-      headers.join(','),
-      ...activities.map((activity: any) => [
-        new Date(activity.createdAt).toLocaleString(),
-        activity.user?.name || 'System',
-        activity.action || '',
-        activity.target || '',
-        activity.details?.replace(/,/g, ';') || ''
-      ].map(field => `"${field}"`).join(','))
-    ].join('\n');
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
+    const headers = ["Date", "User", "Action", "Target", "Details"];
+    const csvContent = [
+      headers.join(","),
+      ...activities.map((activity: any) =>
+        [
+          new Date(activity.createdAt).toLocaleString(),
+          activity.user?.name || "System",
+          activity.action || "",
+          activity.target || "",
+          activity.details?.replace(/,/g, ";") || "",
+        ]
+          .map((field) => `"${field}"`)
+          .join(","),
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `activity-logs-${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
+    link.setAttribute("href", url);
+    link.setAttribute(
+      "download",
+      `activity-logs-${new Date().toISOString().split("T")[0]}.csv`,
+    );
+    link.style.visibility = "hidden";
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -2490,20 +2859,20 @@ const RecentActivity = () => {
 
   const getActivityIcon = (action: string) => {
     switch (action?.toLowerCase()) {
-      case 'create':
-      case 'register':
+      case "create":
+      case "register":
         return <Plus className="w-4 h-4 text-green-600" />;
-      case 'update':
-      case 'edit':
+      case "update":
+      case "edit":
         return <Edit className="w-4 h-4 text-blue-600" />;
-      case 'delete':
-      case 'remove':
+      case "delete":
+      case "remove":
         return <XCircle className="w-4 h-4 text-red-600" />;
-      case 'approve':
+      case "approve":
         return <CheckCircle className="w-4 h-4 text-green-600" />;
-      case 'reject':
+      case "reject":
         return <XCircle className="w-4 h-4 text-orange-600" />;
-      case 'login':
+      case "login":
         return <LogOut className="w-4 h-4 text-purple-600" />;
       default:
         return <ClipboardList className="w-4 h-4 text-gray-600" />;
@@ -2512,22 +2881,22 @@ const RecentActivity = () => {
 
   const getActivityBgColor = (action: string) => {
     switch (action?.toLowerCase()) {
-      case 'create':
-      case 'register':
-      case 'approve':
-        return 'bg-green-100';
-      case 'update':
-      case 'edit':
-        return 'bg-blue-100';
-      case 'delete':
-      case 'remove':
-        return 'bg-red-100';
-      case 'reject':
-        return 'bg-orange-100';
-      case 'login':
-        return 'bg-purple-100';
+      case "create":
+      case "register":
+      case "approve":
+        return "bg-green-100";
+      case "update":
+      case "edit":
+        return "bg-blue-100";
+      case "delete":
+      case "remove":
+        return "bg-red-100";
+      case "reject":
+        return "bg-orange-100";
+      case "login":
+        return "bg-purple-100";
       default:
-        return 'bg-gray-100';
+        return "bg-gray-100";
     }
   };
 
@@ -2540,9 +2909,9 @@ const RecentActivity = () => {
             Recent Activity
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Button 
-              variant="outline" 
-              size="sm" 
+            <Button
+              variant="outline"
+              size="sm"
               onClick={exportToCsv}
               disabled={!activities || activities.length === 0}
               data-testid="button-export-activity"
@@ -2557,7 +2926,9 @@ const RecentActivity = () => {
         {/* Filters */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
           <div>
-            <Label htmlFor="dateFrom" className="text-sm">From Date</Label>
+            <Label htmlFor="dateFrom" className="text-sm">
+              From Date
+            </Label>
             <Input
               id="dateFrom"
               type="date"
@@ -2568,7 +2939,9 @@ const RecentActivity = () => {
             />
           </div>
           <div>
-            <Label htmlFor="dateTo" className="text-sm">To Date</Label>
+            <Label htmlFor="dateTo" className="text-sm">
+              To Date
+            </Label>
             <Input
               id="dateTo"
               type="date"
@@ -2579,7 +2952,9 @@ const RecentActivity = () => {
             />
           </div>
           <div>
-            <Label htmlFor="activitySearch" className="text-sm">Search</Label>
+            <Label htmlFor="activitySearch" className="text-sm">
+              Search
+            </Label>
             <Input
               id="activitySearch"
               placeholder="Search activities..."
@@ -2590,9 +2965,17 @@ const RecentActivity = () => {
             />
           </div>
           <div>
-            <Label htmlFor="limit" className="text-sm">Show Records</Label>
-            <Select value={limit.toString()} onValueChange={(value) => setLimit(Number(value))}>
-              <SelectTrigger className="mt-1" data-testid="select-activity-limit">
+            <Label htmlFor="limit" className="text-sm">
+              Show Records
+            </Label>
+            <Select
+              value={limit.toString()}
+              onValueChange={(value) => setLimit(Number(value))}
+            >
+              <SelectTrigger
+                className="mt-1"
+                data-testid="select-activity-limit"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -2610,7 +2993,10 @@ const RecentActivity = () => {
           {isLoading ? (
             <div className="space-y-3">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-center space-x-4 animate-pulse">
+                <div
+                  key={i}
+                  className="flex items-center space-x-4 animate-pulse"
+                >
                   <div className="w-8 h-8 bg-gray-200 rounded-full"></div>
                   <div className="flex-1 space-y-1">
                     <div className="h-4 bg-gray-200 rounded w-3/4"></div>
@@ -2621,17 +3007,32 @@ const RecentActivity = () => {
             </div>
           ) : activities && activities.length > 0 ? (
             activities.map((activity: any, index: number) => (
-              <div key={activity._id || index} className="flex items-center space-x-4 p-3 hover:bg-gray-50 rounded-lg">
-                <div className={`w-8 h-8 ${getActivityBgColor(activity.action)} rounded-full flex items-center justify-center`}>
+              <div
+                key={activity._id || index}
+                className="flex items-center space-x-4 p-3 hover:bg-gray-50 rounded-lg"
+              >
+                <div
+                  className={`w-8 h-8 ${getActivityBgColor(activity.action)} rounded-full flex items-center justify-center`}
+                >
                   {getActivityIcon(activity.action)}
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm font-medium" data-testid={`activity-action-${index}`}>
-                    {activity.action || 'Unknown action'} {activity.target && `- ${activity.target}`}
+                  <p
+                    className="text-sm font-medium"
+                    data-testid={`activity-action-${index}`}
+                  >
+                    {activity.action || "Unknown action"}{" "}
+                    {activity.target && `- ${activity.target}`}
                   </p>
-                  <p className="text-xs text-muted-foreground" data-testid={`activity-details-${index}`}>
-                    {activity.user?.name || 'System'} • {activity.details || 'No details'} • {' '}
-                    {activity.createdAt ? new Date(activity.createdAt).toLocaleString() : 'Unknown time'}
+                  <p
+                    className="text-xs text-muted-foreground"
+                    data-testid={`activity-details-${index}`}
+                  >
+                    {activity.user?.name || "System"} •{" "}
+                    {activity.details || "No details"} •{" "}
+                    {activity.createdAt
+                      ? new Date(activity.createdAt).toLocaleString()
+                      : "Unknown time"}
                   </p>
                 </div>
               </div>
@@ -2641,13 +3042,13 @@ const RecentActivity = () => {
               <ClipboardList className="w-8 h-8 mx-auto mb-2 text-gray-400" />
               <p>No recent activity found</p>
               {(dateFrom || dateTo || search) && (
-                <Button 
-                  variant="link" 
-                  size="sm" 
+                <Button
+                  variant="link"
+                  size="sm"
                   onClick={() => {
-                    setDateFrom('');
-                    setDateTo('');
-                    setSearch('');
+                    setDateFrom("");
+                    setDateTo("");
+                    setSearch("");
                   }}
                   className="mt-2"
                 >
@@ -2665,15 +3066,17 @@ const RecentActivity = () => {
 // PostgreSQL Bridge Stats Component - Shows data from resident/provider system
 const PostgreSQLBridgeStats = () => {
   const { data: bridgeStats, isLoading } = useQuery({
-    queryKey: ['/api/admin/bridge/stats'],
-    queryFn: () => adminApiRequest('GET', '/api/admin/bridge/stats'),
+    queryKey: ["/api/admin/bridge/stats"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/bridge/stats"),
   });
 
   if (isLoading) {
     return (
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-foreground">Resident & Provider System Data</h3>
+          <h3 className="text-lg font-semibold text-foreground">
+            Resident & Provider System Data
+          </h3>
           <Badge variant="secondary">PostgreSQL</Badge>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -2695,52 +3098,72 @@ const PostgreSQLBridgeStats = () => {
 
   const bridgeStatCards = [
     {
-      title: 'Total Residents',
+      title: "Total Residents",
       value: bridgeStats?.users?.totalResidents || 0,
       icon: Users,
-      description: 'Active residents in the system',
-      color: 'text-blue-600'
+      description: "Active residents in the system",
+      color: "text-blue-600",
     },
     {
-      title: 'Service Providers',
+      title: "Service Providers",
       value: bridgeStats?.users?.totalProviders || 0,
       icon: UserCheck,
-      description: 'Registered service providers',
-      color: 'text-green-600'
+      description: "Registered service providers",
+      color: "text-green-600",
     },
     {
-      title: 'Service Requests',
+      title: "Service Requests",
       value: bridgeStats?.serviceRequests?.total || 0,
       icon: ClipboardList,
-      description: 'Total service requests',
-      color: 'text-purple-600'
+      description: "Total service requests",
+      color: "text-purple-600",
     },
     {
-      title: 'Pending Approvals',
+      title: "Pending Approvals",
       value: bridgeStats?.users?.pendingProviders || 0,
       icon: AlertTriangle,
-      description: 'Providers awaiting approval',
-      color: 'text-orange-600'
+      description: "Providers awaiting approval",
+      color: "text-orange-600",
     },
   ];
 
-  const requestStatusData = bridgeStats?.serviceRequests ? [
-    { label: 'Pending', value: bridgeStats.serviceRequests.pending, color: 'bg-yellow-500' },
-    { label: 'In Progress', value: bridgeStats.serviceRequests.inProgress, color: 'bg-blue-500' },
-    { label: 'Completed', value: bridgeStats.serviceRequests.completed, color: 'bg-green-500' },
-    { label: 'Cancelled', value: bridgeStats.serviceRequests.cancelled, color: 'bg-red-500' },
-  ] : [];
+  const requestStatusData = bridgeStats?.serviceRequests
+    ? [
+        {
+          label: "Pending",
+          value: bridgeStats.serviceRequests.pending,
+          color: "bg-yellow-500",
+        },
+        {
+          label: "In Progress",
+          value: bridgeStats.serviceRequests.inProgress,
+          color: "bg-blue-500",
+        },
+        {
+          label: "Completed",
+          value: bridgeStats.serviceRequests.completed,
+          color: "bg-green-500",
+        },
+        {
+          label: "Cancelled",
+          value: bridgeStats.serviceRequests.cancelled,
+          color: "bg-red-500",
+        },
+      ]
+    : [];
 
   return (
     <div className="mb-8">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-foreground">Resident & Provider System Data</h3>
+        <h3 className="text-lg font-semibold text-foreground">
+          Resident & Provider System Data
+        </h3>
         <div className="flex items-center gap-2">
           <Badge variant="secondary">PostgreSQL</Badge>
           <Badge variant="outline">Live Data</Badge>
         </div>
       </div>
-      
+
       {/* Bridge Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
         {bridgeStatCards.map((stat, index) => {
@@ -2753,7 +3176,10 @@ const PostgreSQLBridgeStats = () => {
                     <p className="text-sm font-medium text-muted-foreground">
                       {stat.title}
                     </p>
-                    <p className={`text-2xl font-bold ${stat.color}`} data-testid={`bridge-stat-${stat.title.toLowerCase().replace(' ', '-')}`}>
+                    <p
+                      className={`text-2xl font-bold ${stat.color}`}
+                      data-testid={`bridge-stat-${stat.title.toLowerCase().replace(" ", "-")}`}
+                    >
                       {stat.value}
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
@@ -2774,13 +3200,17 @@ const PostgreSQLBridgeStats = () => {
       {requestStatusData.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Service Request Status Breakdown</CardTitle>
+            <CardTitle className="text-base">
+              Service Request Status Breakdown
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {requestStatusData.map((status, index) => (
                 <div key={index} className="text-center">
-                  <div className={`w-full h-2 ${status.color} rounded-full mb-2`}></div>
+                  <div
+                    className={`w-full h-2 ${status.color} rounded-full mb-2`}
+                  ></div>
                   <p className="text-sm font-medium">{status.label}</p>
                   <p className="text-lg font-bold">{status.value}</p>
                 </div>
@@ -2796,8 +3226,8 @@ const PostgreSQLBridgeStats = () => {
 // Dashboard Stats Component
 const DashboardStats = () => {
   const { data: stats, isLoading } = useQuery({
-    queryKey: ['/api/admin/dashboard/stats'],
-    queryFn: () => adminApiRequest('GET', '/api/admin/dashboard/stats'),
+    queryKey: ["/api/admin/dashboard/stats"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/dashboard/stats"),
   });
 
   if (isLoading) {
@@ -2820,32 +3250,32 @@ const DashboardStats = () => {
 
   const statCards = [
     {
-      title: 'Total Users',
+      title: "Total Users",
       value: stats?.totalUsers || 0,
       icon: Users,
-      change: '+12.5%',
-      trend: 'up'
+      change: "+12.5%",
+      trend: "up",
     },
     {
-      title: 'Active Estates',
+      title: "Active Estates",
       value: stats?.totalEstates || 0,
       icon: Building2,
-      change: '+3.2%',
-      trend: 'up'
+      change: "+3.2%",
+      trend: "up",
     },
     {
-      title: 'Service Providers',
+      title: "Service Providers",
       value: stats?.totalProviders || 0,
       icon: UserCheck,
-      change: '+8.1%',
-      trend: 'up'
+      change: "+8.1%",
+      trend: "up",
     },
     {
-      title: 'Total Revenue',
+      title: "Total Revenue",
       value: `₦${(stats?.totalRevenue || 0).toLocaleString()}`,
       icon: DollarSign,
-      change: '+15.3%',
-      trend: 'up'
+      change: "+15.3%",
+      trend: "up",
     },
   ];
 
@@ -2861,7 +3291,10 @@ const DashboardStats = () => {
                   <p className="text-sm font-medium text-muted-foreground">
                     {stat.title}
                   </p>
-                  <p className="text-2xl font-bold text-foreground" data-testid={`stat-${stat.title.toLowerCase().replace(' ', '-')}`}>
+                  <p
+                    className="text-2xl font-bold text-foreground"
+                    data-testid={`stat-${stat.title.toLowerCase().replace(" ", "-")}`}
+                  >
                     {stat.value}
                   </p>
                 </div>
@@ -2872,7 +3305,9 @@ const DashboardStats = () => {
               <div className="flex items-center mt-2">
                 <TrendingUp className="w-4 h-4 text-green-500 mr-1" />
                 <span className="text-sm text-green-500">{stat.change}</span>
-                <span className="text-sm text-muted-foreground ml-1">vs last month</span>
+                <span className="text-sm text-muted-foreground ml-1">
+                  vs last month
+                </span>
               </div>
             </CardContent>
           </Card>
@@ -2885,7 +3320,7 @@ const DashboardStats = () => {
 // Main Admin Dashboard Component
 export default function AdminSuperDashboard() {
   const { user, token } = useAdminAuth();
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState("dashboard");
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
   // Redirect to login if not authenticated
@@ -2897,7 +3332,7 @@ export default function AdminSuperDashboard() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <div className="flex">
         {/* Sidebar */}
-        <AdminSidebar 
+        <AdminSidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           isMobileOpen={isMobileOpen}
@@ -2925,14 +3360,15 @@ export default function AdminSuperDashboard() {
 
           {/* Page Content */}
           <div className="p-6">
-            {activeTab === 'dashboard' && (
+            {activeTab === "dashboard" && (
               <div>
                 <div className="mb-6">
                   <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
                     Dashboard Overview
                   </h1>
                   <p className="text-gray-600 dark:text-gray-400">
-                    Welcome back, {user.name}! Here's what's happening across your platform.
+                    Welcome back, {user.name}! Here's what's happening across
+                    your platform.
                   </p>
                 </div>
 
@@ -2951,30 +3387,42 @@ export default function AdminSuperDashboard() {
                     <CardContent>
                       <div className="space-y-4">
                         <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">Lekki Estate</span>
+                          <span className="text-sm font-medium">
+                            Lekki Estate
+                          </span>
                           <div className="flex items-center space-x-2">
                             <div className="w-20 h-2 bg-gray-200 rounded-full">
                               <div className="w-16 h-2 bg-green-500 rounded-full"></div>
                             </div>
-                            <span className="text-xs text-muted-foreground">85%</span>
+                            <span className="text-xs text-muted-foreground">
+                              85%
+                            </span>
                           </div>
                         </div>
                         <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">Victoria Island</span>
+                          <span className="text-sm font-medium">
+                            Victoria Island
+                          </span>
                           <div className="flex items-center space-x-2">
                             <div className="w-20 h-2 bg-gray-200 rounded-full">
                               <div className="w-14 h-2 bg-blue-500 rounded-full"></div>
                             </div>
-                            <span className="text-xs text-muted-foreground">72%</span>
+                            <span className="text-xs text-muted-foreground">
+                              72%
+                            </span>
                           </div>
                         </div>
                         <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">Ikoyi Estate</span>
+                          <span className="text-sm font-medium">
+                            Ikoyi Estate
+                          </span>
                           <div className="flex items-center space-x-2">
                             <div className="w-20 h-2 bg-gray-200 rounded-full">
                               <div className="w-12 h-2 bg-yellow-500 rounded-full"></div>
                             </div>
-                            <span className="text-xs text-muted-foreground">68%</span>
+                            <span className="text-xs text-muted-foreground">
+                              68%
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -2984,152 +3432,164 @@ export default function AdminSuperDashboard() {
               </div>
             )}
 
-            {activeTab === 'users' && <UsersManagement />}
-            {activeTab === 'estates' && <EstatesManagement />}
-            {activeTab === 'providers' && <ProvidersManagement />}
-            {activeTab === 'categories' && <CategoriesManagement />}
-            {activeTab === 'marketplace' && <MarketplaceManagement />}
-            {activeTab === 'orders' && <OrdersManagement />}
-            
-            {activeTab !== 'dashboard' && activeTab !== 'users' && activeTab !== 'estates' && activeTab !== 'providers' && activeTab !== 'categories' && activeTab !== 'marketplace' && activeTab !== 'orders' && (
-              <div className="text-center py-12">
-                <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-                  {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Management
-                </h2>
-                <p className="text-gray-600 dark:text-gray-400 mb-8">
-                  This module is under development. Coming soon!
-                </p>
-                <Card className="max-w-md mx-auto">
-                  <CardContent className="p-6">
-                    <div className="text-muted-foreground">
-                      <Package className="w-12 h-12 mx-auto mb-4" />
-                      <p className="text-sm">
-                        The {activeTab} management module will provide comprehensive tools for managing this aspect of your platform.
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            )}
+            {activeTab === "users" && <UsersManagement />}
+            {activeTab === "estates" && <EstatesManagement />}
+            {activeTab === "providers" && <ProvidersManagement />}
+            {activeTab === "categories" && <CategoriesManagement />}
+            {activeTab === "marketplace" && <MarketplaceManagement />}
+            {activeTab === "orders" && <OrdersManagement />}
+
+            {activeTab !== "dashboard" &&
+              activeTab !== "users" &&
+              activeTab !== "estates" &&
+              activeTab !== "providers" &&
+              activeTab !== "categories" &&
+              activeTab !== "marketplace" &&
+              activeTab !== "orders" && (
+                <div className="text-center py-12">
+                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
+                    {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}{" "}
+                    Management
+                  </h2>
+                  <p className="text-gray-600 dark:text-gray-400 mb-8">
+                    This module is under development. Coming soon!
+                  </p>
+                  <Card className="max-w-md mx-auto">
+                    <CardContent className="p-6">
+                      <div className="text-muted-foreground">
+                        <Package className="w-12 h-12 mx-auto mb-4" />
+                        <p className="text-sm">
+                          The {activeTab} management module will provide
+                          comprehensive tools for managing this aspect of your
+                          platform.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
           </div>
         </div>
       </div>
     </div>
   );
-};
+}
 
-// Estates Management Component  
+// Estates Management Component
 const EstatesManagement = () => {
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingEstate, setEditingEstate] = useState<any>(null);
   const [formData, setFormData] = useState({
-    name: '',
-    slug: '',
-    description: '',
-    address: '',
+    name: "",
+    slug: "",
+    description: "",
+    address: "",
     settings: {
       servicesEnabled: [],
       marketplaceEnabled: true,
       paymentMethods: [],
-      deliveryRules: {}
-    }
+      deliveryRules: {},
+    },
   });
-  
+
   const { user } = useAdminAuth();
   const { toast } = useToast();
-  const isSuperAdmin = user?.globalRole === 'super_admin';
+  const isSuperAdmin = user?.globalRole === "super_admin";
 
   const { data: estates, isLoading } = useQuery({
-    queryKey: ['/api/admin/estates', { search }],
+    queryKey: ["/api/admin/estates", { search }],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (search) params.append('search', search);
+      if (search) params.append("search", search);
       const queryString = params.toString();
-      return adminApiRequest('GET', `/api/admin/estates${queryString ? '?' + queryString : ''}`);
+      return adminApiRequest(
+        "GET",
+        `/api/admin/estates${queryString ? "?" + queryString : ""}`,
+      );
     },
   });
 
   const createEstateMutation = useMutation({
-    mutationFn: (estateData: any) => 
-      adminApiRequest('POST', '/api/admin/estates', estateData),
+    mutationFn: (estateData: any) =>
+      adminApiRequest("POST", "/api/admin/estates", estateData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/estates'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/estates"] });
       setIsCreateDialogOpen(false);
       resetForm();
       toast({ title: "Estate created successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error creating estate", 
+      toast({
+        title: "Error creating estate",
         description: error.response?.data?.error || "Failed to create estate",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const updateEstateMutation = useMutation({
-    mutationFn: ({ id, ...data }: any) => 
-      adminApiRequest('PATCH', `/api/admin/estates/${id}`, data),
+    mutationFn: ({ id, ...data }: any) =>
+      adminApiRequest("PATCH", `/api/admin/estates/${id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/estates'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/estates"] });
       setEditingEstate(null);
       resetForm();
       toast({ title: "Estate updated successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error updating estate", 
+      toast({
+        title: "Error updating estate",
         description: error.response?.data?.error || "Failed to update estate",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const deleteEstateMutation = useMutation({
-    mutationFn: (estateId: string) => 
-      adminApiRequest('DELETE', `/api/admin/estates/${estateId}`),
+    mutationFn: (estateId: string) =>
+      adminApiRequest("DELETE", `/api/admin/estates/${estateId}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/estates'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/estates"] });
       toast({ title: "Estate deleted successfully" });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error deleting estate", 
+      toast({
+        title: "Error deleting estate",
         description: error.response?.data?.error || "Failed to delete estate",
-        variant: "destructive" 
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const resetForm = () => {
     setFormData({
-      name: '',
-      slug: '',
-      description: '',
-      address: '',
+      name: "",
+      slug: "",
+      description: "",
+      address: "",
       settings: {
         servicesEnabled: [],
         marketplaceEnabled: true,
         paymentMethods: [],
-        deliveryRules: {}
-      }
+        deliveryRules: {},
+      },
     });
   };
 
   const handleEdit = (estate: any) => {
     setEditingEstate(estate);
     setFormData({
-      name: estate.name || '',
-      slug: estate.slug || '',
-      description: estate.description || '',
-      address: estate.address || '',
+      name: estate.name || "",
+      slug: estate.slug || "",
+      description: estate.description || "",
+      address: estate.address || "",
       settings: estate.settings || {
         servicesEnabled: [],
         marketplaceEnabled: true,
         paymentMethods: [],
-        deliveryRules: {}
-      }
+        deliveryRules: {},
+      },
     });
   };
 
@@ -3140,15 +3600,23 @@ const EstatesManagement = () => {
       createEstateMutation.mutate({
         ...formData,
         coverage: {
-          type: 'Polygon',
-          coordinates: [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] // Default polygon
-        }
+          type: "Polygon",
+          coordinates: [
+            [
+              [0, 0],
+              [0, 1],
+              [1, 1],
+              [1, 0],
+              [0, 0],
+            ],
+          ], // Default polygon
+        },
       });
     }
   };
 
   const handleDelete = (estateId: string) => {
-    if (confirm('Are you sure you want to delete this estate?')) {
+    if (confirm("Are you sure you want to delete this estate?")) {
       deleteEstateMutation.mutate(estateId);
     }
   };
@@ -3157,11 +3625,18 @@ const EstatesManagement = () => {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Estate Management</h1>
-          <p className="text-gray-600 dark:text-gray-400">Manage estates and their configurations</p>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            Estate Management
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400">
+            Manage estates and their configurations
+          </p>
         </div>
         {isSuperAdmin && (
-          <Button onClick={() => setIsCreateDialogOpen(true)} data-testid="button-add-estate">
+          <Button
+            onClick={() => setIsCreateDialogOpen(true)}
+            data-testid="button-add-estate"
+          >
             <Plus className="w-4 h-4 mr-2" />
             Add Estate
           </Button>
@@ -3202,26 +3677,49 @@ const EstatesManagement = () => {
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
-                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
-                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
-                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
-                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
-                    <TableCell><div className="h-4 bg-gray-200 rounded animate-pulse"></div></TableCell>
+                    <TableCell>
+                      <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                    </TableCell>
                   </TableRow>
                 ))
               ) : estates && estates.length > 0 ? (
                 estates.map((estate: any) => (
                   <TableRow key={estate._id}>
-                    <TableCell className="font-medium" data-testid={`estate-name-${estate._id}`}>
+                    <TableCell
+                      className="font-medium"
+                      data-testid={`estate-name-${estate._id}`}
+                    >
                       {estate.name}
                     </TableCell>
                     <TableCell data-testid={`estate-address-${estate._id}`}>
                       {estate.address}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={estate.settings?.marketplaceEnabled ? "default" : "secondary"}>
-                        {estate.settings?.marketplaceEnabled ? "Enabled" : "Disabled"}
+                      <Badge
+                        variant={
+                          estate.settings?.marketplaceEnabled
+                            ? "default"
+                            : "secondary"
+                        }
+                      >
+                        {estate.settings?.marketplaceEnabled
+                          ? "Enabled"
+                          : "Disabled"}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -3258,7 +3756,10 @@ const EstatesManagement = () => {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                  <TableCell
+                    colSpan={6}
+                    className="text-center py-8 text-gray-500"
+                  >
                     No estates found
                   </TableCell>
                 </TableRow>
@@ -3269,19 +3770,26 @@ const EstatesManagement = () => {
       </Card>
 
       {/* Create/Edit Dialog */}
-      <Dialog open={isCreateDialogOpen || !!editingEstate} onOpenChange={() => {
-        setIsCreateDialogOpen(false);
-        setEditingEstate(null);
-        resetForm();
-      }}>
+      <Dialog
+        open={isCreateDialogOpen || !!editingEstate}
+        onOpenChange={() => {
+          setIsCreateDialogOpen(false);
+          setEditingEstate(null);
+          resetForm();
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{editingEstate ? 'Edit Estate' : 'Create New Estate'}</DialogTitle>
+            <DialogTitle>
+              {editingEstate ? "Edit Estate" : "Create New Estate"}
+            </DialogTitle>
             <DialogDescription>
-              {editingEstate ? 'Update estate information' : 'Add a new estate to the platform'}
+              {editingEstate
+                ? "Update estate information"
+                : "Add a new estate to the platform"}
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -3290,7 +3798,9 @@ const EstatesManagement = () => {
                   id="estateName"
                   placeholder="Enter estate name"
                   value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
                   data-testid="input-estate-name"
                 />
               </div>
@@ -3300,43 +3810,54 @@ const EstatesManagement = () => {
                   id="estateSlug"
                   placeholder="estate-slug"
                   value={formData.slug}
-                  onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({ ...formData, slug: e.target.value })
+                  }
                   data-testid="input-estate-slug"
                 />
               </div>
             </div>
-            
+
             <div>
               <Label htmlFor="estateAddress">Address</Label>
               <Input
                 id="estateAddress"
                 placeholder="Enter estate address"
                 value={formData.address}
-                onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, address: e.target.value })
+                }
                 data-testid="input-estate-address"
               />
             </div>
-            
+
             <div>
               <Label htmlFor="estateDescription">Description</Label>
               <Textarea
                 id="estateDescription"
                 placeholder="Enter estate description"
                 value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
                 data-testid="textarea-estate-description"
               />
             </div>
-            
+
             <div className="flex items-center space-x-2">
               <input
                 type="checkbox"
                 id="marketplaceEnabled"
                 checked={formData.settings.marketplaceEnabled}
-                onChange={(e) => setFormData({ 
-                  ...formData, 
-                  settings: { ...formData.settings, marketplaceEnabled: e.target.checked }
-                })}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    settings: {
+                      ...formData.settings,
+                      marketplaceEnabled: e.target.checked,
+                    },
+                  })
+                }
                 data-testid="checkbox-marketplace-enabled"
               />
               <Label htmlFor="marketplaceEnabled">Enable Marketplace</Label>
@@ -3344,9 +3865,9 @@ const EstatesManagement = () => {
           </div>
 
           <DialogFooter>
-            <Button 
-              type="button" 
-              variant="outline" 
+            <Button
+              type="button"
+              variant="outline"
               onClick={() => {
                 setIsCreateDialogOpen(false);
                 setEditingEstate(null);
@@ -3355,16 +3876,19 @@ const EstatesManagement = () => {
             >
               Cancel
             </Button>
-            <Button 
-              type="button" 
+            <Button
+              type="button"
               onClick={handleSubmit}
-              disabled={createEstateMutation.isPending || updateEstateMutation.isPending}
+              disabled={
+                createEstateMutation.isPending || updateEstateMutation.isPending
+              }
               data-testid="button-submit-estate"
             >
-              {createEstateMutation.isPending || updateEstateMutation.isPending ? 
-                'Saving...' : 
-                editingEstate ? 'Update Estate' : 'Create Estate'
-              }
+              {createEstateMutation.isPending || updateEstateMutation.isPending
+                ? "Saving..."
+                : editingEstate
+                  ? "Update Estate"
+                  : "Create Estate"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3375,32 +3899,39 @@ const EstatesManagement = () => {
 
 // Orders Management Component
 const OrdersManagement = () => {
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [disputeFilter, setDisputeFilter] = useState('all');
-  const [dateRange, setDateRange] = useState({ start: '', end: '' });
-  const [priceRange, setPriceRange] = useState({ min: '', max: '' });
-  const [sortBy, setSortBy] = useState('createdAt');
-  const [sortOrder, setSortOrder] = useState('desc');
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [disputeFilter, setDisputeFilter] = useState("all");
+  const [dateRange, setDateRange] = useState({ start: "", end: "" });
+  const [priceRange, setPriceRange] = useState({ min: "", max: "" });
+  const [sortBy, setSortBy] = useState("createdAt");
+  const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
   const [limit] = useState(20);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [showOrderDetails, setShowOrderDetails] = useState(false);
   const [showDisputeModal, setShowDisputeModal] = useState(false);
-  const [disputeAction, setDisputeAction] = useState<'create' | 'resolve'>('create');
+  const [disputeAction, setDisputeAction] = useState<"create" | "resolve">(
+    "create",
+  );
   const [disputeForm, setDisputeForm] = useState({
-    reason: '',
-    description: '',
-    status: 'resolved',
-    resolution: '',
-    refundAmount: 0
+    reason: "",
+    description: "",
+    status: "resolved",
+    resolution: "",
+    refundAmount: 0,
   });
-  
+
   // Query parameters
   const queryParams = {
     search: search || undefined,
-    status: statusFilter === 'all' ? undefined : statusFilter,
-    hasDispute: disputeFilter === 'disputes' ? 'true' : disputeFilter === 'no-disputes' ? 'false' : undefined,
+    status: statusFilter === "all" ? undefined : statusFilter,
+    hasDispute:
+      disputeFilter === "disputes"
+        ? "true"
+        : disputeFilter === "no-disputes"
+          ? "false"
+          : undefined,
     startDate: dateRange.start || undefined,
     endDate: dateRange.end || undefined,
     minTotal: priceRange.min ? Number(priceRange.min) : undefined,
@@ -3408,47 +3939,90 @@ const OrdersManagement = () => {
     page,
     limit,
     sortBy,
-    sortOrder
+    sortOrder,
   };
 
   const { data: ordersData, isLoading: ordersLoading } = useQuery({
-    queryKey: ['/api/admin/orders', queryParams],
-    queryFn: () => adminApiRequest('GET', '/api/admin/orders', queryParams),
+    queryKey: ["/api/admin/orders", queryParams],
+    queryFn: () => adminApiRequest("GET", "/api/admin/orders", queryParams),
   });
 
   const { data: orderStats } = useQuery({
-    queryKey: ['/api/admin/orders/analytics/stats'],
-    queryFn: () => adminApiRequest('GET', '/api/admin/orders/analytics/stats'),
+    queryKey: ["/api/admin/orders/analytics/stats"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/orders/analytics/stats"),
   });
 
   const updateOrderStatusMutation = useMutation({
-    mutationFn: ({ orderId, status }: { orderId: string, status: string }) => 
-      adminApiRequest('PATCH', `/api/admin/orders/${orderId}/status`, { status }),
+    mutationFn: ({ orderId, status }: { orderId: string; status: string }) =>
+      adminApiRequest("PATCH", `/api/admin/orders/${orderId}/status`, {
+        status,
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders/analytics/stats'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/orders"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/admin/orders/analytics/stats"],
+      });
       setShowOrderDetails(false);
     },
   });
 
   const createDisputeMutation = useMutation({
-    mutationFn: ({ orderId, reason, description }: { orderId: string, reason: string, description?: string }) => 
-      adminApiRequest('POST', `/api/admin/orders/${orderId}/dispute`, { reason, description }),
+    mutationFn: ({
+      orderId,
+      reason,
+      description,
+    }: {
+      orderId: string;
+      reason: string;
+      description?: string;
+    }) =>
+      adminApiRequest("POST", `/api/admin/orders/${orderId}/dispute`, {
+        reason,
+        description,
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/orders"] });
       setShowDisputeModal(false);
-      setDisputeForm({ reason: '', description: '', status: 'resolved', resolution: '', refundAmount: 0 });
+      setDisputeForm({
+        reason: "",
+        description: "",
+        status: "resolved",
+        resolution: "",
+        refundAmount: 0,
+      });
     },
   });
 
   const resolveDisputeMutation = useMutation({
-    mutationFn: ({ orderId, status, resolution, refundAmount }: { orderId: string, status: string, resolution: string, refundAmount?: number }) => 
-      adminApiRequest('PATCH', `/api/admin/orders/${orderId}/dispute`, { status, resolution, refundAmount }),
+    mutationFn: ({
+      orderId,
+      status,
+      resolution,
+      refundAmount,
+    }: {
+      orderId: string;
+      status: string;
+      resolution: string;
+      refundAmount?: number;
+    }) =>
+      adminApiRequest("PATCH", `/api/admin/orders/${orderId}/dispute`, {
+        status,
+        resolution,
+        refundAmount,
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/orders/analytics/stats'] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/orders"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/admin/orders/analytics/stats"],
+      });
       setShowDisputeModal(false);
-      setDisputeForm({ reason: '', description: '', status: 'resolved', resolution: '', refundAmount: 0 });
+      setDisputeForm({
+        reason: "",
+        description: "",
+        status: "resolved",
+        resolution: "",
+        refundAmount: 0,
+      });
     },
   });
 
@@ -3461,7 +4035,7 @@ const OrdersManagement = () => {
       createDisputeMutation.mutate({
         orderId: selectedOrder._id,
         reason: disputeForm.reason,
-        description: disputeForm.description
+        description: disputeForm.description,
       });
     }
   };
@@ -3470,19 +4044,19 @@ const OrdersManagement = () => {
     if (selectedOrder && disputeForm.resolution) {
       resolveDisputeMutation.mutate({
         orderId: selectedOrder._id,
-        status: disputeForm.status as 'resolved' | 'rejected' | 'escalated',
+        status: disputeForm.status as "resolved" | "rejected" | "escalated",
         resolution: disputeForm.resolution,
-        refundAmount: disputeForm.refundAmount || undefined
+        refundAmount: disputeForm.refundAmount || undefined,
       });
     }
   };
 
   const resetFilters = () => {
-    setSearch('');
-    setStatusFilter('all');
-    setDisputeFilter('all');
-    setDateRange({ start: '', end: '' });
-    setPriceRange({ min: '', max: '' });
+    setSearch("");
+    setStatusFilter("all");
+    setDisputeFilter("all");
+    setDateRange({ start: "", end: "" });
+    setPriceRange({ min: "", max: "" });
     setPage(1);
   };
 
@@ -3491,21 +4065,31 @@ const OrdersManagement = () => {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'pending': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200';
-      case 'processing': return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
-      case 'delivered': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
-      case 'cancelled': return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
-      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
+      case "pending":
+        return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
+      case "processing":
+        return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+      case "delivered":
+        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+      case "cancelled":
+        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+      default:
+        return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
     }
   };
 
   const getDisputeStatusColor = (status: string) => {
     switch (status) {
-      case 'open': return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
-      case 'resolved': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
-      case 'rejected': return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
-      case 'escalated': return 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200';
-      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
+      case "open":
+        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+      case "resolved":
+        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+      case "rejected":
+        return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
+      case "escalated":
+        return "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200";
+      default:
+        return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
     }
   };
 
@@ -3514,8 +4098,12 @@ const OrdersManagement = () => {
       {/* Header & Stats */}
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Orders Management</h2>
-          <p className="text-gray-600 dark:text-gray-400">Manage orders, track status, and resolve disputes</p>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+            Orders Management
+          </h2>
+          <p className="text-gray-600 dark:text-gray-400">
+            Manage orders, track status, and resolve disputes
+          </p>
         </div>
       </div>
 
@@ -3527,44 +4115,60 @@ const OrdersManagement = () => {
               <div className="flex items-center space-x-2">
                 <Package className="w-8 h-8 text-blue-600" />
                 <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Total Orders</p>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{orderStats.totalOrders}</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Total Orders
+                  </p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {orderStats.totalOrders}
+                  </p>
                 </div>
               </div>
             </CardContent>
           </Card>
-          
+
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center space-x-2">
                 <DollarSign className="w-8 h-8 text-green-600" />
                 <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Total Revenue</p>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-white">₦{orderStats.totalRevenue?.toLocaleString()}</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Total Revenue
+                  </p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    ₦{orderStats.totalRevenue?.toLocaleString()}
+                  </p>
                 </div>
               </div>
             </CardContent>
           </Card>
-          
+
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center space-x-2">
                 <AlertTriangle className="w-8 h-8 text-orange-600" />
                 <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Disputed Orders</p>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{orderStats.disputedOrders}</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Disputed Orders
+                  </p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {orderStats.disputedOrders}
+                  </p>
                 </div>
               </div>
             </CardContent>
           </Card>
-          
+
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center space-x-2">
                 <TrendingUp className="w-8 h-8 text-purple-600" />
                 <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Avg Order Value</p>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-white">₦{orderStats.avgOrderValue?.toFixed(0)}</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Avg Order Value
+                  </p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    ₦{orderStats.avgOrderValue?.toFixed(0)}
+                  </p>
                 </div>
               </div>
             </CardContent>
@@ -3626,7 +4230,9 @@ const OrdersManagement = () => {
                 id="start-date"
                 type="date"
                 value={dateRange.start}
-                onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                onChange={(e) =>
+                  setDateRange((prev) => ({ ...prev, start: e.target.value }))
+                }
                 data-testid="input-start-date"
               />
             </div>
@@ -3637,7 +4243,9 @@ const OrdersManagement = () => {
                 id="end-date"
                 type="date"
                 value={dateRange.end}
-                onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+                onChange={(e) =>
+                  setDateRange((prev) => ({ ...prev, end: e.target.value }))
+                }
                 data-testid="input-end-date"
               />
             </div>
@@ -3649,13 +4257,20 @@ const OrdersManagement = () => {
                 type="number"
                 placeholder="0"
                 value={priceRange.min}
-                onChange={(e) => setPriceRange(prev => ({ ...prev, min: e.target.value }))}
+                onChange={(e) =>
+                  setPriceRange((prev) => ({ ...prev, min: e.target.value }))
+                }
                 data-testid="input-min-price"
               />
             </div>
 
             <div className="flex items-end">
-              <Button variant="outline" onClick={resetFilters} className="w-full" data-testid="button-reset-filters">
+              <Button
+                variant="outline"
+                onClick={resetFilters}
+                className="w-full"
+                data-testid="button-reset-filters"
+              >
                 <X className="w-4 h-4 mr-2" />
                 Reset
               </Button>
@@ -3670,51 +4285,78 @@ const OrdersManagement = () => {
           {ordersLoading ? (
             <div className="text-center py-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-              <p className="mt-2 text-gray-600 dark:text-gray-400">Loading orders...</p>
+              <p className="mt-2 text-gray-600 dark:text-gray-400">
+                Loading orders...
+              </p>
             </div>
           ) : orders.length === 0 ? (
             <div className="text-center py-8">
               <Package className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600 dark:text-gray-400">No orders found</p>
+              <p className="text-gray-600 dark:text-gray-400">
+                No orders found
+              </p>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50 dark:bg-gray-700">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Order ID</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Customer</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Vendor</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Total</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Dispute</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Date</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Actions</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Order ID
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Customer
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Vendor
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Total
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Dispute
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Date
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {orders.map((order: any) => (
-                    <tr key={order._id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <tr
+                      key={order._id}
+                      className="hover:bg-gray-50 dark:hover:bg-gray-700"
+                    >
                       <td className="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
                         #{order._id.slice(-8)}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-300">
-                        {order.buyer?.name || 'Unknown'}
+                        {order.buyer?.name || "Unknown"}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-300">
-                        {order.vendor?.name || 'Unknown'}
+                        {order.vendor?.name || "Unknown"}
                       </td>
                       <td className="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
                         ₦{order.total.toLocaleString()}
                       </td>
                       <td className="px-6 py-4">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.status)}`}>
+                        <span
+                          className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.status)}`}
+                        >
                           {order.status}
                         </span>
                       </td>
                       <td className="px-6 py-4">
                         {order.dispute?.reason ? (
-                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getDisputeStatusColor(order.dispute.status)}`}>
+                          <span
+                            className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getDisputeStatusColor(order.dispute.status)}`}
+                          >
                             {order.dispute.status}
                           </span>
                         ) : (
@@ -3725,8 +4367,8 @@ const OrdersManagement = () => {
                         {new Date(order.createdAt).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 text-sm space-x-2">
-                        <Button 
-                          variant="outline" 
+                        <Button
+                          variant="outline"
                           size="sm"
                           onClick={() => {
                             setSelectedOrder(order);
@@ -3736,34 +4378,36 @@ const OrdersManagement = () => {
                         >
                           <Eye className="w-4 h-4" />
                         </Button>
-                        {order.status === 'delivered' && !order.dispute?.reason && (
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => {
-                              setSelectedOrder(order);
-                              setDisputeAction('create');
-                              setShowDisputeModal(true);
-                            }}
-                            data-testid={`button-create-dispute-${order._id}`}
-                          >
-                            <AlertTriangle className="w-4 h-4" />
-                          </Button>
-                        )}
-                        {order.dispute?.reason && order.dispute.status === 'open' && (
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => {
-                              setSelectedOrder(order);
-                              setDisputeAction('resolve');
-                              setShowDisputeModal(true);
-                            }}
-                            data-testid={`button-resolve-dispute-${order._id}`}
-                          >
-                            <CheckCircle className="w-4 h-4" />
-                          </Button>
-                        )}
+                        {order.status === "delivered" &&
+                          !order.dispute?.reason && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedOrder(order);
+                                setDisputeAction("create");
+                                setShowDisputeModal(true);
+                              }}
+                              data-testid={`button-create-dispute-${order._id}`}
+                            >
+                              <AlertTriangle className="w-4 h-4" />
+                            </Button>
+                          )}
+                        {order.dispute?.reason &&
+                          order.dispute.status === "open" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedOrder(order);
+                                setDisputeAction("resolve");
+                                setShowDisputeModal(true);
+                              }}
+                              data-testid={`button-resolve-dispute-${order._id}`}
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                            </Button>
+                          )}
                       </td>
                     </tr>
                   ))}
@@ -3777,7 +4421,12 @@ const OrdersManagement = () => {
             <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700">
               <div className="flex items-center justify-between">
                 <div className="text-sm text-gray-600 dark:text-gray-400">
-                  Showing {((pagination.page - 1) * pagination.limit) + 1} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} orders
+                  Showing {(pagination.page - 1) * pagination.limit + 1} to{" "}
+                  {Math.min(
+                    pagination.page * pagination.limit,
+                    pagination.total,
+                  )}{" "}
+                  of {pagination.total} orders
                 </div>
                 <div className="flex space-x-2">
                   <Button
@@ -3793,7 +4442,9 @@ const OrdersManagement = () => {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
+                    onClick={() =>
+                      setPage(Math.min(pagination.totalPages, page + 1))
+                    }
                     disabled={page === pagination.totalPages}
                     data-testid="button-next-page"
                   >
@@ -3823,7 +4474,9 @@ const OrdersManagement = () => {
                 </div>
                 <div>
                   <Label>Status</Label>
-                  <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(selectedOrder.status)}`}>
+                  <span
+                    className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(selectedOrder.status)}`}
+                  >
                     {selectedOrder.status}
                   </span>
                 </div>
@@ -3837,11 +4490,15 @@ const OrdersManagement = () => {
                 </div>
                 <div>
                   <Label>Total Amount</Label>
-                  <p className="text-sm font-medium">₦{selectedOrder.total.toLocaleString()}</p>
+                  <p className="text-sm font-medium">
+                    ₦{selectedOrder.total.toLocaleString()}
+                  </p>
                 </div>
                 <div>
                   <Label>Date</Label>
-                  <p className="text-sm">{new Date(selectedOrder.createdAt).toLocaleString()}</p>
+                  <p className="text-sm">
+                    {new Date(selectedOrder.createdAt).toLocaleString()}
+                  </p>
                 </div>
               </div>
 
@@ -3850,12 +4507,19 @@ const OrdersManagement = () => {
                 <Label>Order Items</Label>
                 <div className="mt-2 space-y-2">
                   {selectedOrder.items.map((item: any, index: number) => (
-                    <div key={index} className="flex justify-between items-center p-3 border rounded-lg">
+                    <div
+                      key={index}
+                      className="flex justify-between items-center p-3 border rounded-lg"
+                    >
                       <div>
                         <p className="font-medium">{item.name}</p>
-                        <p className="text-sm text-gray-600">Quantity: {item.quantity}</p>
+                        <p className="text-sm text-gray-600">
+                          Quantity: {item.quantity}
+                        </p>
                       </div>
-                      <p className="font-medium">₦{(item.price * item.quantity).toLocaleString()}</p>
+                      <p className="font-medium">
+                        ₦{(item.price * item.quantity).toLocaleString()}
+                      </p>
                     </div>
                   ))}
                 </div>
@@ -3867,14 +4531,21 @@ const OrdersManagement = () => {
                   <Label>Dispute Information</Label>
                   <div className="mt-2 p-4 border rounded-lg bg-red-50 dark:bg-red-900/20">
                     <div className="flex justify-between items-start mb-2">
-                      <p className="font-medium text-red-800 dark:text-red-200">Reason: {selectedOrder.dispute.reason}</p>
-                      <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getDisputeStatusColor(selectedOrder.dispute.status)}`}>
+                      <p className="font-medium text-red-800 dark:text-red-200">
+                        Reason: {selectedOrder.dispute.reason}
+                      </p>
+                      <span
+                        className={`px-2 py-1 text-xs font-semibold rounded-full ${getDisputeStatusColor(selectedOrder.dispute.status)}`}
+                      >
                         {selectedOrder.dispute.status}
                       </span>
                     </div>
                     {selectedOrder.dispute.resolvedAt && (
                       <p className="text-sm text-gray-600 dark:text-gray-300">
-                        Resolved: {new Date(selectedOrder.dispute.resolvedAt).toLocaleString()}
+                        Resolved:{" "}
+                        {new Date(
+                          selectedOrder.dispute.resolvedAt,
+                        ).toLocaleString()}
                       </p>
                     )}
                   </div>
@@ -3882,31 +4553,37 @@ const OrdersManagement = () => {
               )}
 
               {/* Status Actions */}
-              {['pending', 'processing'].includes(selectedOrder.status) && (
+              {["pending", "processing"].includes(selectedOrder.status) && (
                 <div>
                   <Label>Update Status</Label>
                   <div className="mt-2 flex space-x-2">
-                    {selectedOrder.status === 'pending' && (
-                      <Button 
-                        onClick={() => handleStatusChange(selectedOrder._id, 'processing')}
+                    {selectedOrder.status === "pending" && (
+                      <Button
+                        onClick={() =>
+                          handleStatusChange(selectedOrder._id, "processing")
+                        }
                         disabled={updateOrderStatusMutation.isPending}
                         data-testid="button-mark-processing"
                       >
                         Mark as Processing
                       </Button>
                     )}
-                    {selectedOrder.status === 'processing' && (
-                      <Button 
-                        onClick={() => handleStatusChange(selectedOrder._id, 'delivered')}
+                    {selectedOrder.status === "processing" && (
+                      <Button
+                        onClick={() =>
+                          handleStatusChange(selectedOrder._id, "delivered")
+                        }
                         disabled={updateOrderStatusMutation.isPending}
                         data-testid="button-mark-delivered"
                       >
                         Mark as Delivered
                       </Button>
                     )}
-                    <Button 
+                    <Button
                       variant="destructive"
-                      onClick={() => handleStatusChange(selectedOrder._id, 'cancelled')}
+                      onClick={() =>
+                        handleStatusChange(selectedOrder._id, "cancelled")
+                      }
                       disabled={updateOrderStatusMutation.isPending}
                       data-testid="button-cancel-order"
                     >
@@ -3925,18 +4602,25 @@ const OrdersManagement = () => {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {disputeAction === 'create' ? 'Create Dispute' : 'Resolve Dispute'}
+              {disputeAction === "create"
+                ? "Create Dispute"
+                : "Resolve Dispute"}
             </DialogTitle>
           </DialogHeader>
-          
-          {disputeAction === 'create' ? (
+
+          {disputeAction === "create" ? (
             <div className="space-y-4">
               <div>
                 <Label htmlFor="dispute-reason">Dispute Reason *</Label>
                 <Input
                   id="dispute-reason"
                   value={disputeForm.reason}
-                  onChange={(e) => setDisputeForm(prev => ({ ...prev, reason: e.target.value }))}
+                  onChange={(e) =>
+                    setDisputeForm((prev) => ({
+                      ...prev,
+                      reason: e.target.value,
+                    }))
+                  }
                   placeholder="Brief reason for dispute"
                   data-testid="input-dispute-reason"
                 />
@@ -3946,23 +4630,30 @@ const OrdersManagement = () => {
                 <Textarea
                   id="dispute-description"
                   value={disputeForm.description}
-                  onChange={(e) => setDisputeForm(prev => ({ ...prev, description: e.target.value }))}
+                  onChange={(e) =>
+                    setDisputeForm((prev) => ({
+                      ...prev,
+                      description: e.target.value,
+                    }))
+                  }
                   placeholder="Detailed description of the issue"
                   rows={3}
                   data-testid="textarea-dispute-description"
                 />
               </div>
               <div className="flex justify-end space-x-2">
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   onClick={() => setShowDisputeModal(false)}
                   data-testid="button-cancel-dispute"
                 >
                   Cancel
                 </Button>
-                <Button 
+                <Button
                   onClick={handleCreateDispute}
-                  disabled={!disputeForm.reason || createDisputeMutation.isPending}
+                  disabled={
+                    !disputeForm.reason || createDisputeMutation.isPending
+                  }
                   data-testid="button-create-dispute"
                 >
                   Create Dispute
@@ -3973,7 +4664,12 @@ const OrdersManagement = () => {
             <div className="space-y-4">
               <div>
                 <Label htmlFor="dispute-status">Resolution Status *</Label>
-                <Select value={disputeForm.status} onValueChange={(value) => setDisputeForm(prev => ({ ...prev, status: value }))}>
+                <Select
+                  value={disputeForm.status}
+                  onValueChange={(value) =>
+                    setDisputeForm((prev) => ({ ...prev, status: value }))
+                  }
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -3989,7 +4685,12 @@ const OrdersManagement = () => {
                 <Textarea
                   id="dispute-resolution"
                   value={disputeForm.resolution}
-                  onChange={(e) => setDisputeForm(prev => ({ ...prev, resolution: e.target.value }))}
+                  onChange={(e) =>
+                    setDisputeForm((prev) => ({
+                      ...prev,
+                      resolution: e.target.value,
+                    }))
+                  }
                   placeholder="Detailed resolution or action taken"
                   rows={3}
                   data-testid="textarea-dispute-resolution"
@@ -4001,7 +4702,12 @@ const OrdersManagement = () => {
                   id="refund-amount"
                   type="number"
                   value={disputeForm.refundAmount}
-                  onChange={(e) => setDisputeForm(prev => ({ ...prev, refundAmount: Number(e.target.value) }))}
+                  onChange={(e) =>
+                    setDisputeForm((prev) => ({
+                      ...prev,
+                      refundAmount: Number(e.target.value),
+                    }))
+                  }
                   placeholder="0"
                   min="0"
                   max={selectedOrder?.total}
@@ -4009,16 +4715,18 @@ const OrdersManagement = () => {
                 />
               </div>
               <div className="flex justify-end space-x-2">
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   onClick={() => setShowDisputeModal(false)}
                   data-testid="button-cancel-resolve"
                 >
                   Cancel
                 </Button>
-                <Button 
+                <Button
                   onClick={handleResolveDispute}
-                  disabled={!disputeForm.resolution || resolveDisputeMutation.isPending}
+                  disabled={
+                    !disputeForm.resolution || resolveDisputeMutation.isPending
+                  }
                   data-testid="button-resolve-dispute"
                 >
                   Resolve Dispute
