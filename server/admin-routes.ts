@@ -16,6 +16,18 @@ import {
   createProviderSchema,
   UserRole,
 } from "../shared/admin-schema";
+import {
+  dualWriteCreateEstate,
+  dualWriteUpdateEstate,
+  dualWriteDeleteEstate,
+  dualWriteCreateCategory,
+  dualWriteUpdateCategory,
+  dualWriteCreateMarketplaceItem,
+  dualWriteUpdateMarketplaceItem,
+  dualWriteCreateMembership,
+  dualWriteUpdateMembership,
+  getDualWriteStats,
+} from "./dual-write";
 
 // Toggle bridge scoping via env (email|off)
 // email = scope by estate members' emails (default)
@@ -259,11 +271,29 @@ router.post(
   async (req: AdminRequest, res) => {
     try {
       const data = createEstateSchema.parse(req.body);
-      const estate = await adminDb.createEstate(data);
-      res.status(201).json(estate);
+      
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
+      const result = await dualWriteCreateEstate({
+        name: data.name,
+        slug: data.slug,
+        description: data.description,
+        address: data.address,
+        coverage: data.coverage as any,
+        settings: data.settings as any,
+      });
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for estate:', result.shadowWriteError);
+      }
+      
+      res.status(201).json(result.pgData);
     } catch (error: any) {
-      if (error.code === 11000) res.status(400).json({ error: "Estate slug already exists" });
-      else res.status(400).json({ error: error.message });
+      if (error.code === 11000 || error.code === '23505') {
+        res.status(400).json({ error: "Estate slug already exists" });
+      } else {
+        res.status(400).json({ error: error.message });
+      }
     }
   }
 );
@@ -286,9 +316,19 @@ router.patch(
   auditAction("UPDATE", "ESTATE"),
   async (req: AdminRequest, res) => {
     try {
-      const estate = await adminDb.updateEstate(req.params.id, req.body);
-      if (!estate) return res.status(404).json({ error: "Estate not found" });
-      res.json(estate);
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
+      const result = await dualWriteUpdateEstate(req.params.id, req.body);
+      
+      if (!result.pgData) {
+        return res.status(404).json({ error: "Estate not found" });
+      }
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for estate update:', result.shadowWriteError);
+      }
+      
+      res.json(result.pgData);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -303,8 +343,18 @@ router.delete(
   auditAction("DELETE", "ESTATE"),
   async (req: AdminRequest, res) => {
     try {
-      const estate = await adminDb.deleteEstate(req.params.id);
-      if (!estate) return res.status(404).json({ error: "Estate not found" });
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
+      const result = await dualWriteDeleteEstate(req.params.id);
+      
+      if (!result.pgData) {
+        return res.status(404).json({ error: "Estate not found" });
+      }
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for estate delete:', result.shadowWriteError);
+      }
+      
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -760,8 +810,16 @@ router.post(
   async (req: AdminRequest, res) => {
     try {
       const data = createMembershipSchema.parse(req.body);
-      const membership = await adminDb.createMembership(data);
-      res.status(201).json(membership);
+      
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
+      const result = await dualWriteCreateMembership(data as any);
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for membership:', result.shadowWriteError);
+      }
+      
+      res.status(201).json(result.pgData);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -776,8 +834,20 @@ router.patch(
   async (req: AdminRequest, res) => {
     try {
       const { userId, estateId } = req.params;
-      const membership = await adminDb.updateMembership(userId, estateId, req.body);
-      res.json(membership);
+      
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
+      const result = await dualWriteUpdateMembership(userId, estateId, req.body);
+      
+      if (!result.pgData) {
+        return res.status(404).json({ error: "Membership not found" });
+      }
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for membership update:', result.shadowWriteError);
+      }
+      
+      res.json(result.pgData);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -897,8 +967,15 @@ router.post(
         isActive: true,
       };
 
-      const category = await adminDb.createCategory(categoryData);
-      res.status(201).json(category);
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
+      const result = await dualWriteCreateCategory(categoryData as any);
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for category:', result.shadowWriteError);
+      }
+      
+      res.status(201).json(result.pgData);
     } catch (error: any) {
       if (error.code === 11000) res.status(409).json({ error: "Category key already exists in this scope" });
       else res.status(500).json({ error: error.message });
@@ -935,9 +1012,19 @@ router.patch(
         }
       }
 
-      const category = await adminDb.updateCategory(categoryId, validatedUpdates);
-      if (!category) return res.status(404).json({ error: "Category not found" });
-      res.json(category);
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
+      const result = await dualWriteUpdateCategory(categoryId, validatedUpdates);
+      
+      if (!result.pgData) {
+        return res.status(404).json({ error: "Category not found" });
+      }
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for category update:', result.shadowWriteError);
+      }
+      
+      res.json(result.pgData);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -971,7 +1058,14 @@ router.delete(
         }
       }
 
-      await adminDb.updateCategory(categoryId, { isActive: false });
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow) - soft delete
+      const result = await dualWriteUpdateCategory(categoryId, { isActive: false });
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for category delete:', result.shadowWriteError);
+      }
+      
       res.json({ message: "Category deleted successfully" });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1040,12 +1134,19 @@ router.post(
         return res.status(400).json({ error: "Estate context required" });
       }
 
-      const item = await adminDb.createMarketplaceItem({
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
+      const result = await dualWriteCreateMarketplaceItem({
         ...validatedData,
         estateId: req.currentEstate.id,
         isActive: true,
-      });
-      res.status(201).json(item);
+      } as any);
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for marketplace item:', result.shadowWriteError);
+      }
+      
+      res.status(201).json(result.pgData);
     } catch (error: any) {
       if (error.name === "ZodError") res.status(400).json({ error: "Validation error", details: error.errors });
       else res.status(500).json({ error: error.message });
@@ -1075,9 +1176,19 @@ router.patch(
         return res.status(403).json({ error: "Insufficient permissions" });
       }
 
-      const item = await adminDb.updateMarketplaceItem(itemId, req.body);
-      if (!item) return res.status(404).json({ error: "Marketplace item not found" });
-      res.json(item);
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
+      const result = await dualWriteUpdateMarketplaceItem(itemId, req.body);
+      
+      if (!result.pgData) {
+        return res.status(404).json({ error: "Marketplace item not found" });
+      }
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for marketplace item update:', result.shadowWriteError);
+      }
+      
+      res.json(result.pgData);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -1106,7 +1217,14 @@ router.delete(
         return res.status(403).json({ error: "Insufficient permissions" });
       }
 
-      await adminDb.updateMarketplaceItem(itemId, { isActive: false });
+      // Use dual-write: PostgreSQL (primary) + MongoDB (shadow) - soft delete
+      const result = await dualWriteUpdateMarketplaceItem(itemId, { isActive: false });
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for marketplace item delete:', result.shadowWriteError);
+      }
+      
       res.json({ message: "Marketplace item deleted successfully" });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1766,6 +1884,26 @@ router.post(
   }
 );
 
+
+/** ------------------------------------------------------------------ */
+/** Dual-Write Monitoring                                              */
+/** ------------------------------------------------------------------ */
+router.get(
+  "/dual-write/stats",
+  authenticateAdmin,
+  requireSuperAdmin,
+  async (_req: AdminRequest, res) => {
+    try {
+      const stats = getDualWriteStats();
+      res.json({
+        message: "Dual-write statistics for migration transition period",
+        ...stats,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
 
 /** ------------------------------------------------------------------ */
 /** Health                                                              */
