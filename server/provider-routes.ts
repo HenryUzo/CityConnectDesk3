@@ -1,0 +1,368 @@
+import { Router } from "express";
+import { db } from "./db";
+import { 
+  stores, 
+  storeMembers, 
+  marketplaceItems, 
+  users,
+  memberships,
+  insertMarketplaceItemSchema 
+} from "@shared/schema";
+import { eq, and, or, like, desc } from "drizzle-orm";
+import { z } from "zod";
+
+const router = Router();
+
+// Custom Request interface for provider routes
+interface ProviderRequest {
+  isAuthenticated: () => boolean;
+  user?: any;
+  storeMembership?: any;
+  params: any;
+  query: any;
+  body: any;
+}
+
+// Middleware to ensure user is authenticated as provider
+const requireProvider = (req: ProviderRequest, res: any, next: any) => {
+  if (!req.isAuthenticated() || req.user?.role !== "provider") {
+    return res.status(401).json({ error: "Unauthorized. Provider access required." });
+  }
+  next();
+};
+
+// Middleware to verify provider has access to a store
+const verifyStoreAccess = async (req: ProviderRequest, res: any, next: any) => {
+  try {
+    const storeId = req.params.id || req.params.storeId;
+    const providerId = req.user!.id;
+
+    const [membership] = await db.select()
+      .from(storeMembers)
+      .where(
+        and(
+          eq(storeMembers.storeId, storeId),
+          eq(storeMembers.userId, providerId),
+          eq(storeMembers.isActive, true)
+        )
+      );
+
+    if (!membership) {
+      return res.status(403).json({ error: "Access denied. You are not a member of this store." });
+    }
+
+    req.storeMembership = membership;
+    next();
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// GET /api/provider/stores - Get all stores I'm a member of
+router.get("/stores", requireProvider, async (req: ProviderRequest, res) => {
+  try {
+    const providerId = req.user!.id;
+
+    const memberships = await db.select({
+      membership: storeMembers,
+      store: stores
+    })
+    .from(storeMembers)
+    .innerJoin(stores, eq(storeMembers.storeId, stores.id))
+    .where(
+      and(
+        eq(storeMembers.userId, providerId),
+        eq(storeMembers.isActive, true)
+      )
+    );
+
+    res.json(memberships.map(m => ({
+      ...m.store,
+      membership: {
+        role: m.membership.role,
+        canManageItems: m.membership.canManageItems,
+        canManageOrders: m.membership.canManageOrders
+      }
+    })));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/provider/stores - Create a new store (self-registration)
+router.post("/stores", requireProvider, async (req: ProviderRequest, res) => {
+  try {
+    const providerId = req.user!.id;
+    
+    // Validation schema for store creation
+    const createStoreSchema = z.object({
+      name: z.string().min(1, "Store name is required").max(200),
+      description: z.string().max(1000).optional(),
+      location: z.string().min(1, "Location is required").max(300),
+      latitude: z.number().optional(),
+      longitude: z.number().optional(),
+      phone: z.string().max(20).optional(),
+      email: z.string().email().optional(),
+      logo: z.string().max(500).optional(),
+      estateId: z.string().min(1, "Estate ID is required") // Providers must specify which estate
+    });
+
+    const validated = createStoreSchema.parse(req.body);
+
+    // Verify provider is a member of the specified estate
+    const [membership] = await db.select()
+      .from(memberships)
+      .where(
+        and(
+          eq(memberships.userId, providerId),
+          eq(memberships.estateId, validated.estateId),
+          eq(memberships.isActive, true)
+        )
+      );
+
+    if (!membership) {
+      return res.status(403).json({ error: "You are not a member of the specified estate" });
+    }
+
+    // Create store
+    const [newStore] = await db.insert(stores).values({
+      name: validated.name,
+      description: validated.description,
+      location: validated.location,
+      latitude: validated.latitude,
+      longitude: validated.longitude,
+      phone: validated.phone,
+      email: validated.email,
+      logo: validated.logo,
+      estateId: validated.estateId,
+      ownerId: providerId,
+      isActive: true
+    }).returning();
+
+    // Automatically add provider as store owner/member
+    await db.insert(storeMembers).values({
+      storeId: newStore.id,
+      userId: providerId,
+      role: "owner",
+      canManageItems: true as any,
+      canManageOrders: true as any,
+      isActive: true as any
+    });
+
+    res.status(201).json(newStore);
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({ error: "Validation error", details: error.errors });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/provider/stores/:id/items - Get all items for my store
+router.get("/stores/:id/items", requireProvider, verifyStoreAccess, async (req: ProviderRequest, res) => {
+  try {
+    const storeId = req.params.id;
+    const { search, category, isActive } = req.query;
+
+    let conditions = [eq(marketplaceItems.storeId, storeId)];
+    
+    if (search) {
+      conditions.push(
+        or(
+          like(marketplaceItems.name, `%${search}%`),
+          like(marketplaceItems.description, `%${search}%`)
+        )!
+      );
+    }
+    
+    if (category) {
+      conditions.push(eq(marketplaceItems.category, category as string));
+    }
+    
+    if (isActive !== undefined) {
+      conditions.push(eq(marketplaceItems.isActive, isActive === 'true'));
+    }
+
+    const items = await db.select()
+      .from(marketplaceItems)
+      .where(and(...conditions))
+      .orderBy(desc(marketplaceItems.createdAt));
+
+    res.json(items);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/provider/stores/:id/items - Add item to store
+router.post("/stores/:id/items", requireProvider, verifyStoreAccess, async (req: ProviderRequest, res) => {
+  try {
+    const storeId = req.params.id;
+    const providerId = req.user!.id;
+    const membership = req.storeMembership;
+
+    // Check if provider has permission to manage items
+    if (!membership.canManageItems) {
+      return res.status(403).json({ error: "You don't have permission to manage items for this store" });
+    }
+
+    // Get store to retrieve estateId
+    const [store] = await db.select()
+      .from(stores)
+      .where(eq(stores.id, storeId));
+
+    if (!store) {
+      return res.status(404).json({ error: "Store not found" });
+    }
+
+    // Validation schema for item creation
+    const createItemSchema = z.object({
+      name: z.string().min(1, "Item name is required"),
+      description: z.string().optional(),
+      price: z.union([z.string(), z.number()]).transform(val => String(val)),
+      currency: z.string().optional().default("NGN"),
+      unitOfMeasure: z.enum(["kg", "g", "liter", "ml", "piece", "bunch", "pack", "bag", "bottle", "can", "box", "dozen", "yard", "meter"]).optional().default("piece"),
+      category: z.string().min(1, "Category is required"),
+      subcategory: z.string().optional(),
+      stock: z.number().int().min(0).default(0),
+      images: z.array(z.string()).optional()
+    });
+
+    const validated = createItemSchema.parse(req.body);
+
+    // Create item
+    const [newItem] = await db.insert(marketplaceItems).values({
+      name: validated.name,
+      description: validated.description,
+      price: validated.price,
+      currency: validated.currency,
+      unitOfMeasure: validated.unitOfMeasure as any,
+      category: validated.category,
+      subcategory: validated.subcategory,
+      stock: validated.stock,
+      images: validated.images,
+      estateId: store.estateId,
+      storeId: storeId,
+      vendorId: providerId,
+      isActive: true
+    }).returning();
+
+    res.status(201).json(newItem);
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({ error: "Validation error", details: error.errors });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/provider/stores/:storeId/items/:itemId - Update item
+router.patch("/stores/:storeId/items/:itemId", requireProvider, verifyStoreAccess, async (req: ProviderRequest, res) => {
+  try {
+    const { storeId, itemId } = req.params;
+    const membership = req.storeMembership;
+
+    // Check if provider has permission to manage items
+    if (!membership.canManageItems) {
+      return res.status(403).json({ error: "You don't have permission to manage items for this store" });
+    }
+
+    // Verify item exists and belongs to this store
+    const [existingItem] = await db.select()
+      .from(marketplaceItems)
+      .where(
+        and(
+          eq(marketplaceItems.id, itemId),
+          eq(marketplaceItems.storeId, storeId)
+        )
+      );
+
+    if (!existingItem) {
+      return res.status(404).json({ error: "Item not found in this store" });
+    }
+
+    // Validation schema for updates
+    const updateItemSchema = z.object({
+      name: z.string().min(1).optional(),
+      description: z.string().optional(),
+      price: z.union([z.string(), z.number()]).transform(val => String(val)).optional(),
+      category: z.string().optional(),
+      subcategory: z.string().optional(),
+      stock: z.number().int().min(0).optional(),
+      unitOfMeasure: z.enum(["kg", "g", "liter", "ml", "piece", "bunch", "pack", "bag", "bottle", "can", "box", "dozen", "yard", "meter"]).optional(),
+      images: z.array(z.string()).optional(),
+      isActive: z.boolean().optional()
+    });
+
+    const validated = updateItemSchema.parse(req.body);
+
+    // Build update object
+    const updateData: any = {
+      updatedAt: new Date()
+    };
+    if (validated.name !== undefined) updateData.name = validated.name;
+    if (validated.description !== undefined) updateData.description = validated.description;
+    if (validated.price !== undefined) updateData.price = validated.price;
+    if (validated.category !== undefined) updateData.category = validated.category;
+    if (validated.subcategory !== undefined) updateData.subcategory = validated.subcategory;
+    if (validated.stock !== undefined) updateData.stock = validated.stock;
+    if (validated.unitOfMeasure !== undefined) updateData.unitOfMeasure = validated.unitOfMeasure;
+    if (validated.images !== undefined) updateData.images = validated.images;
+    if (validated.isActive !== undefined) updateData.isActive = validated.isActive;
+
+    // Update item
+    const [updatedItem] = await db.update(marketplaceItems)
+      .set(updateData)
+      .where(eq(marketplaceItems.id, itemId))
+      .returning();
+
+    res.json(updatedItem);
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({ error: "Validation error", details: error.errors });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/provider/stores/:storeId/items/:itemId - Delete item
+router.delete("/stores/:storeId/items/:itemId", requireProvider, verifyStoreAccess, async (req: ProviderRequest, res) => {
+  try {
+    const { storeId, itemId } = req.params;
+    const membership = req.storeMembership;
+
+    // Check if provider has permission to manage items
+    if (!membership.canManageItems) {
+      return res.status(403).json({ error: "You don't have permission to manage items for this store" });
+    }
+
+    // Verify item exists and belongs to this store
+    const [existingItem] = await db.select()
+      .from(marketplaceItems)
+      .where(
+        and(
+          eq(marketplaceItems.id, itemId),
+          eq(marketplaceItems.storeId, storeId)
+        )
+      );
+
+    if (!existingItem) {
+      return res.status(404).json({ error: "Item not found in this store" });
+    }
+
+    // Soft delete by marking as inactive
+    const [deletedItem] = await db.update(marketplaceItems)
+      .set({
+        isActive: false,
+        updatedAt: new Date()
+      })
+      .where(eq(marketplaceItems.id, itemId))
+      .returning();
+
+    res.json({ message: "Item deleted successfully", item: deletedItem });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+export default router;

@@ -7,7 +7,8 @@ import { insertServiceRequestSchema } from "@shared/schema"; // ✅ only the one
 import { z } from "zod";    
 import adminRoutes from "./admin-routes";
 import superAdminRoutes from "./super-admin-routes";
-import appRoutes from "./app-routes";            
+import appRoutes from "./app-routes";
+import providerRoutes from "./provider-routes";            
 
 
 // ---- ACCEPT FLEXIBLE INPUTS, NORMALIZE OUTPUT TYPES ----
@@ -51,6 +52,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use("/api/super-admin", superAdminRoutes);
 
   app.use("/api/app", appRoutes);
+
+  // Provider routes for store and item management
+  app.use("/api/provider", providerRoutes);
 
   // Service Requests Routes
   // Service Requests Routes
