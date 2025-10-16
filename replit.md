@@ -2,6 +2,8 @@
 
 CityConnect is a full-stack MVP web application that connects estate residents with service providers for artisan repairs and market runs/errands. The platform enables residents to request services while allowing providers (artisans and market runners) to accept and fulfill these requests. The application includes role-based access for residents, service providers, and administrators with comprehensive request tracking and management features.
 
+The system uses a dual-database architecture: MongoDB for the admin management system and PostgreSQL for the resident/provider operations, connected via secure bridge APIs with proper multi-tenant isolation.
+
 # User Preferences
 
 Preferred communication style: Simple, everyday language.
@@ -36,6 +38,8 @@ Preferred communication style: Simple, everyday language.
 - **Real-time Updates**: Query invalidation for immediate UI updates after mutations
 - **Access Code Login**: 6-digit code alternative for resident authentication
 - **Admin Dashboard**: User management, provider approval, and system statistics
+- **Multi-Tenant Management**: Global/Estate toggle for super admins to view all users or filter by specific estate
+- **Bridge Integration**: Secure connection between MongoDB admin system and PostgreSQL resident/provider data
 - **Mobile-Responsive Design**: Optimized layouts for mobile devices
 
 ## API Structure
@@ -43,7 +47,13 @@ Preferred communication style: Simple, everyday language.
 - **Service Request CRUD**: Create, read, update requests with status management
 - **Provider Acceptance**: Endpoint for providers to accept available requests
 - **Admin Functions**: User approval, statistics, and system management
-- **Protected Routes**: Authentication middleware for secure endpoints
+- **Bridge Endpoints**: Secure APIs connecting MongoDB admin system with PostgreSQL data
+  - `/api/admin/bridge/users` - Fetch users with estate scoping
+  - `/api/admin/bridge/service-requests` - Fetch service requests with tenant filtering
+  - `/api/admin/bridge/stats` - Get aggregated statistics for current estate or globally
+  - `/api/admin/bridge/providers/:id/approval` - Approve/reject providers
+  - `/api/admin/bridge/users/:id/wallet` - View user wallet details
+- **Protected Routes**: Authentication middleware with estate context for secure multi-tenant access
 
 # External Dependencies
 
