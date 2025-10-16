@@ -38,7 +38,11 @@ Preferred communication style: Simple, everyday language.
 - **Real-time Updates**: Query invalidation for immediate UI updates after mutations
 - **Access Code Login**: 6-digit code alternative for resident authentication
 - **Admin Dashboard**: User management, provider approval, and system statistics
-- **Multi-Tenant Management**: Global/Estate toggle for super admins to view all users or filter by specific estate
+- **Multi-Tenant Management**: Global/Estate toggle for super admins to view all users and providers across estates or filter by specific estate
+  - **User Management**: Purple theme for global view, teal theme for estate view
+  - **Provider Management**: Same Global/Estate toggle pattern with purple/teal theming
+  - **Company Categorization**: Providers can be categorized by company or marked as independent
+  - **Company Filtering**: Filter providers by specific companies or independent status
 - **Bridge Integration**: Secure connection between MongoDB admin system and PostgreSQL resident/provider data
 - **Mobile-Responsive Design**: Optimized layouts for mobile devices
 
