@@ -5,6 +5,9 @@ import { adminDb } from "./admin-db";
 // Default import for runtime members + type-only for req typing
 import AdminAuth, { type AdminRequest } from "./admin-auth";
 import { storage } from "./storage"; // Bridge to PostgreSQL system
+import { db } from "./db"; // PostgreSQL database
+import { stores, storeEstates, storeMembers } from "@shared/schema"; // PostgreSQL stores schema
+import { eq, like, or, inArray, desc } from "drizzle-orm";
 import {
   createEstateSchema,
   createUserSchema,
@@ -1551,32 +1554,82 @@ router.get(
       const offset = parseInt(req.query.offset as string) || 0;
       const limit = parseInt(req.query.limit as string) || 50;
       const search = req.query.search as string || "";
+      const approvalStatus = req.query.approvalStatus as string;
       
-      // Build filter
-      const filter: any = {};
+      // Build conditions
+      let conditions: any[] = [];
+      
+      // Search filter
       if (search) {
-        filter.$or = [
-          { name: new RegExp(search, 'i') },
-          { location: new RegExp(search, 'i') }
-        ];
+        conditions.push(
+          or(
+            like(stores.name, `%${search}%`),
+            like(stores.location, `%${search}%`)
+          )
+        );
       }
       
-      let stores: any[];
+      // Approval status filter
+      if (approvalStatus && ['pending', 'approved', 'rejected'].includes(approvalStatus)) {
+        conditions.push(eq(stores.approvalStatus, approvalStatus as any));
+      }
+      
+      // Fetch stores from PostgreSQL (source of truth)
+      let allStores: any[];
+      
       if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN) {
-        const estateId = req.query.estateId as string;
-        if (estateId) {
-          stores = await adminDb.getStoresByEstate(estateId, filter);
-        } else {
-          stores = await adminDb.getStores(filter);
+        const estateIdFilter = req.query.estateId as string;
+        if (estateIdFilter) {
+          // Filter by specific estate via store_estates junction
+          const estateStoresData = await db.select()
+            .from(storeEstates)
+            .where(eq(storeEstates.estateId, estateIdFilter));
+          
+          const storeIds = estateStoresData.map(se => se.storeId);
+          
+          if (storeIds.length > 0) {
+            conditions.push(inArray(stores.id, storeIds));
+          } else {
+            // No stores for this estate
+            return res.json([]);
+          }
         }
+        // Super admin sees all stores (with optional filters)
+        allStores = await db.select()
+          .from(stores)
+          .where(conditions.length > 0 ? or(...conditions as any) : undefined)
+          .orderBy(desc(stores.createdAt));
       } else {
+        // Estate admin sees only stores in their estate (via store_estates)
         if (!req.currentEstate) return res.status(400).json({ error: "Estate context required" });
-        stores = await adminDb.getStoresByEstate(req.currentEstate.id, filter);
+        
+        const estateStoresData = await db.select()
+          .from(storeEstates)
+          .where(eq(storeEstates.estateId, req.currentEstate.id));
+        
+        const storeIds = estateStoresData.map(se => se.storeId);
+        
+        if (storeIds.length > 0) {
+          conditions.push(inArray(stores.id, storeIds));
+          allStores = await db.select()
+            .from(stores)
+            .where(conditions.length > 0 ? or(...conditions as any) : undefined)
+            .orderBy(desc(stores.createdAt));
+        } else {
+          // No stores for this estate yet, but also show pending stores without estate allocation
+          // (so admins can see stores awaiting approval and estate allocation)
+          conditions.push(eq(stores.approvalStatus, 'pending' as any));
+          allStores = await db.select()
+            .from(stores)
+            .where(conditions.length > 0 ? or(...conditions as any) : undefined)
+            .orderBy(desc(stores.createdAt));
+        }
       }
 
-      const paginatedStores = stores.slice(offset, offset + limit);
+      const paginatedStores = allStores.slice(offset, offset + limit);
       res.json(paginatedStores);
     } catch (error: any) {
+      console.error("Error fetching stores:", error);
       res.status(500).json({ error: error.message });
     }
   }
