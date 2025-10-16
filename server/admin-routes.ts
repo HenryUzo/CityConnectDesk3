@@ -623,6 +623,7 @@ router.post(
       // 2) Create provider profile
       const provider = await adminDb.createProvider({
         userId: createdUser._id.toString(),
+        company: data.company,
         categories: data.categories,
         experience: data.experience ?? 0,
         description: data.description ?? "",

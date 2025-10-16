@@ -151,6 +151,7 @@ MembershipSchema.index({ userId: 1, estateId: 1 }, { unique: true });
 export interface IProvider extends Document {
   _id: string;
   userId: string;
+  company?: string;
   estates: string[];
   categories: string[];
   experience: number;
@@ -168,6 +169,7 @@ export interface IProvider extends Document {
 
 export const ProviderSchema = new Schema<IProvider>({
   userId: { type: String, required: true },
+  company: { type: String },
   estates: [String],
   categories: [{ type: String, enum: Object.values(ServiceCategory) }],
   experience: { type: Number, default: 0 },
@@ -497,6 +499,7 @@ export const createProviderSchema = z.object({
   email: z.string().email("Invalid email format").max(255),
   phone: z.string().max(20).optional(),
   password: z.string().min(6, "Password must be at least 6 characters").max(100),
+  company: z.string().max(200).optional(),
   categories: z.array(z.enum(Object.values(ServiceCategory) as [string, ...string[]])).min(1, "At least one category is required"),
   experience: z.number().int().min(0).max(50).optional().default(0),
   description: z.string().max(1000).optional(),
@@ -504,6 +507,7 @@ export const createProviderSchema = z.object({
 });
 
 export const updateProviderSchema = z.object({
+  company: z.string().max(200).optional(),
   categories: z.array(z.enum(Object.values(ServiceCategory) as [string, ...string[]])).optional(),
   experience: z.number().int().min(0).max(50).optional(),
   description: z.string().max(1000).optional(),
