@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
+import { Link } from "wouter";
 import { 
   LogOut, 
   Star, 
@@ -655,14 +656,16 @@ export default function ProviderDashboard() {
                             </div>
                           </div>
                           <div className="flex space-x-2">
-                            <Button 
-                              variant="outline" 
-                              size="sm"
-                              data-testid={`button-manage-items-${store.id}`}
-                            >
-                              <Package className="w-4 h-4 mr-1" />
-                              Manage Items
-                            </Button>
+                            <Link href={`/provider/stores/${store.id}/items`}>
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                data-testid={`button-manage-items-${store.id}`}
+                              >
+                                <Package className="w-4 h-4 mr-1" />
+                                Manage Items
+                              </Button>
+                            </Link>
                             <Button 
                               variant="outline" 
                               size="sm"

@@ -11,6 +11,7 @@ import LandingPage from "@/pages/landing-page";
 import AuthPage from "@/pages/auth-page";
 import ResidentDashboard from "@/pages/resident-dashboard";
 import ProviderDashboard from "@/pages/provider-dashboard";
+import ProviderStoreItems from "@/pages/provider-store-items";
 import AdminDashboard from "@/pages/admin-dashboard";
 import AdminSuperDashboard from "@/pages/admin-super-dashboard";
 import BookArtisan from "@/pages/book-artisan";
@@ -25,6 +26,7 @@ function Router() {
       <Route path="/auth" component={AuthPage} />
       <ProtectedRoute path="/resident" component={ResidentDashboard} />
       <ProtectedRoute path="/provider" component={ProviderDashboard} />
+      <ProtectedRoute path="/provider/stores/:storeId/items" component={ProviderStoreItems} />
       <ProtectedRoute path="/admin" component={AdminDashboard} />
       <Route path="/admin/login">
         <Redirect to="/admin-dashboard" />
