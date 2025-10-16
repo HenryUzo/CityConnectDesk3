@@ -36,8 +36,7 @@ export default function ProviderDashboard() {
     description: "",
     location: "",
     phone: "",
-    email: "",
-    estateId: ""
+    email: ""
   });
 
   const { data: availableRequests = [] } = useQuery({
@@ -562,16 +561,10 @@ export default function ProviderDashboard() {
                             data-testid="input-store-email"
                           />
                         </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="estateId">Estate ID *</Label>
-                          <Input
-                            id="estateId"
-                            value={storeFormData.estateId}
-                            onChange={(e) => setStoreFormData({ ...storeFormData, estateId: e.target.value })}
-                            placeholder="Enter estate ID"
-                            data-testid="input-store-estate-id"
-                          />
-                          <p className="text-xs text-muted-foreground">Contact admin for your estate ID</p>
+                        <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
+                          <p className="text-sm text-blue-800 dark:text-blue-200">
+                            <strong>Note:</strong> Your store will be submitted for admin review. Once approved, admins will allocate estates based on proximity to your location.
+                          </p>
                         </div>
                       </div>
                       <div className="flex justify-end space-x-2">
@@ -584,10 +577,10 @@ export default function ProviderDashboard() {
                         </Button>
                         <Button 
                           onClick={() => createStoreMutation.mutate(storeFormData)}
-                          disabled={!storeFormData.name || !storeFormData.location || !storeFormData.estateId || createStoreMutation.isPending}
+                          disabled={!storeFormData.name || !storeFormData.location || createStoreMutation.isPending}
                           data-testid="button-submit-store"
                         >
-                          {createStoreMutation.isPending ? "Creating..." : "Create Store"}
+                          {createStoreMutation.isPending ? "Submitting..." : "Submit for Approval"}
                         </Button>
                       </div>
                     </DialogContent>

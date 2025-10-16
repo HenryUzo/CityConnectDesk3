@@ -115,6 +115,11 @@ export const unitOfMeasureEnum = pgEnum("unit_of_measure", [
   "yard",
   "meter",
 ]);
+export const storeApprovalStatusEnum = pgEnum("store_approval_status", [
+  "pending",
+  "approved",
+  "rejected",
+]);
 
 // Estates table (from MongoDB)
 export const estates = pgTable("estates", {
@@ -200,9 +205,7 @@ export const stores = pgTable("stores", {
   id: varchar("id")
     .primaryKey()
     .default(sql`gen_random_uuid()`),
-  estateId: varchar("estate_id")
-    .notNull()
-    .references(() => estates.id),
+  estateId: varchar("estate_id").references(() => estates.id), // Nullable - estate assigned by admin after approval
   ownerId: varchar("owner_id").references(() => users.id), // Optional: primary owner
   name: text("name").notNull(),
   description: text("description"),
@@ -212,6 +215,9 @@ export const stores = pgTable("stores", {
   phone: text("phone"),
   email: text("email"),
   logo: text("logo"), // Store logo URL
+  approvalStatus: storeApprovalStatusEnum("approval_status").notNull().default("pending"),
+  approvedBy: varchar("approved_by").references(() => users.id), // Admin who approved
+  approvedAt: timestamp("approved_at"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -236,6 +242,26 @@ export const storeMembers = pgTable("store_members", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
   uniqueStoreMember: sql`UNIQUE (${table.storeId}, ${table.userId})`,
+}));
+
+// Store Estates table (many-to-many: stores can deliver to multiple estates)
+export const storeEstates = pgTable("store_estates", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  storeId: varchar("store_id")
+    .notNull()
+    .references(() => stores.id, { onDelete: "cascade" }),
+  estateId: varchar("estate_id")
+    .notNull()
+    .references(() => estates.id, { onDelete: "cascade" }),
+  allocatedBy: varchar("allocated_by")
+    .notNull()
+    .references(() => users.id), // Admin who allocated this estate
+  allocatedAt: timestamp("allocated_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  uniqueStoreEstate: sql`UNIQUE (${table.storeId}, ${table.estateId})`,
 }));
 
 // Marketplace Items table (from MongoDB)
@@ -523,7 +549,12 @@ export const storesRelations = relations(stores, ({ one, many }) => ({
     fields: [stores.ownerId],
     references: [users.id],
   }),
+  approver: one(users, {
+    fields: [stores.approvedBy],
+    references: [users.id],
+  }),
   members: many(storeMembers),
+  storeEstates: many(storeEstates),
   items: many(marketplaceItems),
   orders: many(orders),
 }));
@@ -535,6 +566,21 @@ export const storeMembersRelations = relations(storeMembers, ({ one }) => ({
   }),
   user: one(users, {
     fields: [storeMembers.userId],
+    references: [users.id],
+  }),
+}));
+
+export const storeEstatesRelations = relations(storeEstates, ({ one }) => ({
+  store: one(stores, {
+    fields: [storeEstates.storeId],
+    references: [stores.id],
+  }),
+  estate: one(estates, {
+    fields: [storeEstates.estateId],
+    references: [estates.id],
+  }),
+  allocator: one(users, {
+    fields: [storeEstates.allocatedBy],
     references: [users.id],
   }),
 }));
@@ -653,6 +699,11 @@ export const insertStoreMemberSchema = createInsertSchema(storeMembers).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+});
+
+export const insertStoreEstateSchema = createInsertSchema(storeEstates).omit({
+  id: true,
+  createdAt: true,
 });
 
 export const insertMarketplaceItemSchema = createInsertSchema(marketplaceItems).omit({

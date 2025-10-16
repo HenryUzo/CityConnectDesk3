@@ -6,6 +6,7 @@ import {
   marketplaceItems, 
   users,
   memberships,
+  storeEstates,
   insertMarketplaceItemSchema 
 } from "@shared/schema";
 import { eq, and, or, like, desc } from "drizzle-orm";
@@ -94,7 +95,7 @@ router.post("/stores", requireProvider, async (req: ProviderRequest, res) => {
   try {
     const providerId = req.user!.id;
     
-    // Validation schema for store creation
+    // Validation schema for store creation (no estate ID - will be allocated by admin)
     const createStoreSchema = z.object({
       name: z.string().min(1, "Store name is required").max(200),
       description: z.string().max(1000).optional(),
@@ -104,27 +105,12 @@ router.post("/stores", requireProvider, async (req: ProviderRequest, res) => {
       phone: z.string().max(20).optional(),
       email: z.string().email().optional(),
       logo: z.string().max(500).optional(),
-      estateId: z.string().min(1, "Estate ID is required") // Providers must specify which estate
     });
 
     const validated = createStoreSchema.parse(req.body);
 
-    // Verify provider is a member of the specified estate
-    const [membership] = await db.select()
-      .from(memberships)
-      .where(
-        and(
-          eq(memberships.userId, providerId),
-          eq(memberships.estateId, validated.estateId),
-          eq(memberships.isActive, true)
-        )
-      );
-
-    if (!membership) {
-      return res.status(403).json({ error: "You are not a member of the specified estate" });
-    }
-
-    // Create store
+    // Create store (without estate - will be allocated by admin after approval)
+    // Store starts with approvalStatus='pending' by default from schema
     const [newStore] = await db.insert(stores).values({
       name: validated.name,
       description: validated.description,
@@ -134,9 +120,10 @@ router.post("/stores", requireProvider, async (req: ProviderRequest, res) => {
       phone: validated.phone,
       email: validated.email,
       logo: validated.logo,
-      estateId: validated.estateId,
       ownerId: providerId,
       isActive: true
+      // estateId: null - will be set by admin during approval
+      // approvalStatus: 'pending' - default from schema
     }).returning();
 
     // Automatically add provider as store owner/member
@@ -206,13 +193,41 @@ router.post("/stores/:id/items", requireProvider, verifyStoreAccess, async (req:
       return res.status(403).json({ error: "You don't have permission to manage items for this store" });
     }
 
-    // Get store to retrieve estateId
+    // Get store and check approval status
     const [store] = await db.select()
       .from(stores)
       .where(eq(stores.id, storeId));
 
     if (!store) {
       return res.status(404).json({ error: "Store not found" });
+    }
+
+    // Block item creation for pending or rejected stores
+    if (store.approvalStatus === 'pending') {
+      return res.status(403).json({ 
+        error: "Cannot add items to pending stores",
+        message: "Your store is awaiting admin approval. Items can be added once approved."
+      });
+    }
+
+    if (store.approvalStatus === 'rejected') {
+      return res.status(403).json({ 
+        error: "Cannot add items to rejected stores",
+        message: "Your store has been rejected. Please contact admin for details."
+      });
+    }
+
+    // Get first allocated estate for this store
+    const [storeEstate] = await db.select()
+      .from(storeEstates)
+      .where(eq(storeEstates.storeId, storeId))
+      .limit(1);
+
+    if (!storeEstate) {
+      return res.status(403).json({ 
+        error: "Cannot add items yet",
+        message: "No estates have been allocated to your store. Please contact admin."
+      });
     }
 
     // Validation schema for item creation
@@ -230,7 +245,7 @@ router.post("/stores/:id/items", requireProvider, verifyStoreAccess, async (req:
 
     const validated = createItemSchema.parse(req.body);
 
-    // Create item
+    // Create item (use first allocated estate)
     const [newItem] = await db.insert(marketplaceItems).values({
       name: validated.name,
       description: validated.description,
@@ -241,7 +256,7 @@ router.post("/stores/:id/items", requireProvider, verifyStoreAccess, async (req:
       subcategory: validated.subcategory,
       stock: validated.stock,
       images: validated.images,
-      estateId: store.estateId,
+      estateId: storeEstate.estateId, // Use first allocated estate
       storeId: storeId,
       vendorId: providerId,
       isActive: true
