@@ -12,6 +12,10 @@ import {
   createCategorySchema,
   updateCategorySchema,
   createMarketplaceItemSchema,
+  createStoreSchema,
+  updateStoreSchema,
+  createStoreMemberSchema,
+  updateStoreMemberSchema,
   // ❌ updateMarketplaceItemSchema intentionally not used here
   createProviderSchema,
   UserRole,
@@ -26,6 +30,10 @@ import {
   dualWriteUpdateMarketplaceItem,
   dualWriteCreateMembership,
   dualWriteUpdateMembership,
+  dualWriteCreateStore,
+  dualWriteUpdateStore,
+  dualWriteCreateStoreMember,
+  dualWriteUpdateStoreMember,
   getDualWriteStats,
   getIdMapping,
 } from "./dual-write";
@@ -1525,6 +1533,246 @@ router.patch(
     } catch (error: any) {
       if (error.name === "ZodError") res.status(400).json({ error: "Validation error", details: error.errors });
       else res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/** ------------------------------------------------------------------ */
+/** Stores Management                                                   */
+/** ------------------------------------------------------------------ */
+router.get(
+  "/stores",
+  requireAdminDB,
+  authenticateAdmin,
+  setEstateContext,
+  requireEstateAdmin,
+  async (req: AdminRequest, res) => {
+    try {
+      const offset = parseInt(req.query.offset as string) || 0;
+      const limit = parseInt(req.query.limit as string) || 50;
+      const search = req.query.search as string || "";
+      
+      // Build filter
+      const filter: any = {};
+      if (search) {
+        filter.$or = [
+          { name: new RegExp(search, 'i') },
+          { location: new RegExp(search, 'i') }
+        ];
+      }
+      
+      let stores: any[];
+      if (req.adminUser?.globalRole === UserRole.SUPER_ADMIN) {
+        const estateId = req.query.estateId as string;
+        if (estateId) {
+          stores = await adminDb.getStoresByEstate(estateId, filter);
+        } else {
+          stores = await adminDb.getStores(filter);
+        }
+      } else {
+        if (!req.currentEstate) return res.status(400).json({ error: "Estate context required" });
+        stores = await adminDb.getStoresByEstate(req.currentEstate.id, filter);
+      }
+
+      const paginatedStores = stores.slice(offset, offset + limit);
+      res.json(paginatedStores);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+router.post(
+  "/stores",
+  requireAdminDB,
+  authenticateAdmin,
+  setEstateContext,
+  requireEstateAdmin,
+  auditAction("CREATE_STORE", "STORE"),
+  async (req: AdminRequest, res) => {
+    try {
+      if (!req.currentEstate) {
+        return res.status(400).json({ error: "Estate context required" });
+      }
+
+      // Validate request body
+      const validated = createStoreSchema.parse(req.body);
+
+      const storeData = {
+        ...validated,
+        estateId: req.currentEstate.id,
+      };
+
+      const result = await dualWriteCreateStore(storeData);
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for store:', result.shadowWriteError);
+      }
+      
+      res.status(201).json(result.pgData);
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Validation error", details: error.errors });
+      }
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+router.patch(
+  "/stores/:id",
+  requireAdminDB,
+  authenticateAdmin,
+  setEstateContext,
+  requireEstateAdmin,
+  auditAction("UPDATE_STORE", "STORE"),
+  async (req: AdminRequest, res) => {
+    try {
+      const storeId = await resolveEstateId(req.params.id);
+
+      // Validate request body
+      const validated = updateStoreSchema.parse(req.body);
+      
+      const result = await dualWriteUpdateStore(storeId, validated);
+      
+      if (!result.pgData) {
+        return res.status(404).json({ error: "Store not found" });
+      }
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for store update:', result.shadowWriteError);
+      }
+      
+      res.json(result.pgData);
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Validation error", details: error.errors });
+      }
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+router.get(
+  "/stores/:id/members",
+  requireAdminDB,
+  authenticateAdmin,
+  setEstateContext,
+  requireEstateAdmin,
+  async (req: AdminRequest, res) => {
+    try {
+      const storeId = await resolveEstateId(req.params.id);
+      
+      // Get members from MongoDB (shadow read for now)
+      const members = await adminDb.getStoreMembers(storeId);
+      
+      // Enrich with user data from MongoDB
+      const userIds = members.map((m: any) => m.userId);
+      if (userIds.length > 0) {
+        const users = await adminDb.AdminUser.find({ _id: { $in: userIds } })
+          .select("_id name email phone")
+          .lean();
+        const userMap = new Map(users.map((u: any) => [u._id.toString(), u]));
+        
+        const enrichedMembers = members.map((m: any) => ({
+          _id: m._id,
+          storeId: m.storeId,
+          userId: m.userId,
+          role: m.role,
+          canManageItems: m.canManageItems,
+          canManageOrders: m.canManageOrders,
+          isActive: m.isActive,
+          createdAt: m.createdAt,
+          updatedAt: m.updatedAt,
+          user: userMap.get(m.userId),
+        }));
+        
+        res.json(enrichedMembers);
+      } else {
+        res.json([]);
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+router.post(
+  "/stores/:id/members",
+  requireAdminDB,
+  authenticateAdmin,
+  setEstateContext,
+  requireEstateAdmin,
+  auditAction("ADD_STORE_MEMBER", "STORE_MEMBER"),
+  async (req: AdminRequest, res) => {
+    try {
+      const storeId = await resolveEstateId(req.params.id);
+
+      // Validate request body
+      const validated = createStoreMemberSchema.parse(req.body);
+
+      const memberData = {
+        ...validated,
+        storeId,
+      };
+
+      const result = await dualWriteCreateStoreMember(memberData);
+      
+      if (!result.pgData) {
+        return res.status(400).json({ error: "Failed to create store member. Store or user may not exist." });
+      }
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for store member:', result.shadowWriteError);
+      }
+      
+      res.status(201).json(result.pgData);
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Validation error", details: error.errors });
+      }
+      if (error.message && error.message.includes('duplicate')) {
+        return res.status(400).json({ error: "User is already a member of this store" });
+      }
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+router.patch(
+  "/stores/:storeId/members/:memberId",
+  requireAdminDB,
+  authenticateAdmin,
+  setEstateContext,
+  requireEstateAdmin,
+  auditAction("UPDATE_STORE_MEMBER", "STORE_MEMBER"),
+  async (req: AdminRequest, res) => {
+    try {
+      const memberId = await resolveEstateId(req.params.memberId);
+
+      // Validate request body
+      const validated = updateStoreMemberSchema.parse(req.body);
+      
+      const result = await dualWriteUpdateStoreMember(memberId, validated);
+      
+      if (!result.pgData) {
+        return res.status(404).json({ error: "Store member not found" });
+      }
+      
+      // Log shadow write failures for monitoring
+      if (!result.shadowWriteSuccess) {
+        console.warn('[DUAL-WRITE] Shadow write failed for store member update:', result.shadowWriteError);
+      }
+      
+      res.json(result.pgData);
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Validation error", details: error.errors });
+      }
+      res.status(500).json({ error: error.message });
     }
   }
 );

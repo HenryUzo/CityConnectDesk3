@@ -78,6 +78,7 @@ import {
   LayoutDashboard,
   Users,
   Building2,
+  Store,
   Settings,
   ShoppingCart,
   FileBarChart,
@@ -385,6 +386,7 @@ const AdminSidebar = ({
     { id: "estates", label: "Estates", icon: Building2 },
     { id: "users", label: "Users", icon: Users },
     { id: "providers", label: "Providers", icon: UserCheck },
+    { id: "stores", label: "Stores", icon: Store },
     { id: "categories", label: "Categories", icon: Tags },
     { id: "marketplace", label: "Marketplace", icon: ShoppingBag },
      { id: "artisanRequests", label: "Book an Artisan", icon: Wrench },
@@ -3785,6 +3787,7 @@ export default function AdminSuperDashboard() {
             {activeTab === "users" && <UsersManagement />}
             {activeTab === "estates" && <EstatesManagement />}
             {activeTab === "providers" && <ProvidersManagement />}
+            {activeTab === "stores" && <StoresManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "orders" && <OrdersManagement />}
             {activeTab === "requests" && <ArtisanRequestsPanel />}
@@ -3794,6 +3797,7 @@ export default function AdminSuperDashboard() {
               activeTab !== "users" &&
               activeTab !== "estates" &&
               activeTab !== "providers" &&
+              activeTab !== "stores" &&
               activeTab !== "categories" &&
               activeTab !== "marketplace" &&
               activeTab !== "orders" && (
@@ -5086,6 +5090,299 @@ const OrdersManagement = () => {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
+// Stores Management Component
+const StoresManagement = () => {
+  const [search, setSearch] = useState("");
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [selectedStore, setSelectedStore] = useState<any>(null);
+  const [showMembersDialog, setShowMembersDialog] = useState(false);
+  const [formData, setFormData] = useState({
+    name: "",
+    description: "",
+    location: "",
+    phone: "",
+    email: "",
+  });
+
+  const { user } = useAdminAuth();
+  const { toast } = useToast();
+
+  const { data: stores, isLoading } = useQuery({
+    queryKey: ["/api/admin/stores", { search }],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (search) params.append("search", search);
+      const queryString = params.toString();
+      return adminApiRequest(
+        "GET",
+        `/api/admin/stores${queryString ? "?" + queryString : ""}`,
+      );
+    },
+  });
+
+  const createStoreMutation = useMutation({
+    mutationFn: (storeData: any) =>
+      adminApiRequest("POST", "/api/admin/stores", storeData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/stores"] });
+      setIsCreateDialogOpen(false);
+      setFormData({ name: "", description: "", location: "", phone: "", email: "" });
+      toast({ title: "Store created successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error creating store",
+        description: error.response?.data?.error || "Failed to create store",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSubmit = () => {
+    if (!formData.name || !formData.location) {
+      toast({
+        title: "Validation Error",
+        description: "Name and location are required",
+        variant: "destructive",
+      });
+      return;
+    }
+    createStoreMutation.mutate(formData);
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>Stores Management</CardTitle>
+            <Button
+              onClick={() => setIsCreateDialogOpen(true)}
+              data-testid="button-create-store"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Create Store
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {/* Search Bar */}
+          <div className="mb-6">
+            <div className="relative">
+              <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
+              <Input
+                placeholder="Search stores..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-10"
+                data-testid="input-search-stores"
+              />
+            </div>
+          </div>
+
+          {/* Stores Table */}
+          {isLoading ? (
+            <div className="text-center py-8">
+              <p className="text-gray-600 dark:text-gray-400">Loading stores...</p>
+            </div>
+          ) : !stores || stores.length === 0 ? (
+            <div className="text-center py-8">
+              <Store className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-600 dark:text-gray-400">
+                No stores found. Create your first store to get started.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 dark:bg-gray-800">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Store Name
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Location
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Contact
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
+                  {stores.map((store: any) => (
+                    <tr key={store._id || store.id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <Store className="w-5 h-5 text-gray-400 mr-3" />
+                          <div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-white">
+                              {store.name}
+                            </div>
+                            {store.description && (
+                              <div className="text-sm text-gray-500 dark:text-gray-400">
+                                {store.description}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                        {store.location}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                        <div>{store.phone || "—"}</div>
+                        <div>{store.email || "—"}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <Badge
+                          variant={store.isActive ? "default" : "secondary"}
+                          data-testid={`badge-store-status-${store._id || store.id}`}
+                        >
+                          {store.isActive ? "Active" : "Inactive"}
+                        </Badge>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedStore(store);
+                            setShowMembersDialog(true);
+                          }}
+                          data-testid={`button-view-store-${store._id || store.id}`}
+                        >
+                          <Users className="w-4 h-4 mr-1" />
+                          Members
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Create Store Dialog */}
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create New Store</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="store-name">Store Name *</Label>
+              <Input
+                id="store-name"
+                value={formData.name}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, name: e.target.value }))
+                }
+                placeholder="Enter store name"
+                data-testid="input-store-name"
+              />
+            </div>
+            <div>
+              <Label htmlFor="store-location">Location *</Label>
+              <Input
+                id="store-location"
+                value={formData.location}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, location: e.target.value }))
+                }
+                placeholder="Enter store location"
+                data-testid="input-store-location"
+              />
+            </div>
+            <div>
+              <Label htmlFor="store-description">Description</Label>
+              <Textarea
+                id="store-description"
+                value={formData.description}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, description: e.target.value }))
+                }
+                placeholder="Brief description of the store"
+                rows={3}
+                data-testid="textarea-store-description"
+              />
+            </div>
+            <div>
+              <Label htmlFor="store-phone">Phone</Label>
+              <Input
+                id="store-phone"
+                value={formData.phone}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, phone: e.target.value }))
+                }
+                placeholder="+234..."
+                data-testid="input-store-phone"
+              />
+            </div>
+            <div>
+              <Label htmlFor="store-email">Email</Label>
+              <Input
+                id="store-email"
+                type="email"
+                value={formData.email}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, email: e.target.value }))
+                }
+                placeholder="store@example.com"
+                data-testid="input-store-email"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsCreateDialogOpen(false)}
+              data-testid="button-cancel-create-store"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={createStoreMutation.isPending}
+              data-testid="button-submit-create-store"
+            >
+              {createStoreMutation.isPending ? "Creating..." : "Create Store"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Store Members Dialog - Coming Soon */}
+      <Dialog open={showMembersDialog} onOpenChange={setShowMembersDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Store Members - {selectedStore?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="text-center py-8">
+            <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              Store member management functionality is being set up.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              You'll be able to allocate providers to stores and manage their permissions here.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setShowMembersDialog(false)}>Close</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

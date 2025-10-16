@@ -581,6 +581,47 @@ export const updateProviderSchema = z.object({
   totalJobs: z.number().int().min(0).optional()
 });
 
+// Store Schemas
+export const createStoreSchema = z.object({
+  name: z.string().min(1, "Store name is required").max(200),
+  description: z.string().max(1000).optional(),
+  location: z.string().min(1, "Location is required").max(300),
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
+  phone: z.string().max(20).optional(),
+  email: z.string().email().optional(),
+  logo: z.string().max(500).optional(),
+  ownerId: z.string().optional()
+});
+
+export const updateStoreSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).optional(),
+  location: z.string().min(1).max(300).optional(),
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
+  phone: z.string().max(20).optional(),
+  email: z.string().email().optional(),
+  logo: z.string().max(500).optional(),
+  ownerId: z.string().optional(),
+  isActive: z.boolean().optional()
+});
+
+// Store Member Schemas
+export const createStoreMemberSchema = z.object({
+  userId: z.string().min(1, "User ID is required"),
+  role: z.string().optional().default("member"),
+  canManageItems: z.boolean().optional().default(true),
+  canManageOrders: z.boolean().optional().default(true)
+});
+
+export const updateStoreMemberSchema = z.object({
+  role: z.string().optional(),
+  canManageItems: z.boolean().optional(),
+  canManageOrders: z.boolean().optional(),
+  isActive: z.boolean().optional()
+});
+
 // Type Exports
 export type Estate = IEstate;
 export type User = IUser;
