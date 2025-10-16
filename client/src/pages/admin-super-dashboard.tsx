@@ -1308,8 +1308,43 @@ const ProvidersManagement = () => {
   const [approvalFilter, setApprovalFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [showAddProvider, setShowAddProvider] = useState(false);
+  const [viewMode, setViewMode] = useState<"global" | "estate">("global");
+  const [selectedEstateId, setSelectedEstateId] = useState("");
 
   const { toast } = useToast();
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  // Initialize view mode from localStorage estate context
+  useEffect(() => {
+    const estateId = getCurrentEstate();
+    if (estateId) {
+      setViewMode("estate");
+      setSelectedEstateId(estateId);
+    } else {
+      setViewMode("global");
+    }
+  }, []);
+
+  // Fetch estates for the dropdown
+  const { data: estates } = useQuery({
+    queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/estates`],
+    queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
+    enabled: isSuperAdmin,
+  });
+
+  const handleViewModeChange = (mode: "global" | "estate") => {
+    setViewMode(mode);
+    if (mode === "global") {
+      setCurrentEstate(null);
+      setSelectedEstateId("");
+    }
+  };
+
+  const handleEstateSelect = (estateId: string) => {
+    setSelectedEstateId(estateId);
+    setCurrentEstate(estateId);
+  };
 
   const providerForm = useForm<CreateProviderInput>({
     resolver: zodResolver(createProviderSchema),
@@ -1332,6 +1367,8 @@ const ProvidersManagement = () => {
         search,
         approved: approvalFilter === "all" ? undefined : approvalFilter,
         category: categoryFilter === "all" ? undefined : categoryFilter,
+        viewMode,
+        selectedEstateId,
       },
     ],
     queryFn: () =>
@@ -1434,6 +1471,98 @@ const ProvidersManagement = () => {
           Add Provider
         </Button>
       </div>
+
+      {/* Global/Estate Toggle - Only for Super Admins */}
+      {isSuperAdmin && (
+        <Card className={viewMode === "global" ? "bg-purple-500/5 dark:bg-purple-500/10" : "bg-teal-500/5 dark:bg-teal-500/10"}>
+          <CardContent className="p-4">
+            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+              {/* Toggle Buttons */}
+              <div className="flex items-center gap-2 bg-background border border-border rounded-lg p-1 h-10">
+                <Button
+                  variant={viewMode === "global" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => handleViewModeChange("global")}
+                  className={`transition-all duration-200 ${
+                    viewMode === "global"
+                      ? "bg-purple-500 hover:bg-purple-600 text-white shadow-[0_0_20px_rgba(168,85,247,0.15)]"
+                      : ""
+                  }`}
+                  data-testid="button-provider-view-global"
+                >
+                  <Globe className="w-4 h-4 mr-2" />
+                  Global
+                </Button>
+                <Button
+                  variant={viewMode === "estate" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => handleViewModeChange("estate")}
+                  className={`transition-all duration-200 ${
+                    viewMode === "estate"
+                      ? "bg-teal-500 hover:bg-teal-600 text-white shadow-[0_0_20px_rgba(20,184,166,0.15)]"
+                      : ""
+                  }`}
+                  data-testid="button-provider-view-estate"
+                >
+                  <Building2 className="w-4 h-4 mr-2" />
+                  Estate
+                </Button>
+              </div>
+
+              {/* Estate Selector - Shows when Estate mode is active */}
+              {viewMode === "estate" && (
+                <Select value={selectedEstateId} onValueChange={handleEstateSelect}>
+                  <SelectTrigger className="w-full sm:w-[280px]" data-testid="select-provider-estate-filter">
+                    <SelectValue placeholder="Select an estate..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {estates && estates.length > 0 ? (
+                      estates.map((estate: any) => (
+                        <SelectItem key={estate._id} value={estate._id}>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{estate.name}</span>
+                            <span className="text-xs text-muted-foreground">{estate.address}</span>
+                          </div>
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="none" disabled>
+                        No estates available
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              )}
+
+              {/* Context Badge */}
+              <div className="flex-1">
+                <Badge
+                  variant="outline"
+                  className={`text-sm ${
+                    viewMode === "global"
+                      ? "border-purple-500 text-purple-600 dark:text-purple-400"
+                      : "border-teal-500 text-teal-600 dark:text-teal-400"
+                  }`}
+                >
+                  {viewMode === "global" ? (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-purple-500 mr-2"></div>
+                      Viewing all providers globally
+                    </>
+                  ) : selectedEstateId ? (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-teal-500 mr-2"></div>
+                      Estate: {estates?.find((e: any) => e._id === selectedEstateId)?.name || "Selected"}
+                    </>
+                  ) : (
+                    <>Please select an estate</>
+                  )}
+                </Badge>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filters */}
       <Card>

@@ -673,7 +673,11 @@ router.get(
       if (category) filter.categories = category;
       if (search) filter.$or = [{ categories: { $regex: search, $options: "i" } }];
 
-      if (req.adminUser?.globalRole !== UserRole.SUPER_ADMIN) {
+      // Super admins in global mode (no estate context) see all providers
+      const isSuperGlobal = req.adminUser?.globalRole === UserRole.SUPER_ADMIN && !req.currentEstate;
+      
+      if (!isSuperGlobal) {
+        // Non-super admins or super admins with estate context see estate-scoped providers
         if (!req.currentEstate) return res.status(400).json({ error: "Estate context required" });
         filter.estates = req.currentEstate.id;
       }
