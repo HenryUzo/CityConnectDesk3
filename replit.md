@@ -4,13 +4,28 @@ CityConnect is a full-stack MVP web application that connects estate residents w
 
 ## Database Architecture
 
-**Current State**: Unified PostgreSQL database with migration tools from MongoDB
-- **PostgreSQL**: All operational and admin data (estates, users, providers, service requests, marketplace, orders)
-- **MongoDB**: Legacy admin data (being phased out)
+**Current State**: Dual-write implementation (Phase 3 COMPLETED - October 2025)
+- **PostgreSQL**: Primary database (source of truth) for all operational and admin data
+- **MongoDB**: Shadow database for transitional validation and gradual cutover
+- **Dual-Write Pattern**: All admin CRUD operations write to PostgreSQL first, then MongoDB as shadow write
 
-**Migration Status**: ETL scripts available for MongoDB→PostgreSQL migration. See `MIGRATION_GUIDE.md` for details.
+**Migration Progress**:
+- ✅ Phase 1: Unified PostgreSQL schema design (estates, categories, marketplace, memberships)
+- ✅ Phase 2: ETL backfill scripts (MongoDB → PostgreSQL data migration)
+- ✅ Phase 3: Dual-write implementation with ID mapping and monitoring
+- 🔄 Phase 4: Read cutover (switch admin reads from MongoDB to PostgreSQL)
+- ⏳ Phase 5: MongoDB decommissioning (remove shadow writes, sunset MongoDB)
 
-**Migration Command**: `tsx server/migration/index.ts` (requires MONGODB_URI environment variable)
+**Dual-Write Implementation**:
+- **ID Mapping**: `mongo_id_mappings` table tracks MongoDB ObjectId ↔ PostgreSQL UUID relationships
+- **ID Resolution**: Admin endpoints accept both MongoDB _id and PostgreSQL UUID (automatic resolution)
+- **Monitoring**: `/api/admin/dual-write/stats` endpoint provides real-time success/failure metrics
+- **Graceful Degradation**: MongoDB shadow write failures logged but don't block operations
+- **Entity Support**: Estates, categories, marketplace items, and memberships
+
+**Migration Commands**: 
+- ETL backfill: `tsx server/migration/index.ts` (requires MONGODB_URI)
+- Verification: `tsx server/migration/verify.ts` (checks data consistency)
 
 # User Preferences
 
