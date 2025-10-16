@@ -1,6 +1,6 @@
 # Overview
 
-CityConnect is a full-stack MVP web application that connects estate residents with service providers for artisan repairs and market runs/errands. The platform enables residents to request services while allowing providers (artisans and market runners) to accept and fulfill these requests. The application includes role-based access for residents, service providers, and administrators with comprehensive request tracking and management features.
+CityConnect is a full-stack MVP web application that connects estate residents with service providers for artisan repairs and market runs/errands. The platform enables residents to request services while allowing providers (artisans and market runners) to accept and fulfill these requests. The application also features a comprehensive marketplace vendor/store management system where providers can create stores, add items with pricing and units of measurement, and fulfill orders. The application includes role-based access for residents, service providers, and administrators with comprehensive request tracking and management features.
 
 ## Database Architecture
 
@@ -21,7 +21,7 @@ CityConnect is a full-stack MVP web application that connects estate residents w
 - **ID Resolution**: Admin endpoints accept both MongoDB _id and PostgreSQL UUID (automatic resolution)
 - **Monitoring**: `/api/admin/dual-write/stats` endpoint provides real-time success/failure metrics
 - **Graceful Degradation**: MongoDB shadow write failures logged but don't block operations
-- **Entity Support**: Estates, categories, marketplace items, and memberships
+- **Entity Support**: Estates, categories, marketplace items, memberships, stores, and store members
 
 **Migration Commands**: 
 - ETL backfill: `tsx server/migration/index.ts` (requires MONGODB_URI)
@@ -52,8 +52,12 @@ Preferred communication style: Simple, everyday language.
 ## Database Design
 - **PostgreSQL with Drizzle ORM**: Type-safe database operations with schema migrations
 - **Neon Database**: Serverless PostgreSQL hosting with connection pooling
-- **Relational Schema**: Users, service requests, wallets, and transactions tables with proper foreign key relationships
-- **Enum Types**: Strongly typed status fields for service categories, urgency levels, and request statuses
+- **Relational Schema**: Users, service requests, wallets, transactions, stores, store members, and marketplace items with proper foreign key relationships
+- **Enum Types**: Strongly typed status fields for service categories, urgency levels, request statuses, and units of measurement
+- **Store Management Schema**: 
+  - `stores`: Store information with estate association, location, contact details
+  - `store_members`: Provider allocation to stores with role-based permissions (manage items, manage orders)
+  - `marketplace_items`: Enhanced with optional storeId and unitOfMeasure for vendor marketplace
 
 ## Key Features Implementation
 - **Service Categories**: Electrician, plumber, carpenter, and market runner services
@@ -67,6 +71,13 @@ Preferred communication style: Simple, everyday language.
   - **Company Categorization**: Providers can be categorized by company or marked as independent
   - **Company Filtering**: Filter providers by specific companies or independent status
 - **Bridge Integration**: Secure connection between MongoDB admin system and PostgreSQL resident/provider data
+- **Marketplace Store Management**: Comprehensive vendor/store management system (October 2025)
+  - **Admin Features**: Create stores, allocate providers as members, manage items, track orders
+  - **Store Schema**: Location-aware stores with contact details, estate association
+  - **Store Members**: Provider allocation with granular permissions (canManageItems, canManageOrders)
+  - **Item Management**: Products with pricing, units of measurement (kg, g, liter, piece, etc.)
+  - **Order Tracking**: Incoming orders visibility for fulfillment
+  - **Search & Pagination**: Store listing with search filtering and pagination support
 - **Mobile-Responsive Design**: Optimized layouts for mobile devices
 
 ## API Structure
@@ -82,6 +93,14 @@ Preferred communication style: Simple, everyday language.
   - `/api/admin/bridge/users/:id/wallet` - View user wallet details
 - **Protected Routes**: Authentication middleware with estate context for secure multi-tenant access
 - **Provider Management**: Uses bridge API to display all providers from PostgreSQL operational database
+- **Store Management Endpoints**: Admin APIs for marketplace vendor management
+  - `GET /api/admin/stores` - List stores with search and pagination (estate-scoped)
+  - `POST /api/admin/stores` - Create new store (auto-adds estate context)
+  - `PATCH /api/admin/stores/:id` - Update store details
+  - `GET /api/admin/stores/:id/members` - List store members with enriched user data
+  - `POST /api/admin/stores/:id/members` - Allocate provider to store
+  - `PATCH /api/admin/stores/:storeId/members/:memberId` - Update member permissions
+  - All endpoints use Zod validation, dual-write pattern, and proper estate scoping
 
 # External Dependencies
 
