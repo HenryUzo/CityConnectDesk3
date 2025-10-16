@@ -133,6 +133,8 @@ async function ensureServiceRequestsColumns() {
   if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
+    // In production, ensure frontend build is accessible at client/dist
+    await import("./prepare-static").then(m => m.prepareStaticFiles()).catch(console.error);
     serveStatic(app);
   }
 
