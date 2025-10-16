@@ -5,7 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useState } from "react";
 import { 
   LogOut, 
   Star, 
@@ -15,12 +20,24 @@ import {
   Briefcase,
   MapPin,
   Phone,
-  User
+  User,
+  Store,
+  Plus,
+  Package
 } from "lucide-react";
 
 export default function ProviderDashboard() {
   const { user, logoutMutation } = useAuth();
   const { toast } = useToast();
+  const [isCreateStoreDialogOpen, setIsCreateStoreDialogOpen] = useState(false);
+  const [storeFormData, setStoreFormData] = useState({
+    name: "",
+    description: "",
+    location: "",
+    phone: "",
+    email: "",
+    estateId: ""
+  });
 
   const { data: availableRequests = [] } = useQuery({
     queryKey: ["/api/service-requests", { status: "available" }],
@@ -28,6 +45,11 @@ export default function ProviderDashboard() {
 
   const { data: myRequests = [] } = useQuery({
     queryKey: ["/api/service-requests"],
+  });
+
+  const { data: myStores = [], isLoading: isLoadingStores } = useQuery({
+    queryKey: ["/api/provider/stores"],
+    queryFn: () => apiRequest("GET", "/api/provider/stores")
   });
 
   const acceptJobMutation = useMutation({
@@ -65,6 +87,28 @@ export default function ProviderDashboard() {
       toast({
         title: "Error",
         description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const createStoreMutation = useMutation({
+    mutationFn: async (storeData: typeof storeFormData) => {
+      return await apiRequest("POST", "/api/provider/stores", storeData);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/provider/stores"] });
+      setIsCreateStoreDialogOpen(false);
+      setStoreFormData({ name: "", description: "", location: "", phone: "", email: "", estateId: "" });
+      toast({
+        title: "Store Created",
+        description: "Your store has been created successfully!",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create store",
         variant: "destructive",
       });
     },
@@ -227,6 +271,10 @@ export default function ProviderDashboard() {
                 </TabsTrigger>
                 <TabsTrigger value="completed" data-testid="tab-completed-jobs">
                   Completed ({stats.completed})
+                </TabsTrigger>
+                <TabsTrigger value="stores" data-testid="tab-my-stores">
+                  <Store className="w-4 h-4 mr-1" />
+                  My Stores ({myStores.length})
                 </TabsTrigger>
               </TabsList>
             </CardHeader>
@@ -437,6 +485,207 @@ export default function ProviderDashboard() {
                       <CheckCircle className="w-12 h-12 mx-auto mb-4 opacity-50" />
                       <p>No completed jobs yet</p>
                       <p className="text-sm">Completed jobs will appear here</p>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </TabsContent>
+
+            <TabsContent value="stores">
+              <CardContent>
+                <div className="mb-4 flex justify-between items-center">
+                  <div>
+                    <h3 className="text-lg font-semibold">My Stores</h3>
+                    <p className="text-sm text-muted-foreground">Manage your marketplace stores and items</p>
+                  </div>
+                  <Dialog open={isCreateStoreDialogOpen} onOpenChange={setIsCreateStoreDialogOpen}>
+                    <DialogTrigger asChild>
+                      <Button data-testid="button-create-store">
+                        <Plus className="w-4 h-4 mr-2" />
+                        Create Store
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="sm:max-w-md">
+                      <DialogHeader>
+                        <DialogTitle>Create New Store</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-4 py-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="name">Store Name *</Label>
+                          <Input
+                            id="name"
+                            value={storeFormData.name}
+                            onChange={(e) => setStoreFormData({ ...storeFormData, name: e.target.value })}
+                            placeholder="e.g., Fresh Groceries Store"
+                            data-testid="input-store-name"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="description">Description</Label>
+                          <Textarea
+                            id="description"
+                            value={storeFormData.description}
+                            onChange={(e) => setStoreFormData({ ...storeFormData, description: e.target.value })}
+                            placeholder="Describe your store"
+                            data-testid="input-store-description"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="location">Location *</Label>
+                          <Input
+                            id="location"
+                            value={storeFormData.location}
+                            onChange={(e) => setStoreFormData({ ...storeFormData, location: e.target.value })}
+                            placeholder="e.g., Block A, Ground Floor"
+                            data-testid="input-store-location"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="phone">Phone</Label>
+                          <Input
+                            id="phone"
+                            value={storeFormData.phone}
+                            onChange={(e) => setStoreFormData({ ...storeFormData, phone: e.target.value })}
+                            placeholder="+234..."
+                            data-testid="input-store-phone"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="email">Email</Label>
+                          <Input
+                            id="email"
+                            type="email"
+                            value={storeFormData.email}
+                            onChange={(e) => setStoreFormData({ ...storeFormData, email: e.target.value })}
+                            placeholder="store@example.com"
+                            data-testid="input-store-email"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="estateId">Estate ID *</Label>
+                          <Input
+                            id="estateId"
+                            value={storeFormData.estateId}
+                            onChange={(e) => setStoreFormData({ ...storeFormData, estateId: e.target.value })}
+                            placeholder="Enter estate ID"
+                            data-testid="input-store-estate-id"
+                          />
+                          <p className="text-xs text-muted-foreground">Contact admin for your estate ID</p>
+                        </div>
+                      </div>
+                      <div className="flex justify-end space-x-2">
+                        <Button 
+                          variant="outline" 
+                          onClick={() => setIsCreateStoreDialogOpen(false)}
+                          data-testid="button-cancel-store"
+                        >
+                          Cancel
+                        </Button>
+                        <Button 
+                          onClick={() => createStoreMutation.mutate(storeFormData)}
+                          disabled={!storeFormData.name || !storeFormData.location || !storeFormData.estateId || createStoreMutation.isPending}
+                          data-testid="button-submit-store"
+                        >
+                          {createStoreMutation.isPending ? "Creating..." : "Create Store"}
+                        </Button>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                </div>
+
+                <div className="space-y-4">
+                  {isLoadingStores ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <p>Loading your stores...</p>
+                    </div>
+                  ) : myStores.length > 0 ? (
+                    myStores.map((store: any) => (
+                      <div
+                        key={store.id}
+                        className="border border-border rounded-lg p-6 hover:shadow-md transition-shadow"
+                        data-testid={`store-${store.id}`}
+                      >
+                        <div className="flex justify-between items-start mb-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Store className="w-5 h-5 text-primary" />
+                              <h3 className="font-semibold text-foreground text-lg">{store.name}</h3>
+                              {store.isActive ? (
+                                <Badge className="bg-green-100 text-green-800">Active</Badge>
+                              ) : (
+                                <Badge variant="outline">Inactive</Badge>
+                              )}
+                            </div>
+                            {store.description && (
+                              <p className="text-sm text-muted-foreground mb-3">{store.description}</p>
+                            )}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                              <div className="flex items-center text-muted-foreground">
+                                <MapPin className="w-4 h-4 mr-1" />
+                                <span>{store.location}</span>
+                              </div>
+                              {store.phone && (
+                                <div className="flex items-center text-muted-foreground">
+                                  <Phone className="w-4 h-4 mr-1" />
+                                  <span>{store.phone}</span>
+                                </div>
+                              )}
+                              {store.membership && (
+                                <div className="flex items-center text-muted-foreground">
+                                  <Badge variant="outline" className="text-xs">
+                                    {store.membership.role}
+                                  </Badge>
+                                  {store.membership.canManageItems && (
+                                    <span className="text-xs ml-2">• Can manage items</span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex justify-between items-center pt-4 border-t">
+                          <div className="flex space-x-4 text-sm text-muted-foreground">
+                            <div className="flex items-center">
+                              <Package className="w-4 h-4 mr-1" />
+                              <span>0 items</span>
+                            </div>
+                            <div className="flex items-center">
+                              <User className="w-4 h-4 mr-1" />
+                              <span>0 orders</span>
+                            </div>
+                          </div>
+                          <div className="flex space-x-2">
+                            <Button 
+                              variant="outline" 
+                              size="sm"
+                              data-testid={`button-manage-items-${store.id}`}
+                            >
+                              <Package className="w-4 h-4 mr-1" />
+                              Manage Items
+                            </Button>
+                            <Button 
+                              variant="outline" 
+                              size="sm"
+                              data-testid={`button-view-orders-${store.id}`}
+                            >
+                              View Orders
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-center py-12 text-muted-foreground">
+                      <Store className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                      <h3 className="font-medium text-lg mb-2">No stores yet</h3>
+                      <p className="text-sm mb-4">Create your first store to start selling items in the marketplace</p>
+                      <Button
+                        onClick={() => setIsCreateStoreDialogOpen(true)}
+                        data-testid="button-create-first-store"
+                      >
+                        <Plus className="w-4 h-4 mr-2" />
+                        Create Your First Store
+                      </Button>
                     </div>
                   )}
                 </div>
