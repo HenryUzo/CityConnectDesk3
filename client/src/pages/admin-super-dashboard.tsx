@@ -1364,22 +1364,19 @@ const ProvidersManagement = () => {
 
   const { data: providers, isLoading } = useQuery({
     queryKey: [
-      "/api/admin/providers",
+      "/api/admin/bridge/users",
       {
+        role: "provider",
         search,
-        approved: approvalFilter === "all" ? undefined : approvalFilter,
-        category: categoryFilter === "all" ? undefined : categoryFilter,
-        company: companyFilter === "all" ? undefined : companyFilter,
+        approved: approvalFilter,
         viewMode,
         selectedEstateId,
       },
     ],
     queryFn: () =>
-      adminApiRequest("GET", "/api/admin/providers", {
+      adminApiRequest("GET", "/api/admin/bridge/users", {
+        role: "provider",
         search: search || undefined,
-        approved: approvalFilter === "all" ? undefined : approvalFilter,
-        category: categoryFilter === "all" ? undefined : categoryFilter,
-        company: companyFilter === "all" ? undefined : companyFilter,
       }),
   });
 
@@ -1391,11 +1388,11 @@ const ProvidersManagement = () => {
       providerId: string;
       approved: boolean;
     }) =>
-      adminApiRequest("PATCH", `/api/admin/providers/${providerId}/approve`, {
+      adminApiRequest("PATCH", `/api/admin/bridge/providers/${providerId}/approval`, {
         approved,
       }),
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/providers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/users"] });
       toast({
         title: `Provider ${variables.approved ? "approved" : "rejected"} successfully`,
       });
@@ -1439,6 +1436,19 @@ const ProvidersManagement = () => {
   const onSubmit = (data: CreateProviderInput) => {
     createProviderMutation.mutate(data);
   };
+
+  // Client-side filtering for approval status
+  const filteredProviders = providers?.filter((provider: any) => {
+    if (approvalFilter === "all") return true;
+    if (approvalFilter === "true") return provider.isApproved === true;
+    if (approvalFilter === "false") return provider.isApproved === false;
+    return true;
+  });
+
+  // Get unique companies for filter (all providers will show as Independent since PostgreSQL doesn't have company field yet)
+  const uniqueCompanies = Array.from(
+    new Set(filteredProviders?.map((p: any) => p.company).filter(Boolean))
+  );
 
   if (isLoading) {
     return (
@@ -1650,13 +1660,13 @@ const ProvidersManagement = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {providers?.map((provider: any) => (
+              {filteredProviders?.map((provider: any) => (
                 <TableRow
-                  key={provider._id}
-                  data-testid={`row-provider-${provider._id}`}
+                  key={provider.id}
+                  data-testid={`row-provider-${provider.id}`}
                 >
                   <TableCell className="font-medium">
-                    {provider.userId}
+                    {provider.name}
                   </TableCell>
                   <TableCell>
                     {provider.company ? (
@@ -1685,14 +1695,14 @@ const ProvidersManagement = () => {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell>{provider.experience} years</TableCell>
+                  <TableCell>{provider.experience || 0} years</TableCell>
                   <TableCell>
                     <div className="flex items-center">
                       <Star className="w-4 h-4 fill-yellow-400 text-yellow-400 mr-1" />
-                      {provider.rating?.toFixed(1) || "N/A"}
+                      {provider.rating ? Number(provider.rating).toFixed(1) : "N/A"}
                     </div>
                   </TableCell>
-                  <TableCell>{provider.totalJobs}</TableCell>
+                  <TableCell>{provider.totalJobs || 0}</TableCell>
                   <TableCell>
                     <Badge
                       variant={provider.isApproved ? "default" : "destructive"}
@@ -1706,9 +1716,9 @@ const ProvidersManagement = () => {
                         <Button
                           variant="default"
                           size="sm"
-                          onClick={() => handleApproval(provider._id, true)}
+                          onClick={() => handleApproval(provider.id, true)}
                           disabled={approveMutation.isPending}
-                          data-testid={`button-approve-provider-${provider._id}`}
+                          data-testid={`button-approve-provider-${provider.id}`}
                         >
                           <CheckCircle className="w-4 h-4" />
                         </Button>
@@ -1716,9 +1726,9 @@ const ProvidersManagement = () => {
                         <Button
                           variant="destructive"
                           size="sm"
-                          onClick={() => handleApproval(provider._id, false)}
+                          onClick={() => handleApproval(provider.id, false)}
                           disabled={approveMutation.isPending}
-                          data-testid={`button-reject-provider-${provider._id}`}
+                          data-testid={`button-reject-provider-${provider.id}`}
                         >
                           <XCircle className="w-4 h-4" />
                         </Button>
@@ -1726,7 +1736,7 @@ const ProvidersManagement = () => {
                       <Button
                         variant="outline"
                         size="sm"
-                        data-testid={`button-edit-provider-${provider._id}`}
+                        data-testid={`button-edit-provider-${provider.id}`}
                       >
                         <Edit className="w-4 h-4" />
                       </Button>
@@ -1734,7 +1744,7 @@ const ProvidersManagement = () => {
                   </TableCell>
                 </TableRow>
               ))}
-              {(!providers || providers.length === 0) && (
+              {(!filteredProviders || filteredProviders.length === 0) && (
                 <TableRow>
                   <TableCell
                     colSpan={8}
