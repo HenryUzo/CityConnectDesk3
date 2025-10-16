@@ -21,6 +21,9 @@ export const userRoleEnum = pgEnum("user_role", [
   "resident",
   "provider",
   "admin",
+  "super_admin",
+  "estate_admin",
+  "moderator",
 ]);
 export const serviceStatusEnum = pgEnum("service_status", [
   "pending",
@@ -85,8 +88,34 @@ export const disputeStatusEnum = pgEnum("dispute_status", [
   "rejected",
   "escalated",
 ]);
+export const orderStatusEnum = pgEnum("order_status", [
+  "pending",
+  "processing",
+  "delivered",
+  "cancelled",
+]);
+export const categoryScopeEnum = pgEnum("category_scope", [
+  "global",
+  "estate",
+]);
 
-// Users table
+// Estates table (from MongoDB)
+export const estates = pgTable("estates", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  description: text("description"),
+  address: text("address").notNull(),
+  coverage: jsonb("coverage").notNull(), // GeoJSON Polygon
+  settings: jsonb("settings").notNull().default('{"servicesEnabled":[],"marketplaceEnabled":true,"paymentMethods":[],"deliveryRules":{}}'),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Users table (merged: residents, providers, and admin users)
 export const users = pgTable("users", {
   id: varchar("id")
     .primaryKey()
@@ -97,17 +126,133 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   accessCode: text("access_code"), // 6-digit code for residents
   role: userRoleEnum("role").notNull().default("resident"),
+  globalRole: userRoleEnum("global_role"), // for admin users from MongoDB
   rating: decimal("rating", { precision: 3, scale: 2 }).default("0"),
   isActive: boolean("is_active").notNull().default(true),
   isApproved: boolean("is_approved").notNull().default(true), // for providers
   categories: varchar("categories", { length: 100 }).array(), // for providers
   serviceCategory: serviceCategoryEnum("service_category"), // for providers
   experience: integer("experience"), // years of experience for providers
+  company: text("company"), // company name for providers (from MongoDB)
+  documents: text("documents").array(), // provider documents
   location: text("location"), // building/block info for residents
   latitude: doublePrecision("latitude"), // optional latitude for location
   longitude: doublePrecision("longitude"), // optional longitude for location
+  lastLoginAt: timestamp("last_login_at"), // for admin users
+  metadata: jsonb("metadata"), // flexible field for extra profile data from MongoDB
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Memberships table (user-estate relationships from MongoDB)
+export const memberships = pgTable("memberships", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id),
+  estateId: varchar("estate_id")
+    .notNull()
+    .references(() => estates.id),
+  role: userRoleEnum("role").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  permissions: text("permissions").array(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Categories table (from MongoDB)
+export const categories = pgTable("categories", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  scope: categoryScopeEnum("scope").notNull(),
+  estateId: varchar("estate_id").references(() => estates.id),
+  name: text("name").notNull(),
+  key: text("key").notNull(),
+  description: text("description"),
+  icon: text("icon"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Marketplace Items table (from MongoDB)
+export const marketplaceItems = pgTable("marketplace_items", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  estateId: varchar("estate_id")
+    .notNull()
+    .references(() => estates.id),
+  vendorId: varchar("vendor_id")
+    .notNull()
+    .references(() => users.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 10 }).notNull().default("NGN"),
+  category: text("category").notNull(),
+  subcategory: text("subcategory"),
+  stock: integer("stock").notNull().default(0),
+  images: text("images").array(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Orders table (from MongoDB)
+export const orders = pgTable("orders", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  estateId: varchar("estate_id")
+    .notNull()
+    .references(() => estates.id),
+  buyerId: varchar("buyer_id")
+    .notNull()
+    .references(() => users.id),
+  vendorId: varchar("vendor_id")
+    .notNull()
+    .references(() => users.id),
+  items: jsonb("items").notNull(), // Array of {itemId, name, price, quantity}
+  total: decimal("total", { precision: 10, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 10 }).notNull().default("NGN"),
+  status: orderStatusEnum("status").notNull().default("pending"),
+  deliveryAddress: text("delivery_address").notNull(),
+  paymentMethod: text("payment_method"),
+  paymentId: text("payment_id"),
+  dispute: jsonb("dispute"), // {reason, status, resolvedAt}
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Audit Logs table (from MongoDB)
+export const auditLogs = pgTable("audit_logs", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  actorId: varchar("actor_id").notNull(),
+  estateId: varchar("estate_id").references(() => estates.id),
+  action: text("action").notNull(),
+  target: text("target").notNull(),
+  targetId: text("target_id").notNull(),
+  meta: jsonb("meta").notNull().default('{}'),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// MongoDB ID Mappings table (for migration tracking)
+export const mongoIdMappings = pgTable("mongo_id_mappings", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  mongoId: text("mongo_id").notNull().unique(),
+  postgresId: varchar("postgres_id").notNull(),
+  entityType: text("entity_type").notNull(), // 'user', 'estate', 'provider', etc.
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Service Requests table
@@ -115,6 +260,7 @@ export const serviceRequests = pgTable("service_requests", {
   id: varchar("id")
     .primaryKey()
     .default(sql`gen_random_uuid()`),
+  estateId: varchar("estate_id").references(() => estates.id), // optional estate reference
   category: serviceCategoryEnum("category").notNull(),
   description: text("description").notNull(),
   residentId: varchar("resident_id")
@@ -261,6 +407,15 @@ export const deviceAssignments = pgTable("device_assignments", {
 });
 
 // Relations
+export const estatesRelations = relations(estates, ({ many }) => ({
+  memberships: many(memberships),
+  serviceRequests: many(serviceRequests),
+  marketplaceItems: many(marketplaceItems),
+  orders: many(orders),
+  categories: many(categories),
+  auditLogs: many(auditLogs),
+}));
+
 export const usersRelations = relations(users, ({ many, one }) => ({
   serviceRequestsAsResident: many(serviceRequests, {
     relationName: "residentRequests",
@@ -268,7 +423,64 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   serviceRequestsAsProvider: many(serviceRequests, {
     relationName: "providerRequests",
   }),
+  memberships: many(memberships),
+  marketplaceItems: many(marketplaceItems),
+  ordersAsBuyer: many(orders, { relationName: "buyerOrders" }),
+  ordersAsVendor: many(orders, { relationName: "vendorOrders" }),
   wallet: one(wallets),
+}));
+
+export const membershipsRelations = relations(memberships, ({ one }) => ({
+  user: one(users, {
+    fields: [memberships.userId],
+    references: [users.id],
+  }),
+  estate: one(estates, {
+    fields: [memberships.estateId],
+    references: [estates.id],
+  }),
+}));
+
+export const categoriesRelations = relations(categories, ({ one }) => ({
+  estate: one(estates, {
+    fields: [categories.estateId],
+    references: [estates.id],
+  }),
+}));
+
+export const marketplaceItemsRelations = relations(marketplaceItems, ({ one }) => ({
+  estate: one(estates, {
+    fields: [marketplaceItems.estateId],
+    references: [estates.id],
+  }),
+  vendor: one(users, {
+    fields: [marketplaceItems.vendorId],
+    references: [users.id],
+  }),
+}));
+
+export const ordersRelations = relations(orders, ({ one }) => ({
+  estate: one(estates, {
+    fields: [orders.estateId],
+    references: [estates.id],
+  }),
+  buyer: one(users, {
+    fields: [orders.buyerId],
+    references: [users.id],
+    relationName: "buyerOrders",
+  }),
+  vendor: one(users, {
+    fields: [orders.vendorId],
+    references: [users.id],
+    relationName: "vendorOrders",
+  }),
+}));
+
+export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
+  estate: one(estates, {
+    fields: [auditLogs.estateId],
+    references: [estates.id],
+  }),
 }));
 
 export const serviceRequestsRelations = relations(
@@ -308,10 +520,50 @@ export const transactionsRelations = relations(transactions, ({ one }) => ({
 }));
 
 // Insert schemas
+export const insertEstateSchema = createInsertSchema(estates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+});
+
+export const insertMembershipSchema = createInsertSchema(memberships).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertCategorySchema = createInsertSchema(categories).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMarketplaceItemSchema = createInsertSchema(marketplaceItems).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertOrderSchema = createInsertSchema(orders).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertMongoIdMappingSchema = createInsertSchema(mongoIdMappings).omit({
+  id: true,
+  createdAt: true,
 });
 
 export const insertServiceRequestSchema = createInsertSchema(
@@ -334,8 +586,22 @@ export const insertTransactionSchema = createInsertSchema(transactions).omit({
 });
 
 // Types
+export type Estate = typeof estates.$inferSelect;
+export type InsertEstate = z.infer<typeof insertEstateSchema>;
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
+export type Membership = typeof memberships.$inferSelect;
+export type InsertMembership = z.infer<typeof insertMembershipSchema>;
+export type Category = typeof categories.$inferSelect;
+export type InsertCategory = z.infer<typeof insertCategorySchema>;
+export type MarketplaceItem = typeof marketplaceItems.$inferSelect;
+export type InsertMarketplaceItem = z.infer<typeof insertMarketplaceItemSchema>;
+export type Order = typeof orders.$inferSelect;
+export type InsertOrder = z.infer<typeof insertOrderSchema>;
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type MongoIdMapping = typeof mongoIdMappings.$inferSelect;
+export type InsertMongoIdMapping = z.infer<typeof insertMongoIdMappingSchema>;
 export type ServiceRequest = typeof serviceRequests.$inferSelect;
 export type InsertServiceRequest = z.infer<typeof insertServiceRequestSchema>;
 export type Wallet = typeof wallets.$inferSelect;
