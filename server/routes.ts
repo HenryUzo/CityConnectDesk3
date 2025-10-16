@@ -1,12 +1,42 @@
+import { ObjectId } from "mongodb"; // put this import at the very top of the file if not already there
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
-import { insertServiceRequestSchema, residentLoginSchema, providerLoginSchema } from "@shared/schema";
+import { insertServiceRequestSchema } from "@shared/schema"; // ✅ only the one you use
 import { z } from "zod";    
 import adminRoutes from "./admin-routes";
 import superAdminRoutes from "./super-admin-routes";
-import { ObjectId } from "mongodb"; // put this import at the very top of the file if not already there
+import appRoutes from "./app-routes";            
+
+
+// ---- ACCEPT FLEXIBLE INPUTS, NORMALIZE OUTPUT TYPES ----
+const CreateServiceRequest = insertServiceRequestSchema.extend({
+  // Accept ISO string, plain string, epoch ms number, or Date; normalize to Date|null
+  preferredTime: z
+    .union([
+      z.string().datetime().optional(),
+      z.string().optional(),
+      z.number().optional(),
+      z.date().optional(),
+      z.null().optional(),
+    ])
+    .transform((v) => {
+      if (v == null || v === "") return null;
+      const d = v instanceof Date ? v : new Date(v as any);
+      return isNaN(d.getTime()) ? null : d;
+    }),
+
+  // Accept number/string/empty; ALWAYS output a string
+  budget: z
+    .preprocess(
+      (v) => (v === undefined || v === null || v === "" ? "0" : v),
+      z.union([z.string(), z.number()])
+    )
+    .transform((v) => (typeof v === "number" ? String(v) : v)),
+});
+
+
 
 export async function registerRoutes(app: Express): Promise<Server> {
 
@@ -20,6 +50,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.use("/api/super-admin", superAdminRoutes);
 
+  app.use("/api/app", appRoutes);
+
+  // Service Requests Routes
   // Service Requests Routes
   app.post("/api/service-requests", async (req, res, next) => {
     try {
@@ -27,17 +60,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const validatedData = insertServiceRequestSchema.parse({
+      // ✅ Parse & normalize. Output type now matches storage expectation
+      const parsed = CreateServiceRequest.parse({
         ...req.body,
         residentId: req.user.id,
       });
 
-      const serviceRequest = await storage.createServiceRequest(validatedData);
-      res.status(201).json(serviceRequest);
-    } catch (error) {
+      const created = await storage.createServiceRequest(parsed);
+      return res.status(201).json(created);
+    } catch (error: any) {
+      if (error?.issues) {
+        // Zod validation surface
+        return res.status(400).json({
+          error: "Validation error",
+          details: error.issues.map((i: any) => ({
+            path: i.path.join("."),
+            message: i.message,
+            expected: i.expected,
+            received: i.received,
+            code: i.code,
+          })),
+        });
+      }
       next(error);
     }
   });
+
+
 
   app.get("/api/service-requests", async (req, res, next) => {
     try {
@@ -45,8 +94,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const { status, category } = req.query;
+      const { status } = req.query; // removed unused 'category'
       let requests;
+
 
       if (req.user?.role === "resident") {
         requests = await storage.getServiceRequestsByResident(req.user.id);

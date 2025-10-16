@@ -1,25 +1,58 @@
+// client/src/pages/book-artisan.tsx
+import { useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { ArrowLeft, Wrench, LogOut, Calendar } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { ArrowLeft, Wrench, LogOut } from "lucide-react";
+// 👇 uses the resident API wrapper that sends cookies & supports x-user-email
+import { residentFetch, ResidentAPI } from "@/lib/residentApi";
 
 const artisanRequestSchema = z.object({
   category: z.enum([
-    "electrician", "plumber", "carpenter", "hvac_technician", "painter", "tiler", 
-    "mason", "roofer", "gardener", "cleaner", "security_guard", "cook", 
-    "laundry_service", "pest_control", "welder", "mechanic", "phone_repair", 
-    "appliance_repair", "tailor", "market_runner"
+    "electrician",
+    "plumber",
+    "carpenter",
+    "hvac_technician",
+    "painter",
+    "tiler",
+    "mason",
+    "roofer",
+    "gardener",
+    "cleaner",
+    "security_guard",
+    "cook",
+    "laundry_service",
+    "pest_control",
+    "welder",
+    "mechanic",
+    "phone_repair",
+    "appliance_repair",
+    "tailor",
+    "market_runner",
   ]),
   description: z.string().min(10, "Description must be at least 10 characters"),
   urgency: z.enum(["low", "medium", "high", "emergency"]),
@@ -40,6 +73,13 @@ export default function BookArtisan() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
+  // In dev (or when cookies aren't set yet), use the email header fallback automatically.
+  useEffect(() => {
+    if (user?.email) {
+      localStorage.setItem("resident_email_dev", user.email);
+    }
+  }, [user?.email]);
+
   const form = useForm<ArtisanRequestFormData>({
     resolver: zodResolver(artisanRequestSchema),
     defaultValues: {
@@ -59,26 +99,48 @@ export default function BookArtisan() {
 
   const submitRequestMutation = useMutation({
     mutationFn: async (data: ArtisanRequestFormData) => {
-      const submitData = {
-        ...data,
+      // shape for server
+      const payload = {
+        category: data.category,
+        description: data.description,
+        urgency: data.urgency,
+        budget: data.budget,
         location: data.location.address,
-        latitude: data.location.latitude,
-        longitude: data.location.longitude,
-        preferredTime: data.preferredTime ? new Date(data.preferredTime).toISOString() : null,
+        latitude: data.location.latitude ?? null,
+        longitude: data.location.longitude ?? null,
+        preferredTime: data.preferredTime
+          ? new Date(data.preferredTime).toISOString()
+          : null,
+        specialInstructions: data.specialInstructions || null,
       };
-      return await apiRequest("POST", "/api/service-requests", submitData);
+
+      // Ensure server receives identity: cookies + email header
+      const headers: Record<string, string> = {};
+      if (user?.email) headers["x-user-email"] = user.email;
+
+      // POST to resident app endpoint
+      return await residentFetch("/api/app/service-requests", {
+        method: "POST",
+        json: payload,
+        headers,
+      });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/service-requests"] });
+    onSuccess: async () => {
+      // refresh the resident's list view
+      queryClient.invalidateQueries({ queryKey: ["my-requests"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/app/service-requests/mine"],
+      });
+
       toast({
-        title: "Request Submitted",
-        description: "Your artisan repair request has been submitted successfully!",
+        title: "Request submitted",
+        description: "Your artisan repair request has been submitted.",
       });
       setLocation("/resident");
     },
     onError: (error: Error) => {
       toast({
-        title: "Submission Failed",
+        title: "Submission failed",
         description: error.message,
         variant: "destructive",
       });
@@ -87,6 +149,8 @@ export default function BookArtisan() {
 
   const handleLogout = async () => {
     await logoutMutation.mutateAsync();
+    // clear dev header fallback
+    localStorage.removeItem("resident_email_dev");
     setLocation("/");
   };
 
@@ -102,10 +166,18 @@ export default function BookArtisan() {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
               <h1 className="text-xl font-bold text-primary">CityConnect</h1>
-              <span className="ml-2 sm:ml-3 text-xs sm:text-sm text-muted-foreground truncate">Book Artisan</span>
+              <span className="ml-2 sm:ml-3 text-xs sm:text-sm text-muted-foreground truncate">
+                Book Artisan
+              </span>
             </div>
             <div className="flex items-center space-x-2 sm:space-x-4">
-              <Button variant="ghost" size="sm" onClick={handleLogout} className="h-9 w-9 p-0" data-testid="button-logout">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleLogout}
+                className="h-9 w-9 p-0"
+                data-testid="button-logout"
+              >
                 <LogOut className="w-4 h-4" />
               </Button>
             </div>
@@ -115,9 +187,9 @@ export default function BookArtisan() {
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
         <div className="mb-4 sm:mb-6">
-          <Button 
-            variant="ghost" 
-            onClick={() => setLocation("/resident")} 
+          <Button
+            variant="ghost"
+            onClick={() => setLocation("/resident")}
             className="mb-4 h-11 min-h-[44px] px-4"
             data-testid="button-back-dashboard"
           >
@@ -127,8 +199,12 @@ export default function BookArtisan() {
           <div className="flex flex-col sm:flex-row sm:items-center mb-4 space-y-3 sm:space-y-0">
             <Wrench className="w-8 h-8 text-primary mr-0 sm:mr-3" />
             <div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Book Artisan Repair</h1>
-              <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">Find the right professional for your repair needs</p>
+              <h1 className="text-2xl sm:text-3xl font-bold text-foreground">
+                Book Artisan Repair
+              </h1>
+              <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">
+                Find the right professional for your repair needs
+              </p>
             </div>
           </div>
         </div>
@@ -148,7 +224,10 @@ export default function BookArtisan() {
                       <FormLabel>Service Category</FormLabel>
                       <Select onValueChange={field.onChange} defaultValue={field.value}>
                         <FormControl>
-                          <SelectTrigger data-testid="select-service-category" className="h-12 min-h-[44px] text-base">
+                          <SelectTrigger
+                            data-testid="select-service-category"
+                            className="h-12 min-h-[44px] text-base"
+                          >
                             <SelectValue placeholder="Select a category" />
                           </SelectTrigger>
                         </FormControl>
@@ -172,6 +251,7 @@ export default function BookArtisan() {
                           <SelectItem value="phone_repair">Phone Repair</SelectItem>
                           <SelectItem value="appliance_repair">Appliance Repair</SelectItem>
                           <SelectItem value="tailor">Tailor</SelectItem>
+                          <SelectItem value="market_runner">Market Runner</SelectItem>
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -207,7 +287,10 @@ export default function BookArtisan() {
                         <FormLabel>Urgency Level</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                           <FormControl>
-                            <SelectTrigger data-testid="select-urgency" className="h-12 min-h-[44px] text-base">
+                            <SelectTrigger
+                              data-testid="select-urgency"
+                              className="h-12 min-h-[44px] text-base"
+                            >
                               <SelectValue placeholder="Select urgency" />
                             </SelectTrigger>
                           </FormControl>
@@ -253,11 +336,13 @@ export default function BookArtisan() {
                         <Input
                           placeholder="e.g., Block 5, Flat 3B"
                           value={field.value.address}
-                          onChange={(e) => field.onChange({
-                            address: e.target.value,
-                            latitude: undefined,
-                            longitude: undefined
-                          })}
+                          onChange={(e) =>
+                            field.onChange({
+                              address: e.target.value,
+                              latitude: undefined,
+                              longitude: undefined,
+                            })
+                          }
                           className="h-12 min-h-[44px] text-base"
                           data-testid="input-location"
                         />

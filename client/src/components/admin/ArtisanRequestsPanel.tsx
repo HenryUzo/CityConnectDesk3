@@ -1,12 +1,17 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { getQueryFn } from "@/lib/queryClient";
+import { AdminAPI } from "@/lib/adminApi";
 
-type RequestStatus = "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
+type RequestStatus =
+  | "pending"
+  | "assigned"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
 
 interface ServiceRequest {
   id: string;
@@ -22,17 +27,30 @@ export default function ArtisanRequestsPanel() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<RequestStatus | "all">("pending");
 
-  const search = encodeURIComponent(q.trim());
-  const statusParam = status === "all" ? "" : status;
-
-  const { data: requests = [], error } = useQuery<ServiceRequest[], Error>({
-    // IMPORTANT: use the admin bridge route that exists in your server
-    queryKey: [
-      `/api/admin/bridge/service-requests?status=${statusParam}&q=${search}`,
-    ],
-    queryFn: getQueryFn<ServiceRequest[]>({ on401: "throw" }),
+  const { data, isLoading, error } = useQuery<ServiceRequest[], Error>({
+    queryKey: ["admin.bridge.service-requests", { status, q }],
+    queryFn: async () => {
+      const params: Record<string, string> = {};
+      if (status !== "all") params.status = status;
+      if (q.trim()) params.q = q.trim();
+      // Use the typed AdminAPI wrapper: returns JSON directly
+      return await AdminAPI.bridge.getServiceRequests(params);
+    },
     refetchInterval: 5000,
+    keepPreviousData: true,
   });
+
+  const requests = useMemo(() => {
+    const list = data ?? [];
+    const needle = q.trim().toLowerCase();
+    if (!needle) return list;
+    return list.filter(
+      (r) =>
+        r.description?.toLowerCase().includes(needle) ||
+        r.category?.toLowerCase().includes(needle) ||
+        r.id?.toLowerCase().includes(needle)
+    );
+  }, [data, q]);
 
   if (error) {
     return (
@@ -41,9 +59,14 @@ export default function ArtisanRequestsPanel() {
           <div className="text-lg font-semibold">Artisan Requests</div>
         </CardHeader>
         <CardContent>
-          <div className="text-sm text-red-600">
-            Failed to load requests<br />
+          <div className="text-sm text-red-600 whitespace-pre-wrap">
+            Failed to load requests{"\n"}
             {error.message}
+            {"\n\n"}
+            <span className="text-xs text-muted-foreground">
+              Tip: make sure you&apos;re logged in as an Admin and an Estate is
+              selected. (The hook auto-selects the first estate once /api/admin/estates loads.)
+            </span>
           </div>
         </CardContent>
       </Card>
@@ -78,35 +101,48 @@ export default function ArtisanRequestsPanel() {
         </div>
       </CardHeader>
       <CardContent>
-        <div className="space-y-3">
-          {requests.map((r) => (
-            <div key={r.id} className="border rounded-lg p-4 flex items-start justify-between">
-              <div>
-                <div className="font-semibold">
-                  {r.category?.replaceAll("_", " ") || "Request"}
+        {isLoading ? (
+          <div className="text-sm text-muted-foreground">Loading…</div>
+        ) : (
+          <div className="space-y-3">
+            {requests.map((r) => (
+              <div
+                key={r.id}
+                className="border rounded-lg p-4 flex items-start justify-between"
+              >
+                <div>
+                  <div className="font-semibold">
+                    {r.category?.replaceAll("_", " ") || "Request"}
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    {r.description}
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Badge variant="secondary">
+                      {r.status.replaceAll("_", " ")}
+                    </Badge>
+                    {r.billedAmount && (
+                      <Badge>₦ {Number(r.billedAmount).toLocaleString()}</Badge>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {new Date(r.createdAt).toLocaleString()}
+                  </div>
                 </div>
-                <div className="text-sm text-muted-foreground">{r.description}</div>
-                <div className="mt-2 flex items-center gap-2">
-                  <Badge variant="secondary">{r.status.replaceAll("_", " ")}</Badge>
-                  {r.billedAmount && (
-                    <Badge>₦ {Number(r.billedAmount).toLocaleString()}</Badge>
-                  )}
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  {new Date(r.createdAt).toLocaleString()}
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline">
+                    View
+                  </Button>
+                  {r.status === "pending" && <Button size="sm">Assign</Button>}
+                  {r.status === "in_progress" && <Button size="sm">Bill</Button>}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline">View</Button>
-                {r.status === "pending" && <Button size="sm">Assign</Button>}
-                {r.status === "in_progress" && <Button size="sm">Bill</Button>}
-              </div>
-            </div>
-          ))}
-          {requests.length === 0 && (
-            <div className="text-sm text-muted-foreground">No requests.</div>
-          )}
-        </div>
+            ))}
+            {requests.length === 0 && (
+              <div className="text-sm text-muted-foreground">No requests.</div>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -22,3 +22,5 @@ try {
 } catch {
   console.log("[DB] DATABASE_URL not set or unparsable");
 }
+console.log("[DB] URL present:", !!process.env.DATABASE_URL, "length:", process.env.DATABASE_URL?.length || 0);
+

@@ -28,16 +28,31 @@ function resolveUrlFromQueryKey(queryKey: readonly unknown[]): string {
 }
 
 /** Attach Bearer token from storage (sessionStorage preferred in this repo) */
-function getAuthHeaders(): Record<string, string> {
+function getAuthHeaders() {
+  const headers: Record<string, string> = {};
+
+  // Read admin token from storage
   const token =
-    (typeof sessionStorage !== "undefined" && sessionStorage.getItem("admin_access_token")) ||
-    (typeof localStorage !== "undefined" &&
-      (localStorage.getItem("admin_jwt") ||
-       localStorage.getItem("jwt") ||
-       localStorage.getItem("token"))) ||
+    sessionStorage.getItem("admin_access_token") ||
+    localStorage.getItem("admin_access_token") ||
+    localStorage.getItem("admin_jwt") ||
+    localStorage.getItem("jwt") ||
+    localStorage.getItem("token") ||
     "";
-  return token ? { Authorization: `Bearer ${token}` } : {};
+
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  // Send selected estate id with every admin call
+  const estateId =
+    localStorage.getItem("admin_current_estate_id") ||
+    sessionStorage.getItem("admin_current_estate_id") ||
+    "";
+
+  if (estateId) headers["X-Estate-Id"] = estateId;
+
+  return headers;
 }
+
 
 
 export async function apiRequest(

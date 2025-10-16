@@ -34,6 +34,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
 
+
+
 import {
   Table,
   TableBody,
@@ -498,6 +500,8 @@ const AdminSidebar = ({
   );
 };
 
+
+
 // Users Management Component
 const UsersManagement = () => {
   const [search, setSearch] = useState("");
@@ -520,26 +524,38 @@ const UsersManagement = () => {
 
   const { toast } = useToast();
 
-  const { data: users, isLoading } = useQuery({
+  // Users (unified) — array normalized for the table
+  const { data: users = [], isLoading } = useQuery<any[]>({
     queryKey: [
-      "${import.meta.env.VITE_API_URL}/api/admin/users",
-      { search, globalRole: roleFilter === "all" ? undefined : roleFilter },
+      `${import.meta.env.VITE_API_URL}/api/admin/users/all`,
+      { search, role: roleFilter === "all" ? undefined : roleFilter },
     ],
-    queryFn: () =>
-      adminApiRequest("GET", "/api/admin/users", {
+    queryFn: async () => {
+      const r = await adminApiRequest("GET", "/api/admin/users/all", {
         search: search || undefined,
-        globalRole: roleFilter === "all" ? undefined : roleFilter,
-      }),
+        role: roleFilter === "all" ? undefined : roleFilter, // 'admin' | 'resident' | 'provider'
+      });
+      // Always return an array for the table:
+      return Array.isArray(r) ? r : (r?.items ?? []);
+    },
   });
 
+  // Optional alias (now just equals users)
+  const rows = users;
+
+  // Estates (fix queryKey to be stable)
   const { data: estates } = useQuery({
-    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/estates"],
+    // either use a simple stable key:
+    queryKey: ["admin-estates"],
+    // or if you really want the URL in the key, use backticks:
+    // queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/estates`],
     queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
     enabled: showMemberships, // Only load when needed
   });
 
+  // Memberships query – use the correct endpoint
   const { data: userMemberships } = useQuery({
-    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/memberships", membershipUser?._id],
+    queryKey: ["admin-user-memberships", membershipUser?._id],
     queryFn: () =>
       membershipUser
         ? adminApiRequest(
@@ -550,11 +566,12 @@ const UsersManagement = () => {
     enabled: !!membershipUser,
   });
 
+  // Toggle active/inactive – use /api/admin/users/{id}
   const toggleUserStatusMutation = useMutation({
     mutationFn: ({ userId, isActive }: { userId: string; isActive: boolean }) =>
       adminApiRequest("PATCH", `/api/admin/users/${userId}`, { isActive }),
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
       toast({
         title: `User ${variables.isActive ? "activated" : "deactivated"} successfully`,
       });
@@ -569,11 +586,12 @@ const UsersManagement = () => {
     },
   });
 
+  // Create user – POST to /api/admin/users
   const createUserMutation = useMutation({
     mutationFn: (userData: any) =>
       adminApiRequest("POST", "/api/admin/users", userData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
       setShowAddUser(false);
       resetForm();
       toast({ title: "User created successfully" });
@@ -587,11 +605,12 @@ const UsersManagement = () => {
     },
   });
 
+  // Update user – PATCH to /api/admin/users/{id}
   const updateUserMutation = useMutation({
     mutationFn: ({ userId, userData }: { userId: string; userData: any }) =>
       adminApiRequest("PATCH", `/api/admin/users/${userId}`, userData),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
       setEditingUser(null);
       resetForm();
       toast({ title: "User updated successfully" });
@@ -599,11 +618,13 @@ const UsersManagement = () => {
     onError: (error: any) => {
       toast({
         title: "Error updating user",
-        description: error.response?.data?.error || "Failed to update user",
+        description:
+          error.response?.data?.error || "Failed to update user",
         variant: "destructive",
       });
     },
   });
+
 
   const handleToggleUserStatus = (userId: string, currentStatus: boolean) => {
     toggleUserStatusMutation.mutate({ userId, isActive: !currentStatus });
@@ -636,7 +657,7 @@ const UsersManagement = () => {
     onSuccess: () => {
       // Invalidate all relevant queries to ensure UI consistency
       queryClient.invalidateQueries({ queryKey: ["/api/admin/memberships"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
 
       // Reset form state
       setNewMembership({ estateId: "", role: "" });
@@ -658,7 +679,7 @@ const UsersManagement = () => {
     onSuccess: () => {
       // Invalidate all relevant queries to ensure UI consistency
       queryClient.invalidateQueries({ queryKey: ["/api/admin/memberships"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
 
       toast({ title: "Membership removed successfully" });
     },
@@ -797,8 +818,9 @@ const UsersManagement = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {users?.map((user: any) => (
-                  <TableRow key={user._id} data-testid={`row-user-${user._id}`}>
+                
+                   {rows.map((user: any) => (
+  <TableRow key={user.id || user._id || user.email}>
                     <TableCell className="font-medium">{user.name}</TableCell>
                     <TableCell>{user.email}</TableCell>
                     <TableCell>{user.phone}</TableCell>
@@ -977,7 +999,7 @@ const UsersManagement = () => {
                   <SelectValue placeholder="Select Role" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">No Global Role</SelectItem>
+                  <SelectItem value="none">No Global Role</SelectItem> // ← ✅
                   <SelectItem value="resident">Resident</SelectItem>
                   <SelectItem value="provider">Provider</SelectItem>
                   <SelectItem value="estate_admin">Estate Admin</SelectItem>
@@ -3451,7 +3473,7 @@ export default function AdminSuperDashboard() {
             {activeTab === "providers" && <ProvidersManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "orders" && <OrdersManagement />}
-
+            {activeTab === "requests" && <ArtisanRequestsPanel />}
             {activeTab === "artisanRequests" && <ArtisanRequestsPanel />}
 
             {activeTab !== "dashboard" &&

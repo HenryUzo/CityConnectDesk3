@@ -1,127 +1,144 @@
-import express, { type Request, Response, NextFunction } from "express";
+// server/index.ts
+import express, { type Request, type Response, type NextFunction } from "express";
+import cookieParser from "cookie-parser";
+import cors from "cors";
 import { sql } from "drizzle-orm";
 import { db } from "./db";
-import cookieParser from "cookie-parser";
-// import cors from "cors"; // not needed for same-origin; uncomment only if you actually use it
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
-const app = express();
+// ⬇️ Import your API routers and mount them explicitly
+import adminRoutes from "./admin-routes";
+import superAdminRoutes from "./super-admin-routes";
 
+const app = express();
 app.set("trust proxy", 1);
 
+// Body parsers
 app.use(express.json());
-app.use(cookieParser());
 app.use(express.urlencoded({ extended: false }));
+app.use(cookieParser());
 
-// ---------------------------------------------------------
-// Request logging for /api responses (truncated for brevity)
-// ---------------------------------------------------------
+// ──────────────────────────────────────────────────────────
+// CORS (safe defaults for dev; keep credentials if you use cookies)
+// If client and server share origin (reverse-proxy), this won’t hurt.
+// If they’re on different hosts/ports (Replit dev), this is REQUIRED.
+// ──────────────────────────────────────────────────────────
+// ...after cookieParser()
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    try {
+      const u = new URL(origin);
+      // Allow your dev preview hosts + prod host:
+      if (
+        u.hostname.endsWith(".replit.dev") ||
+        origin === "https://cityconnect.replit.app"
+      ) {
+        return cb(null, true);
+      }
+    } catch {}
+    return cb(new Error("CORS blocked for origin: " + origin));
+  },
+  credentials: true, // <-- cookies allowed
+  methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-estate-id", "x-user-id", "x-user-email"],
+}));
+app.options("*", cors());
+// ──────────────────────────────────────────────────────────
+/** Request logging for /api responses (trimmed to avoid noisy logs) */
+// ──────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+  let capturedJsonResponse: unknown;
 
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
+  const originalJson = res.json.bind(res);
+  res.json = (body: any, ...rest: any[]) => {
+    capturedJsonResponse = body;
+    // @ts-expect-error forwarding variadic args
+    return originalJson(body, ...rest);
   };
 
   res.on("finish", () => {
+    if (!path.startsWith("/api")) return;
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-      log(logLine);
+    let line = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+    if (capturedJsonResponse) {
+      try {
+        line += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+      } catch {}
     }
+    if (line.length > 80) line = line.slice(0, 79) + "…";
+    log(line);
   });
 
   next();
 });
 
-// ---------------------------------------------------------
-// SCHEMA GUARD: ensure missing columns exist (idempotent)
-// ---------------------------------------------------------
+// Lightweight health probes
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", ts: new Date().toISOString() });
+});
+
+// When mounted under /api/admin, this becomes /api/admin/health
+// (admin-routes already has its own /health too once mounted below)
+
+// ──────────────────────────────────────────────────────────
+// Schema guard: ensure columns exist (idempotent)
+// ──────────────────────────────────────────────────────────
 async function ensureServiceRequestsColumns() {
-  // Safe to run every boot; IF NOT EXISTS prevents errors
   await db.execute(sql`
     ALTER TABLE service_requests
-      ADD COLUMN IF NOT EXISTS admin_notes        text,
-      ADD COLUMN IF NOT EXISTS assigned_at        timestamp NULL,
-      ADD COLUMN IF NOT EXISTS closed_at          timestamp NULL,
-      ADD COLUMN IF NOT EXISTS close_reason       text,
-      ADD COLUMN IF NOT EXISTS billed_amount      numeric(10,2) DEFAULT '0',
-      ADD COLUMN IF NOT EXISTS payment_status     text DEFAULT 'pending';
+      ADD COLUMN IF NOT EXISTS admin_notes      text,
+      ADD COLUMN IF NOT EXISTS assigned_at      timestamp NULL,
+      ADD COLUMN IF NOT EXISTS closed_at        timestamp NULL,
+      ADD COLUMN IF NOT EXISTS close_reason     text,
+      ADD COLUMN IF NOT EXISTS billed_amount    numeric(10,2) DEFAULT '0',
+      ADD COLUMN IF NOT EXISTS payment_status   text DEFAULT 'pending',
+      ADD COLUMN IF NOT EXISTS preferred_time   timestamp NULL;
   `);
 }
 
-// If you ever need CORS for the Replit preview host, uncomment and configure:
-// app.use(cors({
-//   origin: (origin, cb) => {
-//     if (!origin) return cb(null, true);
-//     try {
-//       const u = new URL(origin);
-//       if (u.hostname.endsWith(".replit.dev") || origin === "https://cityconnect.replit.app") {
-//         return cb(null, true);
-//       }
-//     } catch {}
-//     return cb(new Error("CORS blocked for origin: " + origin));
-//   },
-//   credentials: true,
-//   methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-//   allowedHeaders: ["Content-Type", "Authorization", "x-estate-id"],
-// }));
-// app.options("*", cors({ /* same config as above */ }));
-
-// ---------------------------------------------------------
+// ──────────────────────────────────────────────────────────
 // Boot sequence
-// ---------------------------------------------------------
+// ──────────────────────────────────────────────────────────
 (async () => {
   try {
-    // 1) Ensure DB schema has the columns your code expects
     await ensureServiceRequestsColumns();
     log("[DB] Schema guard OK");
   } catch (e) {
     console.error("[DB] Schema guard failed:", e);
-    // continue to start so you can still see the app and logs;
-    // remove 'throw' if you prefer hard-fail:
-    // throw e;
+    // keep running so you can see logs and fix in place
   }
 
-  // 2) Register routes (API + SSR)
+  // ⬇️ Mount your API *before* Vite/SSR:
+  app.use("/api/admin", adminRoutes);
+  app.use("/api/super-admin", superAdminRoutes);
+
+  // Register the rest of your routes (SSR/API defined in ./routes)
   const server = await registerRoutes(app);
 
-  // 3) Error handler
+  // ────────────────────────────────────────────────────────
+  // Global error handler — do NOT throw/rethrow
+  // ────────────────────────────────────────────────────────
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-    res.status(status).json({ message });
-    throw err;
+    const status = err?.status || err?.statusCode || 500;
+    const message = err?.message || "Internal Server Error";
+    console.error("[UNHANDLED ERROR]", { status, message, stack: err?.stack });
+    if (!res.headersSent) res.status(status).json({ error: message });
   });
 
-  // 4) Vite/Static
+  // Dev: Vite middleware; Prod: static assets
   if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
 
-  // 5) Listen (Replit requires PORT; default 5000)
+  // Replit/Render/Heroku style port
   const port = parseInt(process.env.PORT || "5000", 10);
-  server.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    }
+  server.listen({ port, host: "0.0.0.0", reusePort: true }, () =>
+    log(`serving on port ${port}`)
   );
 })();

@@ -1,223 +1,252 @@
-// Centralized Admin API module with auth token management
-let currentAdminToken: string | null = null;
-let currentEstateId: string | null = null;
+// client/src/lib/adminApi.ts
+import type { QueryFunction } from "@tanstack/react-query";
 
-export const setAdminToken = (token: string | null) => {
-  currentAdminToken = token;
-};
+// Prefer same-origin by default (works on Replit preview & local dev).
+// You can still override with VITE_API_URL if you deploy API elsewhere.
+const API_BASE =
+  (typeof window !== "undefined" ? window.location.origin : "") ||
+  (import.meta as any).env?.VITE_API_URL?.replace(/\/$/, "") ||
+  "";
 
-export const setCurrentEstate = (estateId: string | null) => {
-  currentEstateId = estateId;
-};
+// storage keys
+const ADMIN_TOKEN_KEY = "admin_access_token";
+const ADMIN_ESTATE_KEY = "admin_current_estate_id";
 
-export const adminApiRequest = async (
-  method: string,
-  endpoint: string,
-  data?: any,
-) => {
-  const headers: Record<string, any> = {
-    Authorization: `Bearer ${sessionStorage.getItem("admin_access_token")}`,
-  };
+// ---------------------
+// Token & estate helpers
+// ---------------------
+export function setAdminToken(token: string | null) {
+  if (typeof window === "undefined") return;
+  if (token) {
+    window.sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
+    window.localStorage.setItem(ADMIN_TOKEN_KEY, token);
+  } else {
+    window.sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    window.localStorage.removeItem(ADMIN_TOKEN_KEY);
+  }
+}
 
-  if (data) {
-    headers["Content-Type"] = "application/json";
+export function getAdminToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return (
+    window.sessionStorage.getItem(ADMIN_TOKEN_KEY) ||
+    window.localStorage.getItem(ADMIN_TOKEN_KEY) ||
+    window.localStorage.getItem("admin_jwt") ||
+    null
+  );
+}
+
+export function setCurrentEstate(estateId: string | null) {
+  if (typeof window === "undefined") return;
+  if (estateId) window.localStorage.setItem(ADMIN_ESTATE_KEY, estateId);
+  else window.localStorage.removeItem(ADMIN_ESTATE_KEY);
+}
+
+/** Normalize stored estate id: treat "", "null", null as no estate */
+export function getCurrentEstate(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(ADMIN_ESTATE_KEY);
+    if (!raw) return null;
+    const trimmed = String(raw).trim();
+    if (!trimmed || trimmed.toLowerCase() === "null") return null;
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
+/** Build headers with Authorization and (conditionally) X-Estate-Id */
+export function adminHeaders(extra?: Record<string, string>) {
+  const headers: Record<string, string> = { Accept: "application/json" };
+
+  const token = getAdminToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const estateId = getCurrentEstate();
+  if (estateId) {
+    headers["X-Estate-Id"] = estateId; // only when present & normalized
   }
 
-  if (currentEstateId) {
-    headers["x-estate-id"] = currentEstateId;
+  if (extra) Object.assign(headers, extra);
+  return headers;
+}
+
+// -----------------------------------------------------
+// Low-level fetch with JWT + estate header + query JSON
+// -----------------------------------------------------
+/**
+ * - Never sends a body for GET/HEAD (prevents "GET cannot have body")
+ * - Supports `json` (auto-stringified) and `query` (URLSearchParams)
+ * - By default omits credentials (cookies) for cross-origin safety
+ */
+export async function adminFetch<T = any>(
+  path: string,
+  init?: (RequestInit & { json?: any; query?: Record<string, any> }) | undefined
+): Promise<T> {
+  // Build URL
+  let url = path.startsWith("http")
+    ? path
+    : `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+
+  // Append query string if provided
+  if (init?.query && Object.keys(init.query).length > 0) {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(init.query)) {
+      if (v === undefined || v === null) continue;
+      qs.append(k, String(v));
+    }
+    url += (url.includes("?") ? "&" : "?") + qs.toString();
   }
 
-  const config: RequestInit = {
+  // Normalize method & headers
+  const method = ((init?.method ?? "GET") as string).toUpperCase();
+  const wantsJsonBody = init?.json !== undefined && method !== "GET" && method !== "HEAD";
+  const headers = adminHeaders(wantsJsonBody ? { "Content-Type": "application/json" } : undefined);
+
+  // Ensure we never pass a body for GET/HEAD
+  let body: BodyInit | undefined;
+  if (wantsJsonBody) {
+    body = JSON.stringify(init!.json);
+  } else if (method !== "GET" && method !== "HEAD" && init?.body !== undefined) {
+    body = init.body as BodyInit;
+  }
+
+  const res = await fetch(url, {
+    ...init,
     method,
     headers,
-    credentials: "include", // <-- critical: ensures cookies go with requests
-  };
+    body,
+    // never send cookies cross-origin for these calls
+    credentials: "omit",
+  });
 
-  if (data && ["POST", "PATCH", "PUT"].includes(method)) {
-    config.body = JSON.stringify(data);
+  const ct = res.headers.get("content-type") || "";
+  if (!res.ok) {
+    let bodyText = "";
+    try {
+      bodyText = ct.includes("application/json")
+        ? JSON.stringify(await res.json())
+        : await res.text();
+    } catch {
+      // ignore parse errors on failure path
+    }
+    throw new Error(`${res.status} ${res.statusText} @ ${url}\n${bodyText.slice(0, 300)}`);
   }
 
-  const response = await fetch(endpoint, config);
-
-  if (!response.ok) {
-    const errorData = await response
-      .json()
-      .catch(() => ({ error: "Unknown error" }));
-    throw new Error(errorData.error || `HTTP ${response.status}`);
+  if (!ct.includes("application/json")) {
+    const text = await res.text();
+    throw new Error(`Expected JSON but got ${ct} @ ${url}\n${text.slice(0, 300)}`);
   }
 
-  return response.json();
+  return (await res.json()) as T;
+}
+
+// back-compat wrapper you may use elsewhere
+export async function adminApiRequest(
+  method: string,
+  endpoint: string,
+  data?: any
+) {
+  const init: any = { method };
+  if (method.toUpperCase() !== "GET" && data !== undefined) {
+    init.json = data;
+  } else if (method.toUpperCase() === "GET" && data) {
+    // if someone passes data for GET, treat it as query params
+    init.query = data;
+  }
+  return adminFetch(endpoint, init);
+}
+
+// React Query queryFn for admin endpoints (path is queryKey[0])
+export const adminQueryFn: QueryFunction<any> = async ({ queryKey, signal }) => {
+  const path = String(queryKey[0] ?? "");
+  return adminFetch(path, { signal });
 };
 
-// Admin API interface with all endpoints
+// -----------------------------------------------------
+// High-level Admin API (mirrors your existing structure)
+// -----------------------------------------------------
 export const AdminAPI = {
   auth: {
-    setup: async (data: any) => {
-      return adminApiRequest("POST", "/api/admin/setup", data);
-    },
-    login: async (data: any) => {
-      return adminApiRequest("POST", "/api/admin/auth/login", data);
-    },
-    refresh: async (data: any) => {
-      return adminApiRequest("POST", "/api/admin/auth/refresh", data);
-    },
-    logout: async () => {
-      return adminApiRequest("POST", "/api/admin/auth/logout");
-    },
+    setup: (data: any) =>
+      adminFetch("/api/admin/setup", { method: "POST", json: data }),
+    login: (data: any) =>
+      adminFetch("/api/admin/auth/login", { method: "POST", json: data }),
+    refresh: (data: any) =>
+      adminFetch("/api/admin/auth/refresh", { method: "POST", json: data }),
+    logout: () => adminFetch("/api/admin/auth/logout", { method: "POST" }),
   },
-
   dashboard: {
-    getStats: async () => {
-      return adminApiRequest("GET", "/api/admin/stats");
-    },
+    getStats: () => adminFetch("/api/admin/dashboard/stats"),
   },
-
   users: {
-    getAll: async (params?: any) => {
-      const queryString = params
-        ? "?" + new URLSearchParams(params).toString()
-        : "";
-      return adminApiRequest("GET", `/api/admin/users${queryString}`);
-    },
-    create: async (data: any) => {
-      return adminApiRequest("POST", "/api/admin/users", data);
-    },
-    update: async (id: string, data: any) => {
-      return adminApiRequest("PATCH", `/api/admin/users/${id}`, data);
-    },
+    // Unified endpoint (admins + residents + providers)
+    getAll: (params?: any) => adminFetch("/api/admin/users/all", { query: params }),
+    create: (data: any) =>
+      adminFetch("/api/admin/users", { method: "POST", json: data }),
+    update: (id: string, data: any) =>
+      adminFetch(`/api/admin/users/${id}`, { method: "PATCH", json: data }),
   },
-
   providers: {
-    getAll: async (params?: any) => {
-      const queryString = params
-        ? "?" + new URLSearchParams(params).toString()
-        : "";
-      return adminApiRequest("GET", `/api/admin/providers${queryString}`);
-    },
-    create: async (data: any) => {
-      return adminApiRequest("POST", "/api/admin/providers", data);
-    },
-    update: async (id: string, data: any) => {
-      return adminApiRequest("PATCH", `/api/admin/providers/${id}`, data);
-    },
+    getAll: (params?: any) =>
+      adminFetch("/api/admin/providers", { query: params }),
+    create: (data: any) =>
+      adminFetch("/api/admin/providers", { method: "POST", json: data }),
+    update: (id: string, data: any) =>
+      adminFetch(`/api/admin/providers/${id}`, { method: "PATCH", json: data }),
   },
-
   estates: {
-    getAll: async () => {
-      return adminApiRequest("GET", "/api/admin/estates");
-    },
-    create: async (data: any) => {
-      return adminApiRequest("POST", "/api/admin/estates", data);
-    },
-    update: async (id: string, data: any) => {
-      return adminApiRequest("PATCH", `/api/admin/estates/${id}`, data);
-    },
+    getAll: (params?: any) =>
+      adminFetch("/api/admin/estates", { query: params }),
+    create: (data: any) =>
+      adminFetch("/api/admin/estates", { method: "POST", json: data }),
+    update: (id: string, data: any) =>
+      adminFetch(`/api/admin/estates/${id}`, { method: "PATCH", json: data }),
   },
-
   categories: {
-    getAll: async () => {
-      return adminApiRequest("GET", "/api/admin/categories");
-    },
-    create: async (data: any) => {
-      return adminApiRequest("POST", "/api/admin/categories", data);
-    },
-    update: async (id: string, data: any) => {
-      return adminApiRequest("PATCH", `/api/admin/categories/${id}`, data);
-    },
+    getAll: (params?: any) =>
+      adminFetch("/api/admin/categories", { query: params }),
+    create: (data: any) =>
+      adminFetch("/api/admin/categories", { method: "POST", json: data }),
+    update: (id: string, data: any) =>
+      adminFetch(`/api/admin/categories/${id}`, { method: "PATCH", json: data }),
   },
-
   marketplace: {
-    getAll: async (params?: any) => {
-      const queryString = params
-        ? "?" + new URLSearchParams(params).toString()
-        : "";
-      return adminApiRequest("GET", `/api/admin/marketplace${queryString}`);
-    },
-    create: async (data: any) => {
-      return adminApiRequest("POST", "/api/admin/marketplace", data);
-    },
-    update: async (id: string, data: any) => {
-      return adminApiRequest("PATCH", `/api/admin/marketplace/${id}`, data);
-    },
+    getAll: (params?: any) =>
+      adminFetch("/api/admin/marketplace", { query: params }),
+    create: (data: any) =>
+      adminFetch("/api/admin/marketplace", { method: "POST", json: data }),
+    update: (id: string, data: any) =>
+      adminFetch(`/api/admin/marketplace/${id}`, { method: "PATCH", json: data }),
   },
-
   orders: {
-    getAll: async (params?: any) => {
-      const queryString = params
-        ? "?" + new URLSearchParams(params).toString()
-        : "";
-      return adminApiRequest("GET", `/api/admin/orders${queryString}`);
-    },
-    getAnalytics: async () => {
-      return adminApiRequest("GET", "/api/admin/orders/analytics/stats");
-    },
+    getAll: (params?: any) =>
+      adminFetch("/api/admin/orders", { query: params }),
+    // If you have this endpoint, keep it; otherwise remove it
+    getAnalytics: () => adminFetch("/api/admin/orders/analytics/stats"),
   },
-
   auditLogs: {
-    getAll: async (params?: any) => {
-      const queryString = params
-        ? "?" + new URLSearchParams(params).toString()
-        : "";
-      return adminApiRequest("GET", `/api/admin/audit-logs${queryString}`);
-    },
+    getAll: (params?: any) =>
+      adminFetch("/api/admin/audit-logs", { query: params }),
   },
-
-  // ============================================================================
-  // BRIDGE API ENDPOINTS - Connect Admin System with PostgreSQL Resident/Provider Data
-  // ============================================================================
   bridge: {
-    // Get service requests from PostgreSQL system
-    getServiceRequests: async (params?: {
+    getServiceRequests: (params?: {
       status?: string;
       category?: string;
       residentId?: string;
       providerId?: string;
-    }) => {
-      const queryString = params
-        ? "?" + new URLSearchParams(params).toString()
-        : "";
-      return adminApiRequest(
-        "GET",
-        `/api/admin/bridge/service-requests${queryString}`,
-      );
-    },
-
-    // Get users from PostgreSQL system
-    getUsers: async (params?: {
-      role?: string;
-      search?: string;
-      status?: string;
-    }) => {
-      const queryString = params
-        ? "?" + new URLSearchParams(params).toString()
-        : "";
-      return adminApiRequest("GET", `/api/admin/bridge/users${queryString}`);
-    },
-
-    // Get statistics from PostgreSQL system
-    getStats: async () => {
-      return adminApiRequest("GET", "/api/admin/bridge/stats");
-    },
-
-    // Approve/reject providers in PostgreSQL system
-    updateProviderApproval: async (
-      id: string,
-      data: { approved: boolean; reason?: string },
-    ) => {
-      return adminApiRequest(
-        "PATCH",
-        `/api/admin/bridge/providers/${id}/approval`,
-        data,
-      );
-    },
-
-    // Get user wallet and transactions from PostgreSQL system
-    getUserWallet: async (id: string) => {
-      return adminApiRequest("GET", `/api/admin/bridge/users/${id}/wallet`);
-    },
+    }) => adminFetch("/api/admin/bridge/service-requests", { query: params }),
+    getUsers: (params?: { role?: string; search?: string; status?: string }) =>
+      adminFetch("/api/admin/bridge/users", { query: params }),
+    getStats: () => adminFetch("/api/admin/bridge/stats"),
+    updateProviderApproval: (id: string, data: { approved: boolean; reason?: string }) =>
+      adminFetch(`/api/admin/bridge/providers/${id}/approval`, {
+        method: "PATCH",
+        json: data,
+      }),
+    getUserWallet: (id: string) =>
+      adminFetch(`/api/admin/bridge/users/${id}/wallet`),
   },
-
-  health: async () => {
-    return adminApiRequest("GET", "/api/admin/health");
-  },
+  health: () => adminFetch("/api/admin/health"),
 };

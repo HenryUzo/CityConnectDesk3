@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
+import { adminApiRequest } from "@/lib/adminApi"; // add this import
 
 import { 
   LogOut, 
@@ -59,14 +59,20 @@ export default function AdminDashboard() {
 
   // Stats
   const { data: stats } = useQuery<Stats>({
-    queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/stats`],
+    queryKey: ["/api/admin/dashboard/stats"],
+    // (optional) you can leave the default queryFn; the header fix above will attach JWT+estate id
   });
 
   // All users (auto-refresh)
-  const { data: allUsers = [] } = useQuery<User[]>({
-    queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/users`],
+  const { data: allUsers = [] } = useQuery<any[]>({
+    queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/users/all`],
+    queryFn: async () => {
+      const r = await adminApiRequest("GET", "/api/admin/users/all");
+      return Array.isArray(r) ? r : (r?.items ?? []);
+    },
     refetchInterval: 5000,
   });
+
 
   // All requests (auto-refresh)
   const { data: allRequests = [] } = useQuery<ServiceRequest[]>({
@@ -75,7 +81,7 @@ export default function AdminDashboard() {
   });
 
   // Pending providers (auto-refresh)
-  const { data: pendingProviders = [] } = useQuery<User[]>({
+    const { data: pendingProviders = [] } = useQuery<User[]>({
     queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/providers/pending`],
     refetchInterval: 5000,
   });
@@ -88,7 +94,7 @@ export default function AdminDashboard() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/providers/pending"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
       toast({
         title: "Provider Approved",
         description: "The provider has been successfully approved!",
@@ -107,8 +113,8 @@ export default function AdminDashboard() {
     await logoutMutation.mutateAsync();
   };
 
-  const residents = allUsers.filter((u: any) => u.role === 'resident');
-  const providers = allUsers.filter((u: any) => u.role === 'provider');
+  const residents = allUsers.filter((u: any) => u.role === "resident");
+  const providers = allUsers.filter((u: any) => u.role === "provider");
 
   const getStatusColor = (status: string) => {
     switch (status) {
