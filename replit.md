@@ -2,7 +2,15 @@
 
 CityConnect is a full-stack MVP web application that connects estate residents with service providers for artisan repairs and market runs/errands. The platform enables residents to request services while allowing providers (artisans and market runners) to accept and fulfill these requests. The application includes role-based access for residents, service providers, and administrators with comprehensive request tracking and management features.
 
-The system uses a dual-database architecture: MongoDB for the admin management system and PostgreSQL for the resident/provider operations, connected via secure bridge APIs with proper multi-tenant isolation.
+## Database Architecture
+
+**Current State**: Unified PostgreSQL database with migration tools from MongoDB
+- **PostgreSQL**: All operational and admin data (estates, users, providers, service requests, marketplace, orders)
+- **MongoDB**: Legacy admin data (being phased out)
+
+**Migration Status**: ETL scripts available for MongoDB→PostgreSQL migration. See `MIGRATION_GUIDE.md` for details.
+
+**Migration Command**: `tsx server/migration/index.ts` (requires MONGODB_URI environment variable)
 
 # User Preferences
 
