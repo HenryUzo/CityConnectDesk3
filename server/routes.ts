@@ -8,7 +8,8 @@ import { z } from "zod";
 import adminRoutes from "./admin-routes";
 import superAdminRoutes from "./super-admin-routes";
 import appRoutes from "./app-routes";
-import providerRoutes from "./provider-routes";            
+import providerRoutes from "./provider-routes";
+import marketplaceRoutes from "./marketplace-routes";            
 
 
 // ---- ACCEPT FLEXIBLE INPUTS, NORMALIZE OUTPUT TYPES ----
@@ -55,6 +56,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Provider routes for store and item management
   app.use("/api/provider", providerRoutes);
+
+  // Marketplace routes for residents to browse stores and place orders
+  app.use("/api/marketplace", marketplaceRoutes);
 
   // Service Requests Routes
   // Service Requests Routes
