@@ -1353,6 +1353,7 @@ const ProvidersManagement = () => {
       email: "",
       phone: "",
       password: "",
+      company: "",
       categories: [],
       experience: 0,
       description: "",
@@ -1818,6 +1819,24 @@ const ProvidersManagement = () => {
                     )}
                   />
                 </div>
+
+                <FormField
+                  control={providerForm.control}
+                  name="company"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Company Name</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="Enter company name (optional)"
+                          {...field}
+                          data-testid="input-provider-company"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
                 <FormField
                   control={providerForm.control}
