@@ -19,11 +19,15 @@ import {
   orders, 
   memberships,
   mongoIdMappings,
+  stores,
+  storeMembers,
   type InsertEstate,
   type InsertCategory,
   type InsertMarketplaceItem,
   type InsertOrder,
   type InsertMembership,
+  type InsertStore,
+  type InsertStoreMember,
 } from '../shared/schema';
 import { eq, and } from 'drizzle-orm';
 import type { ObjectId } from 'mongoose';
@@ -702,6 +706,263 @@ export async function dualWriteUpdateMembership(
   return {
     pgData: pgMembership,
     mongoData: mongoMembership,
+    shadowWriteSuccess: shadowSuccess,
+    shadowWriteError: shadowError,
+  };
+}
+
+/**
+ * STORES
+ */
+export async function dualWriteCreateStore(
+  data: InsertStore
+): Promise<DualWriteResult<typeof stores.$inferSelect>> {
+  // 1. Primary write to PostgreSQL
+  const [pgStore] = await db.insert(stores).values(data).returning();
+
+  // 2. Shadow write to MongoDB
+  let shadowSuccess = false;
+  let shadowError: string | undefined;
+  let mongoStore: any;
+
+  try {
+    if (adminDb.isConnected) {
+      const estateMongoId = await getOrCreateMapping(data.estateId, 'estate');
+      let ownerMongoId: string | null = null;
+      
+      if (data.ownerId) {
+        ownerMongoId = await getOrCreateMapping(data.ownerId, 'user');
+      }
+
+      if (!estateMongoId) {
+        shadowError = 'Missing required MongoDB mapping for estate';
+        dualWriteLogger.logFailure('store', 'create', pgStore.id, shadowError!);
+      } else {
+        mongoStore = await adminDb.createStore({
+          estateId: estateMongoId,
+          ownerId: ownerMongoId,
+          name: data.name,
+          description: data.description,
+          location: data.location,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          phone: data.phone,
+          email: data.email,
+          logo: data.logo,
+          isActive: data.isActive ?? true,
+        });
+
+        await saveMapping(pgStore.id, mongoStore._id.toString(), 'store');
+        shadowSuccess = true;
+        dualWriteLogger.logSuccess('store', 'create', pgStore.id);
+      }
+    } else {
+      shadowError = 'MongoDB not connected';
+      dualWriteLogger.logFailure('store', 'create', pgStore.id, shadowError!);
+    }
+  } catch (error: any) {
+    shadowError = error?.message || 'Unknown error';
+    dualWriteLogger.logFailure('store', 'create', pgStore.id, shadowError!);
+  }
+
+  return {
+    pgData: pgStore,
+    mongoData: mongoStore,
+    shadowWriteSuccess: shadowSuccess,
+    shadowWriteError: shadowError,
+  };
+}
+
+export async function dualWriteUpdateStore(
+  id: string,
+  updates: Partial<InsertStore>
+): Promise<DualWriteResult<typeof stores.$inferSelect | null>> {
+  // 1. Primary write to PostgreSQL
+  const [pgStore] = await db
+    .update(stores)
+    .set(updates)
+    .where(eq(stores.id, id))
+    .returning();
+
+  if (!pgStore) {
+    return {
+      pgData: null,
+      shadowWriteSuccess: false,
+      shadowWriteError: 'Store not found in PostgreSQL',
+    };
+  }
+
+  // 2. Shadow write to MongoDB
+  let shadowSuccess = false;
+  let shadowError: string | undefined;
+  let mongoStore: any;
+
+  try {
+    if (adminDb.isConnected) {
+      const mongoId = await getOrCreateMapping(id, 'store');
+      
+      if (!mongoId) {
+        shadowError = 'No MongoDB mapping found';
+        dualWriteLogger.logFailure('store', 'update', id, shadowError!);
+      } else {
+        const mongoUpdates = { ...updates };
+        
+        // Convert foreign key references if present
+        if (updates.estateId) {
+          const estateMongoId = await getOrCreateMapping(updates.estateId, 'estate');
+          if (estateMongoId) {
+            (mongoUpdates as any).estateId = estateMongoId;
+          }
+        }
+        if (updates.ownerId !== undefined) {
+          if (updates.ownerId) {
+            const ownerMongoId = await getOrCreateMapping(updates.ownerId, 'user');
+            if (ownerMongoId) {
+              (mongoUpdates as any).ownerId = ownerMongoId;
+            }
+          } else {
+            (mongoUpdates as any).ownerId = null;
+          }
+        }
+
+        mongoStore = await adminDb.updateStore(mongoId, mongoUpdates);
+        shadowSuccess = true;
+        dualWriteLogger.logSuccess('store', 'update', id);
+      }
+    } else {
+      shadowError = 'MongoDB not connected';
+      dualWriteLogger.logFailure('store', 'update', id, shadowError!);
+    }
+  } catch (error: any) {
+    shadowError = error?.message || 'Unknown error';
+    dualWriteLogger.logFailure('store', 'update', id, shadowError!);
+  }
+
+  return {
+    pgData: pgStore,
+    mongoData: mongoStore,
+    shadowWriteSuccess: shadowSuccess,
+    shadowWriteError: shadowError,
+  };
+}
+
+/**
+ * STORE MEMBERS
+ */
+export async function dualWriteCreateStoreMember(
+  data: InsertStoreMember
+): Promise<DualWriteResult<typeof storeMembers.$inferSelect>> {
+  // 1. Primary write to PostgreSQL
+  const [pgStoreMember] = await db.insert(storeMembers).values(data).returning();
+
+  // 2. Shadow write to MongoDB
+  let shadowSuccess = false;
+  let shadowError: string | undefined;
+  let mongoStoreMember: any;
+
+  try {
+    if (adminDb.isConnected) {
+      const storeMongoId = await getOrCreateMapping(data.storeId, 'store');
+      const userMongoId = await getOrCreateMapping(data.userId, 'user');
+
+      if (!storeMongoId || !userMongoId) {
+        shadowError = 'Missing required MongoDB mapping for store or user';
+        dualWriteLogger.logFailure('store_member', 'create', pgStoreMember.id, shadowError!);
+      } else {
+        mongoStoreMember = await adminDb.createStoreMember({
+          storeId: storeMongoId,
+          userId: userMongoId,
+          role: data.role,
+          canManageItems: data.canManageItems ?? true,
+          canManageOrders: data.canManageOrders ?? true,
+          isActive: data.isActive ?? true,
+        });
+
+        await saveMapping(pgStoreMember.id, mongoStoreMember._id.toString(), 'store_member');
+        shadowSuccess = true;
+        dualWriteLogger.logSuccess('store_member', 'create', pgStoreMember.id);
+      }
+    } else {
+      shadowError = 'MongoDB not connected';
+      dualWriteLogger.logFailure('store_member', 'create', pgStoreMember.id, shadowError!);
+    }
+  } catch (error: any) {
+    shadowError = error?.message || 'Unknown error';
+    dualWriteLogger.logFailure('store_member', 'create', pgStoreMember.id, shadowError!);
+  }
+
+  return {
+    pgData: pgStoreMember,
+    mongoData: mongoStoreMember,
+    shadowWriteSuccess: shadowSuccess,
+    shadowWriteError: shadowError,
+  };
+}
+
+export async function dualWriteUpdateStoreMember(
+  id: string,
+  updates: Partial<InsertStoreMember>
+): Promise<DualWriteResult<typeof storeMembers.$inferSelect | null>> {
+  // 1. Primary write to PostgreSQL
+  const [pgStoreMember] = await db
+    .update(storeMembers)
+    .set(updates)
+    .where(eq(storeMembers.id, id))
+    .returning();
+
+  if (!pgStoreMember) {
+    return {
+      pgData: null,
+      shadowWriteSuccess: false,
+      shadowWriteError: 'Store member not found in PostgreSQL',
+    };
+  }
+
+  // 2. Shadow write to MongoDB
+  let shadowSuccess = false;
+  let shadowError: string | undefined;
+  let mongoStoreMember: any;
+
+  try {
+    if (adminDb.isConnected) {
+      const mongoId = await getOrCreateMapping(id, 'store_member');
+      
+      if (!mongoId) {
+        shadowError = 'No MongoDB mapping found';
+        dualWriteLogger.logFailure('store_member', 'update', id, shadowError!);
+      } else {
+        const mongoUpdates = { ...updates };
+        
+        // Convert foreign key references if present
+        if (updates.storeId) {
+          const storeMongoId = await getOrCreateMapping(updates.storeId, 'store');
+          if (storeMongoId) {
+            (mongoUpdates as any).storeId = storeMongoId;
+          }
+        }
+        if (updates.userId) {
+          const userMongoId = await getOrCreateMapping(updates.userId, 'user');
+          if (userMongoId) {
+            (mongoUpdates as any).userId = userMongoId;
+          }
+        }
+
+        mongoStoreMember = await adminDb.updateStoreMember(mongoId, mongoUpdates);
+        shadowSuccess = true;
+        dualWriteLogger.logSuccess('store_member', 'update', id);
+      }
+    } else {
+      shadowError = 'MongoDB not connected';
+      dualWriteLogger.logFailure('store_member', 'update', id, shadowError!);
+    }
+  } catch (error: any) {
+    shadowError = error?.message || 'Unknown error';
+    dualWriteLogger.logFailure('store_member', 'update', id, shadowError!);
+  }
+
+  return {
+    pgData: pgStoreMember,
+    mongoData: mongoStoreMember,
     shadowWriteSuccess: shadowSuccess,
     shadowWriteError: shadowError,
   };

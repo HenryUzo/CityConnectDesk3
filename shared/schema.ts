@@ -59,6 +59,7 @@ export const serviceCategoryEnum = pgEnum("service_category", [
   "appliance_repair",
   "tailor",
   "market_runner",
+  "item_vendor",
 ]);
 export const transactionTypeEnum = pgEnum("transaction_type", [
   "debit",
@@ -97,6 +98,22 @@ export const orderStatusEnum = pgEnum("order_status", [
 export const categoryScopeEnum = pgEnum("category_scope", [
   "global",
   "estate",
+]);
+export const unitOfMeasureEnum = pgEnum("unit_of_measure", [
+  "kg",
+  "g",
+  "liter",
+  "ml",
+  "piece",
+  "bunch",
+  "pack",
+  "bag",
+  "bottle",
+  "can",
+  "box",
+  "dozen",
+  "yard",
+  "meter",
 ]);
 
 // Estates table (from MongoDB)
@@ -178,6 +195,49 @@ export const categories = pgTable("categories", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Stores table (marketplace vendor stores)
+export const stores = pgTable("stores", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  estateId: varchar("estate_id")
+    .notNull()
+    .references(() => estates.id),
+  ownerId: varchar("owner_id").references(() => users.id), // Optional: primary owner
+  name: text("name").notNull(),
+  description: text("description"),
+  location: text("location").notNull(), // Physical location/address
+  latitude: doublePrecision("latitude"),
+  longitude: doublePrecision("longitude"),
+  phone: text("phone"),
+  email: text("email"),
+  logo: text("logo"), // Store logo URL
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Store Members table (allocate multiple providers to a store)
+export const storeMembers = pgTable("store_members", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  storeId: varchar("store_id")
+    .notNull()
+    .references(() => stores.id),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id),
+  role: text("role").notNull().default("member"), // 'owner', 'manager', 'member'
+  canManageItems: boolean("can_manage_items").notNull().default(true),
+  canManageOrders: boolean("can_manage_orders").notNull().default(true),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  uniqueStoreMember: sql`UNIQUE (${table.storeId}, ${table.userId})`,
+}));
+
 // Marketplace Items table (from MongoDB)
 export const marketplaceItems = pgTable("marketplace_items", {
   id: varchar("id")
@@ -186,13 +246,15 @@ export const marketplaceItems = pgTable("marketplace_items", {
   estateId: varchar("estate_id")
     .notNull()
     .references(() => estates.id),
+  storeId: varchar("store_id").references(() => stores.id), // Nullable for backward compatibility
   vendorId: varchar("vendor_id")
     .notNull()
-    .references(() => users.id),
+    .references(() => users.id), // Legacy: keep for backward compatibility
   name: text("name").notNull(),
   description: text("description"),
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
   currency: varchar("currency", { length: 10 }).notNull().default("NGN"),
+  unitOfMeasure: unitOfMeasureEnum("unit_of_measure").default("piece"), // Nullable for backward compatibility
   category: text("category").notNull(),
   subcategory: text("subcategory"),
   stock: integer("stock").notNull().default(0),
@@ -210,13 +272,14 @@ export const orders = pgTable("orders", {
   estateId: varchar("estate_id")
     .notNull()
     .references(() => estates.id),
+  storeId: varchar("store_id").references(() => stores.id), // Optional: for store-specific orders
   buyerId: varchar("buyer_id")
     .notNull()
     .references(() => users.id),
   vendorId: varchar("vendor_id")
     .notNull()
     .references(() => users.id),
-  items: jsonb("items").notNull(), // Array of {itemId, name, price, quantity}
+  items: jsonb("items").notNull(), // Array of {itemId, name, price, quantity, unitOfMeasure}
   total: decimal("total", { precision: 10, scale: 2 }).notNull(),
   currency: varchar("currency", { length: 10 }).notNull().default("NGN"),
   status: orderStatusEnum("status").notNull().default("pending"),
@@ -414,6 +477,7 @@ export const estatesRelations = relations(estates, ({ many }) => ({
   orders: many(orders),
   categories: many(categories),
   auditLogs: many(auditLogs),
+  stores: many(stores),
 }));
 
 export const usersRelations = relations(users, ({ many, one }) => ({
@@ -428,6 +492,8 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   ordersAsBuyer: many(orders, { relationName: "buyerOrders" }),
   ordersAsVendor: many(orders, { relationName: "vendorOrders" }),
   wallet: one(wallets),
+  ownedStores: many(stores),
+  storeMembers: many(storeMembers),
 }));
 
 export const membershipsRelations = relations(memberships, ({ one }) => ({
@@ -448,10 +514,39 @@ export const categoriesRelations = relations(categories, ({ one }) => ({
   }),
 }));
 
+export const storesRelations = relations(stores, ({ one, many }) => ({
+  estate: one(estates, {
+    fields: [stores.estateId],
+    references: [estates.id],
+  }),
+  owner: one(users, {
+    fields: [stores.ownerId],
+    references: [users.id],
+  }),
+  members: many(storeMembers),
+  items: many(marketplaceItems),
+  orders: many(orders),
+}));
+
+export const storeMembersRelations = relations(storeMembers, ({ one }) => ({
+  store: one(stores, {
+    fields: [storeMembers.storeId],
+    references: [stores.id],
+  }),
+  user: one(users, {
+    fields: [storeMembers.userId],
+    references: [users.id],
+  }),
+}));
+
 export const marketplaceItemsRelations = relations(marketplaceItems, ({ one }) => ({
   estate: one(estates, {
     fields: [marketplaceItems.estateId],
     references: [estates.id],
+  }),
+  store: one(stores, {
+    fields: [marketplaceItems.storeId],
+    references: [stores.id],
   }),
   vendor: one(users, {
     fields: [marketplaceItems.vendorId],
@@ -463,6 +558,10 @@ export const ordersRelations = relations(orders, ({ one }) => ({
   estate: one(estates, {
     fields: [orders.estateId],
     references: [estates.id],
+  }),
+  store: one(stores, {
+    fields: [orders.storeId],
+    references: [stores.id],
   }),
   buyer: one(users, {
     fields: [orders.buyerId],
@@ -544,6 +643,18 @@ export const insertCategorySchema = createInsertSchema(categories).omit({
   updatedAt: true,
 });
 
+export const insertStoreSchema = createInsertSchema(stores).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertStoreMemberSchema = createInsertSchema(storeMembers).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertMarketplaceItemSchema = createInsertSchema(marketplaceItems).omit({
   id: true,
   createdAt: true,
@@ -594,6 +705,10 @@ export type Membership = typeof memberships.$inferSelect;
 export type InsertMembership = z.infer<typeof insertMembershipSchema>;
 export type Category = typeof categories.$inferSelect;
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
+export type Store = typeof stores.$inferSelect;
+export type InsertStore = z.infer<typeof insertStoreSchema>;
+export type StoreMember = typeof storeMembers.$inferSelect;
+export type InsertStoreMember = z.infer<typeof insertStoreMemberSchema>;
 export type MarketplaceItem = typeof marketplaceItems.$inferSelect;
 export type InsertMarketplaceItem = z.infer<typeof insertMarketplaceItemSchema>;
 export type Order = typeof orders.$inferSelect;

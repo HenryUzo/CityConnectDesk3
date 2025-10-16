@@ -9,6 +9,8 @@ import {
   OrderSchema,
   CategorySchema,
   AuditLogSchema,
+  StoreSchema,
+  StoreMemberSchema,
   type IEstate,
   type IUser,
   type IMembership,
@@ -17,7 +19,9 @@ import {
   type IMarketplaceItem,
   type IOrder,
   type ICategory,
-  type IAuditLog
+  type IAuditLog,
+  type IStore,
+  type IStoreMember
 } from '../shared/admin-schema';
 
 // MongoDB Models
@@ -30,6 +34,8 @@ export const MarketplaceItem = mongoose.model<IMarketplaceItem>('MarketplaceItem
 export const Order = mongoose.model<IOrder>('Order', OrderSchema);
 export const AdminCategory = mongoose.model<ICategory>('AdminCategory', CategorySchema);
 export const AuditLog = mongoose.model<IAuditLog>('AuditLog', AuditLogSchema);
+export const Store = mongoose.model<IStore>('Store', StoreSchema);
+export const StoreMember = mongoose.model<IStoreMember>('StoreMember', StoreMemberSchema);
 
 class AdminDatabase {
   private _isConnected = false;
@@ -48,6 +54,8 @@ class AdminDatabase {
   Order = Order;
   AdminCategory = AdminCategory;
   AuditLog = AuditLog;
+  Store = Store;
+  StoreMember = StoreMember;
 
   async connect() {
     if (this._isConnected) return;
@@ -223,6 +231,38 @@ class AdminDatabase {
 
   async updateOrder(id: string, data: any) {
     return await Order.findByIdAndUpdate(id, data, { new: true });
+  }
+
+  // Store Operations
+  async createStore(data: any) {
+    const store = new Store(data);
+    return await store.save();
+  }
+
+  async getStores(filter: any = {}) {
+    return await Store.find({ isActive: true, ...filter }).sort({ createdAt: -1 });
+  }
+
+  async getStoresByEstate(estateId: string, filter: any = {}) {
+    return await Store.find({ estateId, isActive: true, ...filter }).sort({ createdAt: -1 });
+  }
+
+  async updateStore(id: string, data: any) {
+    return await Store.findByIdAndUpdate(id, data, { new: true });
+  }
+
+  // Store Member Operations
+  async createStoreMember(data: any) {
+    const storeMember = new StoreMember(data);
+    return await storeMember.save();
+  }
+
+  async getStoreMembers(storeId: string, filter: any = {}) {
+    return await StoreMember.find({ storeId, isActive: true, ...filter }).sort({ createdAt: -1 });
+  }
+
+  async updateStoreMember(id: string, data: any) {
+    return await StoreMember.findByIdAndUpdate(id, data, { new: true });
   }
 
   // Category Operations

@@ -31,7 +31,8 @@ export const ServiceCategory = {
   PHONE_REPAIR: 'phone_repair',
   APPLIANCE_REPAIR: 'appliance_repair',
   TAILOR: 'tailor',
-  MARKET_RUNNER: 'market_runner'
+  MARKET_RUNNER: 'market_runner',
+  ITEM_VENDOR: 'item_vendor'
 } as const;
 
 export const ServiceStatus = {
@@ -85,7 +86,10 @@ export const EstateSchema = new Schema<IEstate>({
   slug: { type: String, required: true, unique: true },
   description: String,
   address: { type: String, required: true },
-  coverage: { type: Schema.Types.Polygon, required: true },
+  coverage: { 
+    type: { type: String, enum: ['Polygon'], required: true },
+    coordinates: { type: [[[Number]]], required: true }
+  },
   settings: {
     servicesEnabled: [String],
     marketplaceEnabled: { type: Boolean, default: true },
@@ -341,6 +345,67 @@ export const OrderSchema = new Schema<IOrder>({
 OrderSchema.index({ estateId: 1, status: 1 });
 OrderSchema.index({ buyerId: 1 });
 OrderSchema.index({ vendorId: 1 });
+
+// Stores
+export interface IStore extends Document {
+  _id: string;
+  estateId: string;
+  ownerId?: string;
+  name: string;
+  description?: string;
+  location: string;
+  latitude?: number;
+  longitude?: number;
+  phone?: string;
+  email?: string;
+  logo?: string;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export const StoreSchema = new Schema<IStore>({
+  estateId: { type: String, required: true },
+  ownerId: String,
+  name: { type: String, required: true },
+  description: String,
+  location: { type: String, required: true },
+  latitude: Number,
+  longitude: Number,
+  phone: String,
+  email: String,
+  logo: String,
+  isActive: { type: Boolean, default: true }
+}, { timestamps: true });
+
+StoreSchema.index({ estateId: 1 });
+StoreSchema.index({ ownerId: 1 });
+
+// Store Members
+export interface IStoreMember extends Document {
+  _id: string;
+  storeId: string;
+  userId: string;
+  role: string; // 'owner', 'manager', 'member'
+  canManageItems: boolean;
+  canManageOrders: boolean;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export const StoreMemberSchema = new Schema<IStoreMember>({
+  storeId: { type: String, required: true },
+  userId: { type: String, required: true },
+  role: { type: String, default: 'member' },
+  canManageItems: { type: Boolean, default: true },
+  canManageOrders: { type: Boolean, default: true },
+  isActive: { type: Boolean, default: true }
+}, { timestamps: true });
+
+StoreMemberSchema.index({ storeId: 1 });
+StoreMemberSchema.index({ userId: 1 });
+StoreMemberSchema.index({ storeId: 1, userId: 1 }, { unique: true });
 
 // Categories
 export interface ICategory extends Document {
