@@ -27,6 +27,7 @@ import {
   dualWriteCreateMembership,
   dualWriteUpdateMembership,
   getDualWriteStats,
+  getIdMapping,
 } from "./dual-write";
 
 // Toggle bridge scoping via env (email|off)
@@ -48,6 +49,21 @@ const {
 } = AdminAuth;
 
 const router = Router();
+
+/** ------------------------------------------------------------------ */
+/** ID Resolution Helper (MongoDB _id → PostgreSQL UUID)               */
+/** ------------------------------------------------------------------ */
+async function resolveEstateId(id: string): Promise<string> {
+  // If it's a MongoDB ObjectId (24 hex chars), resolve to PostgreSQL UUID
+  if (/^[0-9a-f]{24}$/i.test(id)) {
+    const mapping = await getIdMapping(id, 'estate');
+    if (mapping) {
+      return mapping.pg_id;
+    }
+  }
+  // Otherwise, assume it's already a PostgreSQL UUID
+  return id;
+}
 
 /** ------------------------------------------------------------------ */
 /** DB health gating (skip for /auth/* and /setup)                      */
@@ -316,8 +332,11 @@ router.patch(
   auditAction("UPDATE", "ESTATE"),
   async (req: AdminRequest, res) => {
     try {
+      // Resolve MongoDB _id to PostgreSQL UUID if needed
+      const pgId = await resolveEstateId(req.params.id);
+      
       // Use dual-write: PostgreSQL (primary) + MongoDB (shadow)
-      const result = await dualWriteUpdateEstate(req.params.id, req.body);
+      const result = await dualWriteUpdateEstate(pgId, req.body);
       
       if (!result.pgData) {
         return res.status(404).json({ error: "Estate not found" });

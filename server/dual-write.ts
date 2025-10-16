@@ -148,6 +148,38 @@ async function saveMapping(
 }
 
 /**
+ * Get PostgreSQL ID from MongoDB ID
+ */
+export async function getIdMapping(
+  mongoId: string,
+  entityType: string
+): Promise<{ pg_id: string; mongo_id: string } | null> {
+  try {
+    const [mapping] = await db
+      .select()
+      .from(mongoIdMappings)
+      .where(
+        and(
+          eq(mongoIdMappings.mongoId, mongoId),
+          eq(mongoIdMappings.entityType, entityType)
+        )
+      )
+      .limit(1);
+
+    if (mapping) {
+      return {
+        pg_id: mapping.postgresId,
+        mongo_id: mapping.mongoId,
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error('[ID MAPPING ERROR]', { mongoId, entityType, error });
+    return null;
+  }
+}
+
+/**
  * ESTATES
  */
 export async function dualWriteCreateEstate(
