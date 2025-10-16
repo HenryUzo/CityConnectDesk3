@@ -668,10 +668,17 @@ router.get(
   requireModerator,
   async (req: AdminRequest, res) => {
     try {
-      const { approved, category, search, limit = 50, offset = 0 } = req.query as Record<string, any>;
+      const { approved, category, company, search, limit = 50, offset = 0 } = req.query as Record<string, any>;
       const filter: any = {};
       if (approved !== undefined) filter.isApproved = approved === "true";
       if (category) filter.categories = category;
+      if (company) {
+        if (company === "independent") {
+          filter.$or = [{ company: { $exists: false } }, { company: "" }, { company: null }];
+        } else {
+          filter.company = company;
+        }
+      }
       if (search) filter.$or = [{ categories: { $regex: search, $options: "i" } }];
 
       // Super admins in global mode (no estate context) see all providers

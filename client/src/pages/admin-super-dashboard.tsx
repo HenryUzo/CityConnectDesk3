@@ -1307,6 +1307,7 @@ const ProvidersManagement = () => {
   const [search, setSearch] = useState("");
   const [approvalFilter, setApprovalFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [companyFilter, setCompanyFilter] = useState("all");
   const [showAddProvider, setShowAddProvider] = useState(false);
   const [viewMode, setViewMode] = useState<"global" | "estate">("global");
   const [selectedEstateId, setSelectedEstateId] = useState("");
@@ -1368,6 +1369,7 @@ const ProvidersManagement = () => {
         search,
         approved: approvalFilter === "all" ? undefined : approvalFilter,
         category: categoryFilter === "all" ? undefined : categoryFilter,
+        company: companyFilter === "all" ? undefined : companyFilter,
         viewMode,
         selectedEstateId,
       },
@@ -1377,6 +1379,7 @@ const ProvidersManagement = () => {
         search: search || undefined,
         approved: approvalFilter === "all" ? undefined : approvalFilter,
         category: categoryFilter === "all" ? undefined : categoryFilter,
+        company: companyFilter === "all" ? undefined : companyFilter,
       }),
   });
 
@@ -1609,6 +1612,23 @@ const ProvidersManagement = () => {
                 <SelectItem value="market_runner">Market Runner</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={companyFilter} onValueChange={setCompanyFilter}>
+              <SelectTrigger
+                className="w-48"
+                data-testid="select-company-filter"
+              >
+                <SelectValue placeholder="Filter by company" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Companies</SelectItem>
+                <SelectItem value="independent">Independent</SelectItem>
+                {providers && Array.from(new Set(providers.map((p: any) => p.company).filter(Boolean))).map((company: any) => (
+                  <SelectItem key={company} value={company}>
+                    {company}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
@@ -1620,6 +1640,7 @@ const ProvidersManagement = () => {
             <TableHeader>
               <TableRow>
                 <TableHead>Provider ID</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Categories</TableHead>
                 <TableHead>Experience</TableHead>
                 <TableHead>Rating</TableHead>
@@ -1636,6 +1657,13 @@ const ProvidersManagement = () => {
                 >
                   <TableCell className="font-medium">
                     {provider.userId}
+                  </TableCell>
+                  <TableCell>
+                    {provider.company ? (
+                      <span className="text-sm font-medium">{provider.company}</span>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">Independent</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
@@ -1709,7 +1737,7 @@ const ProvidersManagement = () => {
               {(!providers || providers.length === 0) && (
                 <TableRow>
                   <TableCell
-                    colSpan={7}
+                    colSpan={8}
                     className="text-center py-8 text-gray-500"
                   >
                     No providers found
