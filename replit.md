@@ -101,6 +101,21 @@ Preferred communication style: Simple, everyday language.
   - `POST /api/admin/stores/:id/members` - Allocate provider to store
   - `PATCH /api/admin/stores/:storeId/members/:memberId` - Update member permissions
   - All endpoints use Zod validation, dual-write pattern, and proper estate scoping
+- **Provider Store Endpoints**: Provider APIs for managing their stores and items
+  - `GET /api/provider/stores` - List provider's stores (filtered by store membership)
+  - `POST /api/provider/stores` - Create new store (auto-adds provider as member with full permissions)
+  - `GET /api/provider/stores/:storeId/items` - List items in a specific store
+  - `POST /api/provider/stores/:storeId/items` - Add new item to store (requires canManageItems permission)
+  - `PATCH /api/provider/stores/:storeId/items/:itemId` - Update item details or availability
+  - `DELETE /api/provider/stores/:storeId/items/:itemId` - Soft delete item (mark as inactive)
+  - All endpoints verify store membership and permissions before allowing operations
+- **Marketplace Endpoints**: Resident-facing APIs for browsing stores and placing orders
+  - `GET /api/marketplace/stores` - Browse all active stores in user's estates
+  - `GET /api/marketplace/stores/:storeId/items` - View available items in a specific store
+  - `POST /api/marketplace/orders` - Create order with items, delivery address, and payment method
+  - `GET /api/marketplace/orders` - View user's order history (sorted by most recent)
+  - Estate-scoped authorization ensures residents only access stores in their estates
+  - Automatic vendor resolution handles stores with/without owners via storeMembers fallback
 
 # External Dependencies
 
