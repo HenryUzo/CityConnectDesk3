@@ -1,9 +1,12 @@
-// server/prepare-static.js
+// server/prepare-static.ts
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 export async function prepareStaticFiles() {
-  const rootDir = path.resolve(import.meta.dirname, '..');
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const rootDir = path.resolve(__dirname, '..');
   const sourceDir = path.join(rootDir, 'dist', 'public');
   const targetDir = path.join(rootDir, 'client', 'dist');
 
@@ -46,7 +49,7 @@ export async function prepareStaticFiles() {
       // Fallback to copying if symlink fails
       console.log('[STATIC] Symlink failed, copying files instead...');
       
-      function copyRecursive(src, dest) {
+      const copyRecursive = (src: string, dest: string): void => {
         const stats = fs.statSync(src);
         if (stats.isDirectory()) {
           fs.mkdirSync(dest, { recursive: true });
@@ -57,7 +60,7 @@ export async function prepareStaticFiles() {
         } else {
           fs.copyFileSync(src, dest);
         }
-      }
+      };
       
       copyRecursive(sourceDir, targetDir);
       console.log('[STATIC] ✓ Files copied successfully');

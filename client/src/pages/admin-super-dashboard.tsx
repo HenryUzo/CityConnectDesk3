@@ -593,23 +593,23 @@ const UsersManagement = () => {
 
   // Memberships query – use the correct endpoint
   const { data: userMemberships } = useQuery({
-    queryKey: ["admin-user-memberships", membershipUser?._id],
-    queryFn: () =>
-      membershipUser
-        ? adminApiRequest(
-            "GET",
-            `/api/admin/users/${membershipUser._id}/memberships`,
-          )
-        : [],
+    queryKey: ["admin-user-memberships", membershipUser?._id || membershipUser?.id],
+    queryFn: () => {
+      if (!membershipUser) return [];
+      // Handle both MongoDB (_id) and PostgreSQL (id) user objects
+      const userId = membershipUser._id || membershipUser.id;
+      return adminApiRequest("GET", `/api/admin/users/${userId}/memberships`);
+    },
     enabled: !!membershipUser,
   });
 
-  // Toggle active/inactive – use /api/admin/users/{id}
+  // Toggle active/inactive – use /api/admin/bridge/users/{id} (PostgreSQL)
   const toggleUserStatusMutation = useMutation({
     mutationFn: ({ userId, isActive }: { userId: string; isActive: boolean }) =>
-      adminApiRequest("PATCH", `/api/admin/users/${userId}`, { isActive }),
+      adminApiRequest("PATCH", `/api/admin/bridge/users/${userId}`, { isActive }),
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/users"] });
       toast({
         title: `User ${variables.isActive ? "activated" : "deactivated"} successfully`,
       });
@@ -643,12 +643,13 @@ const UsersManagement = () => {
     },
   });
 
-  // Update user – PATCH to /api/admin/users/{id}
+  // Update user – PATCH to /api/admin/bridge/users/{id} (PostgreSQL)
   const updateUserMutation = useMutation({
     mutationFn: ({ userId, userData }: { userId: string; userData: any }) =>
-      adminApiRequest("PATCH", `/api/admin/users/${userId}`, userData),
+      adminApiRequest("PATCH", `/api/admin/bridge/users/${userId}`, userData),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/users"] });
       setEditingUser(null);
       resetForm();
       toast({ title: "User updated successfully" });
@@ -736,7 +737,9 @@ const UsersManagement = () => {
     const userData = password ? { ...baseData, password } : baseData; // Only include password if provided
 
     if (editingUser) {
-      updateUserMutation.mutate({ userId: editingUser._id, userData });
+      // Handle both MongoDB (_id) and PostgreSQL (id) user objects
+      const userId = editingUser._id || editingUser.id;
+      updateUserMutation.mutate({ userId, userData });
     } else {
       createUserMutation.mutate(userData);
     }
@@ -759,8 +762,10 @@ const UsersManagement = () => {
       return;
     }
 
+    // Handle both MongoDB (_id) and PostgreSQL (id) user objects
+    const userId = membershipUser._id || membershipUser.id;
     createMembershipMutation.mutate({
-      userId: membershipUser._id,
+      userId,
       estateId,
       role,
     });

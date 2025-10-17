@@ -2102,6 +2102,84 @@ router.get(
   }
 );
 
+// Bridge: Update user in PostgreSQL
+router.patch(
+  "/bridge/users/:id",
+  authenticateAdmin,
+  setEstateContext,
+  requireEstateAdmin,
+  auditAction("UPDATE", "USER"),
+  async (req: AdminRequest, res) => {
+    try {
+      const { id } = req.params;
+      const updates = { ...req.body };
+
+      // Fetch the user to check authorization
+      const user = await storage.getUser(id);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      // Non-global-super must pass email-based membership scope
+      const allowedEmails = await getAllowedEmailsOrNull(req);
+      if (allowedEmails && (!user.email || !allowedEmails.has(String(user.email).toLowerCase()))) {
+        return res.status(403).json({ error: "User not found in your estate" });
+      }
+
+      // Hash password if provided
+      if (updates.password) {
+        const bcrypt = await import("bcryptjs");
+        updates.passwordHash = await bcrypt.hash(updates.password, 10);
+        delete updates.password;
+      }
+
+      // Update user in PostgreSQL
+      const updatedUser = await storage.updateUser(id, updates);
+      if (!updatedUser) return res.status(404).json({ error: "User not found" });
+
+      res.json(updatedUser);
+    } catch (error: any) {
+      console.error("Bridge update user error:", error);
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+// Bridge: Approve/reject provider in PostgreSQL
+router.patch(
+  "/bridge/providers/:id/approval",
+  authenticateAdmin,
+  setEstateContext,
+  requireEstateAdmin,
+  auditAction("UPDATE", "PROVIDER"),
+  async (req: AdminRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { approved } = req.body;
+
+      // Fetch the provider to check authorization
+      const provider = await storage.getUser(id);
+      if (!provider) return res.status(404).json({ error: "Provider not found" });
+      if (provider.role !== "provider") {
+        return res.status(400).json({ error: "User is not a provider" });
+      }
+
+      // Non-global-super must pass email-based membership scope
+      const allowedEmails = await getAllowedEmailsOrNull(req);
+      if (allowedEmails && (!provider.email || !allowedEmails.has(String(provider.email).toLowerCase()))) {
+        return res.status(403).json({ error: "Provider not found in your estate" });
+      }
+
+      // Update provider approval status
+      const updatedProvider = await storage.updateUser(id, { isApproved: approved });
+      if (!updatedProvider) return res.status(404).json({ error: "Provider not found" });
+
+      res.json(updatedProvider);
+    } catch (error: any) {
+      console.error("Bridge provider approval error:", error);
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
 // Debug: show bridge scope state (emails, estate, etc.)
 router.get(
   "/bridge/_debug-scope",

@@ -86,11 +86,14 @@ Preferred communication style: Simple, everyday language.
 - **Provider Acceptance**: Endpoint for providers to accept available requests
 - **Admin Functions**: User approval, statistics, and system management
 - **Bridge Endpoints**: Secure APIs connecting MongoDB admin system with PostgreSQL data
-  - `/api/admin/bridge/users` - Fetch users (including providers with role=provider) with estate scoping
-  - `/api/admin/bridge/service-requests` - Fetch service requests with tenant filtering
-  - `/api/admin/bridge/stats` - Get aggregated statistics for current estate or globally
-  - `/api/admin/bridge/providers/:id/approval` - Approve/reject providers from PostgreSQL
-  - `/api/admin/bridge/users/:id/wallet` - View user wallet details
+  - `GET /api/admin/bridge/users` - Fetch users (including providers with role=provider) with estate scoping
+  - `PATCH /api/admin/bridge/users/:id` - Update user information (name, email, phone, password, role, status) in PostgreSQL
+  - `GET /api/admin/bridge/service-requests` - Fetch service requests with tenant filtering
+  - `GET /api/admin/bridge/stats` - Get aggregated statistics for current estate or globally
+  - `PATCH /api/admin/bridge/providers/:id/approval` - Approve/reject providers from PostgreSQL
+  - `GET /api/admin/bridge/users/:id/wallet` - View user wallet details
+  - **User Updates**: Admin dashboard now updates users in PostgreSQL (operational database) instead of MongoDB
+  - **ID Compatibility**: Frontend handles both MongoDB `_id` and PostgreSQL `id` fields for seamless transition
 - **Protected Routes**: Authentication middleware with estate context for secure multi-tenant access
 - **Provider Management**: Uses bridge API to display all providers from PostgreSQL operational database
 - **Store Management Endpoints**: Admin APIs for marketplace vendor management
