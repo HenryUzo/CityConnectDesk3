@@ -26,7 +26,7 @@ import {
   type CreateProviderInput,
   type IMarketplaceItem,
 } from "@shared/admin-schema";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,8 +34,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
-
-
 
 import {
   Table,
@@ -59,14 +57,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -75,70 +65,71 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  LayoutDashboard,
-  Users,
-  Building2,
-  Store,
-  Settings,
-  ShoppingCart,
-  FileBarChart,
-  UserCheck,
-  ClipboardList,
-  MessageSquare,
-  Shield,
-  LogOut,
-  Menu,
-  X,
-  Plus,
-  Search,
-  Filter,
-  TrendingUp,
-  DollarSign,
-  Package,
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
   AlertTriangle,
-  UserPlus,
-  Edit,
+  Building2,
+  Briefcase,
   CheckCircle,
-  XCircle,
-  Star,
-  Eye,
-  EyeOff,
-  Tags,
-  Wrench,
-  ShoppingBag,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Download,
-  Calendar,
+  ClipboardList,
   Clock,
+  DollarSign,
+  Download,
+  Edit,
+  Eye,
+  FileBarChart,
   Globe,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  MessageSquare,
+  Package,
+  Plus,
+  Search,
+  Settings,
+  Shield,
+  ShoppingBag,
+  Star,
+  Store,
+  Tags,
+  TrendingUp,
+  UserCheck,
+  UserPlus,
+  Users,
+  Wrench,
+  X,
+  XCircle,
 } from "lucide-react";
 
-// Admin Context for JWT token management
-interface AdminUser {
-  id: string;
-  email: string;
-  name: string;
-  globalRole?: string;
-  memberships?: Array<{
-    estateId: string;
-    role: string;
-    permissions?: string[];
-  }>;
-}
+// Admin auth context (local to this page file)
+type AdminUser = any;
 
-interface AdminAuthContextType {
-  user: AdminUser | null;
-  token: string | null;
-  selectedEstateId: string | null;
-  setSelectedEstateId: (estateId: string | null) => void;
-  login: (email: string, password: string) => Promise<any>;
-  logout: () => void;
-  isLoading: boolean;
-  refreshToken: () => Promise<void>;
-}
-
-const AdminAuthContext = createContext<AdminAuthContextType | null>(null);
+const AdminAuthContext = createContext<
+  | {
+      user: AdminUser | null;
+      token: string | null;
+      selectedEstateId: string | null;
+      setSelectedEstateId: (id: string | null) => void;
+      login: (email: string, password: string) => Promise<any>;
+      logout: () => void;
+      isLoading: boolean;
+      refreshToken: () => Promise<void>;
+      sessionChecked: boolean;
+    }
+  | null
+>(null);
 
 export const useAdminAuth = () => {
   const context = useContext(AdminAuthContext);
@@ -157,6 +148,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
   const [token, setToken] = useState<string | null>(null);
   const [selectedEstateId, setSelectedEstateId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionChecked, setSessionChecked] = useState(false);
   const [, setLocation] = useLocation();
 
   // Update global token reference when token changes
@@ -189,6 +181,31 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     }
   }, []);
 
+  // If we are using session-based auth (no token), try to load the user from the session cookie
+  useEffect(() => {
+    let cancelled = false;
+    const bootstrapSessionUser = async () => {
+      if (token || user) {
+        setSessionChecked(true);
+        return;
+      }
+      try {
+        const sessionUser = await adminApiRequest("GET", "/api/user");
+        if (!cancelled && sessionUser) {
+          setUser(sessionUser);
+        }
+      } catch {
+        // ignore; will fall back to login
+      } finally {
+        if (!cancelled) setSessionChecked(true);
+      }
+    };
+    bootstrapSessionUser();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, user]);
+
   const refreshToken = async () => {
     const refreshTokenValue = sessionStorage.getItem("admin_refresh_token");
     if (!refreshTokenValue) return;
@@ -205,16 +222,16 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
       // Race-proof: Set tokens immediately
       setAdminToken(response.accessToken);
       setToken(response.accessToken);
-      setUser(response.user);
+      // Ensure memberships is always an array to avoid runtime reads of undefined
+      setUser(response.user ? { ...response.user, memberships: Array.isArray(response.user.memberships) ? response.user.memberships : [] } : null);
       sessionStorage.setItem("admin_refresh_token", response.refreshToken);
 
       // Restore estate selection if user has memberships
-      if (
-        response.user.memberships &&
-        response.user.memberships.length > 0 &&
-        !selectedEstateId
-      ) {
-        const firstEstate = response.user.memberships[0].estateId;
+      const memberships = Array.isArray(response?.user?.memberships)
+        ? response.user.memberships
+        : [];
+      if (memberships.length > 0 && !selectedEstateId) {
+        const firstEstate = memberships[0].estateId;
         setSelectedEstateId(firstEstate);
       }
     } catch (error) {
@@ -226,24 +243,38 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
   const login = async (email: string, password: string) => {
     setIsLoading(true);
     try {
-      const response: any = await adminApiRequest(
-        "POST",
-        "/api/admin/auth/login",
-        { email, password },
-      );
+        const response: any = await adminApiRequest(
+          "POST",
+          "/api/login",
+          { username: email, password },
+        );
 
-      // Race-proof: Set tokens immediately before any queries can fire
-      setAdminToken(response.accessToken);
-      setToken(response.accessToken);
-      setUser(response.user);
-      sessionStorage.setItem("admin_refresh_token", response.refreshToken);
-      sessionStorage.setItem("admin_access_token", response.accessToken);
+        // Support two response shapes:
+        // 1) token-based: { accessToken, refreshToken, user }
+        // 2) session-based: user object returned directly
+        const userObj = response?.user ?? response;
+        const accessToken = response?.accessToken ?? null;
+        const refreshToken = response?.refreshToken ?? null;
 
-      // Auto-select first estate for tenant scoping
-      if (response.user.memberships && response.user.memberships.length > 0) {
-        const firstEstate = response.user.memberships[0].estateId;
-        setSelectedEstateId(firstEstate);
-      }
+        // Race-proof: Set tokens immediately if present
+        if (accessToken) {
+          setAdminToken(accessToken);
+          setToken(accessToken);
+          sessionStorage.setItem("admin_access_token", accessToken);
+        }
+        if (refreshToken) {
+          sessionStorage.setItem("admin_refresh_token", refreshToken);
+        }
+
+        // Ensure memberships is always an array to avoid runtime reads of undefined elsewhere
+        setUser(userObj ? { ...userObj, memberships: Array.isArray(userObj.memberships) ? userObj.memberships : [] } : null);
+
+        // Auto-select first estate for tenant scoping
+        const memberships = Array.isArray(userObj?.memberships) ? userObj.memberships : [];
+        if (memberships.length > 0) {
+          const firstEstate = memberships[0].estateId;
+          setSelectedEstateId(firstEstate);
+        }
 
       return response;
     } catch (error) {
@@ -279,6 +310,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
         logout,
         isLoading,
         refreshToken,
+        sessionChecked,
       }}
     >
       {children}
@@ -386,6 +418,7 @@ const AdminSidebar = ({
     { id: "estates", label: "Estates", icon: Building2 },
     { id: "users", label: "Users", icon: Users },
     { id: "providers", label: "Providers", icon: UserCheck },
+    { id: "companies", label: "Companies", icon: Briefcase },
     { id: "stores", label: "Stores", icon: Store },
     { id: "categories", label: "Categories", icon: Tags },
     { id: "marketplace", label: "Marketplace", icon: ShoppingBag },
@@ -520,6 +553,7 @@ const UsersManagement = () => {
     phone: "",
     password: "",
     globalRole: "",
+    company: "",
   });
   const [showMemberships, setShowMemberships] = useState(false);
   const [membershipUser, setMembershipUser] = useState<any>(null);
@@ -527,6 +561,7 @@ const UsersManagement = () => {
     estateId: "",
     role: "",
   });
+  const [previewUser, setPreviewUser] = useState<any>(null);
 
   const { toast } = useToast();
   const { user } = useAdminAuth();
@@ -569,6 +604,12 @@ const UsersManagement = () => {
     enabled: showMemberships || isSuperAdmin, // Load for super admins or when managing memberships
   });
 
+  // Companies (for provider dropdown)
+  const { data: companies = [], isLoading: isCompaniesLoading } = useQuery({
+    queryKey: ["admin-companies"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/companies"),
+  });
+
   // Handle view mode changes
   const handleViewModeChange = (mode: "global" | "estate") => {
     setViewMode(mode);
@@ -603,13 +644,13 @@ const UsersManagement = () => {
     enabled: !!membershipUser,
   });
 
-  // Toggle active/inactive – use /api/admin/bridge/users/{id} (PostgreSQL)
+  // Toggle active/inactive – use /api/admin/users/{id}
   const toggleUserStatusMutation = useMutation({
     mutationFn: ({ userId, isActive }: { userId: string; isActive: boolean }) =>
-      adminApiRequest("PATCH", `/api/admin/bridge/users/${userId}`, { isActive }),
+      adminApiRequest("PATCH", `/api/admin/users/${userId}`, { isActive }),
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       toast({
         title: `User ${variables.isActive ? "activated" : "deactivated"} successfully`,
       });
@@ -643,13 +684,13 @@ const UsersManagement = () => {
     },
   });
 
-  // Update user – PATCH to /api/admin/bridge/users/{id} (PostgreSQL)
+  // Update user – PATCH to /api/admin/users/{id}
   const updateUserMutation = useMutation({
     mutationFn: ({ userId, userData }: { userId: string; userData: any }) =>
-      adminApiRequest("PATCH", `/api/admin/bridge/users/${userId}`, userData),
+      adminApiRequest("PATCH", `/api/admin/users/${userId}`, userData),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       setEditingUser(null);
       resetForm();
       toast({ title: "User updated successfully" });
@@ -676,6 +717,7 @@ const UsersManagement = () => {
       phone: "",
       password: "",
       globalRole: "",
+      company: "",
     });
   };
 
@@ -687,6 +729,7 @@ const UsersManagement = () => {
       phone: user.phone || "",
       password: "",
       globalRole: user.globalRole || "",
+      company: user.globalRole === "provider" ? user.company || "" : "",
     });
   };
 
@@ -734,7 +777,13 @@ const UsersManagement = () => {
 
   const handleSubmit = () => {
     const { password, ...baseData } = formData;
-    const userData = password ? { ...baseData, password } : baseData; // Only include password if provided
+    const payload = { ...baseData };
+    if (payload.globalRole !== "provider") {
+      delete (payload as any).company;
+    } else if (!payload.company) {
+      delete (payload as any).company; // treat "Independent" as no company
+    }
+    const userData = password ? { ...payload, password } : payload; // Only include password if provided
 
     if (editingUser) {
       // Handle both MongoDB (_id) and PostgreSQL (id) user objects
@@ -849,24 +898,27 @@ const UsersManagement = () => {
                 {/* Estate Selector - Shows when Estate mode is active */}
                 {viewMode === "estate" && (
                   <Select value={selectedEstateId} onValueChange={handleEstateSelect}>
-                    <SelectTrigger className="w-full sm:w-[280px]" data-testid="select-estate-filter">
-                      <SelectValue placeholder="Select an estate..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {estates && estates.length > 0 ? (
-                        estates.map((estate: any) => (
-                          <SelectItem key={estate._id} value={estate._id}>
+                  <SelectTrigger className="w-full sm:w-[280px]" data-testid="select-estate-filter">
+                    <SelectValue placeholder="Select an estate..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {estates && estates.length > 0 ? (
+                      estates.map((estate: any, idx: number) => {
+                        const estateId = estate._id || estate.id || estate.slug || `estate-${idx}`;
+                        return (
+                          <SelectItem key={estateId} value={estateId}>
                             <div className="flex flex-col">
                               <span className="font-medium">{estate.name}</span>
                               <span className="text-xs text-muted-foreground">{estate.address}</span>
                             </div>
                           </SelectItem>
-                        ))
-                      ) : (
-                        <SelectItem value="none" disabled>
-                          No estates available
-                        </SelectItem>
-                      )}
+                        );
+                      })
+                    ) : (
+                      <SelectItem value="none" disabled>
+                        No estates available
+                      </SelectItem>
+                    )}
                     </SelectContent>
                   </Select>
                 )}
@@ -954,8 +1006,10 @@ const UsersManagement = () => {
               </TableHeader>
               <TableBody>
                 
-                   {rows.map((user: any) => (
-  <TableRow key={user.id || user._id || user.email}>
+                   {rows.map((user: any) => {
+  const userId = user.id || user._id || user.email;
+  return (
+  <TableRow key={userId}>
                     <TableCell className="font-medium">{user.name}</TableCell>
                     <TableCell>{user.email}</TableCell>
                     <TableCell>{user.phone}</TableCell>
@@ -965,6 +1019,11 @@ const UsersManagement = () => {
                           user.globalRole === "super_admin"
                             ? "default"
                             : "secondary"
+                        }
+                        className={
+                          user.globalRole === "resident"
+                            ? "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-200 border-purple-200 dark:border-purple-700"
+                            : undefined
                         }
                       >
                         {user.globalRole || "User"}
@@ -990,7 +1049,7 @@ const UsersManagement = () => {
                               variant="outline"
                               size="sm"
                               onClick={() => handleOpenEditDialog(user)}
-                              data-testid={`button-edit-user-${user._id}`}
+                              data-testid={`button-edit-user-${userId}`}
                             >
                               <Edit className="w-4 h-4" />
                             </Button>
@@ -1009,7 +1068,7 @@ const UsersManagement = () => {
                                 setMembershipUser(user);
                                 setShowMemberships(true);
                               }}
-                              data-testid={`button-estates-user-${user._id}`}
+                              data-testid={`button-estates-user-${userId}`}
                             >
                               <Building2 className="w-4 h-4" />
                             </Button>
@@ -1027,10 +1086,13 @@ const UsersManagement = () => {
                               }
                               size="sm"
                               onClick={() =>
-                                handleToggleUserStatus(user._id, user.isActive)
+                                handleToggleUserStatus(
+                                  userId,
+                                  user.isActive,
+                                )
                               }
                               disabled={toggleUserStatusMutation.isPending}
-                              data-testid={`button-toggle-user-${user._id}`}
+                              data-testid={`button-toggle-user-${userId}`}
                             >
                               {user.isActive ? (
                                 <XCircle className="w-4 h-4" />
@@ -1047,10 +1109,26 @@ const UsersManagement = () => {
                             </p>
                           </TooltipContent>
                         </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setPreviewUser(user)}
+                              data-testid={`button-preview-user-${userId}`}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Preview user details</p>
+                          </TooltipContent>
+                        </Tooltip>
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                );
+                })}
                 {(!users || users.length === 0) && (
                   <TableRow>
                     <TableCell
@@ -1113,6 +1191,33 @@ const UsersManagement = () => {
                 }
                 data-testid="input-user-phone"
               />
+              {formData.globalRole === "provider" && (
+                <Select
+                  value={formData.company || "independent"}
+                  onValueChange={(value) =>
+                    setFormData({
+                      ...formData,
+                      company: value === "independent" ? "" : value,
+                    })
+                  }
+                  disabled={isCompaniesLoading}
+                >
+                  <SelectTrigger data-testid="select-user-company">
+                    <SelectValue placeholder="Select company" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="independent">Independent</SelectItem>
+                    {Array.isArray(companies) &&
+                      companies
+                        .filter((company: any) => !!company?.name)
+                        .map((company: any) => (
+                          <SelectItem key={company.id} value={company.name}>
+                            {company.name}
+                          </SelectItem>
+                        ))}
+                  </SelectContent>
+                </Select>
+              )}
               {!editingUser && (
                 <Input
                   placeholder="Password"
@@ -1127,14 +1232,18 @@ const UsersManagement = () => {
               <Select
                 value={formData.globalRole}
                 onValueChange={(value) =>
-                  setFormData({ ...formData, globalRole: value })
+                  setFormData({
+                    ...formData,
+                    globalRole: value,
+                    company: value === "provider" ? formData.company : "",
+                  })
                 }
               >
                 <SelectTrigger data-testid="select-user-role">
                   <SelectValue placeholder="Select Role" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">No Global Role</SelectItem> // ← ✅
+                  <SelectItem value="none">No Global Role</SelectItem>
                   <SelectItem value="resident">Resident</SelectItem>
                   <SelectItem value="provider">Provider</SelectItem>
                   <SelectItem value="estate_admin">Estate Admin</SelectItem>
@@ -1243,11 +1352,14 @@ const UsersManagement = () => {
                       <SelectValue placeholder="Select Estate" />
                     </SelectTrigger>
                     <SelectContent>
-                      {estates?.map((estate: any) => (
-                        <SelectItem key={estate._id} value={estate._id}>
-                          {estate.name}
-                        </SelectItem>
-                      ))}
+                      {estates?.map((estate: any, idx: number) => {
+                        const estateId = estate._id || estate.id || String(idx);
+                        return (
+                          <SelectItem key={estateId} value={estateId}>
+                            {estate.name}
+                          </SelectItem>
+                        );
+                      })}
                     </SelectContent>
                   </Select>
                   <Select
@@ -1304,6 +1416,76 @@ const UsersManagement = () => {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Preview User Dialog */}
+        <Dialog open={!!previewUser} onOpenChange={(open) => !open && setPreviewUser(null)}>
+          <DialogContent className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-3xl w-[90vw] max-h-[85vh] overflow-auto p-0 bg-transparent border-0 shadow-none">
+            <div className="absolute inset-0 bg-gradient-to-br from-indigo-700 via-purple-700 to-blue-700" />
+            <DialogHeader>
+              <DialogTitle className="sr-only">User Preview</DialogTitle>
+              <DialogDescription className="sr-only">Quick view of user details.</DialogDescription>
+            </DialogHeader>
+
+            <div className="relative px-6 pb-6 pt-6">
+              <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-lg border p-6 space-y-6">
+                <div className="flex items-start gap-4">
+                  <div className="w-20 h-20 rounded-full overflow-hidden border-4 border-white dark:border-gray-900 shadow-lg bg-gray-200 dark:bg-gray-800 flex items-center justify-center text-sm text-muted-foreground">
+                    {previewUser?.name?.[0]?.toUpperCase() || "U"}
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {previewUser?.name || "Unnamed User"}
+                      </h2>
+                      <Badge variant={previewUser?.isActive ? "default" : "destructive"}>
+                        {previewUser?.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <p className="text-sm text-muted-foreground break-all">
+                        {previewUser?.email || "No email"}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {previewUser?.phone || "No phone"}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">
+                        {previewUser?.globalRole || previewUser?.role || "User"}
+                      </Badge>
+                      {previewUser?.lastLoginAt && (
+                        <span className="text-xs text-muted-foreground">
+                          Last login: {new Date(previewUser.lastLoginAt).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="rounded-xl border bg-gray-50 dark:bg-gray-800/50 p-4">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Status</p>
+                    <p className="text-sm text-muted-foreground">
+                      {previewUser?.isActive ? "Active account" : "Inactive account"}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border bg-gray-50 dark:bg-gray-800/50 p-4">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Role</p>
+                    <p className="text-sm text-muted-foreground">
+                      {previewUser?.globalRole || previewUser?.role || "User"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <Button variant="outline" onClick={() => setPreviewUser(null)}>
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </TooltipProvider>
   );
@@ -1316,8 +1498,20 @@ const ProvidersManagement = () => {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [companyFilter, setCompanyFilter] = useState("all");
   const [showAddProvider, setShowAddProvider] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<any>(null);
   const [viewMode, setViewMode] = useState<"global" | "estate">("global");
   const [selectedEstateId, setSelectedEstateId] = useState("");
+  const [previewProvider, setPreviewProvider] = useState<any>(null);
+  const [previewImage, setPreviewImage] = useState<string>("");
+  const [previewData, setPreviewData] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    company: "",
+    categories: [] as string[],
+    experience: 0,
+    description: "",
+  });
 
   const { toast } = useToast();
   const { user } = useAdminAuth();
@@ -1365,13 +1559,13 @@ const ProvidersManagement = () => {
       categories: [],
       experience: 0,
       description: "",
-      isApproved: true,
+      isApproved: false,
     },
   });
 
   const { data: providers, isLoading } = useQuery({
     queryKey: [
-      "/api/admin/bridge/users",
+      "/api/admin/users",
       {
         role: "provider",
         search,
@@ -1381,11 +1575,84 @@ const ProvidersManagement = () => {
       },
     ],
     queryFn: () =>
-      adminApiRequest("GET", "/api/admin/bridge/users", {
+      adminApiRequest("GET", "/api/admin/users/all", {
         role: "provider",
         search: search || undefined,
       }),
   });
+
+  const { data: companies = [], isLoading: isCompaniesLoading } = useQuery({
+    queryKey: ["admin-companies"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/companies"),
+  });
+
+  // Memberships cache for provider->estate mapping
+  const { data: memberships = [] } = useQuery({
+    queryKey: ["admin-memberships"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/memberships"),
+    staleTime: 10_000,
+  });
+
+  // Service categories come from the Categories module so every dropdown stays in sync
+  const { data: categoriesList = [] } = useQuery({
+    queryKey: ["/api/admin/categories"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/categories"),
+  });
+  const categoryOptions =
+    Array.isArray(categoriesList) && categoriesList.length > 0
+      ? categoriesList
+          .filter((c: any) => c?.key || c?.name)
+          .map((c: any) => ({
+            value: c.key || c.name,
+            label: c.name || c.key,
+          }))
+      : [
+          { value: "electrician", label: "Electrician" },
+          { value: "plumber", label: "Plumber" },
+          { value: "carpenter", label: "Carpenter" },
+          { value: "market_runner", label: "Market Runner" },
+        ];
+  const assignEstateMutation = useMutation({
+    mutationFn: ({ providerId, estateId }: { providerId: string; estateId: string }) =>
+      adminApiRequest("POST", "/api/admin/memberships", {
+        userId: providerId,
+        estateId,
+        role: "provider",
+      }),
+    onSuccess: () => {
+      toast({ title: "Provider assigned to estate" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-memberships"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error assigning estate",
+        description: error.response?.data?.error || "Failed to assign estate",
+        variant: "destructive",
+      });
+    },
+  });
+  const removeEstateMutation = useMutation({
+    mutationFn: ({ providerId, estateId }: { providerId: string; estateId: string }) =>
+      adminApiRequest("DELETE", `/api/admin/memberships/${providerId}/${estateId}`),
+    onSuccess: () => {
+      toast({ title: "Estate removed from provider" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-memberships"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error removing estate",
+        description: error.response?.data?.error || "Failed to remove estate",
+        variant: "destructive",
+      });
+    },
+  });
+  const companyOptions = Array.isArray(companies)
+    ? companies.filter((company: any) => !!company?.name)
+    : [];
 
   const approveMutation = useMutation({
     mutationFn: ({
@@ -1395,11 +1662,14 @@ const ProvidersManagement = () => {
       providerId: string;
       approved: boolean;
     }) =>
-      adminApiRequest("PATCH", `/api/admin/bridge/providers/${providerId}/approval`, {
-        approved,
-      }),
+      adminApiRequest(
+        "PATCH",
+        `/api/admin/providers/${providerId}/approval`,
+        { approved },
+      ),
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/providers"] });
       toast({
         title: `Provider ${variables.approved ? "approved" : "rejected"} successfully`,
       });
@@ -1418,8 +1688,11 @@ const ProvidersManagement = () => {
     mutationFn: (providerData: CreateProviderInput) =>
       adminApiRequest("POST", "/api/admin/providers", providerData),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/providers"] });
       setShowAddProvider(false);
+      setEditingProvider(null);
       providerForm.reset();
       toast({ title: "Provider created successfully" });
     },
@@ -1440,22 +1713,140 @@ const ProvidersManagement = () => {
     approveMutation.mutate({ providerId, approved });
   };
 
+  const updateProviderFormMutation = useMutation({
+    mutationFn: ({ providerId, data }: { providerId: string; data: Partial<CreateProviderInput> }) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/providers"] });
+      setEditingProvider(null);
+      setShowAddProvider(false);
+      providerForm.reset();
+      toast({ title: "Provider updated successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error updating provider",
+        description: error.response?.data?.error || "Failed to update provider",
+        variant: "destructive",
+      });
+    },
+  });
+
   const onSubmit = (data: CreateProviderInput) => {
-    createProviderMutation.mutate(data);
+    if (editingProvider) {
+      const providerId = editingProvider.id || editingProvider._id;
+      updateProviderFormMutation.mutate({ providerId, data });
+    } else {
+      createProviderMutation.mutate(data);
+    }
   };
 
   // Client-side filtering for approval status
-  const filteredProviders = providers?.filter((provider: any) => {
-    if (approvalFilter === "all") return true;
-    if (approvalFilter === "true") return provider.isApproved === true;
-    if (approvalFilter === "false") return provider.isApproved === false;
-    return true;
-  });
+  const filteredProviders = providers
+    ?.filter((provider: any) => {
+      if (approvalFilter === "true") return provider.isApproved === true;
+      if (approvalFilter === "false") return provider.isApproved === false;
+      return true;
+    })
+    ?.filter((provider: any) => {
+      if (categoryFilter === "all") return true;
+      return Array.isArray(provider.categories) && provider.categories.includes(categoryFilter);
+    })
+    ?.filter((provider: any) => {
+      if (companyFilter === "all") return true;
+      if (companyFilter === "independent") return !provider.company;
+      return (provider.company || "").toLowerCase() === companyFilter.toLowerCase();
+    })
+    ?.filter((provider: any) => {
+      const needle = search.trim().toLowerCase();
+      if (!needle) return true;
+      return (
+        provider.name?.toLowerCase().includes(needle) ||
+        provider.email?.toLowerCase().includes(needle) ||
+        provider.categories?.some((c: string) => c.toLowerCase().includes(needle))
+      );
+    });
 
   // Get unique companies for filter (all providers will show as Independent since PostgreSQL doesn't have company field yet)
   const uniqueCompanies = Array.from(
     new Set(filteredProviders?.map((p: any) => p.company).filter(Boolean))
   );
+
+  const updateProviderMutation = useMutation({
+    mutationFn: ({
+      providerId,
+      data,
+    }: {
+      providerId: string;
+      data: Partial<CreateProviderInput> & Record<string, any>;
+    }) => adminApiRequest("PATCH", `/api/admin/users/${providerId}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      setPreviewProvider(null);
+      toast({ title: "Provider updated successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error updating provider",
+        description: error.response?.data?.error || "Failed to update provider",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const openPreview = (provider: any) => {
+    setPreviewProvider(provider);
+    setPreviewImage(provider.avatar || "");
+    setPreviewData({
+      name: provider.name || "",
+      email: provider.email || "",
+      phone: provider.phone || "",
+      company: provider.company || "",
+      categories: Array.isArray(provider.categories) ? provider.categories : [],
+      experience: provider.experience || 0,
+      description: provider.description || "",
+    });
+  };
+
+  const openEditProvider = (provider: any) => {
+    setEditingProvider(provider);
+    setShowAddProvider(true);
+    providerForm.reset({
+      name: provider.name || "",
+      email: provider.email || "",
+      phone: provider.phone || "",
+      password: "",
+      company: provider.company || "",
+      categories: Array.isArray(provider.categories) ? provider.categories : [],
+      experience: provider.experience || 0,
+      description: provider.description || "",
+      isApproved: !!provider.isApproved,
+    });
+  };
+
+  const handleSavePreview = () => {
+    if (!previewProvider) return;
+    const providerId = previewProvider.id || previewProvider._id;
+    if (!providerId) {
+      toast({
+        title: "Update failed",
+        description: "Missing provider identifier",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    updateProviderMutation.mutate({
+      providerId,
+      data: {
+        ...previewData,
+        avatar: previewImage,
+      },
+    });
+  };
 
   if (isLoading) {
     return (
@@ -1538,14 +1929,17 @@ const ProvidersManagement = () => {
                   </SelectTrigger>
                   <SelectContent>
                     {estates && estates.length > 0 ? (
-                      estates.map((estate: any) => (
-                        <SelectItem key={estate._id} value={estate._id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{estate.name}</span>
-                            <span className="text-xs text-muted-foreground">{estate.address}</span>
-                          </div>
-                        </SelectItem>
-                      ))
+                      estates.map((estate: any, idx: number) => {
+                        const estateId = estate?._id || estate?.id || `estate-${idx}`;
+                        return (
+                          <SelectItem key={estateId} value={String(estateId)}>
+                            <div className="flex flex-col">
+                              <span className="font-medium">{estate.name}</span>
+                              <span className="text-xs text-muted-foreground">{estate.address}</span>
+                            </div>
+                          </SelectItem>
+                        );
+                      })
                     ) : (
                       <SelectItem value="none" disabled>
                         No estates available
@@ -1623,10 +2017,11 @@ const ProvidersManagement = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Categories</SelectItem>
-                <SelectItem value="electrician">Electrician</SelectItem>
-                <SelectItem value="plumber">Plumber</SelectItem>
-                <SelectItem value="carpenter">Carpenter</SelectItem>
-                <SelectItem value="market_runner">Market Runner</SelectItem>
+                {categoryOptions.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <Select value={companyFilter} onValueChange={setCompanyFilter}>
@@ -1639,11 +2034,14 @@ const ProvidersManagement = () => {
               <SelectContent>
                 <SelectItem value="all">All Companies</SelectItem>
                 <SelectItem value="independent">Independent</SelectItem>
-                {providers && Array.from(new Set(providers.map((p: any) => p.company).filter(Boolean))).map((company: any) => (
-                  <SelectItem key={company} value={company}>
-                    {company}
-                  </SelectItem>
-                ))}
+                {companies &&
+                  companies
+                    .filter((c: any) => !!c?.name)
+                    .map((company: any) => (
+                      <SelectItem key={company.id || company.name} value={company.name}>
+                        {company.name}
+                      </SelectItem>
+                    ))}
               </SelectContent>
             </Select>
           </div>
@@ -1667,10 +2065,12 @@ const ProvidersManagement = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredProviders?.map((provider: any) => (
+              {filteredProviders?.map((provider: any, idx: number) => {
+                const providerId = provider.id || provider._id || `provider-${idx}`;
+                return (
                 <TableRow
-                  key={provider.id}
-                  data-testid={`row-provider-${provider.id}`}
+                  key={providerId}
+                  data-testid={`row-provider-${providerId}`}
                 >
                   <TableCell className="font-medium">
                     {provider.name}
@@ -1710,22 +2110,69 @@ const ProvidersManagement = () => {
                     </div>
                   </TableCell>
                   <TableCell>{provider.totalJobs || 0}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={provider.isApproved ? "default" : "destructive"}
+                <TableCell>
+                  <Badge
+                    variant={provider.isApproved ? "default" : "destructive"}
+                  >
+                    {provider.isApproved ? "Approved" : "Pending"}
+                  </Badge>
+                  {/* Show assigned estates */}
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {memberships
+                      ?.filter((m: any) => m.user_id === providerId || m.userId === providerId)
+                      ?.map((m: any) => {
+                        const estateId = m.estate_id || m.estateId;
+                        const estate = estates?.find((e: any) => (e._id || e.id) === estateId);
+                        const label = estate?.name || estateId;
+                        return (
+                          <Badge
+                            key={`${providerId}-${estateId}`}
+                            variant="outline"
+                            className="text-xs flex items-center gap-1"
+                          >
+                            {label}
+                            <button
+                              type="button"
+                              className="text-red-500 hover:text-red-700"
+                              onClick={() =>
+                                removeEstateMutation.mutate({ providerId, estateId: String(estateId) })
+                              }
+                              aria-label={`Remove ${label}`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </Badge>
+                        );
+                      })}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex space-x-2">
+                    <Select
+                      onValueChange={(value) => assignEstateMutation.mutate({ providerId, estateId: value })}
+                      disabled={!estates?.length || assignEstateMutation.isPending}
                     >
-                      {provider.isApproved ? "Approved" : "Pending"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex space-x-2">
-                      {!provider.isApproved ? (
-                        <Button
-                          variant="default"
-                          size="sm"
-                          onClick={() => handleApproval(provider.id, true)}
+                      <SelectTrigger className="w-40" data-testid={`select-assign-estate-${providerId}`}>
+                        <SelectValue placeholder="Assign estate" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {estates?.map((estate: any, estateIdx: number) => {
+                          const estateId = estate?._id || estate?.id || `estate-${estateIdx}`;
+                          return (
+                            <SelectItem key={estateId} value={String(estateId)}>
+                              {estate.name || "Unnamed estate"}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                    {!provider.isApproved ? (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => handleApproval(providerId, true)}
                           disabled={approveMutation.isPending}
-                          data-testid={`button-approve-provider-${provider.id}`}
+                          data-testid={`button-approve-provider-${providerId}`}
                         >
                           <CheckCircle className="w-4 h-4" />
                         </Button>
@@ -1733,9 +2180,9 @@ const ProvidersManagement = () => {
                         <Button
                           variant="destructive"
                           size="sm"
-                          onClick={() => handleApproval(provider.id, false)}
+                          onClick={() => handleApproval(providerId, false)}
                           disabled={approveMutation.isPending}
-                          data-testid={`button-reject-provider-${provider.id}`}
+                          data-testid={`button-reject-provider-${providerId}`}
                         >
                           <XCircle className="w-4 h-4" />
                         </Button>
@@ -1743,14 +2190,23 @@ const ProvidersManagement = () => {
                       <Button
                         variant="outline"
                         size="sm"
-                        data-testid={`button-edit-provider-${provider.id}`}
+                        onClick={() => openEditProvider(provider)}
+                        data-testid={`button-edit-provider-${providerId}`}
                       >
                         <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openPreview(provider)}
+                        data-testid={`button-preview-provider-${providerId}`}
+                      >
+                        <Eye className="w-4 h-4" />
                       </Button>
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+              );})}
               {(!filteredProviders || filteredProviders.length === 0) && (
                 <TableRow>
                   <TableCell
@@ -1766,20 +2222,137 @@ const ProvidersManagement = () => {
         </CardContent>
       </Card>
 
+      {/* Preview Provider Dialog (read-only profile, profile-style layout) */}
+      <Dialog
+        open={!!previewProvider}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreviewProvider(null);
+          }
+        }}
+      >
+        <DialogContent className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-4xl w-[90vw] max-h-[85vh] overflow-auto p-0 bg-transparent border-0 shadow-none">
+          <div className="absolute inset-0 bg-gradient-to-br from-indigo-700 via-purple-700 to-blue-700" />
+
+          <DialogHeader>
+            <DialogTitle className="sr-only">Provider Profile</DialogTitle>
+            <DialogDescription className="sr-only">
+              Overview of provider details from the database.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="relative px-6 pb-6 pt-6">
+            <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-lg border p-6">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-white dark:border-gray-900 shadow-lg">
+                    {previewImage ? (
+                    <img src={previewImage} alt="Profile" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground bg-gray-200 dark:bg-gray-800">
+                        No image
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {previewData.name || "Unnamed Provider"}
+                      </h2>
+                      <Badge variant={previewProvider?.isApproved ? "default" : "secondary"}>
+                        {previewProvider?.isApproved ? "Approved" : "Pending"}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {previewData.company || "Independent"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {previewProvider?.location || "Location not provided"} ·{" "}
+                      <a
+                        href={previewData.email ? `mailto:${previewData.email}` : "#"}
+                        className="text-blue-600 dark:text-blue-400"
+                      >
+                        Contact info
+                      </a>
+                    </p>
+                    <div className="flex items-center gap-4 text-sm text-blue-600 dark:text-blue-400">
+                      <span>{previewProvider?.followers || 0} followers</span>
+                      <span>{previewProvider?.connections || previewProvider?.totalJobs || 0} jobs</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setPreviewProvider(null)}>Close</Button>
+                  <Button variant="outline" size="sm">Add note</Button>
+                  <Button variant="outline" size="sm">Message</Button>
+                  <Button variant="outline" size="sm">More</Button>
+                </div>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-xl border bg-gray-50 dark:bg-gray-800/50 p-4">
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Open to work</p>
+                  <p className="text-sm text-muted-foreground">
+                    {previewData.categories.length > 0
+                      ? previewData.categories.map((c) => c.replace("_", " ")).join(", ")
+                      : "Categories not specified"}
+                  </p>
+                </div>
+                <div className="rounded-xl border bg-gray-50 dark:bg-gray-800/50 p-4">
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Experience</p>
+                  <p className="text-sm text-muted-foreground">
+                    {previewData.experience || 0} years · {previewData.description || "No summary provided"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Email</p>
+                  <p className="font-medium">{previewData.email || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Phone</p>
+                  <p className="font-medium">{previewData.phone || "—"}</p>
+                </div>
+                <div className="md:col-span-2">
+                  <p className="text-xs text-muted-foreground mb-2">Categories</p>
+                  <div className="flex flex-wrap gap-2">
+                    {previewData.categories.length > 0 ? (
+                      previewData.categories.map((c) => (
+                        <Badge key={c} variant="outline">
+                          {c.replace("_", " ")}
+                        </Badge>
+                      ))
+                    ) : (
+                      <span className="text-sm text-muted-foreground">No categories</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Add Provider Dialog */}
       <Dialog
-        open={showAddProvider}
+        open={showAddProvider || !!editingProvider}
         onOpenChange={(open) => {
           setShowAddProvider(open);
-          if (!open) providerForm.reset();
+          if (!open) {
+            setEditingProvider(null);
+            providerForm.reset();
+          }
         }}
       >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Add New Service Provider</DialogTitle>
+            <DialogTitle>{editingProvider ? "Edit Service Provider" : "Add New Service Provider"}</DialogTitle>
             <DialogDescription>
-              Create a new service provider account. They will be automatically
-              approved.
+              {editingProvider
+                ? "Update the provider information below."
+                : "Create a new service provider account. New providers start as pending until you approve them."}
             </DialogDescription>
           </DialogHeader>
 
@@ -1845,6 +2418,7 @@ const ProvidersManagement = () => {
                       </FormItem>
                     )}
                   />
+                {!editingProvider && (
                   <FormField
                     control={providerForm.control}
                     name="password"
@@ -1863,6 +2437,7 @@ const ProvidersManagement = () => {
                       </FormItem>
                     )}
                   />
+                )}
                 </div>
 
                 <FormField
@@ -1870,14 +2445,28 @@ const ProvidersManagement = () => {
                   name="company"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Company Name</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder="Enter company name (optional)"
-                          {...field}
-                          data-testid="input-provider-company"
-                        />
-                      </FormControl>
+                      <FormLabel>Company</FormLabel>
+                      <Select
+                        value={field.value || "independent"}
+                        onValueChange={(value) =>
+                          field.onChange(value === "independent" ? "" : value)
+                        }
+                        disabled={isCompaniesLoading}
+                      >
+                        <FormControl>
+                          <SelectTrigger data-testid="select-provider-company">
+                            <SelectValue placeholder="Select company" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="independent">Independent</SelectItem>
+                          {companyOptions.map((company: any) => (
+                            <SelectItem key={company.id || company._id || company.name} value={company.name}>
+                              {company.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -1929,42 +2518,73 @@ const ProvidersManagement = () => {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Service Categories *</FormLabel>
-                      <div className="grid grid-cols-2 gap-2 mt-2">
-                        {[
-                          "electrician",
-                          "plumber",
-                          "carpenter",
-                          "market_runner",
-                        ].map((category) => (
-                          <div
-                            key={category}
-                            className="flex items-center space-x-2"
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-between"
                           >
-                            <input
-                              type="checkbox"
-                              id={`category-${category}`}
-                              checked={field.value?.includes(category) || false}
-                              onChange={(e) => {
-                                const updatedCategories = e.target.checked
-                                  ? [...(field.value || []), category]
-                                  : (field.value || []).filter(
-                                      (c) => c !== category,
-                                    );
-                                field.onChange(updatedCategories);
-                              }}
-                              data-testid={`checkbox-category-${category}`}
-                            />
-                            <Label
-                              htmlFor={`category-${category}`}
-                              className="cursor-pointer"
-                            >
-                              {category
-                                .replace("_", " ")
-                                .replace(/\b\w/g, (l) => l.toUpperCase())}
-                            </Label>
-                          </div>
-                        ))}
-                      </div>
+                            {field.value?.length
+                              ? `${field.value.length} selected`
+                              : "Select categories"}
+                            <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-60" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          align="start"
+                          sideOffset={6}
+                          className="w-[calc(100%-16px)] sm:w-[600px] max-w-full p-0"
+                        >
+                          <ScrollArea className="max-h-56 sm:max-h-72 p-3">
+                            <div className="space-y-2">
+                              {categoryOptions.map((category) => {
+                                const categoryValue = category.value;
+                                const label = category.label;
+                                const checked = field.value?.includes(categoryValue);
+                                return (
+                                  <div key={categoryValue} className="flex items-center space-x-2">
+                                    <Checkbox
+                                      id={`category-${categoryValue}`}
+                                      checked={checked}
+                                      onCheckedChange={(checkedState) => {
+                                        const isChecked = checkedState === true;
+                                        const next = isChecked
+                                          ? Array.from(new Set([...(field.value || []), categoryValue]))
+                                          : (field.value || []).filter((c) => c !== categoryValue);
+                                        field.onChange(next);
+                                      }}
+                                      data-testid={`checkbox-category-${categoryValue}`}
+                                    />
+                                    <Label
+                                      htmlFor={`category-${categoryValue}`}
+                                      className="cursor-pointer"
+                                    >
+                                      {label}
+                                    </Label>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </ScrollArea>
+                        </PopoverContent>
+                      </Popover>
+                      {field.value?.length ? (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {field.value.map((category: any) => {
+                            const label =
+                              typeof category === "string"
+                                ? category.replace("_", " ")
+                                : category?.label || category?.value || "Category";
+                            const value = typeof category === "string" ? category : category?.value || label;
+                            return (
+                              <Badge key={value} variant="outline">
+                                {label}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                       <FormMessage />
                     </FormItem>
                   )}
@@ -1981,12 +2601,14 @@ const ProvidersManagement = () => {
                 </Button>
                 <Button
                   type="submit"
-                  disabled={createProviderMutation.isPending}
+                  disabled={createProviderMutation.isPending || updateProviderFormMutation.isPending}
                   data-testid="button-submit-provider"
                 >
-                  {createProviderMutation.isPending
-                    ? "Creating..."
-                    : "Create Provider"}
+                  {createProviderMutation.isPending || updateProviderFormMutation.isPending
+                    ? "Saving..."
+                    : editingProvider
+                      ? "Save changes"
+                      : "Create Provider"}
                 </Button>
               </DialogFooter>
             </form>
@@ -2010,13 +2632,15 @@ const CategoriesManagement = () => {
     icon: "",
     scope: "estate",
   });
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const emojiOptions = ["🔧","🧹","🛠️","⚡","🚰","🔌","📦","🧑‍🔧","🏠","🧰","🚿","✨","🧼","🧽","🪠","🪜","🔨","⛑️"];
 
   const { user } = useAdminAuth();
   const { toast } = useToast();
   const isSuperAdmin = user?.globalRole === "super_admin";
 
   const { data: categories, isLoading } = useQuery({
-    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/categories", { scope: scopeFilter }],
+    queryKey: ["/api/admin/categories", { scope: scopeFilter }],
     queryFn: () => {
       const params = new URLSearchParams();
       if (scopeFilter !== "all") params.set("scope", scopeFilter);
@@ -2091,11 +2715,20 @@ const CategoriesManagement = () => {
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingCategory) {
-      updateCategoryMutation.mutate({ id: editingCategory._id, ...formData });
+      const categoryId = editingCategory._id || editingCategory.id;
+      if (!categoryId) {
+        toast({ title: "Category id missing", variant: "destructive" });
+        return;
+      }
+      updateCategoryMutation.mutate({ id: categoryId, ...formData });
     }
   };
 
-  const handleDeleteCategory = (categoryId: string) => {
+  const handleDeleteCategory = (categoryId: string | undefined) => {
+    if (!categoryId) {
+      toast({ title: "Category id missing", variant: "destructive" });
+      return;
+    }
     if (
       confirm(
         "Are you sure you want to delete this category? This action cannot be undone.",
@@ -2219,8 +2852,8 @@ const CategoriesManagement = () => {
             <TableBody>
               {filteredCategories.map((category: any) => (
                 <TableRow
-                  key={category._id}
-                  data-testid={`row-category-${category._id}`}
+                  key={category._id || category.id}
+                  data-testid={`row-category-${category._id || category.id}`}
                 >
                   <TableCell>
                     <div className="flex items-center space-x-2">
@@ -2229,7 +2862,7 @@ const CategoriesManagement = () => {
                       )}
                       <span
                         className="font-medium"
-                        data-testid={`text-category-name-${category._id}`}
+                        data-testid={`text-category-name-${category._id || category.id}`}
                       >
                         {category.name}
                       </span>
@@ -2265,16 +2898,16 @@ const CategoriesManagement = () => {
                         variant="ghost"
                         size="sm"
                         onClick={() => handleOpenEditDialog(category)}
-                        data-testid={`button-edit-category-${category._id}`}
+                        data-testid={`button-edit-category-${category._id || category.id}`}
                       >
                         <Edit className="w-4 h-4" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleDeleteCategory(category._id)}
+                        onClick={() => handleDeleteCategory(category._id || category.id)}
                         className="text-red-600 hover:text-red-700"
-                        data-testid={`button-delete-category-${category._id}`}
+                        data-testid={`button-delete-category-${category._id || category.id}`}
                       >
                         <XCircle className="w-4 h-4" />
                       </Button>
@@ -2336,14 +2969,40 @@ const CategoriesManagement = () => {
             </div>
             <div>
               <label className="text-sm font-medium">Icon</label>
-              <Input
-                value={formData.icon}
-                onChange={(e) =>
-                  setFormData({ ...formData, icon: e.target.value })
-                }
-                placeholder="🔧 (optional emoji icon)"
-                data-testid="input-category-icon"
-              />
+              <Popover open={iconPickerOpen} onOpenChange={setIconPickerOpen}>
+                <PopoverTrigger asChild>
+                  <Input
+                    value={formData.icon}
+                    onChange={(e) =>
+                      setFormData({ ...formData, icon: e.target.value })
+                    }
+                    onFocus={() => setIconPickerOpen(true)}
+                    placeholder="🔧 (optional emoji icon)"
+                    data-testid="input-category-icon"
+                  />
+                </PopoverTrigger>
+                <PopoverContent
+                  align="start"
+                  sideOffset={6}
+                  className="w-[min(360px,calc(100vw-3rem))]"
+                >
+                  <div className="grid grid-cols-6 gap-2 text-left">
+                    {emojiOptions.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        className="text-xl p-2 rounded hover:bg-muted"
+                        onClick={() => {
+                          setFormData({ ...formData, icon: emoji });
+                          setIconPickerOpen(false);
+                        }}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
             {isSuperAdmin && (
               <div>
@@ -2430,14 +3089,40 @@ const CategoriesManagement = () => {
             </div>
             <div>
               <label className="text-sm font-medium">Icon</label>
-              <Input
-                value={formData.icon}
-                onChange={(e) =>
-                  setFormData({ ...formData, icon: e.target.value })
-                }
-                placeholder="🔧 (optional emoji icon)"
-                data-testid="input-edit-category-icon"
-              />
+              <Popover open={iconPickerOpen} onOpenChange={setIconPickerOpen}>
+                <PopoverTrigger asChild>
+                  <Input
+                    value={formData.icon}
+                    onChange={(e) =>
+                      setFormData({ ...formData, icon: e.target.value })
+                    }
+                    onFocus={() => setIconPickerOpen(true)}
+                    placeholder="🔧 (optional emoji icon)"
+                    data-testid="input-edit-category-icon"
+                  />
+                </PopoverTrigger>
+                <PopoverContent
+                  align="start"
+                  sideOffset={6}
+                  className="w-[min(360px,calc(100vw-3rem))]"
+                >
+                  <div className="grid grid-cols-6 gap-2 text-left">
+                    {emojiOptions.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        className="text-xl p-2 rounded hover:bg-muted"
+                        onClick={() => {
+                          setFormData({ ...formData, icon: emoji });
+                          setIconPickerOpen(false);
+                        }}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
             <DialogFooter>
               <Button
@@ -2516,17 +3201,20 @@ const MarketplaceManagement = () => {
       "${import.meta.env.VITE_API_URL}/api/admin/marketplace",
       { category: categoryFilter, vendor: vendorFilter, search },
     ],
+    queryFn: () => adminApiRequest("GET", "/api/admin/marketplace"),
     enabled: true,
   });
 
   // Get categories and vendors for filtering
   const { data: categories } = useQuery({
-    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/categories"],
+    queryKey: ["/api/admin/categories"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/categories"),
     enabled: true,
   });
 
   const { data: vendors } = useQuery({
     queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/providers"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/providers"),
     enabled: true,
   });
 
@@ -2595,8 +3283,18 @@ const MarketplaceManagement = () => {
 
   const handleEditSubmit = (data: UpdateMarketplaceItemInput) => {
     if (editingItem) {
+      const itemId = editingItem._id || editingItem.id;
+      if (!itemId) {
+        toast({
+          title: "Unable to update item",
+          description: "Missing item identifier for this record",
+          variant: "destructive",
+        });
+        return;
+      }
+
       updateItemMutation.mutate({
-        id: editingItem._id,
+        id: itemId,
         ...data,
       });
     }
@@ -3582,9 +4280,40 @@ const PostgreSQLBridgeStats = () => {
 // Dashboard Stats Component
 const DashboardStats = () => {
   const { data: stats, isLoading } = useQuery({
-    queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/dashboard/stats"],
+    queryKey: ["/api/admin/dashboard/stats"],
     queryFn: () => adminApiRequest("GET", "/api/admin/dashboard/stats"),
   });
+  const { data: bridgeStats } = useQuery({
+    queryKey: ["/api/admin/bridge/stats"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/bridge/stats"),
+    staleTime: 30_000,
+  });
+  const { data: allUsers = [] } = useQuery({
+    queryKey: ["/api/admin/users/all"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/users/all"),
+  });
+  const { data: allEstates = [] } = useQuery({
+    queryKey: ["/api/admin/estates"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
+  });
+
+  const totalProviders =
+    stats?.totalProviders ?? bridgeStats?.users?.totalProviders ?? 0;
+  const totalResidents =
+    stats?.totalResidents ?? bridgeStats?.users?.totalResidents ?? 0;
+  const pendingApprovals =
+    stats?.pendingApprovals ?? bridgeStats?.users?.pendingProviders ?? 0;
+  const totalRequests =
+    stats?.totalRequests ?? bridgeStats?.serviceRequests?.total ?? 0;
+  const activeRequests =
+    stats?.activeRequests ??
+    bridgeStats?.serviceRequests?.pending ??
+    0;
+  const totalUsers =
+    (Array.isArray(allUsers) ? allUsers.length : undefined) ??
+    stats?.totalUsers ??
+    totalProviders + totalResidents;
+  const activeEstatesCount = Array.isArray(allEstates) ? allEstates.length : stats?.totalEstates ?? 0;
 
   if (isLoading) {
     return (
@@ -3607,31 +4336,27 @@ const DashboardStats = () => {
   const statCards = [
     {
       title: "Total Users",
-      value: stats?.totalUsers || 0,
+      value: totalUsers,
       icon: Users,
-      change: "+12.5%",
-      trend: "up",
+      change: "+0%",
     },
     {
       title: "Active Estates",
-      value: stats?.totalEstates || 0,
+      value: activeEstatesCount,
       icon: Building2,
-      change: "+3.2%",
-      trend: "up",
-    },
-    {
-      title: "Service Providers",
-      value: stats?.totalProviders || 0,
-      icon: UserCheck,
-      change: "+8.1%",
-      trend: "up",
+      change: "+0%",
     },
     {
       title: "Total Revenue",
-      value: `₦${(stats?.totalRevenue || 0).toLocaleString()}`,
+      value: `NGN ${(stats?.totalRevenue ?? 0).toLocaleString()}`,
       icon: DollarSign,
-      change: "+15.3%",
-      trend: "up",
+      change: "+0%",
+    },
+    {
+      title: "Active Requests",
+      value: activeRequests,
+      icon: TrendingUp,
+      change: "+0%",
     },
   ];
 
@@ -3658,12 +4383,10 @@ const DashboardStats = () => {
                   <Icon className="w-6 h-6 text-primary" />
                 </div>
               </div>
-              <div className="flex items-center mt-2">
+              <div className="flex items-center mt-2 text-sm text-muted-foreground">
                 <TrendingUp className="w-4 h-4 text-green-500 mr-1" />
-                <span className="text-sm text-green-500">{stat.change}</span>
-                <span className="text-sm text-muted-foreground ml-1">
-                  vs last month
-                </span>
+                <span>{stat.change}</span>
+                <span className="ml-1">vs last month</span>
               </div>
             </CardContent>
           </Card>
@@ -3675,12 +4398,21 @@ const DashboardStats = () => {
 
 // Main Admin Dashboard Component
 export default function AdminSuperDashboard() {
-  const { user, token } = useAdminAuth();
+  const { user, token, sessionChecked } = useAdminAuth();
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
+  // Block until we know whether a session user exists (prevents flicker)
+  if (!sessionChecked && !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <p className="text-gray-600 dark:text-gray-300">Loading session...</p>
+      </div>
+    );
+  }
+
   // Redirect to login if not authenticated
-  if (!token || !user) {
+  if (!user) {
     return <AdminLogin />;
   }
 
@@ -3792,42 +4524,14 @@ export default function AdminSuperDashboard() {
             {activeTab === "users" && <UsersManagement />}
             {activeTab === "estates" && <EstatesManagement />}
             {activeTab === "providers" && <ProvidersManagement />}
+            {activeTab === "companies" && <CompaniesManagement />}
             {activeTab === "stores" && <StoresManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "orders" && <OrdersManagement />}
             {activeTab === "requests" && <ArtisanRequestsPanel />}
             {activeTab === "artisanRequests" && <ArtisanRequestsPanel />}
 
-            {activeTab !== "dashboard" &&
-              activeTab !== "users" &&
-              activeTab !== "estates" &&
-              activeTab !== "providers" &&
-              activeTab !== "stores" &&
-              activeTab !== "categories" &&
-              activeTab !== "marketplace" &&
-              activeTab !== "orders" && (
-                <div className="text-center py-12">
-                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-                    {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}{" "}
-                    Management
-                  </h2>
-                  <p className="text-gray-600 dark:text-gray-400 mb-8">
-                    This module is under development. Coming soon!
-                  </p>
-                  <Card className="max-w-md mx-auto">
-                    <CardContent className="p-6">
-                      <div className="text-muted-foreground">
-                        <Package className="w-12 h-12 mx-auto mb-4" />
-                        <p className="text-sm">
-                          The {activeTab} management module will provide
-                          comprehensive tools for managing this aspect of your
-                          platform.
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              )}
+            {/* Removed generic under-development placeholder section */}
           </div>
         </div>
       </div>
@@ -3853,6 +4557,22 @@ const EstatesManagement = () => {
       deliveryRules: {},
     },
   });
+
+  // Simple slugify helper
+  const slugify = (s: string) =>
+    s
+      .toString()
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9-]/g, "")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+
+  // Keep slug in sync with name when creating/editing
+  useEffect(() => {
+    setFormData((prev) => ({ ...prev, slug: slugify(prev.name || "") }));
+  }, [formData.name]);
 
   const { user } = useAdminAuth();
   const { toast } = useToast();
@@ -3881,9 +4601,16 @@ const EstatesManagement = () => {
       toast({ title: "Estate created successfully" });
     },
     onError: (error: any) => {
+      const serverErr = error?.response?.data;
+      const desc = serverErr?.details
+        ? Array.isArray(serverErr.details)
+          ? serverErr.details.join("; ")
+          : JSON.stringify(serverErr.details)
+        : serverErr?.error || error.message || "Failed to create estate";
+
       toast({
         title: "Error creating estate",
-        description: error.response?.data?.error || "Failed to create estate",
+        description: desc,
         variant: "destructive",
       });
     },
@@ -3942,7 +4669,7 @@ const EstatesManagement = () => {
     setEditingEstate(estate);
     setFormData({
       name: estate.name || "",
-      slug: estate.slug || "",
+      slug: estate.slug || slugify(estate.name || ""),
       description: estate.description || "",
       address: estate.address || "",
       settings: estate.settings || {
@@ -3956,7 +4683,7 @@ const EstatesManagement = () => {
 
   const handleSubmit = () => {
     if (editingEstate) {
-      updateEstateMutation.mutate({ id: editingEstate._id, ...formData });
+      updateEstateMutation.mutate({ id: editingEstate._id || editingEstate.id, ...formData });
     } else {
       createEstateMutation.mutate({
         ...formData,
@@ -3981,6 +4708,84 @@ const EstatesManagement = () => {
       deleteEstateMutation.mutate(estateId);
     }
   };
+
+  const estateRows = isLoading
+    ? Array.from({ length: 5 }).map((_, i) => (
+        <TableRow key={i}>
+          <TableCell>
+            <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+          </TableCell>
+          <TableCell>
+            <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+          </TableCell>
+          <TableCell>
+            <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+          </TableCell>
+          <TableCell>
+            <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+          </TableCell>
+          <TableCell>
+            <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+          </TableCell>
+          <TableCell>
+            <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+          </TableCell>
+        </TableRow>
+      ))
+    : estates && estates.length > 0
+    ? estates.map((estate: any) => {
+        const estateId = estate._id || estate.id;
+        return (
+          <TableRow key={estateId}>
+            <TableCell className="font-medium" data-testid={`estate-name-${estateId}`}>
+              {estate.name}
+            </TableCell>
+            <TableCell data-testid={`estate-address-${estateId}`}>{estate.address}</TableCell>
+            <TableCell>
+              <Badge variant={estate.settings?.marketplaceEnabled ? "default" : "secondary"}>
+                {estate.settings?.marketplaceEnabled ? "Enabled" : "Disabled"}
+              </Badge>
+            </TableCell>
+            <TableCell>
+              <span className="text-sm text-muted-foreground">
+                {estate.settings?.servicesEnabled?.length || 0} services
+              </span>
+            </TableCell>
+            <TableCell data-testid={`estate-created-${estateId}`}>
+              {new Date(estate.createdAt).toLocaleDateString()}
+            </TableCell>
+            <TableCell>
+              <div className="flex space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleEdit(estate)}
+                  data-testid={`button-edit-estate-${estateId}`}
+                >
+                  <Edit className="w-4 h-4" />
+                </Button>
+                {isSuperAdmin && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDelete(estateId)}
+                    data-testid={`button-delete-estate-${estateId}`}
+                  >
+                    <XCircle className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            </TableCell>
+          </TableRow>
+        );
+      })
+    : (
+      <TableRow>
+        <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+          No estates found
+        </TableCell>
+      </TableRow>
+    );
 
   return (
     <div className="space-y-6">
@@ -4059,62 +4864,65 @@ const EstatesManagement = () => {
                   </TableRow>
                 ))
               ) : estates && estates.length > 0 ? (
-                estates.map((estate: any) => (
-                  <TableRow key={estate._id}>
-                    <TableCell
-                      className="font-medium"
-                      data-testid={`estate-name-${estate._id}`}
-                    >
-                      {estate.name}
-                    </TableCell>
-                    <TableCell data-testid={`estate-address-${estate._id}`}>
-                      {estate.address}
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          estate.settings?.marketplaceEnabled
-                            ? "default"
-                            : "secondary"
-                        }
+                estates.map((estate: any) => {
+                  const estateId = estate._id || estate.id;
+                  return (
+                    <TableRow key={estateId}>
+                      <TableCell
+                        className="font-medium"
+                        data-testid={`estate-name-${estateId}`}
                       >
-                        {estate.settings?.marketplaceEnabled
-                          ? "Enabled"
-                          : "Disabled"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-muted-foreground">
-                        {estate.settings?.servicesEnabled?.length || 0} services
-                      </span>
-                    </TableCell>
-                    <TableCell data-testid={`estate-created-${estate._id}`}>
-                      {new Date(estate.createdAt).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex space-x-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleEdit(estate)}
-                          data-testid={`button-edit-estate-${estate._id}`}
+                        {estate.name}
+                      </TableCell>
+                      <TableCell data-testid={`estate-address-${estateId}`}>
+                        {estate.address}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            estate.settings?.marketplaceEnabled
+                              ? "default"
+                              : "secondary"
+                          }
                         >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        {isSuperAdmin && (
+                          {estate.settings?.marketplaceEnabled
+                            ? "Enabled"
+                            : "Disabled"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm text-muted-foreground">
+                          {estate.settings?.servicesEnabled?.length || 0} services
+                        </span>
+                      </TableCell>
+                      <TableCell data-testid={`estate-created-${estateId}`}>
+                        {new Date(estate.createdAt).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex space-x-2">
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleDelete(estate._id)}
-                            data-testid={`button-delete-estate-${estate._id}`}
+                            onClick={() => handleEdit(estate)}
+                            data-testid={`button-edit-estate-${estateId}`}
                           >
-                            <XCircle className="w-4 h-4" />
+                            <Edit className="w-4 h-4" />
                           </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
+                          {isSuperAdmin && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDelete(estateId)}
+                              data-testid={`button-delete-estate-${estateId}`}
+                            >
+                              <XCircle className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               ) : (
                 <TableRow>
                   <TableCell
@@ -4171,11 +4979,12 @@ const EstatesManagement = () => {
                   id="estateSlug"
                   placeholder="estate-slug"
                   value={formData.slug}
-                  onChange={(e) =>
-                    setFormData({ ...formData, slug: e.target.value })
-                  }
+                  readOnly
                   data-testid="input-estate-slug"
                 />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Slug is auto-generated from the estate name and is read-only.
+                </p>
               </div>
             </div>
 
@@ -5097,6 +5906,161 @@ const OrdersManagement = () => {
           )}
         </DialogContent>
       </Dialog>
+    </div>
+  );
+};
+
+// Companies Management Component
+const CompaniesManagement = () => {
+  const { toast } = useToast();
+  const [showAddCompany, setShowAddCompany] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    description: "",
+    contactEmail: "",
+    phone: "",
+  });
+
+  const { data: companies = [], isLoading } = useQuery({
+    queryKey: ["admin-companies"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/companies"),
+  });
+
+  const createCompanyMutation = useMutation({
+    mutationFn: (payload: any) =>
+      adminApiRequest("POST", "/api/admin/companies", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
+      setForm({ name: "", description: "", contactEmail: "", phone: "" });
+      setShowAddCompany(false);
+      toast({ title: "Company created successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error creating company",
+        description: error.response?.data?.error || "Failed to create company",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSubmit = () => {
+    if (!form.name.trim()) {
+      toast({ title: "Name is required", variant: "destructive" });
+      return;
+    }
+    createCompanyMutation.mutate(form);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            Companies
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400">
+            Manage provider companies and assign them to users.
+          </p>
+        </div>
+        <Button onClick={() => setShowAddCompany(true)} data-testid="button-open-add-company">
+          <Plus className="w-4 h-4 mr-2" />
+          Add Company
+        </Button>
+      </div>
+
+      <Dialog open={showAddCompany} onOpenChange={setShowAddCompany}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Company</DialogTitle>
+            <DialogDescription>Create a new provider company.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Company Name *"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              data-testid="input-company-name"
+            />
+            <Input
+              placeholder="Contact Email"
+              value={form.contactEmail}
+              onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
+              data-testid="input-company-email"
+            />
+            <Input
+              placeholder="Phone"
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              data-testid="input-company-phone"
+            />
+            <Textarea
+              placeholder="Description"
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              rows={3}
+              data-testid="textarea-company-description"
+            />
+          </div>
+          <DialogFooter className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowAddCompany(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                handleSubmit();
+              }}
+              disabled={createCompanyMutation.isPending}
+              data-testid="button-create-company"
+            >
+              {createCompanyMutation.isPending ? "Saving..." : "Save Company"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <div className="grid grid-cols-1">
+        <Card>
+          <CardHeader>
+            <CardTitle>All Companies</CardTitle>
+            <CardDescription>Companies available for provider assignment.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 4 }).map((_, idx) => (
+                  <div key={idx} className="h-10 bg-gray-200 rounded animate-pulse"></div>
+                ))}
+              </div>
+            ) : companies.length === 0 ? (
+              <div className="text-center text-muted-foreground py-6">
+                No companies yet. Add one to get started.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="text-left text-xs text-muted-foreground">
+                      <th className="px-4 py-2">Name</th>
+                      <th className="px-4 py-2">Contact</th>
+                      <th className="px-4 py-2">Phone</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {companies.map((company: any) => (
+                      <tr key={company.id} className="border-t border-border">
+                        <td className="px-4 py-3 font-medium">{company.name}</td>
+                        <td className="px-4 py-3">{company.contactEmail || "—"}</td>
+                        <td className="px-4 py-3">{company.phone || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 };
