@@ -74,9 +74,17 @@ export async function setupVite(app: Express, httpServer: Server) {
   // Mount Vite dev middlewares
   app.use(vite.middlewares);
 
-  // Always serve index.html fresh (so you can tweak it without restart)
+  // Serve index.html only for navigation requests (text/html) to avoid
+  // returning HTML for JS/CSS module requests which causes MIME errors.
   app.use("*", async (req, res, next) => {
     const url = req.originalUrl;
+
+    // Only handle GET navigation requests that accept HTML
+    const accept = (req.headers.accept || "").toString();
+    if (req.method !== "GET" || !accept.includes("text/html")) {
+      return next();
+    }
+
     try {
       const clientTemplate = path.resolve(
         // @ts-ignore - import.meta.dirname provided by ts-node/tsx on this project

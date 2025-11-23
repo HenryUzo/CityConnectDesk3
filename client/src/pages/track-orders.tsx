@@ -21,6 +21,18 @@ import {
 } from "lucide-react";
 
 type StatusFilter = "all" | "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
+type ServiceRequest = {
+  id: string;
+  status: string;
+  description?: string;
+  category?: string;
+  budget?: string;
+  location?: string;
+  urgency?: string;
+  createdAt?: string;
+  providerId?: string;
+  buyer?: { name?: string; phone?: string };
+};
 
 export default function TrackOrders() {
   const { user, logoutMutation } = useAuth();
@@ -28,8 +40,9 @@ export default function TrackOrders() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
-  const { data: serviceRequests = [], isLoading } = useQuery({
+  const { data: serviceRequests = [], isLoading } = useQuery<ServiceRequest[]>({
     queryKey: ["/api/service-requests"],
+    queryFn: () => apiRequest("GET", "/api/service-requests").then((res) => res.json()),
   });
 
   const cancelRequestMutation = useMutation({

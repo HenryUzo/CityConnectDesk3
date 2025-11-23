@@ -1,15 +1,11 @@
-// server/index.ts
+import "./env";
 import express, { type Request, type Response, type NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import { sql } from "drizzle-orm";
-import { db } from "./db";
+import { db, dbReady } from "./db";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
-
-// ⬇️ Import your API routers and mount them explicitly
-import adminRoutes from "./admin-routes";
-import superAdminRoutes from "./super-admin-routes";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -19,21 +15,18 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
-// ──────────────────────────────────────────────────────────
 // CORS (safe defaults for dev; keep credentials if you use cookies)
-// If client and server share origin (reverse-proxy), this won’t hurt.
-// If they’re on different hosts/ports (Replit dev), this is REQUIRED.
-// ──────────────────────────────────────────────────────────
-// ...after cookieParser()
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     try {
       const u = new URL(origin);
-      // Allow your dev preview hosts + prod host:
+      // Allow localhost (dev) and your dev preview hosts + prod host:
       if (
-        u.hostname.endsWith(".replit.dev") ||
-        origin === "https://cityconnect.replit.app"
+        u.hostname === 'localhost' ||
+        u.hostname === '127.0.0.1' ||
+        u.hostname.endsWith('.replit.dev') ||
+        origin === 'https://cityconnect.replit.app'
       ) {
         return cb(null, true);
       }
@@ -45,9 +38,8 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization", "x-estate-id", "x-user-id", "x-user-email"],
 }));
 app.options("*", cors());
-// ──────────────────────────────────────────────────────────
+
 /** Request logging for /api responses (trimmed to avoid noisy logs) */
-// ──────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -69,7 +61,7 @@ app.use((req, res, next) => {
         line += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       } catch {}
     }
-    if (line.length > 80) line = line.slice(0, 79) + "…";
+    if (line.length > 80) line = line.slice(0, 79) + "...";
     log(line);
   });
 
@@ -81,12 +73,7 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", ts: new Date().toISOString() });
 });
 
-// When mounted under /api/admin, this becomes /api/admin/health
-// (admin-routes already has its own /health too once mounted below)
-
-// ──────────────────────────────────────────────────────────
 // Schema guard: ensure columns exist (idempotent)
-// ──────────────────────────────────────────────────────────
 async function ensureServiceRequestsColumns() {
   await db.execute(sql`
     ALTER TABLE service_requests
@@ -98,30 +85,68 @@ async function ensureServiceRequestsColumns() {
       ADD COLUMN IF NOT EXISTS payment_status   text DEFAULT 'pending',
       ADD COLUMN IF NOT EXISTS preferred_time   timestamp NULL;
   `);
+  await db.execute(sql`
+    ALTER TABLE service_requests
+      ADD COLUMN IF NOT EXISTS estate_id varchar(255);
+  `);
 }
 
-// ──────────────────────────────────────────────────────────
+// Ensure admin-related columns exist on users table
+async function ensureUsersColumns() {
+  await db.execute(sql`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS global_role user_role;
+  `);
+  await db.execute(sql`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS company text;
+  `);
+  await db.execute(sql`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS documents text[];
+  `);
+  await db.execute(sql`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS last_login_at timestamp NULL;
+  `);
+  await db.execute(sql`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS metadata jsonb;
+  `);
+}
+
+async function ensureCompaniesTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS companies (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      description text,
+      contact_email text,
+      phone text,
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+}
+
 // Boot sequence
-// ──────────────────────────────────────────────────────────
 (async () => {
   try {
+    await dbReady;
     await ensureServiceRequestsColumns();
+    await ensureUsersColumns();
+    await ensureCompaniesTable();
     log("[DB] Schema guard OK");
   } catch (e) {
     console.error("[DB] Schema guard failed:", e);
     // keep running so you can see logs and fix in place
   }
 
-  // ⬇️ Mount your API *before* Vite/SSR:
-  app.use("/api/admin", adminRoutes);
-  app.use("/api/super-admin", superAdminRoutes);
-
   // Register the rest of your routes (SSR/API defined in ./routes)
   const server = await registerRoutes(app);
 
-  // ────────────────────────────────────────────────────────
   // Global error handler — do NOT throw/rethrow
-  // ────────────────────────────────────────────────────────
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err?.status || err?.statusCode || 500;
     const message = err?.message || "Internal Server Error";
@@ -131,10 +156,19 @@ async function ensureServiceRequestsColumns() {
 
   // Dev: Vite middleware; Prod: static assets
   if (app.get("env") === "development") {
+    // Dev-only request logger to help diagnose missing-module/404 issues.
+    app.use((req, _res, next) => {
+      try {
+        const accept = (req.headers.accept || "").toString();
+        console.log(`[DEV REQUEST] ${req.method} ${req.originalUrl} Accept:${accept}`);
+      } catch (e) {}
+      next();
+    });
+
     await setupVite(app, server);
   } else {
     // In production, ensure frontend build is accessible at client/dist
-    await import("./prepare-static").then(m => m.prepareStaticFiles()).catch(console.error);
+    await import("./prepare-static").then((m) => m.prepareStaticFiles()).catch(console.error);
     serveStatic(app);
   }
 

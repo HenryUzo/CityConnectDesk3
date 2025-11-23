@@ -1,0 +1,9 @@
+
+> rest-express@1.0.0 dev
+> cross-env NODE_ENV=development tsx server/index.ts --host --port 5173
+
+[dotenv@17.2.3] injecting env (5) from .env.local -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+[DB] Using postgresql://postgres:****@localhost:5432/cityconnectdesk
+[DB] Host: localhost  Database: cityconnectdesk
+[DB] URL present: true length: 63
+10:19:46 AM [web] [DB] Schema guard OK

@@ -37,10 +37,10 @@ export default function ArtisanRequestsPanel() {
       return await AdminAPI.bridge.getServiceRequests(params);
     },
     refetchInterval: 5000,
-    keepPreviousData: true,
+    placeholderData: (prev) => prev,
   });
 
-  const requests = useMemo(() => {
+  const requests = useMemo<ServiceRequest[]>(() => {
     const list = data ?? [];
     const needle = q.trim().toLowerCase();
     if (!needle) return list;
@@ -102,10 +102,10 @@ export default function ArtisanRequestsPanel() {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <div className="text-sm text-muted-foreground">Loading…</div>
+          <div className="text-sm text-muted-foreground">Loading...</div>
         ) : (
           <div className="space-y-3">
-            {requests.map((r) => (
+            {requests.map((r: ServiceRequest) => (
               <div
                 key={r.id}
                 className="border rounded-lg p-4 flex items-start justify-between"

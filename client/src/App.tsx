@@ -31,7 +31,7 @@ function Router() {
       <Route path="/admin/login">
         <Redirect to="/admin-dashboard" />
       </Route>
-      <Route path="/admin-dashboard">
+      <Route path="/admin-dashboard/:section?">
         <AdminAuthProvider>
           <AdminSuperDashboard />
         </AdminAuthProvider>

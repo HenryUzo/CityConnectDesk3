@@ -4,8 +4,8 @@ import type { QueryFunction } from "@tanstack/react-query";
 // Prefer same-origin by default (works on Replit preview & local dev).
 // You can still override with VITE_API_URL if you deploy API elsewhere.
 const API_BASE =
-  (typeof window !== "undefined" ? window.location.origin : "") ||
   (import.meta as any).env?.VITE_API_URL?.replace(/\/$/, "") ||
+  (typeof window !== "undefined" ? window.location.origin : "") ||
   "";
 
 // storage keys
@@ -112,13 +112,16 @@ export async function adminFetch<T = any>(
     body = init.body as BodyInit;
   }
 
+  // Include cookies by default (admin endpoints expect session/refresh cookies)
+  const credentials: RequestInit["credentials"] =
+    init?.credentials ?? "include";
+
   const res = await fetch(url, {
     ...init,
     method,
     headers,
     body,
-    // never send cookies cross-origin for these calls
-    credentials: "omit",
+    credentials,
   });
 
   const ct = res.headers.get("content-type") || "";
@@ -172,13 +175,14 @@ export const AdminAPI = {
     setup: (data: any) =>
       adminFetch("/api/admin/setup", { method: "POST", json: data }),
     login: (data: any) =>
-      adminFetch("/api/admin/auth/login", { method: "POST", json: data }),
+      adminFetch("/api/login", { method: "POST", json: data }),
     refresh: (data: any) =>
       adminFetch("/api/admin/auth/refresh", { method: "POST", json: data }),
     logout: () => adminFetch("/api/admin/auth/logout", { method: "POST" }),
   },
   dashboard: {
-    getStats: () => adminFetch("/api/admin/dashboard/stats"),
+    // server exposes `/api/admin/stats`
+    getStats: () => adminFetch("/api/admin/stats"),
   },
   users: {
     // Unified endpoint (admins + residents + providers)

@@ -1,4 +1,34 @@
-import { users, serviceRequests, wallets, transactions, type User, type InsertUser, type ServiceRequest, type InsertServiceRequest, type Wallet, type InsertWallet, type Transaction, type InsertTransaction } from "@shared/schema";
+import {
+  users,
+  serviceRequests,
+  wallets,
+  transactions,
+  companies,
+  requestMessages,
+  requestBills,
+  requestBillItems,
+  inspections,
+  deviceAssignments,
+  type User,
+  type InsertUser,
+  type ServiceRequest,
+  type InsertServiceRequest,
+  type Wallet,
+  type InsertWallet,
+  type Transaction,
+  type InsertTransaction,
+  type Company,
+  type InsertCompany,
+  type RequestMessage,
+  type InsertRequestMessage,
+  type RequestBill,
+  type RequestBillItem,
+  type InsertRequestBill,
+  type InsertRequestBillItem,
+  type Inspection,
+  type InsertInspection,
+  type DeviceAssignment,
+} from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, count, sql } from "drizzle-orm";
 import session from "express-session";
@@ -39,6 +69,8 @@ export interface IStorage {
   getPendingProviders(): Promise<User[]>;
   approveProvider(providerId: string): Promise<User | undefined>;
   getUserStats(): Promise<any>;
+  getCompanies(): Promise<Company[]>;
+  createCompany(company: InsertCompany): Promise<Company>;
   
   sessionStore: session.Store;
 }
@@ -54,28 +86,104 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUser(id: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.id, id));
-    return user || undefined;
+    const [user] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        phone: users.phone,
+        password: users.password,
+        role: users.role,
+        globalRole: users.globalRole,
+        company: users.company,
+        documents: users.documents,
+        metadata: users.metadata,
+        lastLoginAt: users.lastLoginAt,
+        isActive: users.isActive,
+        isApproved: users.isApproved,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+      })
+      .from(users)
+      .where(eq(users.id, id));
+    return (user as unknown as User) || undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.email, username));
-    return user || undefined;
+    const [user] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        phone: users.phone,
+        password: users.password,
+        role: users.role,
+        globalRole: users.globalRole,
+        company: users.company,
+        documents: users.documents,
+        metadata: users.metadata,
+        lastLoginAt: users.lastLoginAt,
+        isActive: users.isActive,
+        isApproved: users.isApproved,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+      })
+      .from(users)
+      .where(eq(users.email, username));
+    return (user as unknown as User) || undefined;
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.email, email));
-    return user || undefined;
+    const [user] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        phone: users.phone,
+        password: users.password,
+        role: users.role,
+        globalRole: users.globalRole,
+        company: users.company,
+        documents: users.documents,
+        metadata: users.metadata,
+        lastLoginAt: users.lastLoginAt,
+        isActive: users.isActive,
+        isApproved: users.isApproved,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+      })
+      .from(users)
+      .where(eq(users.email, email));
+    return (user as unknown as User) || undefined;
   }
 
   async getUserByAccessCode(accessCode: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(
-      and(
-        eq(users.accessCode, accessCode),
-        eq(users.role, "resident")
-      )
-    );
-    return user || undefined;
+    const [user] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        phone: users.phone,
+        password: users.password,
+        role: users.role,
+        globalRole: users.globalRole,
+        company: users.company,
+        documents: users.documents,
+        metadata: users.metadata,
+        lastLoginAt: users.lastLoginAt,
+        isActive: users.isActive,
+        isApproved: users.isApproved,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+      })
+      .from(users)
+      .where(
+        and(
+          eq(users.accessCode, accessCode),
+          eq(users.role, "resident")
+        )
+      );
+    return (user as unknown as User) || undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
@@ -483,6 +591,16 @@ export class DatabaseStorage implements IStorage {
       activeRequests: activeRequests.count,
       pendingApprovals: pendingApprovals.count
     };
+  }
+
+  async getCompanies(): Promise<Company[]> {
+    const list = await db.select().from(companies).orderBy(desc(companies.createdAt));
+    return list;
+  }
+
+  async createCompany(company: InsertCompany): Promise<Company> {
+    const [row] = await db.insert(companies).values(company).returning();
+    return row;
   }
 }
 

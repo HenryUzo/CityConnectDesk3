@@ -339,7 +339,7 @@ const AdminLogin = () => {
         title: "Login Successful",
         description: "Welcome to CityConnect Admin Dashboard",
       });
-      setLocation("/admin-dashboard");
+      setLocation("/admin-dashboard/dashboard");
     } catch (error: any) {
       toast({
         title: "Login Failed",
@@ -1419,12 +1419,12 @@ const UsersManagement = () => {
 
         {/* Preview User Dialog */}
         <Dialog open={!!previewUser} onOpenChange={(open) => !open && setPreviewUser(null)}>
-          <DialogContent className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-3xl w-[90vw] max-h-[85vh] overflow-auto p-0 bg-transparent border-0 shadow-none">
-            <div className="absolute inset-0 bg-gradient-to-br from-indigo-700 via-purple-700 to-blue-700" />
-            <DialogHeader>
-              <DialogTitle className="sr-only">User Preview</DialogTitle>
-              <DialogDescription className="sr-only">Quick view of user details.</DialogDescription>
-            </DialogHeader>
+        <DialogContent className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-3xl w-[90vw] max-h-[85vh] overflow-auto p-0 bg-transparent border-0 shadow-none">
+          <div className="absolute inset-0 bg-gradient-to-br from-indigo-700 via-purple-700 to-blue-700" />
+          <DialogHeader>
+            <DialogTitle className="sr-only">User Preview</DialogTitle>
+            <DialogDescription className="sr-only">Quick view of user details.</DialogDescription>
+          </DialogHeader>
 
             <div className="relative px-6 pb-6 pt-6">
               <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-lg border p-6 space-y-6">
@@ -1554,7 +1554,7 @@ const ProvidersManagement = () => {
       name: "",
       email: "",
       phone: "",
-      password: "",
+      password: undefined,
       company: "",
       categories: [],
       experience: 0,
@@ -1737,8 +1737,18 @@ const ProvidersManagement = () => {
   const onSubmit = (data: CreateProviderInput) => {
     if (editingProvider) {
       const providerId = editingProvider.id || editingProvider._id;
-      updateProviderFormMutation.mutate({ providerId, data });
+      const payload: any = { ...data };
+      if (!payload.password) delete payload.password;
+      updateProviderFormMutation.mutate({ providerId, data: payload });
     } else {
+      if (!data.password || data.password.trim().length < 6) {
+        toast({
+          title: "Password required",
+          description: "New providers must have a password (min 6 characters).",
+          variant: "destructive",
+        });
+        return;
+      }
       createProviderMutation.mutate(data);
     }
   };
@@ -1818,7 +1828,7 @@ const ProvidersManagement = () => {
       name: provider.name || "",
       email: provider.email || "",
       phone: provider.phone || "",
-      password: "",
+      password: undefined,
       company: provider.company || "",
       categories: Array.isArray(provider.categories) ? provider.categories : [],
       experience: provider.experience || 0,
@@ -2534,9 +2544,9 @@ const ProvidersManagement = () => {
                         <PopoverContent
                           align="start"
                           sideOffset={6}
-                          className="w-[calc(100%-16px)] sm:w-[600px] max-w-full p-0"
+                          className="w-[calc(100%-16px)] sm:w-[620px] max-w-full p-0"
                         >
-                          <ScrollArea className="max-h-56 sm:max-h-72 p-3">
+                          <ScrollArea className="max-h-64 sm:max-h-80 overflow-y-auto p-3">
                             <div className="space-y-2">
                               {categoryOptions.map((category) => {
                                 const categoryValue = category.value;
@@ -4399,8 +4409,20 @@ const DashboardStats = () => {
 // Main Admin Dashboard Component
 export default function AdminSuperDashboard() {
   const { user, token, sessionChecked } = useAdminAuth();
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const [location, setLocation] = useLocation();
+  const activeTab = (() => {
+    if (!location.startsWith("/admin-dashboard")) return "dashboard";
+    const pathPart = location.split("/")[2] ?? "dashboard";
+    return pathPart.split("?")[0].split("#")[0] || "dashboard";
+  })();
+  const setActiveTab = (tab: string) => setLocation(`/admin-dashboard/${tab}`);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
+
+  useEffect(() => {
+    if (location === "/admin-dashboard" || location === "/admin-dashboard/") {
+      setLocation("/admin-dashboard/dashboard", true);
+    }
+  }, [location, setLocation]);
 
   // Block until we know whether a session user exists (prevents flicker)
   if (!sessionChecked && !user) {
@@ -6071,6 +6093,9 @@ const StoresManagement = () => {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedStore, setSelectedStore] = useState<any>(null);
   const [showMembersDialog, setShowMembersDialog] = useState(false);
+  const [showInventoryDialog, setShowInventoryDialog] = useState(false);
+  const [inventoryStore, setInventoryStore] = useState<any>(null);
+  const [selectedOwnerId, setSelectedOwnerId] = useState("");
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -6095,19 +6120,101 @@ const StoresManagement = () => {
     },
   });
 
+  const { data: storeProviders = [] } = useQuery({
+    queryKey: ["/api/admin/store-owner-providers"],
+    queryFn: () =>
+      adminApiRequest("GET", "/api/admin/users/all", {
+        role: "provider",
+      }),
+  });
+
+  const isStoreOwnerProvider = (p: any) => {
+    if (!p) return false;
+    const cats = Array.isArray(p.categories) ? p.categories : [];
+    return cats.some((c: any) => {
+      const val =
+        typeof c === "string"
+          ? c
+          : c?.value || c?.key || c?.name || "";
+      const norm = String(val).trim().toLowerCase().replace(/\s+/g, "_");
+      return norm === "store_owner";
+    });
+  };
+
+  // Auto-fill phone/email when a store owner is selected
+  useEffect(() => {
+    if (!selectedOwnerId || !Array.isArray(storeProviders)) return;
+    const owner = storeProviders.find(
+      (p: any) => (p.id || p._id) === selectedOwnerId && isStoreOwnerProvider(p),
+    );
+    if (!owner) return;
+    setFormData((prev) => ({
+      ...prev,
+      phone: owner.phone || prev.phone || "",
+      email: owner.email || prev.email || "",
+    }));
+  }, [selectedOwnerId, storeProviders]);
+
   const createStoreMutation = useMutation({
-    mutationFn: (storeData: any) =>
-      adminApiRequest("POST", "/api/admin/stores", storeData),
-    onSuccess: () => {
+    mutationFn: ({ payload, id }: { payload: any; id?: string }) => {
+      if (id) {
+        return adminApiRequest("PATCH", `/api/admin/stores/${id}`, payload);
+      }
+      return adminApiRequest("POST", "/api/admin/stores", payload);
+    },
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/stores"] });
       setIsCreateDialogOpen(false);
       setFormData({ name: "", description: "", location: "", phone: "", email: "" });
-      toast({ title: "Store created successfully" });
+      setSelectedOwnerId("");
+      toast({ title: variables.id ? "Store updated successfully" : "Store created successfully" });
     },
     onError: (error: any) => {
       toast({
-        title: "Error creating store",
-        description: error.response?.data?.error || "Failed to create store",
+        title: "Error saving store",
+        description: error.response?.data?.error || "Failed to save store",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Inventory per store
+  const { data: inventoryItems = [], refetch: refetchInventory } = useQuery({
+    queryKey: ["/api/admin/marketplace", { storeId: inventoryStore?._id || inventoryStore?.id }],
+    queryFn: () =>
+      inventoryStore
+        ? adminApiRequest("GET", "/api/admin/marketplace", {
+            storeId: inventoryStore._id || inventoryStore.id,
+          })
+        : [],
+    enabled: !!inventoryStore,
+  });
+
+  const inventoryForm = useForm({
+    defaultValues: {
+      name: "",
+      price: 0,
+      stock: 0,
+      category: "",
+      description: "",
+      vendorId: "",
+      image: "",
+    },
+  });
+  const [inventoryImagePreview, setInventoryImagePreview] = useState<string>("");
+
+  const createInventoryMutation = useMutation({
+    mutationFn: (payload: any) =>
+      adminApiRequest("POST", "/api/admin/marketplace", payload),
+    onSuccess: () => {
+      refetchInventory();
+      inventoryForm.reset();
+      toast({ title: "Inventory item added" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error adding inventory",
+        description: error.response?.data?.error || "Failed to add item",
         variant: "destructive",
       });
     },
@@ -6122,7 +6229,21 @@ const StoresManagement = () => {
       });
       return;
     }
-    createStoreMutation.mutate(formData);
+    const eligible = Array.isArray(storeProviders)
+      ? storeProviders.filter((p: any) => isStoreOwnerProvider(p))
+      : [];
+    if (!selectedOwnerId) {
+      toast({ title: "Select a store owner", description: "Assign a provider with the store_owner category.", variant: "destructive" });
+      return;
+    }
+    const owner = eligible.find((p: any) => (p.id || p._id) === selectedOwnerId);
+    if (!owner) {
+      toast({ title: "Invalid store owner", description: "Provider must have the store_owner category.", variant: "destructive" });
+      return;
+    }
+    const payload = { ...formData, ownerId: selectedOwnerId };
+    const storeId = selectedStore?._id || selectedStore?.id;
+    createStoreMutation.mutate({ payload, id: storeId });
   };
 
   return (
@@ -6222,7 +6343,7 @@ const StoresManagement = () => {
                           {store.isActive ? "Active" : "Inactive"}
                         </Badge>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2 flex items-center">
                         <Button
                           variant="outline"
                           size="sm"
@@ -6234,6 +6355,53 @@ const StoresManagement = () => {
                         >
                           <Users className="w-4 h-4 mr-1" />
                           Members
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            // placeholder hook for view store details
+                            setSelectedStore(store);
+                            toast({ title: "View store", description: store.name });
+                          }}
+                          data-testid={`button-view-store-details-${store._id || store.id}`}
+                        >
+                          <Eye className="w-4 h-4 mr-1" />
+                          View
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedStore(store);
+                            setIsCreateDialogOpen(true);
+                            // prefill form for edit
+                            setFormData({
+                              name: store.name || "",
+                              description: store.description || "",
+                              location: store.location || "",
+                              phone: store.phone || "",
+                              email: store.email || "",
+                            });
+                            setSelectedOwnerId(store.ownerId || "");
+                          }}
+                          data-testid={`button-edit-store-${store._id || store.id}`}
+                        >
+                          <Edit className="w-4 h-4 mr-1" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedStore(store);
+                            setInventoryStore(store);
+                            setShowInventoryDialog(true);
+                          }}
+                          data-testid={`button-add-inventory-${store._id || store.id}`}
+                        >
+                          <Package className="w-4 h-4 mr-1" />
+                          Add Inventory
                         </Button>
                       </td>
                     </tr>
@@ -6249,7 +6417,10 @@ const StoresManagement = () => {
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create New Store</DialogTitle>
+            <DialogTitle>{selectedStore ? "Edit Store" : "Create New Store"}</DialogTitle>
+            <DialogDescription className="sr-only">
+              {selectedStore ? "Update store details" : "Add a new store to the platform"}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
@@ -6290,6 +6461,35 @@ const StoresManagement = () => {
               />
             </div>
             <div>
+              <Label htmlFor="store-owner">Store Owner (provider with store_owner category)</Label>
+              <Select
+                value={selectedOwnerId}
+                onValueChange={setSelectedOwnerId}
+              >
+                <SelectTrigger id="store-owner" data-testid="select-store-owner">
+                  <SelectValue placeholder="Select store owner" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.isArray(storeProviders) && storeProviders.filter((p: any) => isStoreOwnerProvider(p)).length > 0 ? (
+                    storeProviders
+                      .filter((p: any) => isStoreOwnerProvider(p))
+                      .map((p: any) => {
+                        const pid = p.id || p._id;
+                        return (
+                          <SelectItem key={pid} value={pid}>
+                            {p.name || p.email}
+                          </SelectItem>
+                        );
+                      })
+                  ) : (
+                    <SelectItem value="none" disabled>
+                      No eligible store owners (need category "store_owner")
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label htmlFor="store-phone">Phone</Label>
               <Input
                 id="store-phone"
@@ -6297,6 +6497,8 @@ const StoresManagement = () => {
                 onChange={(e) =>
                   setFormData((prev) => ({ ...prev, phone: e.target.value }))
                 }
+                readOnly
+                className="bg-muted/50 cursor-not-allowed"
                 placeholder="+234..."
                 data-testid="input-store-phone"
               />
@@ -6310,6 +6512,8 @@ const StoresManagement = () => {
                 onChange={(e) =>
                   setFormData((prev) => ({ ...prev, email: e.target.value }))
                 }
+                readOnly
+                className="bg-muted/50 cursor-not-allowed"
                 placeholder="store@example.com"
                 data-testid="input-store-email"
               />
@@ -6328,7 +6532,13 @@ const StoresManagement = () => {
               disabled={createStoreMutation.isPending}
               data-testid="button-submit-create-store"
             >
-              {createStoreMutation.isPending ? "Creating..." : "Create Store"}
+              {createStoreMutation.isPending
+                ? selectedStore
+                  ? "Saving..."
+                  : "Creating..."
+                : selectedStore
+                  ? "Save Store"
+                  : "Create Store"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -6339,6 +6549,9 @@ const StoresManagement = () => {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Store Members - {selectedStore?.name}</DialogTitle>
+            <DialogDescription className="sr-only">
+              View or manage members assigned to this store.
+            </DialogDescription>
           </DialogHeader>
           <div className="text-center py-8">
             <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
@@ -6352,6 +6565,191 @@ const StoresManagement = () => {
           <DialogFooter>
             <Button onClick={() => setShowMembersDialog(false)}>Close</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Store Inventory Dialog */}
+      <Dialog open={showInventoryDialog} onOpenChange={setShowInventoryDialog}>
+        <DialogContent className="w-full max-w-[100vw] h-[100vh] max-h-[100vh] overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>Inventory - {inventoryStore?.name || "Store"}</DialogTitle>
+            <DialogDescription>
+              Add and manage items for this store. Items will appear in the marketplace for residents.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-full">
+            <div className="lg:col-span-2 space-y-3 max-h-[75vh] overflow-auto pr-2">
+              {Array.isArray(inventoryItems) && inventoryItems.length > 0 ? (
+                inventoryItems.map((item: any) => (
+                  <Card key={item._id || item.id}>
+                    <CardContent className="p-4 flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold">{item.name}</div>
+                        <div className="text-sm text-muted-foreground">
+                          {item.description || "No description"}
+                        </div>
+                        <div className="text-sm mt-1">
+                          {item.currency || "NGN"} {item.price?.toLocaleString()} • Stock: {item.stock ?? 0}
+                        </div>
+                      </div>
+                      <Badge variant={item.isActive ? "default" : "secondary"}>
+                        {item.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </CardContent>
+                  </Card>
+                ))
+              ) : (
+                <div className="text-sm text-muted-foreground">No inventory yet</div>
+              )}
+            </div>
+
+            <Card className="lg:col-span-1 w-full max-h-[85vh] overflow-hidden">
+              <CardHeader>
+                <CardTitle className="text-base">Add Item</CardTitle>
+                <CardDescription>Add a product to this store.</CardDescription>
+              </CardHeader>
+              <CardContent className="h-full overflow-hidden">
+                <Form {...inventoryForm}>
+                  <form
+                    className="flex flex-col"
+                    onSubmit={inventoryForm.handleSubmit((values) => {
+                      if (!inventoryStore) return;
+                      const payloadImage = values.image ? values.image : "";
+                      createInventoryMutation.mutate({
+                        ...values,
+                        vendorId: inventoryStore._id || inventoryStore.id,
+                        storeId: inventoryStore._id || inventoryStore.id,
+                        currency: "NGN",
+                        images: payloadImage ? [payloadImage] : [],
+                      });
+                    })}
+                  >
+                    <div className="space-y-3 h-[400px] overflow-auto pr-2">
+                      <FormItem>
+                        <FormLabel>Item Image</FormLabel>
+                        <FormControl>
+                          <div className="space-y-2">
+                            {inventoryImagePreview && (
+                              <img
+                                src={inventoryImagePreview}
+                                alt="Preview"
+                                className="w-full h-32 object-cover rounded border"
+                              />
+                            )}
+                            <Input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  const result = reader.result as string;
+                                  setInventoryImagePreview(result);
+                                  inventoryForm.setValue("image", result);
+                                };
+                                reader.readAsDataURL(file);
+                              }}
+                            />
+                          </div>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    <FormField
+                      control={inventoryForm.control}
+                      name="name"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Name</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Item name" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={inventoryForm.control}
+                      name="description"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Description</FormLabel>
+                          <FormControl>
+                            <Textarea rows={3} placeholder="What is this item?" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <div className="grid grid-cols-2 gap-3">
+                      <FormField
+                        control={inventoryForm.control}
+                        name="price"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Price (NGN)</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                {...field}
+                                onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={inventoryForm.control}
+                        name="stock"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Stock</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min="0"
+                                {...field}
+                                onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    <FormField
+                      control={inventoryForm.control}
+                      name="category"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Category</FormLabel>
+                          <FormControl>
+                            <Input placeholder="e.g. groceries" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    </div>
+                    <div className="pt-4">
+                      <Button
+                        type="submit"
+                        className="w-full"
+                        disabled={createInventoryMutation.isPending}
+                        data-testid="btn-add-inventory-item"
+                      >
+                        {createInventoryMutation.isPending ? "Saving..." : "Add Item"}
+                      </Button>
+                    </div>
+                  </form>
+                </Form>
+              </CardContent>
+            </Card>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

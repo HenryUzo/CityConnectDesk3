@@ -27,29 +27,67 @@ import {
   Package
 } from "lucide-react";
 
+type ServiceRequest = {
+  id: string;
+  status: string;
+  description?: string;
+  category?: string;
+  budget?: string;
+  location?: string;
+  urgency?: string;
+  createdAt?: string;
+  buyer?: { name?: string };
+};
+
+type StoreFormData = {
+  name: string;
+  description: string;
+  location: string;
+  phone: string;
+  email: string;
+  estateId?: string;
+};
+
+type ProviderStore = {
+  id: string;
+  name: string;
+  description?: string;
+  location: string;
+  phone?: string;
+  email?: string;
+  isActive?: boolean;
+  membership?: { role?: string; canManageItems?: boolean };
+};
+
 export default function ProviderDashboard() {
   const { user, logoutMutation } = useAuth();
   const { toast } = useToast();
   const [isCreateStoreDialogOpen, setIsCreateStoreDialogOpen] = useState(false);
-  const [storeFormData, setStoreFormData] = useState({
+  const [storeFormData, setStoreFormData] = useState<StoreFormData>({
     name: "",
     description: "",
     location: "",
     phone: "",
-    email: ""
+    email: "",
+    estateId: "",
   });
 
-  const { data: availableRequests = [] } = useQuery({
+  const { data: availableRequests = [] } = useQuery<ServiceRequest[]>({
     queryKey: ["/api/service-requests", { status: "available" }],
+    queryFn: () =>
+      apiRequest("GET", "/api/service-requests?status=available").then((res) =>
+        res.json(),
+      ),
   });
 
-  const { data: myRequests = [] } = useQuery({
+  const { data: myRequests = [] } = useQuery<ServiceRequest[]>({
     queryKey: ["/api/service-requests"],
+    queryFn: () => apiRequest("GET", "/api/service-requests").then((res) => res.json()),
   });
 
-  const { data: myStores = [], isLoading: isLoadingStores } = useQuery({
+  const { data: myStores = [], isLoading: isLoadingStores } = useQuery<ProviderStore[]>({
     queryKey: ["/api/provider/stores"],
-    queryFn: () => apiRequest("GET", "/api/provider/stores")
+    queryFn: () => apiRequest("GET", "/api/provider/stores").then((res) => res.json()),
   });
 
   const acceptJobMutation = useMutation({
@@ -126,9 +164,10 @@ export default function ProviderDashboard() {
     active: activeJobs.length,
     completed: completedJobs.length,
     monthlyEarnings: completedJobs.reduce((sum: number, job: any) => {
-      const amount = parseFloat(job.budget.split('-')[1]?.replace(/[₦,]/g, '') || '0');
-      return sum + (amount || 0);
-    }, 0)
+      const cleaned = String(job.budget ?? "0").replace(/[^0-9.]/g, "");
+      const amount = parseFloat(cleaned || "0");
+      return sum + (Number.isNaN(amount) ? 0 : amount);
+    }, 0),
   };
 
   const getStatusColor = (status: string) => {

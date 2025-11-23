@@ -290,6 +290,24 @@ export const marketplaceItems = pgTable("marketplace_items", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Companies table (for provider associations)
+export const companies = pgTable("companies", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  contactEmail: text("contact_email"),
+  phone: text("phone"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertCompanySchema = createInsertSchema(companies);
+export type Company = typeof companies.$inferSelect;
+export type InsertCompany = typeof companies.$inferInsert;
+
 // Orders table (from MongoDB)
 export const orders = pgTable("orders", {
   id: varchar("id")
@@ -330,17 +348,6 @@ export const auditLogs = pgTable("audit_logs", {
   meta: jsonb("meta").notNull().default('{}'),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-// MongoDB ID Mappings table (for migration tracking)
-export const mongoIdMappings = pgTable("mongo_id_mappings", {
-  id: varchar("id")
-    .primaryKey()
-    .default(sql`gen_random_uuid()`),
-  mongoId: text("mongo_id").notNull().unique(),
-  postgresId: varchar("postgres_id").notNull(),
-  entityType: text("entity_type").notNull(), // 'user', 'estate', 'provider', etc.
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -723,11 +730,6 @@ export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
   createdAt: true,
 });
 
-export const insertMongoIdMappingSchema = createInsertSchema(mongoIdMappings).omit({
-  id: true,
-  createdAt: true,
-});
-
 export const insertServiceRequestSchema = createInsertSchema(
   serviceRequests,
 ).omit({
@@ -766,14 +768,21 @@ export type Order = typeof orders.$inferSelect;
 export type InsertOrder = z.infer<typeof insertOrderSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
-export type MongoIdMapping = typeof mongoIdMappings.$inferSelect;
-export type InsertMongoIdMapping = z.infer<typeof insertMongoIdMappingSchema>;
 export type ServiceRequest = typeof serviceRequests.$inferSelect;
 export type InsertServiceRequest = z.infer<typeof insertServiceRequestSchema>;
 export type Wallet = typeof wallets.$inferSelect;
 export type InsertWallet = z.infer<typeof insertWalletSchema>;
 export type Transaction = typeof transactions.$inferSelect;
 export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
+export type RequestMessage = typeof requestMessages.$inferSelect;
+export type InsertRequestMessage = typeof requestMessages.$inferInsert;
+export type RequestBill = typeof requestBills.$inferSelect;
+export type InsertRequestBill = typeof requestBills.$inferInsert;
+export type RequestBillItem = typeof requestBillItems.$inferSelect;
+export type InsertRequestBillItem = typeof requestBillItems.$inferInsert;
+export type Inspection = typeof inspections.$inferSelect;
+export type InsertInspection = typeof inspections.$inferInsert;
+export type DeviceAssignment = typeof deviceAssignments.$inferSelect;
 
 // Extended user types for login
 export const residentLoginSchema = z

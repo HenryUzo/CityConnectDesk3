@@ -1,0 +1,60 @@
+[UNHANDLED ERROR] {
+  status: 400,
+  message: "Expected property name or '}' in JSON at position 1",
+  stack: "SyntaxError: Expected property name or '}' in JSON at position 1\n" +
+    '    at JSON.parse (<anonymous>)\n' +
+    '    at parse (C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\body-parser\\lib\\types\\json.js:92:19)\n' +
+    '    at C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\body-parser\\lib\\read.js:128:18\n' +
+    '    at AsyncResource.runInAsyncScope (node:async_hooks:206:9)\n' +
+    '    at invokeCallback (C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\raw-body\\index.js:238:16)\n' +
+    '    at done (C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\raw-body\\index.js:227:7)\n' +
+    '    at IncomingMessage.onEnd (C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\raw-body\\index.js:287:7)\n' +
+    '    at IncomingMessage.emit (node:events:524:28)\n' +
+    '    at endReadableNT (node:internal/streams/readable:1698:12)\n' +
+    '    at process.processTicksAndRejections (node:internal/process/task_queues:82:21)'
+}
+[UNHANDLED ERROR] {
+  status: 400,
+  message: "Expected property name or '}' in JSON at position 1",
+  stack: "SyntaxError: Expected property name or '}' in JSON at position 1\n" +
+    '    at JSON.parse (<anonymous>)\n' +
+    '    at parse (C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\body-parser\\lib\\types\\json.js:92:19)\n' +
+    '    at C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\body-parser\\lib\\read.js:128:18\n' +
+    '    at AsyncResource.runInAsyncScope (node:async_hooks:206:9)\n' +
+    '    at invokeCallback (C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\raw-body\\index.js:238:16)\n' +
+    '    at done (C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\raw-body\\index.js:227:7)\n' +
+    '    at IncomingMessage.onEnd (C:\\Users\\Admin\\OneDrive\\Documents\\CityConnectDesk new\\CityConnectDesk\\node_modules\\raw-body\\index.js:287:7)\n' +
+    '    at IncomingMessage.emit (node:events:524:28)\n' +
+    '    at endReadableNT (node:internal/streams/readable:1698:12)\n' +
+    '    at process.processTicksAndRejections (node:internal/process/task_queues:82:21)'
+}
+C:\Users\Admin\OneDrive\Documents\CityConnectDesk new\CityConnectDesk\node_modules\pg-pool\index.js:45
+    Error.captureStackTrace(err)
+          ^
+
+error: column "global_role" does not exist
+    at C:\Users\Admin\OneDrive\Documents\CityConnectDesk new\CityConnectDesk\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async <anonymous> (C:\Users\Admin\OneDrive\Documents\CityConnectDesk new\CityConnectDesk\node_modules\src\node-postgres\session.ts:104:19)
+    at async DatabaseStorage.getUserByUsername (C:\Users\Admin\OneDrive\Documents\CityConnectDesk new\CityConnectDesk\server\storage.ts:62:20)
+    at async Strategy._verify (C:\Users\Admin\OneDrive\Documents\CityConnectDesk new\CityConnectDesk\server\auth.ts:56:20) {
+  length: 111,
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,
+  position: '75',
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'parse_relation.c',
+  line: '3727',
+  routine: 'errorMissingColumn'
+}
+
+Node.js v20.19.5

@@ -23,6 +23,34 @@ import {
   Ruler
 } from "lucide-react";
 
+type ProviderStore = {
+  id: string;
+  name: string;
+  description?: string;
+  location: string;
+  phone?: string;
+  email?: string;
+  membership?: { role?: string; canManageItems?: boolean };
+  isActive?: boolean;
+};
+
+type StoreItem = {
+  id: string;
+  name: string;
+  description?: string;
+  price: number;
+  unitOfMeasure?: string;
+  isAvailable?: boolean;
+  stock?: number;
+};
+
+type ItemFormData = {
+  name: string;
+  description: string;
+  price: string;
+  unitOfMeasure: string;
+};
+
 const UNIT_OPTIONS = [
   { value: "kg", label: "Kilogram (kg)" },
   { value: "g", label: "Gram (g)" },
@@ -42,26 +70,31 @@ export default function ProviderStoreItems() {
   const { toast } = useToast();
   const [isCreateItemDialogOpen, setIsCreateItemDialogOpen] = useState(false);
   const [isEditItemDialogOpen, setIsEditItemDialogOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<any>(null);
-  const [itemFormData, setItemFormData] = useState({
+  const [editingItem, setEditingItem] = useState<StoreItem | null>(null);
+  const [itemFormData, setItemFormData] = useState<ItemFormData>({
     name: "",
     description: "",
     price: "",
     unitOfMeasure: "piece"
   });
 
-  const { data: store, isLoading: isLoadingStore } = useQuery({
+  const { data: store, isLoading: isLoadingStore } = useQuery<ProviderStore | null>({
     queryKey: ["/api/provider/stores", storeId],
     queryFn: async () => {
-      const stores = await apiRequest("GET", "/api/provider/stores");
-      return stores.find((s: any) => s.id === storeId);
+      const stores = await apiRequest("GET", "/api/provider/stores").then(
+        (res) => res.json() as Promise<ProviderStore[]>,
+      );
+      return stores.find((s: ProviderStore) => s.id === storeId) || null;
     },
     enabled: !!storeId
   });
 
-  const { data: items = [], isLoading: isLoadingItems } = useQuery({
+  const { data: items = [], isLoading: isLoadingItems } = useQuery<StoreItem[]>({
     queryKey: ["/api/provider/stores", storeId, "items"],
-    queryFn: () => apiRequest("GET", `/api/provider/stores/${storeId}/items`),
+    queryFn: () =>
+      apiRequest("GET", `/api/provider/stores/${storeId}/items`).then(
+        (res) => res.json() as Promise<StoreItem[]>,
+      ),
     enabled: !!storeId
   });
 

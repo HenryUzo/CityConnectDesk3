@@ -11,6 +11,7 @@ import {
 } from "@shared/schema";
 import { eq, and, or, like, desc } from "drizzle-orm";
 import { z } from "zod";
+import { storage } from "./storage";
 
 const router = Router();
 
@@ -376,6 +377,88 @@ router.delete("/stores/:storeId/items/:itemId", requireProvider, verifyStoreAcce
 
     res.json({ message: "Item deleted successfully", item: deletedItem });
   } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/provider/company-registration - Register new company profile
+router.post("/company-registration", requireProvider, async (req: ProviderRequest, res) => {
+  try {
+    const providerId = req.user!.id;
+
+    const createCompanySchema = z.object({
+      name: z.string().min(2, "Business name is required"),
+      description: z.string().max(1000).optional(),
+      contactEmail: z.string().email("Valid contact email is required").optional(),
+      phone: z.string().min(7).max(20).optional(),
+      businessDetails: z
+        .object({
+          registrationNumber: z.string().optional(),
+          taxId: z.string().optional(),
+          businessType: z.string().optional(),
+          industry: z.string().optional(),
+          yearEstablished: z
+            .preprocess((val) => {
+              if (typeof val === "string" && val.trim() !== "") {
+                const parsed = Number(val);
+                return Number.isNaN(parsed) ? undefined : parsed;
+              }
+              return val;
+            }, z.number().int().min(1900).max(new Date().getFullYear()).optional()),
+          website: z.string().url().optional(),
+        })
+        .optional(),
+      bankDetails: z
+        .object({
+          bankName: z.string().optional(),
+          accountName: z.string().optional(),
+          accountNumber: z.string().optional(),
+          routingNumber: z.string().optional(),
+          swiftCode: z.string().optional(),
+          notes: z.string().optional(),
+        })
+        .optional(),
+      locationDetails: z
+        .object({
+          addressLine1: z.string().optional(),
+          addressLine2: z.string().optional(),
+          city: z.string().optional(),
+          state: z.string().optional(),
+          lga: z.string().optional(),
+          country: z.string().optional(),
+          coordinates: z
+            .object({
+              latitude: z.number().optional(),
+              longitude: z.number().optional(),
+            })
+            .optional(),
+        })
+        .optional(),
+    });
+
+    const validated = createCompanySchema.parse(req.body);
+
+    const detailsPayload = {
+      businessDetails: validated.businessDetails ?? {},
+      bankDetails: validated.bankDetails ?? {},
+      locationDetails: validated.locationDetails ?? {},
+      submittedAt: new Date().toISOString(),
+    };
+
+    const createdCompany = await storage.createCompany({
+      name: validated.name,
+      description: validated.description,
+      contactEmail: validated.contactEmail,
+      phone: validated.phone,
+      providerId,
+      details: detailsPayload,
+    });
+
+    res.status(201).json(createdCompany);
+  } catch (error: any) {
+    if (error?.name === "ZodError") {
+      return res.status(400).json({ error: "Validation error", details: error.errors });
+    }
     res.status(500).json({ error: error.message });
   }
 });
