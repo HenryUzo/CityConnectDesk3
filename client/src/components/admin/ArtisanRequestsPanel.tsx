@@ -23,12 +23,34 @@ interface ServiceRequest {
   billedAmount?: string | number;
 }
 
-export default function ArtisanRequestsPanel() {
+interface ArtisanRequestsPanelProps {
+  selectedEstateId: string | null;
+}
+
+export default function ArtisanRequestsPanel({ selectedEstateId }: ArtisanRequestsPanelProps) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<RequestStatus | "all">("pending");
+  const enabled = Boolean(selectedEstateId);
+  if (!enabled) {
+    return (
+      <Card>
+        <CardHeader>
+          <div className="text-lg font-semibold">Artisan Requests</div>
+        </CardHeader>
+        <CardContent>
+          <div className="text-sm text-muted-foreground">
+            Select an estate to view artisan service requests.
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const { data, isLoading, error } = useQuery<ServiceRequest[], Error>({
-    queryKey: ["admin.bridge.service-requests", { status, q }],
+    queryKey: [
+      "admin.bridge.service-requests",
+      { status, q, estateId: selectedEstateId },
+    ],
     queryFn: async () => {
       const params: Record<string, string> = {};
       if (status !== "all") params.status = status;
@@ -36,7 +58,7 @@ export default function ArtisanRequestsPanel() {
       // Use the typed AdminAPI wrapper: returns JSON directly
       return await AdminAPI.bridge.getServiceRequests(params);
     },
-    refetchInterval: 5000,
+    refetchInterval: enabled ? 5000 : false,
     placeholderData: (prev) => prev,
   });
 

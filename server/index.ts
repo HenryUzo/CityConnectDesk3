@@ -128,6 +128,12 @@ async function ensureCompaniesTable() {
       updated_at timestamp DEFAULT now()
     );
   `);
+
+  await db.execute(sql`
+    ALTER TABLE companies
+      ADD COLUMN IF NOT EXISTS provider_id varchar REFERENCES users(id),
+      ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}';
+  `);
 }
 
 // Boot sequence

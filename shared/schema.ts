@@ -269,9 +269,7 @@ export const marketplaceItems = pgTable("marketplace_items", {
   id: varchar("id")
     .primaryKey()
     .default(sql`gen_random_uuid()`),
-  estateId: varchar("estate_id")
-    .notNull()
-    .references(() => estates.id),
+  estateId: varchar("estate_id").references(() => estates.id),
   storeId: varchar("store_id").references(() => stores.id), // Nullable for backward compatibility
   vendorId: varchar("vendor_id")
     .notNull()
@@ -290,6 +288,19 @@ export const marketplaceItems = pgTable("marketplace_items", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Item Categories table (for marketplace items)
+export const itemCategories = pgTable("item_categories", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  emoji: text("emoji"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Companies table (for provider associations)
 export const companies = pgTable("companies", {
   id: varchar("id")
@@ -299,6 +310,8 @@ export const companies = pgTable("companies", {
   description: text("description"),
   contactEmail: text("contact_email"),
   phone: text("phone"),
+  providerId: varchar("provider_id").references(() => users.id),
+  details: jsonb("details").notNull().default("{}"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

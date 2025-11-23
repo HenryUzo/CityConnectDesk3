@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +15,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { ArrowLeft } from "lucide-react";
+
+type Company = {
+  id: string;
+  name: string;
+  description?: string;
+};
 
 
 const residentRegisterSchema = z.object({
@@ -33,7 +40,7 @@ const providerRegisterSchema = z.object({
   email: z.string().email("Invalid email address"),
   phone: z.string().min(10, "Phone number must be at least 10 digits"),
   password: z.string().min(6, "Password must be at least 6 characters"),
-  serviceCategory: z.enum(["electrician", "plumber", "carpenter", "market_runner"]),
+  company: z.string().min(1, "Select a company"),
   experience: z.number().min(0, "Experience must be 0 or greater"),
 });
 
@@ -111,10 +118,36 @@ export default function AuthPage() {
       email: "",
       phone: "",
       password: "",
-      serviceCategory: "electrician" as const,
+      company: "",
       experience: 0,
     },
   });
+
+  const { data: companies = [], isLoading: isCompaniesLoading } = useQuery<Company[]>({
+    queryKey: ["companies"],
+    queryFn: async () => {
+      const res = await fetch("/api/companies");
+      if (!res.ok) {
+        throw new Error("Failed to load companies");
+      }
+      return res.json();
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  useEffect(() => {
+    if (
+      authMode === "register" &&
+      userType === "provider" &&
+      companies.length > 0 &&
+      !providerRegisterForm.getValues("company")
+    ) {
+      const defaultCompany = companies[0].name || companies[0].id;
+      if (defaultCompany) {
+        providerRegisterForm.setValue("company", defaultCompany);
+      }
+    }
+  }, [authMode, userType, companies, providerRegisterForm]);
 
   // Redirect if already logged in - after all hooks are declared
   useEffect(() => {
@@ -606,26 +639,48 @@ export default function AuthPage() {
                           />
                           <FormField
                             control={providerRegisterForm.control}
-                            name="serviceCategory"
+                            name="company"
                             render={({ field }) => (
                               <FormItem className="space-y-1.5 sm:space-y-2">
-                                <FormLabel className="text-sm sm:text-base font-medium">Service Category</FormLabel>
-                                <Select onValueChange={field.onChange} defaultValue={field.value}>
-                                  <FormControl>
-                                    <SelectTrigger 
+                                <FormLabel className="text-sm sm:text-base font-medium">Company</FormLabel>
+                                <FormControl>
+                                  <Select
+                                    onValueChange={field.onChange}
+                                    value={field.value || undefined}
+                                    disabled={isCompaniesLoading}
+                                  >
+                                    <SelectTrigger
                                       className="h-11 sm:h-12 text-base"
-                                      data-testid="select-service-category"
+                                      data-testid="select-company"
                                     >
-                                      <SelectValue placeholder="Select your service" />
+                                      <SelectValue
+                                        placeholder={
+                                          isCompaniesLoading
+                                            ? "Loading companies..."
+                                            : "Select your company"
+                                        }
+                                      />
                                     </SelectTrigger>
-                                  </FormControl>
-                                  <SelectContent>
-                                    <SelectItem value="electrician">Electrician</SelectItem>
-                                    <SelectItem value="plumber">Plumber</SelectItem>
-                                    <SelectItem value="carpenter">Carpenter</SelectItem>
-                                    <SelectItem value="market_runner">Market Runner</SelectItem>
-                                  </SelectContent>
-                                </Select>
+                                    <SelectContent>
+                                      {companies.length === 0 ? (
+                                        <SelectItem value="" disabled>
+                                          {isCompaniesLoading
+                                            ? "Loading companies..."
+                                            : "No companies available"}
+                                        </SelectItem>
+                                      ) : (
+                                        companies.map((company) => (
+                                          <SelectItem
+                                            key={company.id}
+                                            value={company.name || company.id}
+                                          >
+                                            {company.name || company.id}
+                                          </SelectItem>
+                                        ))
+                                      )}
+                                    </SelectContent>
+                                  </Select>
+                                </FormControl>
                                 <FormMessage className="text-xs sm:text-sm" />
                               </FormItem>
                             )}
@@ -668,6 +723,20 @@ export default function AuthPage() {
               </Tabs>
 
                 <Separator className="my-6 sm:my-8" />
+
+                <div className="text-center space-y-2">
+                  <p className="text-xs sm:text-sm text-muted-foreground px-4">
+                    Running a business? Register your services and get access to the CityConnect marketplace.
+                  </p>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setLocation("/company-registration")}
+                    className="h-10 sm:h-11 min-h-[44px] w-full"
+                    data-testid="button-register-business"
+                  >
+                    Register as a business
+                  </Button>
+                </div>
 
                 {/* Toggle between login and register - Mobile optimized */}
                 <div className="text-center">
@@ -713,6 +782,16 @@ export default function AuthPage() {
                 </div>
                 <span>Secure Payments</span>
               </div>
+            </div>
+            <div className="mt-8 flex justify-center">
+              <Button
+                variant="outline"
+                className="h-10 sm:h-11 min-h-[44px]"
+                onClick={() => setLocation("/company-registration")}
+                data-testid="button-hero-register-business"
+              >
+                Register as a business
+              </Button>
             </div>
           </div>
         </div>

@@ -112,16 +112,18 @@ export async function adminFetch<T = any>(
     body = init.body as BodyInit;
   }
 
-  // Include cookies by default (admin endpoints expect session/refresh cookies)
-  const credentials: RequestInit["credentials"] =
-    init?.credentials ?? "include";
+  // Include cookies for same-origin session-based auth; omit for cross-origin
+  const shouldIncludeCredentials =
+    typeof window !== "undefined" &&
+    (!url.startsWith("http") ||
+      new URL(url, window.location.origin).origin === window.location.origin);
 
   const res = await fetch(url, {
     ...init,
     method,
     headers,
     body,
-    credentials,
+    credentials: shouldIncludeCredentials ? "include" : "omit",
   });
 
   const ct = res.headers.get("content-type") || "";
@@ -181,8 +183,7 @@ export const AdminAPI = {
     logout: () => adminFetch("/api/admin/auth/logout", { method: "POST" }),
   },
   dashboard: {
-    // server exposes `/api/admin/stats`
-    getStats: () => adminFetch("/api/admin/stats"),
+    getStats: () => adminFetch("/api/admin/dashboard/stats"),
   },
   users: {
     // Unified endpoint (admins + residents + providers)

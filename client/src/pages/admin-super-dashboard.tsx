@@ -1,11 +1,12 @@
 import {
   useState,
   useEffect,
+  useCallback,
   createContext,
   useContext,
   ReactNode,
 } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import {
@@ -26,7 +27,13 @@ import {
   type CreateProviderInput,
   type IMarketplaceItem,
 } from "@shared/admin-schema";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -72,9 +79,14 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ThemeToggle } from "@/components/theme-toggle";
 import {
   AlertTriangle,
   Building2,
@@ -92,6 +104,7 @@ import {
   FileBarChart,
   Globe,
   LayoutDashboard,
+  Loader2,
   LogOut,
   Menu,
   MessageSquare,
@@ -104,6 +117,7 @@ import {
   Star,
   Store,
   Tags,
+  Trash2,
   TrendingUp,
   UserCheck,
   UserPlus,
@@ -112,6 +126,143 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+
+// Shopping-focused emoji palette (generated into dropdown)
+const EMOJI_GROUPS = [
+  { value: "🍎", names: ["Apple", "Apple Bag", "Apple Basket", "Apple Box", "Apple Jam", "Apple Juice", "Apple Pie", "Apple Snack", "Apple Crate", "Apple Pack"] },
+  { value: "🍏", names: ["Green Apple", "Green Apple Box", "Green Apple Juice", "Green Apple Pie", "Green Apple Snack", "Green Apple Basket", "Green Apple Crate", "Green Apple Jam", "Green Apple Pack", "Green Apple Bundle"] },
+  { value: "🍌", names: ["Banana", "Banana Bunch", "Banana Chips", "Banana Smoothie", "Banana Yogurt", "Banana Bread", "Banana Pack", "Banana Basket", "Banana Split", "Banana Snack"] },
+  { value: "🍇", names: ["Grapes", "Grape Box", "Grape Juice", "Grape Jam", "Grape Pack", "Grape Snack", "Grape Basket", "Grape Bundle", "Grape Carton", "Grape Tray"] },
+  { value: "🍓", names: ["Strawberry", "Strawberry Box", "Strawberry Jam", "Strawberry Yogurt", "Strawberry Milk", "Strawberry Cake", "Strawberry Pack", "Strawberry Basket", "Strawberry Snack", "Strawberry Tart"] },
+  { value: "🍒", names: ["Cherry", "Cherry Box", "Cherry Jam", "Cherry Juice", "Cherry Pack", "Cherry Basket", "Cherry Tart", "Cherry Snack", "Cherry Mix", "Cherry Crate"] },
+  { value: "🍑", names: ["Peach", "Peach Jam", "Peach Juice", "Peach Tart", "Peach Basket", "Peach Crate", "Peach Yogurt", "Peach Pack", "Peach Snack", "Peach Slices"] },
+  { value: "🍍", names: ["Pineapple", "Pineapple Slices", "Pineapple Juice", "Pineapple Rings", "Pineapple Jam", "Pineapple Pack", "Pineapple Snack", "Pineapple Basket", "Pineapple Chunks", "Pineapple Crate"] },
+  { value: "🥭", names: ["Mango", "Mango Juice", "Mango Slices", "Mango Jam", "Mango Lassi", "Mango Pack", "Mango Basket", "Mango Snack", "Mango Chutney", "Mango Crate"] },
+  { value: "🍉", names: ["Watermelon", "Watermelon Slice", "Watermelon Juice", "Watermelon Pack", "Watermelon Snack", "Watermelon Basket", "Watermelon Wedges", "Watermelon Crate", "Watermelon Bowl", "Watermelon Platter"] },
+  { value: "🥝", names: ["Kiwi", "Kiwi Pack", "Kiwi Slices", "Kiwi Yogurt", "Kiwi Juice", "Kiwi Basket", "Kiwi Snack", "Kiwi Crate", "Kiwi Mix", "Kiwi Platter"] },
+  { value: "🍊", names: ["Orange", "Orange Juice", "Orange Pack", "Orange Basket", "Orange Crate", "Orange Marmalade", "Orange Snack", "Orange Segments", "Orange Carton", "Orange Mix"] },
+  { value: "🍋", names: ["Lemon", "Lemonade", "Lemon Pack", "Lemon Basket", "Lemon Crate", "Lemon Wedges", "Lemon Pie", "Lemon Tart", "Lemon Snack", "Lemon Mix"] },
+  { value: "🍈", names: ["Melon", "Melon Wedges", "Melon Pack", "Melon Basket", "Melon Crate", "Melon Juice", "Melon Snack", "Melon Platter", "Melon Mix", "Melon Slices"] },
+  { value: "🍐", names: ["Pear", "Pear Pack", "Pear Basket", "Pear Crate", "Pear Juice", "Pear Snack", "Pear Slices", "Pear Tart", "Pear Mix", "Pear Bowl"] },
+  { value: "🍆", names: ["Eggplant", "Eggplant Pack", "Eggplant Basket", "Eggplant Crate", "Eggplant Cutlets", "Eggplant Parm", "Eggplant Mix", "Eggplant Grill", "Eggplant Tray", "Eggplant Dip"] },
+  { value: "🥑", names: ["Avocado", "Avocado Pack", "Avocado Basket", "Avocado Toast", "Avocado Dip", "Avocado Mix", "Avocado Crate", "Avocado Salad", "Avocado Sushi", "Avocado Bowl"] },
+  { value: "🌽", names: ["Corn", "Corn on Cob", "Corn Pack", "Corn Basket", "Corn Crate", "Corn Chips", "Corn Meal", "Corn Mix", "Corn Snack", "Corn Tray"] },
+  { value: "🥕", names: ["Carrot", "Carrot Pack", "Carrot Basket", "Carrot Crate", "Carrot Juice", "Carrot Snack", "Carrot Sticks", "Carrot Cake", "Carrot Mix", "Carrot Tray"] },
+  { value: "🥔", names: ["Potato", "Potato Bag", "Potato Pack", "Potato Basket", "Potato Crate", "Potato Wedges", "Potato Chips", "Potato Mash", "Potato Mix", "Potato Tray"] },
+  { value: "🥦", names: ["Broccoli", "Broccoli Pack", "Broccoli Basket", "Broccoli Crate", "Broccoli Florets", "Broccoli Mix", "Broccoli Snack", "Broccoli Tray", "Broccoli Salad", "Broccoli Stir Fry"] },
+  { value: "🥬", names: ["Lettuce", "Lettuce Pack", "Lettuce Basket", "Lettuce Crate", "Lettuce Mix", "Lettuce Heads", "Lettuce Wraps", "Lettuce Salad", "Lettuce Tray", "Lettuce Stack"] },
+  { value: "🍅", names: ["Tomato", "Tomato Pack", "Tomato Basket", "Tomato Crate", "Tomato Sauce", "Tomato Puree", "Tomato Soup", "Tomato Mix", "Tomato Snack", "Tomato Tray"] },
+  { value: "🧄", names: ["Garlic", "Garlic Pack", "Garlic Basket", "Garlic Crate", "Garlic Paste", "Garlic Powder", "Garlic Mix", "Garlic Snack", "Garlic Tray", "Garlic Bulbs"] },
+  { value: "🧅", names: ["Onion", "Onion Pack", "Onion Basket", "Onion Crate", "Onion Rings", "Onion Powder", "Onion Mix", "Onion Snack", "Onion Tray", "Onion Bulbs"] },
+  { value: "🌶️", names: ["Chili Pepper", "Chili Pack", "Chili Basket", "Chili Crate", "Chili Flakes", "Chili Powder", "Chili Mix", "Chili Snack", "Chili Tray", "Chili Sauce"] },
+  { value: "🍄", names: ["Mushroom", "Mushroom Pack", "Mushroom Basket", "Mushroom Crate", "Mushroom Mix", "Mushroom Snack", "Mushroom Soup", "Mushroom Tray", "Mushroom Slices", "Mushroom Skewers"] },
+  { value: "🥐", names: ["Croissant", "Croissant Pack", "Croissant Basket", "Croissant Crate", "Chocolate Croissant", "Almond Croissant", "Butter Croissant", "Mini Croissant", "Croissant Tray", "Croissant Snack"] },
+  { value: "🍞", names: ["Bread Loaf", "Bread Pack", "Bread Basket", "Bread Crate", "Wholegrain Bread", "Sourdough Bread", "White Bread", "Rye Bread", "Bread Rolls", "Bread Tray"] },
+  { value: "🥯", names: ["Bagel", "Bagel Pack", "Bagel Basket", "Bagel Crate", "Sesame Bagel", "Everything Bagel", "Plain Bagel", "Cinnamon Bagel", "Bagel Tray", "Bagel Snack"] },
+  { value: "🥞", names: ["Pancake", "Pancake Pack", "Pancake Mix", "Pancake Stack", "Pancake Syrup", "Pancake Basket", "Pancake Crate", "Pancake Tray", "Pancake Snack", "Mini Pancake"] },
+  { value: "🧇", names: ["Waffle", "Waffle Pack", "Waffle Mix", "Waffle Stack", "Waffle Syrup", "Waffle Basket", "Waffle Crate", "Waffle Tray", "Waffle Snack", "Mini Waffle"] },
+  { value: "🥖", names: ["Baguette", "Baguette Pack", "Baguette Basket", "Baguette Crate", "Garlic Baguette", "Seeded Baguette", "Classic Baguette", "Mini Baguette", "Baguette Tray", "Baguette Snack"] },
+  { value: "🍗", names: ["Chicken Drumstick", "Chicken Bucket", "Chicken Pack", "Chicken Basket", "Chicken Crate", "BBQ Chicken", "Spicy Chicken", "Fried Chicken", "Roast Chicken", "Chicken Tray"] },
+  { value: "🥩", names: ["Steak", "Steak Pack", "Steak Basket", "Steak Crate", "Ribeye Steak", "Sirloin Steak", "Flank Steak", "Steak Marinade", "Steak Tray", "Steak Cuts"] },
+  { value: "🥓", names: ["Bacon", "Bacon Pack", "Bacon Basket", "Bacon Crate", "Smoked Bacon", "Crispy Bacon", "Turkey Bacon", "Bacon Bits", "Bacon Tray", "Bacon Strips"] },
+  { value: "🍖", names: ["Meat Ribs", "Rib Rack", "BBQ Ribs", "Smoked Ribs", "Ribs Pack", "Ribs Basket", "Ribs Crate", "Ribs Tray", "Honey Ribs", "Spicy Ribs"] },
+  { value: "🍤", names: ["Fried Shrimp", "Shrimp Pack", "Shrimp Basket", "Shrimp Crate", "Shrimp Cocktail", "Shrimp Tray", "Shrimp Skewers", "Shrimp Snack", "Garlic Shrimp", "Spicy Shrimp"] },
+  { value: "🐟", names: ["Fish Fillet", "Fish Pack", "Fish Basket", "Fish Crate", "Salmon Fillet", "Cod Fillet", "Tilapia Fillet", "Fish Tray", "Smoked Fish", "Fish Steak"] },
+  { value: "🍣", names: ["Sushi Roll", "Sushi Box", "Sushi Pack", "Sushi Tray", "Salmon Sushi", "Tuna Sushi", "Veggie Sushi", "Sushi Platter", "Sushi Combo", "Nigiri Sushi"] },
+  { value: "🍕", names: ["Pizza Slice", "Pizza Box", "Cheese Pizza", "Pepperoni Pizza", "Veggie Pizza", "BBQ Pizza", "Pizza Combo", "Pizza Party", "Pizza Pack", "Pizza Tray"] },
+  { value: "🍔", names: ["Burger", "Cheeseburger", "Double Burger", "Veggie Burger", "Chicken Burger", "Burger Combo", "Burger Pack", "Burger Box", "Burger Meal", "Burger Tray"] },
+  { value: "🌭", names: ["Hotdog", "Chili Dog", "Cheese Dog", "BBQ Hotdog", "Hotdog Combo", "Hotdog Pack", "Hotdog Box", "Hotdog Meal", "Hotdog Tray", "Hotdog Snack"] },
+  { value: "🥪", names: ["Sandwich", "Club Sandwich", "Chicken Sandwich", "Turkey Sandwich", "Veggie Sandwich", "Sandwich Box", "Sandwich Pack", "Sandwich Meal", "Sandwich Tray", "BLT Sandwich"] },
+  { value: "🌮", names: ["Taco", "Beef Taco", "Chicken Taco", "Fish Taco", "Veggie Taco", "Taco Pack", "Taco Box", "Taco Meal", "Taco Tray", "Taco Combo"] },
+  { value: "🌯", names: ["Burrito", "Beef Burrito", "Chicken Burrito", "Veggie Burrito", "Bean Burrito", "Burrito Pack", "Burrito Box", "Burrito Meal", "Burrito Tray", "Burrito Combo"] },
+  { value: "🥙", names: ["Pita Pocket", "Falafel Pita", "Chicken Pita", "Lamb Pita", "Veggie Pita", "Pita Pack", "Pita Box", "Pita Meal", "Pita Tray", "Pita Combo"] },
+  { value: "🍜", names: ["Ramen Bowl", "Ramen Pack", "Ramen Box", "Spicy Ramen", "Chicken Ramen", "Veggie Ramen", "Miso Ramen", "Ramen Meal", "Ramen Tray", "Ramen Combo"] },
+  { value: "🍝", names: ["Pasta", "Spaghetti", "Pasta Pack", "Pasta Box", "Pasta Meal", "Pasta Tray", "Pasta Combo", "Creamy Pasta", "Tomato Pasta", "Pesto Pasta"] },
+  { value: "🍲", names: ["Stew", "Stew Pack", "Stew Bowl", "Beef Stew", "Chicken Stew", "Veggie Stew", "Spicy Stew", "Stew Meal", "Stew Tray", "Stew Combo"] },
+  { value: "🍛", names: ["Curry", "Chicken Curry", "Beef Curry", "Veggie Curry", "Curry Pack", "Curry Box", "Curry Meal", "Curry Tray", "Curry Combo", "Spicy Curry"] },
+  { value: "🍚", names: ["Rice Bowl", "Rice Pack", "Rice Bag", "Brown Rice", "Jasmine Rice", "Basmati Rice", "Sticky Rice", "Rice Box", "Rice Meal", "Rice Tray"] },
+  { value: "🍥", names: ["Fish Cake", "Fish Cake Pack", "Fish Cake Box", "Fish Cake Tray", "Spicy Fish Cake", "Sesame Fish Cake", "Veggie Fish Cake", "Fish Cake Meal", "Fish Cake Snack", "Fish Cake Combo"] },
+  { value: "🍩", names: ["Doughnut", "Glazed Doughnut", "Chocolate Doughnut", "Sprinkle Doughnut", "Doughnut Box", "Doughnut Pack", "Doughnut Tray", "Doughnut Snack", "Filled Doughnut", "Mini Doughnut"] },
+  { value: "🍪", names: ["Cookie", "Chocolate Chip Cookie", "Oatmeal Cookie", "Sugar Cookie", "Cookie Box", "Cookie Pack", "Cookie Tray", "Cookie Snack", "Cookie Gift", "Cookie Tin"] },
+  { value: "🍫", names: ["Chocolate Bar", "Dark Chocolate", "Milk Chocolate", "White Chocolate", "Chocolate Pack", "Chocolate Box", "Chocolate Gift", "Chocolate Snack", "Chocolate Mix", "Chocolate Tray"] },
+  { value: "🍿", names: ["Popcorn", "Butter Popcorn", "Caramel Popcorn", "Cheese Popcorn", "Popcorn Tub", "Popcorn Pack", "Popcorn Box", "Popcorn Snack", "Popcorn Bowl", "Popcorn Mix"] },
+  { value: "🧃", names: ["Juice Box", "Apple Juice Box", "Orange Juice Box", "Grape Juice Box", "Mixed Fruit Juice", "Juice Pack", "Juice Carton", "Juice Bottle", "Juice Cooler", "Juice Case"] },
+  { value: "🥤", names: ["Soft Drink", "Soda Can", "Soda Bottle", "Cola Can", "Lemon Soda", "Orange Soda", "Ginger Soda", "Soda Pack", "Soda Crate", "Soda Mix"] },
+  { value: "🧋", names: ["Bubble Tea", "Milk Tea", "Taro Bubble Tea", "Matcha Bubble Tea", "Brown Sugar Bubble Tea", "Fruit Bubble Tea", "Bubble Tea Pack", "Bubble Tea Tray", "Bubble Tea Kit", "Bubble Tea Mix"] },
+  { value: "☕", names: ["Coffee", "Latte", "Cappuccino", "Espresso", "Mocha", "Iced Coffee", "Coffee Pack", "Coffee Beans", "Coffee Pods", "Coffee Gift"] },
+  { value: "🍷", names: ["Red Wine", "White Wine", "Rosé Wine", "Sparkling Wine", "Wine Bottle", "Wine Pack", "Wine Crate", "Wine Gift", "Wine Box", "Wine Pairing"] },
+  { value: "🍺", names: ["Beer", "Beer Can", "Beer Bottle", "Craft Beer", "Lager Beer", "Ale Beer", "Beer Pack", "Beer Crate", "Beer Combo", "Beer Gift"] },
+  { value: "🥛", names: ["Milk Carton", "Milk Bottle", "Whole Milk", "Skim Milk", "Almond Milk", "Oat Milk", "Soy Milk", "Milk Pack", "Milk Crate", "Milk Cooler"] },
+  { value: "🧀", names: ["Cheese Block", "Cheddar Cheese", "Mozzarella Cheese", "Parmesan Cheese", "Cheese Pack", "Cheese Tray", "Cheese Platter", "Cheese Snack", "Cheese Crate", "Cheese Basket"] },
+  { value: "🍶", names: ["Sake Bottle", "Sake Pack", "Sake Gift", "Sake Crate", "Rice Wine", "Premium Sake", "Sparkling Sake", "Sake Set", "Sake Box", "Sake Pairing"] },
+  { value: "🧴", names: ["Lotion", "Body Lotion", "Hand Lotion", "Face Cream", "Sunscreen", "Lotion Pack", "Lotion Gift", "Lotion Set", "Lotion Bottle", "Lotion Tube"] },
+  { value: "🧻", names: ["Paper Towel", "Paper Roll", "Toilet Roll", "Kitchen Towel", "Paper Pack", "Paper Bulk", "Paper Value Pack", "Paper Carton", "Paper Bundle", "Paper Case"] },
+  { value: "🧽", names: ["Sponge", "Cleaning Sponge", "Scrub Sponge", "Kitchen Sponge", "Bath Sponge", "Sponge Pack", "Sponge Bulk", "Sponge Set", "Sponge Value Pack", "Sponge Duo"] },
+  { value: "🧹", names: ["Broom", "Cleaning Broom", "Floor Broom", "Broom Set", "Broom With Dustpan", "Broom Pack", "Broom Value Pack", "Broom Combo", "Outdoor Broom", "Indoor Broom"] },
+  { value: "🧺", names: ["Laundry Basket", "Storage Basket", "Market Basket", "Picnic Basket", "Gift Basket", "Fruit Basket", "Grocery Basket", "Home Basket", "Basket Set", "Basket Duo"] },
+  { value: "🧼", names: ["Soap Bar", "Hand Soap", "Body Soap", "Face Soap", "Soap Pack", "Soap Gift", "Soap Set", "Soap Refill", "Liquid Soap", "Foam Soap"] },
+  { value: "🧦", names: ["Socks", "Ankle Socks", "Crew Socks", "Sport Socks", "Wool Socks", "Dress Socks", "Socks Pack", "Socks Gift", "Socks Bundle", "Socks Trio"] },
+  { value: "👕", names: ["T-Shirt", "Graphic Tee", "Basic Tee", "Sport Tee", "V-Neck Tee", "Long Sleeve Tee", "T-Shirt Pack", "T-Shirt Duo", "T-Shirt Bundle", "T-Shirt Gift"] },
+  { value: "👖", names: ["Jeans", "Slim Jeans", "Straight Jeans", "Relaxed Jeans", "Dark Jeans", "Light Jeans", "Jeans Pack", "Jeans Duo", "Jeans Bundle", "Jeans Gift"] },
+  { value: "👗", names: ["Dress", "Summer Dress", "Evening Dress", "Casual Dress", "Floral Dress", "Party Dress", "Dress Pack", "Dress Duo", "Dress Bundle", "Dress Gift"] },
+  { value: "👔", names: ["Shirt", "Formal Shirt", "Oxford Shirt", "Linen Shirt", "Checked Shirt", "Striped Shirt", "Shirt Pack", "Shirt Duo", "Shirt Bundle", "Shirt Gift"] },
+  { value: "🧥", names: ["Jacket", "Denim Jacket", "Leather Jacket", "Puffer Jacket", "Blazer Jacket", "Rain Jacket", "Jacket Pack", "Jacket Duo", "Jacket Bundle", "Jacket Gift"] },
+  { value: "🧢", names: ["Cap", "Baseball Cap", "Trucker Cap", "Snapback Cap", "Dad Cap", "Sport Cap", "Cap Pack", "Cap Duo", "Cap Bundle", "Cap Gift"] },
+  { value: "👟", names: ["Sneakers", "Running Sneakers", "Casual Sneakers", "High-Top Sneakers", "Court Sneakers", "Trail Sneakers", "Sneaker Pack", "Sneaker Duo", "Sneaker Bundle", "Sneaker Gift"] },
+  { value: "👠", names: ["Heels", "Stiletto Heels", "Block Heels", "Kitten Heels", "Party Heels", "Dress Heels", "Heels Pack", "Heels Duo", "Heels Bundle", "Heels Gift"] },
+  { value: "👞", names: ["Dress Shoes", "Oxford Shoes", "Derby Shoes", "Loafer Shoes", "Wingtip Shoes", "Leather Shoes", "Shoe Pack", "Shoe Duo", "Shoe Bundle", "Shoe Gift"] },
+  { value: "🎒", names: ["Backpack", "Travel Backpack", "School Backpack", "Laptop Backpack", "Hiking Backpack", "Mini Backpack", "Backpack Pack", "Backpack Duo", "Backpack Bundle", "Backpack Gift"] },
+  { value: "👜", names: ["Handbag", "Tote Bag", "Shoulder Bag", "Crossbody Bag", "Clutch Bag", "Satchel Bag", "Bag Pack", "Bag Duo", "Bag Bundle", "Bag Gift"] },
+  { value: "💍", names: ["Ring", "Gold Ring", "Silver Ring", "Diamond Ring", "Engagement Ring", "Wedding Ring", "Ring Box", "Ring Gift", "Ring Pair", "Ring Set"] },
+  { value: "⌚", names: ["Watch", "Smart Watch", "Sport Watch", "Dress Watch", "Classic Watch", "Metal Watch", "Watch Box", "Watch Gift", "Watch Pair", "Watch Set"] },
+  { value: "📱", names: ["Smartphone", "Phone Case", "Phone Charger", "Phone Screen Guard", "Phone Bundle", "Phone Earbuds", "Phone Power Bank", "Phone Mount", "Phone Cable", "Phone Stand"] },
+  { value: "💻", names: ["Laptop", "Laptop Sleeve", "Laptop Stand", "Laptop Charger", "Laptop Dock", "Laptop Bundle", "Laptop Cooling Pad", "Laptop Bag", "Laptop Combo", "Laptop Kit"] },
+  { value: "🎧", names: ["Headphones", "Wireless Headphones", "Noise Canceling Headphones", "Gaming Headset", "On-Ear Headphones", "Over-Ear Headphones", "Headphone Case", "Headphone Stand", "Headphone Bundle", "Headphone Gift"] },
+  { value: "🖥️", names: ["Monitor", "Gaming Monitor", "Office Monitor", "Curved Monitor", "4K Monitor", "Monitor Stand", "Monitor Arm", "Monitor Bundle", "Monitor Pair", "Monitor Gift"] },
+  { value: "📺", names: ["Television", "Smart TV", "LED TV", "OLED TV", "4K TV", "TV Wall Mount", "TV Soundbar", "TV Bundle", "TV Gift", "TV Pair"] },
+  { value: "🧸", names: ["Teddy Bear", "Stuffed Animal", "Plush Toy", "Toy Bundle", "Toy Gift", "Toy Set", "Toy Box", "Toy Basket", "Toy Pack", "Toy Plush"] },
+  { value: "📚", names: ["Books", "Novel Pack", "Cookbook", "Children Book", "Notebook Set", "Journal Pack", "Planner", "Story Book", "Workbook", "Reference Book"] },
+  { value: "✏️", names: ["Pencil", "Pencil Pack", "Colored Pencil Set", "Mechanical Pencil", "Pencil Case", "Pencil Box", "Pencil Kit", "Pencil Duo", "Pencil Bundle", "Pencil Gift"] },
+  { value: "🖊️", names: ["Pen", "Gel Pen", "Ballpoint Pen", "Fountain Pen", "Pen Pack", "Pen Case", "Pen Box", "Pen Set", "Pen Duo", "Pen Gift"] },
+  { value: "📒", names: ["Notebook", "Spiral Notebook", "Hardcover Notebook", "Softcover Notebook", "Notebook Pack", "Notebook Bundle", "Notebook Set", "Notebook Gift", "Notebook Duo", "Notebook Trio"] },
+  { value: "🧴", names: ["Shampoo", "Conditioner", "Body Wash", "Face Wash", "Hair Serum", "Body Lotion", "Hand Cream", "Hair Oil", "Shower Gel", "Self Care Kit"] },
+  { value: "🧹", names: ["Cleaning Mop", "Cleaning Kit", "Cleaning Spray", "Cleaning Cloths", "Cleaning Bucket", "Cleaning Gloves", "Cleaning Set", "Cleaning Bundle", "Cleaning Wipes", "Cleaning Pads"] },
+  { value: "🧺", names: ["Laundry Hamper", "Laundry Bag", "Laundry Basket", "Laundry Detergent", "Laundry Softener", "Laundry Pods", "Laundry Sheets", "Laundry Bundle", "Laundry Kit", "Laundry Pair"] },
+  { value: "🧊", names: ["Ice Tray", "Ice Pack", "Ice Cube", "Ice Bag", "Ice Bucket", "Ice Maker", "Ice Scoop", "Ice Stones", "Ice Set", "Ice Bundle"] },
+  { value: "🛏️", names: ["Bed", "Bed Sheet", "Bed Set", "Duvet", "Comforter", "Pillow", "Pillow Cases", "Mattress Topper", "Bed Blanket", "Bed Throw"] },
+  { value: "🛋️", names: ["Sofa", "Sofa Cover", "Throw Pillow", "Cushion", "Sofa Set", "Sectional Sofa", "Loveseat", "Recliner Sofa", "Sofa Blanket", "Sofa Protector"] },
+  { value: "🪑", names: ["Chair", "Dining Chair", "Office Chair", "Desk Chair", "Bar Stool", "Folding Chair", "Patio Chair", "Gaming Chair", "Accent Chair", "Chair Cushion"] },
+  { value: "🍽️", names: ["Dinner Set", "Plate Set", "Bowl Set", "Cutlery Set", "Glass Set", "Mug Set", "Serving Tray", "Serving Bowl", "Kitchen Utensils", "Table Napkins"] },
+  { value: "🔪", names: ["Kitchen Knife", "Chef Knife", "Knife Set", "Cutting Board", "Knife Sharpener", "Knife Block", "Paring Knife", "Bread Knife", "Utility Knife", "Knife Bundle"] },
+  { value: "🍳", names: ["Frying Pan", "Nonstick Pan", "Skillet", "Sauté Pan", "Omelette Pan", "Griddle Pan", "Pan Set", "Pan Duo", "Pan Bundle", "Pan Gift"] },
+  { value: "🥣", names: ["Mixing Bowl", "Salad Bowl", "Soup Bowl", "Cereal Bowl", "Bowl Set", "Bowl Duo", "Bowl Bundle", "Bowl Gift", "Bowl Pack", "Serving Bowl"] },
+  { value: "🧂", names: ["Salt Shaker", "Pepper Grinder", "Spice Rack", "Spice Jars", "Seasoning Pack", "Herb Mix", "Spice Blend", "Salt Pack", "Pepper Pack", "Spice Kit"] },
+  { value: "🪥", names: ["Toothbrush", "Toothpaste", "Oral Care Kit", "Mouthwash", "Floss", "Toothbrush Pack", "Toothbrush Duo", "Toothbrush Bundle", "Toothbrush Gift", "Toothbrush Holder"] },
+  { value: "🍼", names: ["Baby Bottle", "Baby Formula", "Baby Food", "Baby Snack", "Baby Spoon", "Baby Bowl", "Baby Bib", "Baby Cup", "Baby Utensils", "Baby Sippy Cup"] },
+  { value: "🧸", names: ["Baby Plush", "Baby Toy", "Baby Rattle", "Baby Teether", "Baby Book", "Baby Blocks", "Baby Gift", "Baby Set", "Baby Bundle", "Baby Stacker"] },
+  { value: "🐾", names: ["Pet Treats", "Pet Food", "Pet Toy", "Pet Leash", "Pet Collar", "Pet Bed", "Pet Bowl", "Pet Grooming", "Pet Shampoo", "Pet Bundle"] },
+  { value: "⚽", names: ["Soccer Ball", "Football", "Futsal Ball", "Training Ball", "Match Ball", "Ball Pump", "Ball Net", "Ball Pack", "Ball Duo", "Ball Bundle"] },
+  { value: "🏀", names: ["Basketball", "Outdoor Basketball", "Indoor Basketball", "Training Basketball", "Match Basketball", "Basketball Pump", "Basketball Net", "Basketball Pack", "Basketball Duo", "Basketball Bundle"] },
+  { value: "🏐", names: ["Volleyball", "Beach Volleyball", "Indoor Volleyball", "Training Volleyball", "Match Volleyball", "Volleyball Pump", "Volleyball Net", "Volleyball Pack", "Volleyball Duo", "Volleyball Bundle"] },
+  { value: "🏓", names: ["Ping Pong Paddle", "Ping Pong Balls", "Table Tennis Set", "Ping Pong Net", "Ping Pong Racket", "Ping Pong Case", "Ping Pong Pack", "Ping Pong Duo", "Ping Pong Bundle", "Ping Pong Gift"] },
+  { value: "🎯", names: ["Dartboard", "Dart Set", "Soft Tip Darts", "Steel Tip Darts", "Dart Flights", "Dart Shafts", "Dart Case", "Dart Pack", "Dart Bundle", "Dart Gift"] },
+  { value: "🎲", names: ["Board Game", "Dice Set", "Card Game", "Puzzle", "Game Bundle", "Game Pack", "Strategy Game", "Family Game", "Party Game", "Game Gift"] },
+  { value: "📦", names: ["Storage Box", "Gift Box", "Shipping Box", "Moving Box", "Organizer Box", "Folding Box", "Clear Box", "Decor Box", "Box Bundle", "Box Set"] },
+  { value: "🛒", names: ["Shopping Cart Token", "Shopping Basket Tag", "Reusable Tote", "Market Bag", "Grocery Tote", "Foldable Tote", "Insulated Bag", "Eco Bag", "Canvas Bag", "Cart Clip"] },
+];
+
+// Normalize to a unique set of emoji options (strip variation selectors to avoid duplicate keys)
+const normalizeEmoji = (val: string) => (val || "").replace(/\uFE0F/g, "").trim();
+const EMOJI_OPTIONS = Array.from(
+  new Map(
+    EMOJI_GROUPS.map(({ value, names }) => {
+      const normalized = normalizeEmoji(value);
+      return [normalized, names[0] ?? "Emoji"];
+    }),
+  ).entries(),
+)
+  .map(([value, label]) => ({ value, label }))
+  .sort((a, b) => a.label.localeCompare(b.label));
 
 // Admin auth context (local to this page file)
 type AdminUser = any;
@@ -181,30 +332,14 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     }
   }, []);
 
-  // If we are using session-based auth (no token), try to load the user from the session cookie
+  // Mark session as checked without issuing a cookie-based /api/user call.
+  // Admin auth is handled via explicit login + stored tokens, so we avoid
+  // an extra 401 for users who haven't logged in yet.
   useEffect(() => {
-    let cancelled = false;
-    const bootstrapSessionUser = async () => {
-      if (token || user) {
-        setSessionChecked(true);
-        return;
-      }
-      try {
-        const sessionUser = await adminApiRequest("GET", "/api/user");
-        if (!cancelled && sessionUser) {
-          setUser(sessionUser);
-        }
-      } catch {
-        // ignore; will fall back to login
-      } finally {
-        if (!cancelled) setSessionChecked(true);
-      }
-    };
-    bootstrapSessionUser();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, user]);
+    if (!sessionChecked) {
+      setSessionChecked(true);
+    }
+  }, [sessionChecked]);
 
   const refreshToken = async () => {
     const refreshTokenValue = sessionStorage.getItem("admin_refresh_token");
@@ -412,7 +547,7 @@ const AdminSidebar = ({
   setIsMobileOpen: (open: boolean) => void;
 }) => {
   const { user, logout } = useAdminAuth();
-
+const [location, setLocation] = useLocation();
   const menuItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "estates", label: "Estates", icon: Building2 },
@@ -420,6 +555,7 @@ const AdminSidebar = ({
     { id: "providers", label: "Providers", icon: UserCheck },
     { id: "companies", label: "Companies", icon: Briefcase },
     { id: "stores", label: "Stores", icon: Store },
+    { id: "item-categories", label: "Item Categories", icon: Tags },
     { id: "categories", label: "Categories", icon: Tags },
     { id: "marketplace", label: "Marketplace", icon: ShoppingBag },
      { id: "artisanRequests", label: "Book an Artisan", icon: Wrench },
@@ -455,9 +591,12 @@ const AdminSidebar = ({
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
-            CityConnect Admin
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+              CityConnect Admin
+            </h1>
+            <ThemeToggle />
+          </div>
           <Button
             variant="ghost"
             size="sm"
@@ -486,6 +625,23 @@ const AdminSidebar = ({
         </div>
 
         {/* Navigation */}
+        <div className="px-4 pb-2 space-y-2">
+          <Link href="/company-registration">
+            <Button variant="secondary" className="w-full">
+              Register a business
+            </Button>
+          </Link>
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => {
+              setLocation("/admin-dashboard/providers");
+              setIsMobileOpen(false);
+            }}
+          >
+            Add provider
+          </Button>
+        </div>
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
           {menuItems.map((item) => {
             const Icon = item.icon;
@@ -527,8 +683,8 @@ const AdminSidebar = ({
             className="w-full"
             onClick={logout}
             data-testid="button-logout"
-          >
-            <LogOut className="w-4 h-4 mr-2" />
+
+>
             Logout
           </Button>
         </div>
@@ -2997,9 +3153,9 @@ const CategoriesManagement = () => {
                   className="w-[min(360px,calc(100vw-3rem))]"
                 >
                   <div className="grid grid-cols-6 gap-2 text-left">
-                    {emojiOptions.map((emoji) => (
+                    {emojiOptions.map((emoji, idx) => (
                       <button
-                        key={emoji}
+                        key={`${emoji}-${idx}`}
                         type="button"
                         className="text-xl p-2 rounded hover:bg-muted"
                         onClick={() => {
@@ -3117,9 +3273,9 @@ const CategoriesManagement = () => {
                   className="w-[min(360px,calc(100vw-3rem))]"
                 >
                   <div className="grid grid-cols-6 gap-2 text-left">
-                    {emojiOptions.map((emoji) => (
+                    {emojiOptions.map((emoji, idx) => (
                       <button
-                        key={emoji}
+                        key={`${emoji}-${idx}`}
                         type="button"
                         className="text-xl p-2 rounded hover:bg-muted"
                         onClick={() => {
@@ -4408,7 +4564,7 @@ const DashboardStats = () => {
 
 // Main Admin Dashboard Component
 export default function AdminSuperDashboard() {
-  const { user, token, sessionChecked } = useAdminAuth();
+  const { user, token, sessionChecked, selectedEstateId } = useAdminAuth();
   const [location, setLocation] = useLocation();
   const activeTab = (() => {
     if (!location.startsWith("/admin-dashboard")) return "dashboard";
@@ -4420,7 +4576,7 @@ export default function AdminSuperDashboard() {
 
   useEffect(() => {
     if (location === "/admin-dashboard" || location === "/admin-dashboard/") {
-      setLocation("/admin-dashboard/dashboard", true);
+      setLocation("/admin-dashboard/dashboard")
     }
   }, [location, setLocation]);
 
@@ -4547,11 +4703,16 @@ export default function AdminSuperDashboard() {
             {activeTab === "estates" && <EstatesManagement />}
             {activeTab === "providers" && <ProvidersManagement />}
             {activeTab === "companies" && <CompaniesManagement />}
+            {activeTab === "item-categories" && <ItemCategoriesPage />}
             {activeTab === "stores" && <StoresManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "orders" && <OrdersManagement />}
-            {activeTab === "requests" && <ArtisanRequestsPanel />}
-            {activeTab === "artisanRequests" && <ArtisanRequestsPanel />}
+            {activeTab === "requests" && (
+              <ArtisanRequestsPanel selectedEstateId={selectedEstateId} />
+            )}
+            {activeTab === "artisanRequests" && (
+              <ArtisanRequestsPanel selectedEstateId={selectedEstateId} />
+            )}
 
             {/* Removed generic under-development placeholder section */}
           </div>
@@ -6089,17 +6250,16 @@ const CompaniesManagement = () => {
 
 // Stores Management Component
 const StoresManagement = () => {
-  const [search, setSearch] = useState("");
-  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-  const [selectedStore, setSelectedStore] = useState<any>(null);
-  const [showMembersDialog, setShowMembersDialog] = useState(false);
-  const [showInventoryDialog, setShowInventoryDialog] = useState(false);
-  const [inventoryStore, setInventoryStore] = useState<any>(null);
-  const [selectedOwnerId, setSelectedOwnerId] = useState("");
-  const [formData, setFormData] = useState({
-    name: "",
-    description: "",
-    location: "",
+    const [location, setLocation] = useLocation();
+    const [search, setSearch] = useState("");
+    const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+    const [selectedStore, setSelectedStore] = useState<any>(null);
+    const [showMembersDialog, setShowMembersDialog] = useState(false);
+    const [selectedOwnerId, setSelectedOwnerId] = useState("");
+    const [formData, setFormData] = useState({
+      name: "",
+      description: "",
+      location: "",
     phone: "",
     email: "",
   });
@@ -6107,18 +6267,36 @@ const StoresManagement = () => {
   const { user } = useAdminAuth();
   const { toast } = useToast();
 
-  const { data: stores, isLoading } = useQuery({
-    queryKey: ["/api/admin/stores", { search }],
-    queryFn: () => {
-      const params = new URLSearchParams();
-      if (search) params.append("search", search);
+    const { data: stores, isLoading } = useQuery({
+      queryKey: ["/api/admin/stores", { search }],
+      queryFn: () => {
+        const params = new URLSearchParams();
+        if (search) params.append("search", search);
       const queryString = params.toString();
       return adminApiRequest(
         "GET",
-        `/api/admin/stores${queryString ? "?" + queryString : ""}`,
-      );
-    },
-  });
+          `/api/admin/stores${queryString ? "?" + queryString : ""}`,
+        );
+      },
+    });
+    const inventoryStoreId = (() => {
+      const segments = location.split("/").filter(Boolean);
+      if (
+        segments[0] === "admin-dashboard" &&
+        segments[1] === "stores" &&
+        segments[2] === "inventory"
+      ) {
+        return segments[3] || null;
+      }
+      return null;
+    })();
+    const inventoryStore =
+      inventoryStoreId && Array.isArray(stores)
+        ? stores.find((store: any) => (store._id || store.id) === inventoryStoreId)
+        : null;
+    const isInventoryPage = Boolean(inventoryStoreId);
+    const [inventoryView, setInventoryView] = useState<"card" | "table">("table");
+    const goToStores = () => setLocation("/admin-dashboard/stores");
 
   const { data: storeProviders = [] } = useQuery({
     queryKey: ["/api/admin/store-owner-providers"],
@@ -6176,51 +6354,177 @@ const StoresManagement = () => {
         variant: "destructive",
       });
     },
-  });
+    });
+  
+    // Inventory per store
+    const { data: inventoryItems = [], refetch: refetchInventory } = useQuery({
+      queryKey: ["/api/admin/marketplace", { storeId: inventoryStoreId }],
+      queryFn: () =>
+        inventoryStoreId
+          ? adminApiRequest("GET", "/api/admin/marketplace", {
+              storeId: inventoryStoreId,
+            })
+          : [],
+      enabled: !!inventoryStoreId,
+    });
 
-  // Inventory per store
-  const { data: inventoryItems = [], refetch: refetchInventory } = useQuery({
-    queryKey: ["/api/admin/marketplace", { storeId: inventoryStore?._id || inventoryStore?.id }],
-    queryFn: () =>
-      inventoryStore
-        ? adminApiRequest("GET", "/api/admin/marketplace", {
-            storeId: inventoryStore._id || inventoryStore.id,
-          })
-        : [],
-    enabled: !!inventoryStore,
-  });
+    const inventoryForm = useForm({
+      defaultValues: {
+        name: "",
+        price: 0,
+        stock: 0,
+        category: "",
+        description: "",
+        vendorId: "",
+        image: "",
+      },
+    });
+    const [inventoryImagePreview, setInventoryImagePreview] = useState<string>("");
+    const inventoryEditForm = useForm({
+      defaultValues: {
+        name: "",
+        price: 0,
+        stock: 0,
+        category: "",
+        description: "",
+        image: "",
+      },
+    });
+    const [inventoryEditPreview, setInventoryEditPreview] = useState<string>("");
+    const [inventoryEditingItem, setInventoryEditingItem] = useState<any | null>(null);
+    const [deletingInventoryId, setDeletingInventoryId] = useState<string | null>(null);
 
-  const inventoryForm = useForm({
-    defaultValues: {
-      name: "",
-      price: 0,
-      stock: 0,
-      category: "",
-      description: "",
-      vendorId: "",
-      image: "",
-    },
-  });
-  const [inventoryImagePreview, setInventoryImagePreview] = useState<string>("");
+    const getPrimaryImage = useCallback((item?: any) => {
+      if (!item) return "";
+      if (Array.isArray(item?.images) && item.images.length > 0) {
+        return item.images[0];
+      }
+      if (typeof item?.image === "string" && item.image.length > 0) {
+        return item.image;
+      }
+      return "";
+    }, []);
 
-  const createInventoryMutation = useMutation({
-    mutationFn: (payload: any) =>
-      adminApiRequest("POST", "/api/admin/marketplace", payload),
-    onSuccess: () => {
-      refetchInventory();
-      inventoryForm.reset();
-      toast({ title: "Inventory item added" });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Error adding inventory",
+    const { data: itemCategories = [] } = useQuery({
+      queryKey: ["/api/admin/item-categories"],
+      queryFn: () => adminApiRequest("GET", "/api/admin/item-categories"),
+      enabled: isInventoryPage,
+    });
+    useEffect(() => {
+      if (!isInventoryPage) return;
+      if (!inventoryForm.getValues("category") && Array.isArray(itemCategories) && itemCategories.length > 0) {
+        inventoryForm.setValue("category", itemCategories[0].name);
+      }
+    }, [itemCategories, isInventoryPage]);
+    useEffect(() => {
+      if (!inventoryEditingItem) {
+        inventoryEditForm.reset({
+          name: "",
+          price: 0,
+          stock: 0,
+          description: "",
+          category: itemCategories?.[0]?.name || "",
+          image: "",
+        });
+        setInventoryEditPreview("");
+        return;
+      }
+      const primaryImage = getPrimaryImage(inventoryEditingItem);
+      inventoryEditForm.reset({
+        name: inventoryEditingItem.name || "",
+        price: Number(inventoryEditingItem.price || 0),
+        stock: Number(inventoryEditingItem.stock ?? 0),
+        description: inventoryEditingItem.description || "",
+        category: inventoryEditingItem.category || itemCategories?.[0]?.name || "",
+        image: primaryImage,
+      });
+      setInventoryEditPreview(primaryImage);
+    }, [inventoryEditingItem, inventoryEditForm, itemCategories, getPrimaryImage]);
+
+    const createInventoryMutation = useMutation({
+      mutationFn: (payload: any) =>
+        adminApiRequest("POST", "/api/admin/marketplace", payload),
+      onSuccess: () => {
+        refetchInventory();
+        inventoryForm.reset();
+        setInventoryImagePreview("");
+        toast({ title: "Inventory item added" });
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Error adding inventory",
         description: error.response?.data?.error || "Failed to add item",
         variant: "destructive",
       });
     },
   });
+    const closeInventoryEditDialog = useCallback(() => {
+      setInventoryEditingItem(null);
+      setInventoryEditPreview("");
+      inventoryEditForm.reset({
+        name: "",
+        price: 0,
+        stock: 0,
+        description: "",
+        category: itemCategories?.[0]?.name || "",
+        image: "",
+      });
+    }, [inventoryEditForm, itemCategories]);
 
-  const handleSubmit = () => {
+    const updateInventoryMutation = useMutation({
+      mutationFn: ({ id, ...data }: { id: string } & Record<string, any>) =>
+        adminApiRequest("PATCH", `/api/admin/marketplace/${id}`, data),
+      onSuccess: () => {
+        refetchInventory();
+        toast({ title: "Inventory item updated" });
+        closeInventoryEditDialog();
+        inventoryEditForm.reset();
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Error updating inventory",
+          description: error.response?.data?.error || "Failed to update item",
+          variant: "destructive",
+        });
+      },
+    });
+
+    const deleteInventoryMutation = useMutation({
+      mutationFn: (id: string) => adminApiRequest("DELETE", `/api/admin/marketplace/${id}`),
+      onSuccess: () => {
+        refetchInventory();
+        toast({ title: "Inventory item deleted" });
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Error deleting inventory",
+          description: error.response?.data?.error || "Failed to delete item",
+          variant: "destructive",
+        });
+      },
+    });
+
+    const handleDeleteInventoryItem = (item: any) => {
+      const itemId = item?._id || item?.id;
+      if (!itemId) {
+        toast({
+          title: "Unable to delete item",
+          description: "Missing identifier for this inventory entry.",
+          variant: "destructive",
+        });
+        return;
+      }
+      const shouldDelete = confirm(
+        `Delete ${item.name || "this item"} from ${inventoryStore?.name || "inventory"}?`,
+      );
+      if (!shouldDelete) return;
+      setDeletingInventoryId(itemId);
+      deleteInventoryMutation.mutate(itemId, {
+        onSettled: () => setDeletingInventoryId(null),
+      });
+    };
+
+    const handleSubmit = () => {
     if (!formData.name || !formData.location) {
       toast({
         title: "Validation Error",
@@ -6245,6 +6549,601 @@ const StoresManagement = () => {
     const storeId = selectedStore?._id || selectedStore?.id;
     createStoreMutation.mutate({ payload, id: storeId });
   };
+
+
+  if (isInventoryPage) {
+    const hasInventoryItems = Array.isArray(inventoryItems) && inventoryItems.length > 0;
+    const formatPrice = (item: any) =>
+      `${item.currency || "NGN"} ${Number(item.price || 0).toLocaleString()}`;
+    const renderItemImage = (src?: string, label?: string) =>
+      src ? (
+        <img
+          src={src}
+          alt={label || "Inventory item"}
+          className="h-14 w-14 rounded-md object-cover border"
+        />
+      ) : (
+        <div className="h-14 w-14 rounded-md border flex items-center justify-center text-xs font-semibold text-muted-foreground bg-muted/50">
+          {(label || "?").slice(0, 2).toUpperCase()}
+        </div>
+      );
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Button variant="ghost" size="sm" className="px-0" onClick={goToStores}>
+              <ChevronLeft className="w-4 h-4 mr-1" />
+              Back to Stores
+            </Button>
+            <span>/ Stores</span>
+            {inventoryStore?.name ? <span>/ {inventoryStore.name}</span> : null}
+            <span>/ Add Inventory</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setLocation("/admin-dashboard/item-categories")}>
+              Manage Categories
+            </Button>
+            <Button variant="outline" size="sm" onClick={goToStores}>
+              Store Management
+            </Button>
+          </div>
+        </div>
+
+        <Card>
+          <CardHeader className="space-y-2">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <CardTitle>Inventory - {inventoryStore?.name || "Store"}</CardTitle>
+                <CardDescription>
+                  Add and manage items for this store. Items will appear in the marketplace for residents.
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant={inventoryView === "card" ? "default" : "outline"}
+                  onClick={() => setInventoryView("card")}
+                >
+                  Card View
+                </Button>
+                <Button
+                  size="sm"
+                  variant={inventoryView === "table" ? "default" : "outline"}
+                  onClick={() => setInventoryView("table")}
+                >
+                  Table View
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <TooltipProvider>
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="lg:col-span-2 space-y-4">
+                {hasInventoryItems ? (
+                  inventoryView === "table" ? (
+                    <div className="overflow-x-auto rounded border border-border">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50">
+                          <tr className="text-left">
+                            <th className="px-4 py-2 font-medium">Item</th>
+                            <th className="px-4 py-2 font-medium">Category</th>
+                            <th className="px-4 py-2 font-medium">Price & Stock</th>
+                            <th className="px-4 py-2 font-medium">Status</th>
+                            <th className="px-4 py-2 font-medium text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {inventoryItems.map((item: any) => {
+                            const itemId = item._id || item.id;
+                            const primaryImage = getPrimaryImage(item);
+                            const isDeleting = deletingInventoryId === itemId;
+                            return (
+                              <tr key={itemId} className="border-t border-border">
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-3">
+                                    {renderItemImage(primaryImage, item.name)}
+                                    <div>
+                                      <div className="font-semibold">{item.name}</div>
+                                      <p className="text-xs text-muted-foreground max-w-xs">
+                                        {item.description || "No description"}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3">{item.category || "—"}</td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium">{formatPrice(item)}</div>
+                                  <div className="text-xs text-muted-foreground">Stock: {item.stock ?? 0}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <Badge variant={item.isActive ? "default" : "secondary"}>
+                                    {item.isActive ? "Active" : "Inactive"}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center justify-end gap-2">
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          onClick={() => setInventoryEditingItem(item)}
+                                        >
+                                          <Edit className="w-4 h-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Edit item</TooltipContent>
+                                    </Tooltip>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          onClick={() => handleDeleteInventoryItem(item)}
+                                          disabled={isDeleting}
+                                        >
+                                          {isDeleting ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                          ) : (
+                                            <Trash2 className="w-4 h-4 text-destructive" />
+                                          )}
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Delete item</TooltipContent>
+                                    </Tooltip>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {inventoryItems.map((item: any) => {
+                        const itemId = item._id || item.id;
+                        const primaryImage = getPrimaryImage(item);
+                        const isDeleting = deletingInventoryId === itemId;
+                        return (
+                          <Card key={itemId} className="border border-border">
+                            <CardContent className="p-4 space-y-3">
+                              <div className="flex items-center gap-3">
+                                {renderItemImage(primaryImage, item.name)}
+                                <div>
+                                  <div className="font-semibold">{item.name}</div>
+                                  <p className="text-sm text-muted-foreground">
+                                    {item.description || "No description"}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="font-medium">{formatPrice(item)}</span>
+                                <span className="text-muted-foreground">Stock: {item.stock ?? 0}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <Badge variant={item.isActive ? "default" : "secondary"}>
+                                  {item.isActive ? "Active" : "Inactive"}
+                                </Badge>
+                                <div className="flex items-center gap-2">
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() => setInventoryEditingItem(item)}
+                                      >
+                                        <Edit className="w-4 h-4" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Edit item</TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() => handleDeleteInventoryItem(item)}
+                                        disabled={isDeleting}
+                                      >
+                                        {isDeleting ? (
+                                          <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : (
+                                          <Trash2 className="w-4 h-4 text-destructive" />
+                                        )}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Delete item</TooltipContent>
+                                  </Tooltip>
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  )
+                ) : (
+                  <div className="text-sm text-muted-foreground border border-dashed rounded p-6 text-center">
+                    No inventory yet. Add your first product using the form on the right.
+                  </div>
+                )}
+              </div>
+
+              <Card className="lg:col-span-1 w-full">
+                <CardHeader>
+                  <CardTitle className="text-base">Add Item</CardTitle>
+                  <CardDescription>Add a product to this store.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Form {...inventoryForm}>
+                    <form
+                      className="flex flex-col space-y-3"
+                      onSubmit={inventoryForm.handleSubmit((values) => {
+                        if (!inventoryStoreId) {
+                          toast({
+                            title: "Select a store",
+                            description: "Return to store management and pick a store first.",
+                            variant: "destructive",
+                          });
+                          return;
+                        }
+                        const payloadImage = values.image ? values.image : "";
+                        createInventoryMutation.mutate({
+                          name: values.name,
+                          description: values.description,
+                          category: values.category,
+                          price: Number(values.price) || 0,
+                          stock: Number(values.stock) || 0,
+                          vendorId: inventoryStore?.ownerId || undefined,
+                          storeId: inventoryStoreId,
+                          estateId: inventoryStore?.estateId || undefined,
+                          currency: "NGN",
+                          images: payloadImage ? [payloadImage] : [],
+                        });
+                      })}
+                    >
+                      <FormItem>
+                        <FormLabel>Item Image</FormLabel>
+                        <FormControl>
+                          <div className="space-y-2">
+                            {inventoryImagePreview && (
+                              <img
+                                src={inventoryImagePreview}
+                                alt="Preview"
+                                className="w-full h-32 object-cover rounded border"
+                              />
+                            )}
+                            <Input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  const result = reader.result as string;
+                                  setInventoryImagePreview(result);
+                                  inventoryForm.setValue("image", result);
+                                };
+                                reader.readAsDataURL(file);
+                              }}
+                            />
+                          </div>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                      <FormField
+                        control={inventoryForm.control}
+                        name="name"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Name</FormLabel>
+                            <FormControl>
+                              <Input placeholder="Item name" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={inventoryForm.control}
+                        name="description"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Description</FormLabel>
+                            <FormControl>
+                              <Textarea rows={3} placeholder="What is this item?" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <div className="grid grid-cols-2 gap-3">
+                        <FormField
+                          control={inventoryForm.control}
+                          name="price"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Price (NGN)</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  {...field}
+                                  onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={inventoryForm.control}
+                          name="stock"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Stock</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  {...field}
+                                  onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+                        <FormField
+                          control={inventoryForm.control}
+                          name="category"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Category</FormLabel>
+                              <Select
+                                value={field.value}
+                                onValueChange={(val) => field.onChange(val)}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select category" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
+                                    itemCategories
+                                      .filter((c: any) => c.isActive !== false)
+                                      .map((cat: any) => (
+                                        <SelectItem key={cat.id} value={cat.name}>
+                                          {cat.emoji ? `${cat.emoji} ` : ""}
+                                          {cat.name}
+                                        </SelectItem>
+                                      ))
+                                  ) : (
+                                    <SelectItem value="__none" disabled>
+                                      No categories. Create one first.
+                                    </SelectItem>
+                                  )}
+                                </SelectContent>
+                              </Select>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      <div className="pt-2">
+                        <Button
+                          type="submit"
+                          className="w-full"
+                          disabled={createInventoryMutation.isPending}
+                          data-testid="btn-add-inventory-item"
+                        >
+                          {createInventoryMutation.isPending ? "Saving..." : "Add Item"}
+                        </Button>
+                      </div>
+                    </form>
+                  </Form>
+                </CardContent>
+              </Card>
+              </div>
+            </TooltipProvider>
+          </CardContent>
+        </Card>
+        <Dialog
+          open={!!inventoryEditingItem}
+          onOpenChange={(open) => {
+            if (!open) {
+              closeInventoryEditDialog();
+            }
+          }}
+        >
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Edit Inventory Item</DialogTitle>
+              <DialogDescription>Update the product details shown to residents.</DialogDescription>
+            </DialogHeader>
+            <Form {...inventoryEditForm}>
+              <form
+                className="space-y-4"
+                onSubmit={inventoryEditForm.handleSubmit((values) => {
+                  const itemId = inventoryEditingItem?._id || inventoryEditingItem?.id;
+                  if (!itemId) {
+                    toast({
+                      title: "Cannot update item",
+                      description: "Missing identifier for this inventory entry.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  updateInventoryMutation.mutate({
+                    id: itemId,
+                    name: values.name,
+                    description: values.description,
+                    category: values.category,
+                    price: Number(values.price) || 0,
+                    stock: Number(values.stock) || 0,
+                    images: values.image ? [values.image] : [],
+                  });
+                })}
+              >
+                <FormField
+                  control={inventoryEditForm.control}
+                  name="image"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Item Image</FormLabel>
+                      <FormControl>
+                        <div className="space-y-2">
+                          {inventoryEditPreview ? (
+                            <img
+                              src={inventoryEditPreview}
+                              alt="Preview"
+                              className="w-full h-32 rounded border object-cover"
+                            />
+                          ) : null}
+                          <Input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              const reader = new FileReader();
+                              reader.onload = () => {
+                                const result = reader.result as string;
+                                setInventoryEditPreview(result);
+                                field.onChange(result);
+                              };
+                              reader.readAsDataURL(file);
+                            }}
+                          />
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={inventoryEditForm.control}
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Item name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={inventoryEditForm.control}
+                  name="description"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Description</FormLabel>
+                      <FormControl>
+                        <Textarea rows={3} placeholder="Describe this item" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="price"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Price (NGN)</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            {...field}
+                            onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="stock"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Stock</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            min="0"
+                            {...field}
+                            onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <FormField
+                  control={inventoryEditForm.control}
+                  name="category"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Category</FormLabel>
+                      <Select value={field.value} onValueChange={(val) => field.onChange(val)}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
+                            itemCategories
+                              .filter((c: any) => c.isActive !== false)
+                              .map((cat: any) => (
+                                <SelectItem key={cat.id} value={cat.name}>
+                                  {cat.emoji ? `${cat.emoji} ` : ""}
+                                  {cat.name}
+                                </SelectItem>
+                              ))
+                          ) : (
+                            <SelectItem value="__none" disabled>
+                              No categories. Create one first.
+                            </SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={closeInventoryEditDialog}
+                    disabled={updateInventoryMutation.isPending}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={updateInventoryMutation.isPending}>
+                    {updateInventoryMutation.isPending && (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    )}
+                    Save changes
+                  </Button>
+                </div>
+              </form>
+            </Form>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -6393,11 +7292,9 @@ const StoresManagement = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => {
-                            setSelectedStore(store);
-                            setInventoryStore(store);
-                            setShowInventoryDialog(true);
-                          }}
+                          onClick={() =>
+                            setLocation(`/admin-dashboard/stores/inventory/${store._id || store.id}`)
+                          }
                           data-testid={`button-add-inventory-${store._id || store.id}`}
                         >
                           <Package className="w-4 h-4 mr-1" />
@@ -6568,188 +7465,232 @@ const StoresManagement = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Store Inventory Dialog */}
-      <Dialog open={showInventoryDialog} onOpenChange={setShowInventoryDialog}>
-        <DialogContent className="w-full max-w-[100vw] h-[100vh] max-h-[100vh] overflow-hidden">
-          <DialogHeader>
-            <DialogTitle>Inventory - {inventoryStore?.name || "Store"}</DialogTitle>
-            <DialogDescription>
-              Add and manage items for this store. Items will appear in the marketplace for residents.
-            </DialogDescription>
-          </DialogHeader>
+    </div>
+  );
+};
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-full">
-            <div className="lg:col-span-2 space-y-3 max-h-[75vh] overflow-auto pr-2">
-              {Array.isArray(inventoryItems) && inventoryItems.length > 0 ? (
-                inventoryItems.map((item: any) => (
-                  <Card key={item._id || item.id}>
-                    <CardContent className="p-4 flex items-center justify-between">
-                      <div>
-                        <div className="font-semibold">{item.name}</div>
-                        <div className="text-sm text-muted-foreground">
-                          {item.description || "No description"}
-                        </div>
-                        <div className="text-sm mt-1">
-                          {item.currency || "NGN"} {item.price?.toLocaleString()} • Stock: {item.stock ?? 0}
-                        </div>
+// Item Categories page (standalone)
+const ItemCategoriesPage = () => {
+  const { toast } = useToast();
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState<any>(null);
+  const categoryForm = useForm({
+    defaultValues: { name: "", description: "", emoji: "", isActive: true },
+  });
+
+  const { data: itemCategories = [], refetch } = useQuery({
+    queryKey: ["/api/admin/item-categories"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/item-categories"),
+  });
+
+  const upsertCategoryMutation = useMutation({
+    mutationFn: (payload: any) => {
+      if (editing?.id) {
+        return adminApiRequest("PATCH", `/api/admin/item-categories/${editing.id}`, payload);
+      }
+      return adminApiRequest("POST", "/api/admin/item-categories", payload);
+    },
+    onSuccess: () => {
+      refetch();
+      categoryForm.reset();
+      setEditing(null);
+      setShowModal(false);
+      toast({ title: editing ? "Category updated" : "Category created" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error saving category",
+        description: error?.message || "Failed to save category",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteCategoryMutation = useMutation({
+    mutationFn: (id: string) => adminApiRequest("DELETE", `/api/admin/item-categories/${id}`),
+    onSuccess: () => {
+      refetch();
+      toast({ title: "Category deleted" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error deleting category",
+        description: error?.message || "Failed to delete category",
+        variant: "destructive",
+      });
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <CardTitle>Item Categories</CardTitle>
+            <CardDescription>Manage marketplace item categories.</CardDescription>
+          </div>
+          <Button
+            onClick={() => {
+              setEditing(null);
+              categoryForm.reset({ name: "", description: "", emoji: "", isActive: true });
+              setShowModal(true);
+            }}
+          >
+            + New Category
+          </Button>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="w-[180px]">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
+                itemCategories.map((cat: any) => (
+                  <TableRow key={cat.id}>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        {cat.emoji ? <span className="text-lg leading-none">{cat.emoji}</span> : null}
+                        <span>{cat.name}</span>
                       </div>
-                      <Badge variant={item.isActive ? "default" : "secondary"}>
-                        {item.isActive ? "Active" : "Inactive"}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {cat.description || "No description"}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={cat.isActive ? "default" : "secondary"}>
+                        {cat.isActive ? "Active" : "Inactive"}
                       </Badge>
-                    </CardContent>
-                  </Card>
+                    </TableCell>
+                    <TableCell className="space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setEditing(cat);
+                          categoryForm.reset({
+                            name: cat.name || "",
+                            description: cat.description || "",
+                            emoji: cat.emoji || "",
+                            isActive: cat.isActive ?? true,
+                          });
+                          setShowModal(true);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => deleteCategoryMutation.mutate(cat.id)}
+                        disabled={deleteCategoryMutation.isPending}
+                      >
+                        Delete
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))
               ) : (
-                <div className="text-sm text-muted-foreground">No inventory yet</div>
+                <TableRow>
+                  <TableCell colSpan={4} className="text-sm text-muted-foreground">
+                    No categories yet. Create one to get started.
+                  </TableCell>
+                </TableRow>
               )}
-            </div>
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
 
-            <Card className="lg:col-span-1 w-full max-h-[85vh] overflow-hidden">
-              <CardHeader>
-                <CardTitle className="text-base">Add Item</CardTitle>
-                <CardDescription>Add a product to this store.</CardDescription>
-              </CardHeader>
-              <CardContent className="h-full overflow-hidden">
-                <Form {...inventoryForm}>
-                  <form
-                    className="flex flex-col"
-                    onSubmit={inventoryForm.handleSubmit((values) => {
-                      if (!inventoryStore) return;
-                      const payloadImage = values.image ? values.image : "";
-                      createInventoryMutation.mutate({
-                        ...values,
-                        vendorId: inventoryStore._id || inventoryStore.id,
-                        storeId: inventoryStore._id || inventoryStore.id,
-                        currency: "NGN",
-                        images: payloadImage ? [payloadImage] : [],
-                      });
-                    })}
-                  >
-                    <div className="space-y-3 h-[400px] overflow-auto pr-2">
-                      <FormItem>
-                        <FormLabel>Item Image</FormLabel>
-                        <FormControl>
-                          <div className="space-y-2">
-                            {inventoryImagePreview && (
-                              <img
-                                src={inventoryImagePreview}
-                                alt="Preview"
-                                className="w-full h-32 object-cover rounded border"
-                              />
-                            )}
-                            <Input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (!file) return;
-                                const reader = new FileReader();
-                                reader.onload = () => {
-                                  const result = reader.result as string;
-                                  setInventoryImagePreview(result);
-                                  inventoryForm.setValue("image", result);
-                                };
-                                reader.readAsDataURL(file);
-                              }}
-                            />
-                          </div>
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    <FormField
-                      control={inventoryForm.control}
-                      name="name"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Name</FormLabel>
-                          <FormControl>
-                            <Input placeholder="Item name" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={inventoryForm.control}
-                      name="description"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Description</FormLabel>
-                          <FormControl>
-                            <Textarea rows={3} placeholder="What is this item?" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <div className="grid grid-cols-2 gap-3">
-                      <FormField
-                        control={inventoryForm.control}
-                        name="price"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Price (NGN)</FormLabel>
-                            <FormControl>
-                              <Input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                {...field}
-                                onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={inventoryForm.control}
-                        name="stock"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Stock</FormLabel>
-                            <FormControl>
-                              <Input
-                                type="number"
-                                min="0"
-                                {...field}
-                                onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </div>
-                    <FormField
-                      control={inventoryForm.control}
-                      name="category"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Category</FormLabel>
-                          <FormControl>
-                            <Input placeholder="e.g. groceries" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    </div>
-                    <div className="pt-4">
-                      <Button
-                        type="submit"
-                        className="w-full"
-                        disabled={createInventoryMutation.isPending}
-                        data-testid="btn-add-inventory-item"
-                      >
-                        {createInventoryMutation.isPending ? "Saving..." : "Add Item"}
-                      </Button>
-                    </div>
-                  </form>
-                </Form>
-              </CardContent>
-            </Card>
-          </div>
+      <Dialog open={showModal} onOpenChange={setShowModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editing ? "Edit Category" : "Create Category"}</DialogTitle>
+            <DialogDescription>
+              Define item categories that can be used when adding inventory items.
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...categoryForm}>
+            <form
+              className="space-y-4"
+              onSubmit={categoryForm.handleSubmit((values) => upsertCategoryMutation.mutate(values))}
+            >
+              <FormField
+                control={categoryForm.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Name</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Groceries" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={categoryForm.control}
+                name="emoji"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Emoji Icon</FormLabel>
+                    <Select value={field.value} onValueChange={(val) => field.onChange(val)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select an emoji" />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-64">
+                        {EMOJI_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            <span className="mr-2">{opt.value}</span>
+                            <span>{opt.label}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={categoryForm.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Textarea rows={3} placeholder="Short description (optional)" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={categoryForm.control}
+                name="isActive"
+                render={({ field }) => (
+                  <FormItem className="flex items-center space-x-2">
+                    <FormControl>
+                      <Checkbox checked={field.value} onCheckedChange={(v) => field.onChange(Boolean(v))} />
+                    </FormControl>
+                    <FormLabel className="mb-0">Active</FormLabel>
+                  </FormItem>
+                )}
+              />
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setShowModal(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={upsertCategoryMutation.isPending}>
+                  {upsertCategoryMutation.isPending ? "Saving..." : editing ? "Save Changes" : "Create Category"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
         </DialogContent>
       </Dialog>
     </div>

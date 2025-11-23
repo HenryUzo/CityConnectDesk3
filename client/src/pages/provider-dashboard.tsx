@@ -200,20 +200,25 @@ export default function ProviderDashboard() {
               <h1 className="text-xl font-bold text-primary">CityConnect</h1>
               <span className="ml-3 text-sm text-muted-foreground">Provider Dashboard</span>
             </div>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2">
-                <span className="text-sm text-muted-foreground">Rating:</span>
-                <div className="flex items-center">
-                  <Star className="w-4 h-4 text-yellow-400 fill-current" />
-                  <span className="ml-1 font-semibold text-foreground" data-testid="text-provider-rating">
-                    {user?.rating || "4.8"}
-                  </span>
+              <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm text-muted-foreground">Rating:</span>
+                  <div className="flex items-center">
+                    <Star className="w-4 h-4 text-yellow-400 fill-current" />
+                    <span className="ml-1 font-semibold text-foreground" data-testid="text-provider-rating">
+                      {user?.rating || "4.8"}
+                    </span>
+                  </div>
                 </div>
+                <Link href="/company-registration">
+                  <Button variant="secondary" size="sm">
+                    Register as Company
+                  </Button>
+                </Link>
+                <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="button-logout">
+                  <LogOut className="w-4 h-4" />
+                </Button>
               </div>
-              <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="button-logout">
-                <LogOut className="w-4 h-4" />
-              </Button>
-            </div>
           </div>
         </div>
       </nav>

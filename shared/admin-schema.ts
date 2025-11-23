@@ -26,15 +26,31 @@ export const createProviderSchema = z.object({
 export type CreateProviderInput = z.infer<typeof createProviderSchema>;
 
 export const createMarketplaceItemSchema = z.object({
-  vendorId: z.string().min(1, "Vendor is required"),
+  storeId: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional()
+  ),
+  estateId: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional()
+  ),
+  vendorId: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1, "Vendor is required").optional()
+  ),
   name: z.string().min(1, "Name is required"),
   description: z.string().optional().default(""),
   price: z.preprocess(toNumber, z.number().nonnegative()),
   currency: z.string().min(1).default("NGN"),
   category: z.string().min(1, "Category is required"),
   subcategory: z.string().optional().default(""),
-  stock: z.preprocess(toNumber, z.number().int().nonnegative()),
+  stock: z.preprocess(toNumber, z.number().int().nonnegative()).default(0),
   images: z.array(z.string()).optional().default([]),
+  unitOfMeasure: z
+    .preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.string())
+    .optional()
+    .default("piece"),
+  isActive: z.boolean().optional().default(true),
 });
 
 export const updateMarketplaceItemSchema = createMarketplaceItemSchema;

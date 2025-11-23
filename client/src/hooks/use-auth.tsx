@@ -36,6 +36,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // In resident areas, we ask the API who the user is.
   // On admin routes, we disable this query entirely.
+  const isPublicRegistrationRoute =
+    typeof window !== "undefined" &&
+    window.location.pathname === "/company-registration";
+
   const {
     data: user,
     error,
@@ -43,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   } = useQuery<SelectUser | null, Error>({
     queryKey: ["/api/user"],
     queryFn: getQueryFn<SelectUser | null>({ on401: "returnNull" }),
-    enabled: !isAdminRoute, // <- critical line
+    enabled: !isAdminRoute && !isPublicRegistrationRoute, // <- critical line
   });
 
   const loginMutation = useMutation({
