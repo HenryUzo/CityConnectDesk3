@@ -27,7 +27,7 @@ import providerRoutes from "./provider-routes";
 import marketplaceRoutes from "./marketplace-routes";
 import { randomBytes, scrypt } from "crypto";
 import { promisify } from "util";
-import { and, count, desc, eq, ilike, or, sum } from "drizzle-orm";
+import { and, count, desc, eq, ilike, or, sum, sql } from "drizzle-orm";
 import {
   createMarketplaceItemSchema,
   createProviderSchema,
@@ -369,7 +369,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Provider not found" });
       }
 
+      await storage.deleteProviderRequestByProviderId(id);
+      await storage.createAuditLog({
+        actorId: req.user?.id ?? "system",
+        action: "approve_provider",
+        target: "provider_request",
+        targetId: provider.id,
+        meta: {
+          providerEmail: provider.email,
+          providerName: provider.name,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent") ?? "",
+      });
+
       res.json(provider);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/provider-requests/:id/decline", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const { id } = req.params;
+      const { reason } = req.body as { reason?: string };
+      const request = await storage.getProviderRequestById(id);
+      if (!request) {
+        return res.status(404).json({ message: "Provider request not found" });
+      }
+      const providerId = request.providerId;
+      if (providerId) {
+        await storage.deleteUser(providerId);
+      }
+      await storage.deleteProviderRequest(id);
+      await storage.createAuditLog({
+        actorId: req.user?.id ?? "system",
+        action: "decline_provider_request",
+        target: "provider_request",
+        targetId: request.id,
+        meta: {
+          providerEmail: request.email,
+          providerName: request.name,
+          reason: reason ?? "",
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent") ?? "",
+      });
+      res.json({ success: true });
     } catch (error) {
       next(error);
     }
@@ -513,23 +562,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
+      const businessName = (req.query.company || req.query.business || "").toString();
+      const providerConditions = [
+        eq(users.role, "provider"),
+        ...(businessName ? [eq(users.company, businessName)] : []),
+      ];
+
       const [
         [providerCount],
         [activeRequestsCount],
         [revenueRow],
         recentActivityRows,
       ] = await Promise.all([
-        db
-          .select({ c: count() })
-          .from(users)
-          .where(eq(users.role, "provider")),
+        db.select({ c: count() }).from(users).where(and(...providerConditions)),
         db
           .select({ c: count() })
           .from(serviceRequests)
+          .leftJoin(users, eq(users.id, serviceRequests.providerId))
           .where(
-            or(
+            and(
               eq(serviceRequests.status, "pending"),
-              eq(serviceRequests.status, "in_progress"),
+              ...(businessName ? [eq(users.company, businessName)] : []),
             ),
           ),
         db
@@ -544,20 +597,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
             createdAt: serviceRequests.createdAt,
           })
           .from(serviceRequests)
+          .leftJoin(users, eq(users.id, serviceRequests.providerId))
+          .where(and(...providerConditions))
           .orderBy(desc(serviceRequests.createdAt))
           .limit(5),
       ]);
+
+      const latestTransactionRows = await db
+        .select({
+          id: transactions.id,
+          amount: transactions.amount,
+          status: transactions.status,
+          description: transactions.description,
+          createdAt: transactions.createdAt,
+          category: serviceRequests.category,
+          requestId: serviceRequests.id,
+          providerName: users.name,
+        })
+        .from(transactions)
+        .leftJoin(
+          serviceRequests,
+          eq(transactions.serviceRequestId, serviceRequests.id),
+        )
+        .leftJoin(users, eq(users.id, serviceRequests.providerId))
+        .where(and(...providerConditions))
+        .orderBy(desc(transactions.createdAt))
+        .limit(5);
+
+      let auditQuery = db
+        .select({
+          id: auditLogs.id,
+          action: auditLogs.action,
+          target: auditLogs.target,
+          targetId: auditLogs.targetId,
+          createdAt: auditLogs.createdAt,
+        })
+        .from(auditLogs);
+
+      if (businessName) {
+        auditQuery = auditQuery.where(
+          sql`${auditLogs.meta} ->> 'company' = ${businessName}`,
+        );
+      }
+
+      const recentAuditRows = await auditQuery
+        .orderBy(desc(auditLogs.createdAt))
+        .limit(5);
+
+      const normalizedActivities = [
+        ...recentActivityRows.map((row: any) => ({
+          id: row.id,
+          status: row.status ?? null,
+          category: row.category ?? null,
+          createdAt: row.createdAt ?? null,
+        })),
+        ...recentAuditRows.map((row: any) => ({
+          id: row.id,
+          status: row.action ?? null,
+          category: row.target ?? null,
+          createdAt: row.createdAt ?? null,
+        })),
+      ]
+        .sort((a, b) => {
+          const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return bTime - aTime;
+        })
+        .slice(0, 5)
+        .map((activity) => ({
+          id: activity.id,
+          status: activity.status,
+          category: activity.category,
+          createdAt: activity.createdAt
+            ? new Date(activity.createdAt).toISOString()
+            : null,
+        }));
+
+      const normalizedLatestTransactions = latestTransactionRows.map((row: any) => ({
+        id: row.id,
+        amount: Number(row.amount ?? 0),
+        status: row.status ?? null,
+        description: row.description ?? null,
+        category: row.category ?? null,
+        requestId: row.requestId ?? null,
+        providerName: row.providerName ?? null,
+        createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+      }));
 
       res.json({
         totalProviders: Number(providerCount?.c ?? 0),
         activeRequests: Number(activeRequestsCount?.c ?? 0),
         totalRevenue: Number(revenueRow?.total ?? 0),
-        recentActivity: recentActivityRows.map((row) => ({
-          id: row.id,
-          status: row.status,
-          category: row.category ?? null,
-          createdAt: row.createdAt ? row.createdAt.toISOString() : null,
-        })),
+        recentActivity: normalizedActivities,
+        latestTransactions: normalizedLatestTransactions,
       });
     } catch (error) {
       next(error);
@@ -572,8 +704,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { scope } = req.query as { scope?: string };
       let query = db.select().from(categories);
-      if (scope && scope !== "all") {
-        query = query.where(eq(categories.scope, String(scope)));
+      if (scope && scope !== "all" && (scope === "global" || scope === "estate")) {
+        query = query.where(eq(categories.scope, scope as "global" | "estate"));
       }
 
       const rows = await query.orderBy(desc(categories.createdAt));
@@ -768,8 +900,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { scope, estateId } = req.query;
       let query = db.select().from(categories);
-      if (scope && scope !== "all") {
-        query = query.where(eq(categories.scope, String(scope)));
+      if (scope && scope !== "all" && (scope === "global" || scope === "estate")) {
+        query = query.where(eq(categories.scope, scope as "global" | "estate"));
       }
       if (estateId) {
         query = query.where(eq(categories.estateId, String(estateId)));
@@ -1192,8 +1324,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const tempPassword = randomBytes(8).toString("hex");
       const hashedPassword = await hashPassword(tempPassword);
 
-      const created = await storage.createProviderRequest(parsed);
-      await storage.createUser({
+      const user = await storage.createUser({
         name: parsed.name,
         email: parsed.email,
         phone: parsed.phone || "",
@@ -1205,6 +1336,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isApproved: false,
         metadata: parsed.description ? { description: parsed.description } : undefined,
       } as any);
+      const created = await storage.createProviderRequest({ ...parsed, providerId: user.id });
+      await storage.createAuditLog({
+        actorId: user.id,
+        action: "create_provider_request",
+        target: "provider_request",
+        targetId: created.id,
+        meta: {
+          providerEmail: parsed.email,
+          company: parsed.company,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent") ?? "",
+      });
       res.status(201).json(created);
     } catch (error: any) {
       if (error?.issues) {
@@ -1236,7 +1380,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           experience: providerRequests.experience,
           description: providerRequests.description,
           createdAt: providerRequests.createdAt,
-          providerId: users.id,
+          providerId: sql`coalesce(${providerRequests.providerId}, ${users.id})`,
         })
         .from(providerRequests)
         .leftJoin(users, eq(users.email, providerRequests.email))

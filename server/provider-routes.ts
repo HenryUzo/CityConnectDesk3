@@ -382,7 +382,7 @@ router.delete("/stores/:storeId/items/:itemId", requireProvider, verifyStoreAcce
 });
 
 // POST /api/provider/company-registration - Register new company profile
-router.post("/company-registration", requireProvider, async (req: ProviderRequest, res) => {
+router.post("/company-registration", async (req: ProviderRequest, res) => {
   try {
     const providerId = req.user!.id;
 

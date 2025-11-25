@@ -19,6 +19,10 @@ async function run() {
     const email = process.env.ADMIN_EMAIL || 'pgadmin@cityconnect.com';
     const password = process.env.ADMIN_PASSWORD || 'PgAdmin123!';
     const name = process.env.ADMIN_NAME || 'Postgres Admin';
+    // derive first & last from provided name
+    const nameParts = (name || '').trim().split(/\s+/);
+    const firstName = nameParts[0] || '';
+    const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
     const phone = process.env.ADMIN_PHONE || '+10000000000';
 
     // Use a fresh pg Pool to avoid importing drizzle/db which may reference schema columns
@@ -33,9 +37,9 @@ async function run() {
     const hashed = await hashPassword(password);
 
     const res = await pgPool.query(
-      `INSERT INTO users (name, email, phone, password, role, is_approved, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW()) RETURNING id`,
-      [name, email, phone, hashed, 'admin', true]
+      `INSERT INTO users (name, first_name, last_name, email, phone, password, role, is_approved, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()) RETURNING id`,
+      [name, firstName, lastName, email, phone, hashed, 'admin', true]
     );
 
     const userId = res.rows?.[0]?.id;

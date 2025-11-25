@@ -147,8 +147,15 @@ async function ensureProviderRequestsTable() {
       categories varchar(100)[] DEFAULT '{}',
       experience integer NOT NULL DEFAULT 0,
       description text,
+      provider_id varchar(255) REFERENCES users(id),
       created_at timestamp NOT NULL DEFAULT now()
     );
+  `);
+  
+  // Add provider_id column if it doesn't exist (for existing tables)
+  await db.execute(sql`
+    ALTER TABLE provider_requests
+    ADD COLUMN IF NOT EXISTS provider_id varchar(255) REFERENCES users(id);
   `);
 }
 

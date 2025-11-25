@@ -58,6 +58,17 @@ import {
 } from "@shared/admin-schema";
 import type { Category, Company } from "@shared/schema";
 
+type LatestTransaction = {
+  id: string;
+  amount: number;
+  status: string | null;
+  description: string | null;
+  category: string | null;
+  requestId: string | null;
+  providerName: string | null;
+  createdAt: string | null;
+};
+
 type BusinessOverview = {
   totalProviders: number;
   activeRequests: number;
@@ -68,6 +79,7 @@ type BusinessOverview = {
     category: string | null;
     createdAt: string | null;
   }[];
+  latestTransactions: LatestTransaction[];
 };
 
 type RecentTransaction = {
@@ -124,6 +136,20 @@ const getTransactionBadgeVariant = (
   return "outline";
 };
 
+const currencyFormatter = new Intl.NumberFormat("en-NG", {
+  style: "currency",
+  currency: "NGN",
+  maximumFractionDigits: 0,
+});
+
+const formatCurrency = (value?: number | string) => {
+  const amount = typeof value === "string" ? Number(value) : value ?? 0;
+  if (!Number.isFinite(amount)) {
+    return currencyFormatter.format(0);
+  }
+  return currencyFormatter.format(amount);
+};
+
 const REVENUE_TREND = [35, 42, 38, 48, 55, 62, 75];
 const REQUEST_TREND = [25, 22, 26, 24, 21, 19, 16];
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"];
@@ -160,6 +186,7 @@ export default function CompanyDashboard() {
     activeRequests: 0,
     totalRevenue: 0,
     recentActivity: [],
+    latestTransactions: [],
   };
 
   const {
@@ -212,6 +239,7 @@ export default function CompanyDashboard() {
   const revenueTrendPositive = true;
   const requestTrendPositive = false;
   const userTrendPositive = true;
+  const latestTransactions = stats.latestTransactions ?? [];
 
   const recentTransactions = useMemo(() => {
     if (stats.recentActivity.length === 0) {
@@ -612,40 +640,69 @@ export default function CompanyDashboard() {
               </p>
             </CardHeader>
             <CardContent className="space-y-3 pt-0">
-              {recentTransactions.map((tx) => (
-                <div
-                  key={`${tx.title}-${tx.month}-${tx.amount}`}
-                  className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-sm font-semibold text-slate-500">
-                        🍲
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">
-                          {tx.title}
-                        </p>
-                        <p className="text-[0.7rem] text-slate-500">{tx.month}</p>
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1 text-right">
-                      <p className="text-lg font-semibold text-slate-900">
-                        ₦{tx.amount.toLocaleString("en-NG")}
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <Badge
-                          variant={getTransactionBadgeVariant(tx.status)}
-                          className="py-1 px-3 text-xs"
-                        >
-                          {formatStatusLabel(tx.status)}
-                        </Badge>
-                        <ChevronDown className="h-4 w-4 text-slate-400" />
-                      </div>
-                    </div>
-                  </div>
+              {latestTransactions.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-4 py-6 text-center text-xs uppercase text-slate-400">
+                  No transactions recorded yet
                 </div>
-              ))}
+              ) : (
+                latestTransactions.map((transaction) => {
+                  const displayTitle = transaction.description
+                    ? transaction.description
+                    : transaction.category
+                    ? transaction.category.replace(/_/g, " ")
+                    : "Service transaction";
+                  const dateLabel = transaction.createdAt
+                    ? new Date(transaction.createdAt).toLocaleDateString("en-US", {
+                        month: "2-digit",
+                        year: "numeric",
+                      })
+                    : "—";
+                  const initial = displayTitle.charAt(0).toUpperCase();
+                  return (
+                    <div
+                      key={transaction.id}
+                      className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-sm font-semibold text-slate-500">
+                            {initial}
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {displayTitle}
+                            </p>
+                            <p className="text-[0.7rem] text-slate-400">
+                              {dateLabel}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 text-right">
+                          <p className="text-lg font-semibold text-slate-900">
+                            {formatCurrency(transaction.amount)}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <Badge
+                              variant={getTransactionBadgeVariant(transaction.status ?? "")}
+                              className="py-1 px-3 text-xs"
+                            >
+                              {formatStatusLabel(transaction.status ?? "")}
+                            </Badge>
+                            <ChevronDown className="h-4 w-4 text-slate-400" />
+                          </div>
+                        </div>
+                      </div>
+                      {transaction.providerName && (
+                        <div className="mt-2 pt-2 border-t border-slate-100">
+                          <p className="text-xs text-slate-400">
+                            Provider: {transaction.providerName}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </CardContent>
           </Card>
         </section>

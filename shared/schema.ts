@@ -142,6 +142,9 @@ export const users = pgTable("users", {
   id: varchar("id")
     .primaryKey()
     .default(sql`gen_random_uuid()`),
+  // New split names (keep `name` for compatibility during rollout)
+  firstName: text("first_name"),
+  lastName: text("last_name"),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   phone: text("phone").notNull(),
@@ -328,6 +331,7 @@ export const providerRequests = pgTable("provider_requests", {
   categories: varchar("categories", { length: 100 }).array(),
   experience: integer("experience").notNull().default(0),
   description: text("description"),
+  providerId: varchar("provider_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

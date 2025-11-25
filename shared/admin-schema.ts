@@ -23,6 +23,19 @@ export const createProviderSchema = z.object({
   isApproved: z.boolean().default(true),
 });
 
+
+export const providerRequestSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  email: z.string().email(),
+  phone: z.string().optional().default(""),
+  company: z.string().optional().default(""),
+  categories: z.array(z.string()).optional().default([]),
+  experience: z.preprocess(toNumber, z.number().int().nonnegative()).default(0),
+  description: z.string().optional().default(""),
+});
+
+export type ProviderRequestInput = z.infer<typeof providerRequestSchema>;
+
 export type CreateProviderInput = z.infer<typeof createProviderSchema>;
 
 export const createMarketplaceItemSchema = z.object({

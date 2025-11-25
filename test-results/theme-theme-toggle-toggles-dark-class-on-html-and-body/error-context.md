@@ -1,0 +1,126 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - region "Notifications (F8)":
+    - list
+  - generic [ref=e3]:
+    - navigation [ref=e4]:
+      - generic [ref=e6]:
+        - generic [ref=e7]:
+          - generic [ref=e8]: CityConnect
+          - generic [ref=e9]: Business suite
+        - generic [ref=e10]:
+          - button [ref=e11] [cursor=pointer]:
+            - img
+          - button "Create provider" [ref=e12] [cursor=pointer]:
+            - img
+            - text: Create provider
+          - generic [ref=e13]:
+            - generic [ref=e14]: R
+            - generic [ref=e15]: Ray
+          - link "Logout" [ref=e16] [cursor=pointer]:
+            - /url: /
+            - button "Logout" [ref=e17]
+    - main [ref=e18]:
+      - generic [ref=e19]:
+        - paragraph [ref=e20]: Hi Ray
+        - paragraph [ref=e21]: Here is a brief overview of the activities on Ray's Marketplace
+      - generic [ref=e22]: Unable to load marketplace overview. Please try again shortly.
+      - generic [ref=e23]:
+        - generic [ref=e24]:
+          - button [ref=e25] [cursor=pointer]:
+            - img
+          - generic [ref=e27]:
+            - generic [ref=e28]: Total Revenue
+            - generic [ref=e29]:
+              - img [ref=e30]
+              - generic [ref=e32]: +40% vs last month
+          - generic [ref=e34]:
+            - generic [ref=e35]:
+              - paragraph [ref=e36]: ₦0
+              - paragraph [ref=e37]: Verified providers across all estates
+            - img [ref=e41]
+        - generic [ref=e48]:
+          - button [ref=e49] [cursor=pointer]:
+            - img
+          - generic [ref=e51]:
+            - generic [ref=e52]: Active Requests
+            - generic [ref=e53]:
+              - img [ref=e54]
+              - generic [ref=e56]: "-10% vs last month"
+          - generic [ref=e58]:
+            - generic [ref=e59]:
+              - paragraph [ref=e60]: "0"
+              - paragraph [ref=e61]: Requests currently awaiting provider action
+            - img [ref=e65]
+        - generic [ref=e70]:
+          - generic [ref=e72]: Total Users
+          - generic [ref=e74]:
+            - generic [ref=e75]:
+              - generic [ref=e76]: Providers
+              - paragraph [ref=e77]: "0"
+              - generic [ref=e78]:
+                - img [ref=e79]
+                - generic [ref=e81]: +20%
+              - paragraph [ref=e82]: vs last month
+            - generic [ref=e83]:
+              - generic [ref=e84]: Customers
+              - paragraph [ref=e85]: "0"
+              - generic [ref=e86]:
+                - img [ref=e87]
+                - generic [ref=e89]: +20%
+              - paragraph [ref=e90]: vs last month
+      - generic [ref=e91]:
+        - generic [ref=e92]:
+          - generic [ref=e94]:
+            - generic [ref=e95]:
+              - generic [ref=e96]: Recent activity
+              - paragraph [ref=e97]: Track the latest servings flowing through the marketplace.
+            - generic [ref=e98]:
+              - combobox [ref=e99] [cursor=pointer]:
+                - generic: Last 30 days
+                - img [ref=e100]
+              - textbox "Search for Users" [ref=e102]
+          - generic [ref=e103]:
+            - generic [ref=e104]:
+              - generic [ref=e105]:
+                - checkbox "Export all" [ref=e106] [cursor=pointer]
+                - text: Export all
+              - button "Export all" [ref=e107] [cursor=pointer]
+            - table [ref=e109]:
+              - rowgroup [ref=e110]:
+                - row "Date Activity Request ID Status" [ref=e111]:
+                  - cell "Date" [ref=e112]
+                  - cell "Activity" [ref=e113]
+                  - cell "Request ID" [ref=e114]
+                  - cell "Status" [ref=e115]
+              - rowgroup [ref=e116]:
+                - row "No activity recorded yet" [ref=e117]:
+                  - cell "No activity recorded yet" [ref=e118]
+        - generic [ref=e119]:
+          - generic [ref=e120]:
+            - generic [ref=e121]:
+              - generic [ref=e122]:
+                - button "Latest Transactions" [ref=e123] [cursor=pointer]
+                - button "Chat" [ref=e124] [cursor=pointer]
+              - button [ref=e125] [cursor=pointer]:
+                - img
+            - paragraph [ref=e126]: Review what residents are ordering across Ray's marketplace.
+          - generic [ref=e127]:
+            - generic [ref=e128]:
+              - generic [ref=e129]:
+                - checkbox "Export all" [ref=e130] [cursor=pointer]
+                - text: Export all
+              - button "Export all" [ref=e131] [cursor=pointer]
+            - table [ref=e133]:
+              - rowgroup [ref=e134]:
+                - row "Date Activity Request ID Status" [ref=e135]:
+                  - cell "Date" [ref=e136]
+                  - cell "Activity" [ref=e137]
+                  - cell "Request ID" [ref=e138]
+                  - cell "Status" [ref=e139]
+              - rowgroup [ref=e140]:
+                - row "No activity recorded yet" [ref=e141]:
+                  - cell "No activity recorded yet" [ref=e142]
+```

@@ -29,6 +29,7 @@ function Router() {
       <ProtectedRoute path="/resident" component={ResidentDashboard} />
       <Route path="/company-registration" component={ProviderCompanyRegistration} />
       <Route path="/company-dashboard" component={CompanyDashboard} />
+      <Route path="/company-dashboard/:rest*" component={CompanyDashboard} />
       <ProtectedRoute path="/provider" component={ProviderDashboard} />
       <ProtectedRoute path="/provider/stores/:storeId/items" component={ProviderStoreItems} />
       <ProtectedRoute path="/admin" component={AdminDashboard} />

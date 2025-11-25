@@ -169,6 +169,15 @@ export const adminQueryFn: QueryFunction<any> = async ({ queryKey, signal }) => 
   return adminFetch(path, { signal });
 };
 
+// Define the shape of provider request objects
+export interface ProviderRequest {
+  id: string;
+  name: string;
+  email: string;
+  createdAt: string;
+  status: string;
+}
+
 // -----------------------------------------------------
 // High-level Admin API (mirrors your existing structure)
 // -----------------------------------------------------
@@ -254,4 +263,16 @@ export const AdminAPI = {
       adminFetch(`/api/admin/bridge/users/${id}/wallet`),
   },
   health: () => adminFetch("/api/admin/health"),
+  providerRequests: {
+    getProviderRequests: async () => {
+      return await adminFetch<ProviderRequest[]>("/api/admin/provider-requests");
+    },
+
+    updateProviderRequestStatus: async (id: string, status: "approved" | "rejected") => {
+      return await adminFetch(`/api/admin/provider-requests/${id}/status`, {
+        method: "POST",
+        json: { status },
+      });
+    },
+  },
 };

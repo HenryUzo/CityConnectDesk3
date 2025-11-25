@@ -11,6 +11,7 @@ import {
   requestBillItems,
   inspections,
   deviceAssignments,
+  auditLogs,
   type User,
   type InsertUser,
   type ServiceRequest,
@@ -32,6 +33,8 @@ import {
   type Inspection,
   type InsertInspection,
   type DeviceAssignment,
+  type AuditLog,
+  type InsertAuditLog,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, count, sql } from "drizzle-orm";
@@ -78,7 +81,11 @@ export interface IStorage {
   createProviderRequest(request: InsertProviderRequest): Promise<ProviderRequest>;
   getProviderRequests(): Promise<ProviderRequest[]>;
   deleteUser(userId: string): Promise<boolean>;
+  deleteProviderRequestByProviderId(providerId: string): Promise<void>;
+  getProviderRequestById(requestId: string): Promise<ProviderRequest | null>;
+  deleteProviderRequest(requestId: string): Promise<void>;
   getPostgresIdFromMongoId(entityType: string, mongoId: string): Promise<string | null>;
+  createAuditLog(entry: InsertAuditLog): Promise<AuditLog>;
   
   sessionStore: session.Store;
 }
@@ -97,6 +104,8 @@ export class DatabaseStorage implements IStorage {
     const [user] = await db
       .select({
         id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
         name: users.name,
         email: users.email,
         phone: users.phone,
@@ -121,6 +130,8 @@ export class DatabaseStorage implements IStorage {
     const [user] = await db
       .select({
         id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
         name: users.name,
         email: users.email,
         phone: users.phone,
@@ -145,6 +156,8 @@ export class DatabaseStorage implements IStorage {
     const [user] = await db
       .select({
         id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
         name: users.name,
         email: users.email,
         phone: users.phone,
@@ -169,6 +182,8 @@ export class DatabaseStorage implements IStorage {
     const [user] = await db
       .select({
         id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
         name: users.name,
         email: users.email,
         phone: users.phone,
@@ -635,12 +650,22 @@ export class DatabaseStorage implements IStorage {
 
   async createProviderRequest(
     request: InsertProviderRequest,
+    providerId?: string,
   ): Promise<ProviderRequest> {
     const [row] = await db
       .insert(providerRequests)
-      .values({ ...request, createdAt: new Date() })
+      .values({
+        ...request,
+        providerId: providerId ?? null,
+        createdAt: new Date(),
+      })
       .returning();
     return row;
+  }
+
+  async createAuditLog(entry: InsertAuditLog): Promise<AuditLog> {
+    const [log] = await db.insert(auditLogs).values(entry).returning();
+    return log;
   }
 
   async getProviderRequests(): Promise<ProviderRequest[]> {
@@ -649,6 +674,26 @@ export class DatabaseStorage implements IStorage {
       .from(providerRequests)
       .orderBy(desc(providerRequests.createdAt));
     return rows;
+  }
+
+  async deleteProviderRequestByProviderId(providerId: string): Promise<void> {
+    await db
+      .delete(providerRequests)
+      .where(eq(providerRequests.providerId, providerId));
+  }
+
+  async getProviderRequestById(requestId: string): Promise<ProviderRequest | null> {
+    const [row] = await db
+      .select()
+      .from(providerRequests)
+      .where(eq(providerRequests.id, requestId));
+    return row || null;
+  }
+
+  async deleteProviderRequest(requestId: string): Promise<void> {
+    await db
+      .delete(providerRequests)
+      .where(eq(providerRequests.id, requestId));
   }
 }
 
