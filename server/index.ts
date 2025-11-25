@@ -131,8 +131,36 @@ async function ensureCompaniesTable() {
 
   await db.execute(sql`
     ALTER TABLE companies
-      ADD COLUMN IF NOT EXISTS provider_id varchar REFERENCES users(id),
-      ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}';
+    ADD COLUMN IF NOT EXISTS provider_id varchar REFERENCES users(id),
+    ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}';
+  `);
+}
+
+async function ensureProviderRequestsTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS provider_requests (
+      id varchar(255) PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      email text NOT NULL,
+      phone text,
+      company text,
+      categories varchar(100)[] DEFAULT '{}',
+      experience integer NOT NULL DEFAULT 0,
+      description text,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
+  `);
+}
+
+async function ensureMongoIdMappingTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS mongo_id_mappings (
+      id varchar(255) PRIMARY KEY DEFAULT gen_random_uuid(),
+      mongo_id text NOT NULL,
+      postgres_id varchar(255) NOT NULL,
+      entity_type text NOT NULL,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
   `);
 }
 
@@ -143,6 +171,8 @@ async function ensureCompaniesTable() {
     await ensureServiceRequestsColumns();
     await ensureUsersColumns();
     await ensureCompaniesTable();
+    await ensureProviderRequestsTable();
+    await ensureMongoIdMappingTable();
     log("[DB] Schema guard OK");
   } catch (e) {
     console.error("[DB] Schema guard failed:", e);

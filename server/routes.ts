@@ -4,13 +4,40 @@ import { z } from "zod";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
 import { db } from "./db";
-import { users, serviceRequests, insertServiceRequestSchema } from "@shared/schema";
+import {
+  users,
+  serviceRequests,
+  insertServiceRequestSchema,
+  estates,
+  insertEstateSchema,
+  auditLogs,
+  memberships,
+  insertMembershipSchema,
+  categories,
+  insertCategorySchema,
+  stores,
+  itemCategories,
+  marketplaceItems,
+  transactions,
+  companies,
+  providerRequests,
+} from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
 import marketplaceRoutes from "./marketplace-routes";
 import { randomBytes, scrypt } from "crypto";
 import { promisify } from "util";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, desc, eq, ilike, or, sum } from "drizzle-orm";
+import {
+  createMarketplaceItemSchema,
+  createProviderSchema,
+  providerRequestSchema,
+  updateMarketplaceItemSchema,
+} from "@shared/admin-schema";
+
+const isAdminOrSuper = (req: Express["request"]) =>
+  req.isAuthenticated() &&
+  (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
 
 // Accept flexible inputs, normalize output types
 const CreateServiceRequest = insertServiceRequestSchema.extend({
@@ -263,6 +290,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.delete("/api/admin/users/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      if (!id) {
+        return res.status(400).json({ message: "User id is required" });
+      }
+
+      const targetId = (await storage.getUser(id))?.id ??
+        (await storage.getPostgresIdFromMongoId("user", id)) ??
+        null;
+
+      if (!targetId) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const deleted = await storage.deleteUser(targetId);
+      if (!deleted) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/admin/providers", async (req, res, next) => {
     try {
       const isAdmin = req.isAuthenticated() && (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
@@ -314,6 +371,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(provider);
     } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/providers", async (req, res, next) => {
+    try {
+      const isAdmin = req.isAuthenticated() && (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+      if (!isAdmin) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const parsed = createProviderSchema.parse(req.body);
+      if (!parsed.password) {
+        return res.status(400).json({ message: "Password is required" });
+      }
+
+      const existing = await storage.getUserByEmail(parsed.email);
+      if (existing) {
+        return res.status(409).json({ message: "Email already exists" });
+      }
+
+      const hashedPassword = await hashPassword(parsed.password);
+      const provider = await storage.createUser({
+        name: parsed.name,
+        email: parsed.email,
+        phone: parsed.phone || "",
+        password: hashedPassword,
+        role: "provider",
+        company: parsed.company,
+        categories: parsed.categories,
+        experience: parsed.experience,
+        isApproved: parsed.isApproved ?? true,
+        metadata: parsed.description ? { description: parsed.description } : undefined,
+      } as any);
+
+      res.status(201).json(provider);
+    } catch (error: any) {
+      if (error?.issues) {
+        return res.status(400).json({
+          error: "Validation error",
+          details: error.issues.map((issue: any) => ({
+            path: issue.path.join("."),
+            message: issue.message,
+          })),
+        });
+      }
       next(error);
     }
   });
@@ -390,6 +493,657 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Admin dashboard stats (front-end expects /api/admin/dashboard/stats)
+  app.get("/api/admin/dashboard/stats", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const stats = await storage.getUserStats();
+      res.json(stats);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Business overview data for company dashboard
+  app.get("/api/business/overview", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const [
+        [providerCount],
+        [activeRequestsCount],
+        [revenueRow],
+        recentActivityRows,
+      ] = await Promise.all([
+        db
+          .select({ c: count() })
+          .from(users)
+          .where(eq(users.role, "provider")),
+        db
+          .select({ c: count() })
+          .from(serviceRequests)
+          .where(
+            or(
+              eq(serviceRequests.status, "pending"),
+              eq(serviceRequests.status, "in_progress"),
+            ),
+          ),
+        db
+          .select({ total: sum(transactions.amount) })
+          .from(transactions)
+          .where(eq(transactions.status, "completed")),
+        db
+          .select({
+            id: serviceRequests.id,
+            status: serviceRequests.status,
+            category: serviceRequests.category,
+            createdAt: serviceRequests.createdAt,
+          })
+          .from(serviceRequests)
+          .orderBy(desc(serviceRequests.createdAt))
+          .limit(5),
+      ]);
+
+      res.json({
+        totalProviders: Number(providerCount?.c ?? 0),
+        activeRequests: Number(activeRequestsCount?.c ?? 0),
+        totalRevenue: Number(revenueRow?.total ?? 0),
+        recentActivity: recentActivityRows.map((row) => ({
+          id: row.id,
+          status: row.status,
+          category: row.category ?? null,
+          createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+        })),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/categories", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { scope } = req.query as { scope?: string };
+      let query = db.select().from(categories);
+      if (scope && scope !== "all") {
+        query = query.where(eq(categories.scope, String(scope)));
+      }
+
+      const rows = await query.orderBy(desc(categories.createdAt));
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/companies", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const rows = await db
+        .select()
+        .from(companies)
+        .orderBy(desc(companies.createdAt));
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Audit log listing (limit optional)
+  app.get("/api/admin/audit-logs", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const limit =
+        Math.min(Math.max(Number(req.query.limit ?? 10), 1), 100) || 10;
+
+      const logs = await db
+        .select()
+        .from(auditLogs)
+        .orderBy(desc(auditLogs.createdAt))
+        .limit(limit);
+
+      res.json(logs);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: estates management
+  app.get("/api/admin/estates", async (req, res, next) => {
+    try {
+      const isAdmin =
+        req.isAuthenticated() &&
+        (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+      if (!isAdmin) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const rows = await db.select().from(estates);
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/estates", async (req, res, next) => {
+    try {
+      const isAdmin =
+        req.isAuthenticated() &&
+        (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+      if (!isAdmin) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const parsed = insertEstateSchema.parse({
+        ...req.body,
+        createdBy: req.user?.id,
+      });
+
+      const [created] = await db
+        .insert(estates)
+        .values({
+          ...parsed,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: memberships (user-estate relationships)
+  app.get("/api/admin/memberships", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const rows = await db
+        .select({
+          id: memberships.id,
+          userId: memberships.userId,
+          user_id: memberships.userId,
+          estateId: memberships.estateId,
+          estate_id: memberships.estateId,
+          role: memberships.role,
+          permissions: memberships.permissions,
+          isActive: memberships.isActive,
+          createdAt: memberships.createdAt,
+          updatedAt: memberships.updatedAt,
+          userName: users.name,
+          estateName: estates.name,
+        })
+        .from(memberships)
+        .leftJoin(users, eq(users.id, memberships.userId))
+        .leftJoin(estates, eq(estates.id, memberships.estateId))
+        .orderBy(desc(memberships.createdAt));
+
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/memberships", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const parsed = insertMembershipSchema.parse(req.body);
+      const [existing] = await db
+        .select()
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.userId, parsed.userId),
+            eq(memberships.estateId, parsed.estateId)
+          )
+        )
+        .limit(1);
+
+      if (existing) {
+        return res.status(409).json({ message: "Membership already exists" });
+      }
+
+      const [created] = await db
+        .insert(memberships)
+        .values(parsed)
+        .returning();
+
+      res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/admin/memberships/:userId/:estateId", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { userId, estateId } = req.params;
+      const deleted = await db
+        .delete(memberships)
+        .where(
+          and(
+            eq(memberships.userId, userId),
+            eq(memberships.estateId, estateId)
+          )
+        )
+        .returning();
+
+      if (!deleted || deleted.length === 0) {
+        return res.status(404).json({ message: "Membership not found" });
+      }
+
+      res.json({ success: true, membership: deleted[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: categories management
+  app.get("/api/admin/categories", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { scope, estateId } = req.query;
+      let query = db.select().from(categories);
+      if (scope && scope !== "all") {
+        query = query.where(eq(categories.scope, String(scope)));
+      }
+      if (estateId) {
+        query = query.where(eq(categories.estateId, String(estateId)));
+      }
+
+      const rows = await query.orderBy(desc(categories.createdAt));
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/categories", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const parsed = insertCategorySchema.parse(req.body);
+      const [created] = await db.insert(categories).values(parsed).returning();
+      res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/categories/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const updates = {
+        ...req.body,
+        updatedAt: new Date(),
+      };
+
+      const [updated] = await db
+        .update(categories)
+        .set(updates)
+        .where(eq(categories.id, id))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Category not found" });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/admin/categories/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const deleted = await db
+        .delete(categories)
+        .where(eq(categories.id, id))
+        .returning();
+
+      if (!deleted || deleted.length === 0) {
+        return res.status(404).json({ message: "Category not found" });
+      }
+
+      res.json({ success: true, category: deleted[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: item categories (for marketplace items)
+  const ItemCategorySchema = z.object({
+    name: z.string().min(1, "Name is required"),
+    description: z.string().optional(),
+    emoji: z.string().optional(),
+    isActive: z.boolean().optional(),
+  });
+
+  app.get("/api/admin/item-categories", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const rows = await db
+        .select()
+        .from(itemCategories)
+        .orderBy(desc(itemCategories.createdAt));
+
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/item-categories", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const parsed = ItemCategorySchema.parse(req.body);
+      const [created] = await db
+        .insert(itemCategories)
+        .values({
+          name: parsed.name,
+          description: parsed.description,
+          emoji: parsed.emoji,
+          isActive: parsed.isActive ?? true,
+        })
+        .returning();
+
+      res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/item-categories/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const parsed = ItemCategorySchema.partial().parse(req.body);
+
+      const [updated] = await db
+        .update(itemCategories)
+        .set({
+          ...parsed,
+          updatedAt: new Date(),
+        })
+        .where(eq(itemCategories.id, id))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Item category not found" });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/admin/item-categories/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const deleted = await db
+        .delete(itemCategories)
+        .where(eq(itemCategories.id, id))
+        .returning();
+
+      if (!deleted || deleted.length === 0) {
+        return res.status(404).json({ message: "Item category not found" });
+      }
+
+      res.json({ success: true, category: deleted[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  const StoreSchema = z.object({
+    name: z.string().min(1, "Name is required"),
+    description: z.string().optional(),
+    location: z.string().min(1, "Location is required"),
+    phone: z.string().optional(),
+    email: z.string().email().optional(),
+    ownerId: z.string().min(1, "Owner is required"),
+    estateId: z.string().optional(),
+    isActive: z.boolean().optional(),
+  });
+
+  app.get("/api/admin/stores", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { search } = req.query;
+      let query = db.select().from(stores);
+
+      if (typeof search === "string" && search.trim().length > 0) {
+        const term = `%${search.trim()}%`;
+        query = query.where(
+          or(
+            ilike(stores.name, term),
+            ilike(stores.location, term),
+            ilike(stores.phone, term),
+            ilike(stores.email, term),
+          ),
+        );
+      }
+
+      const rows = await query.orderBy(desc(stores.createdAt));
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/stores", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const parsed = StoreSchema.parse(req.body);
+      const [created] = await db
+        .insert(stores)
+        .values({
+          name: parsed.name,
+          description: parsed.description,
+          location: parsed.location,
+          phone: parsed.phone,
+          email: parsed.email,
+          ownerId: parsed.ownerId,
+          estateId: parsed.estateId,
+          isActive: parsed.isActive ?? true,
+        })
+        .returning();
+
+      res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/stores/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const updates = StoreSchema.partial().parse(req.body);
+
+      const [updated] = await db
+        .update(stores)
+        .set({
+          ...updates,
+          updatedAt: new Date(),
+        })
+        .where(eq(stores.id, id))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Store not found" });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  const MarketplaceItemAdminSchema = createMarketplaceItemSchema.extend({
+    storeId: z.string().min(1, "Store ID is required"),
+    estateId: z.string().optional(),
+    isActive: z.boolean().optional(),
+  });
+
+  app.get("/api/admin/marketplace", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { storeId } = req.query;
+      let query = db.select().from(marketplaceItems);
+      if (typeof storeId === "string" && storeId.trim()) {
+        query = query.where(eq(marketplaceItems.storeId, storeId.trim()));
+      }
+
+      const rows = await query.orderBy(desc(marketplaceItems.createdAt));
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/marketplace", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const parsed = MarketplaceItemAdminSchema.parse(req.body);
+      const [created] = await db
+        .insert(marketplaceItems)
+        .values({
+          vendorId: parsed.vendorId,
+          storeId: parsed.storeId,
+          estateId: parsed.estateId,
+          name: parsed.name,
+          description: parsed.description,
+          price: parsed.price as any,
+          currency: parsed.currency,
+          category: parsed.category,
+          subcategory: parsed.subcategory,
+          stock: parsed.stock as any,
+          images: parsed.images,
+          isActive: parsed.isActive ?? true,
+        })
+        .returning();
+
+      res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/marketplace/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const updates = updateMarketplaceItemSchema.partial().parse(req.body);
+
+      const [updated] = await db
+        .update(marketplaceItems)
+        .set({
+          ...updates,
+          updatedAt: new Date(),
+        })
+        .where(eq(marketplaceItems.id, id))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Marketplace item not found" });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/admin/marketplace/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const deleted = await db
+        .delete(marketplaceItems)
+        .where(eq(marketplaceItems.id, id))
+        .returning();
+
+      if (!deleted || deleted.length === 0) {
+        return res.status(404).json({ message: "Marketplace item not found" });
+      }
+
+      res.json({ success: true, item: deleted[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Admin: Companies (for providers)
   app.get("/api/admin/companies", async (req, res, next) => {
     try {
@@ -420,6 +1174,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } as any);
 
       res.status(201).json(company);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/company/provider-requests", async (req, res, next) => {
+    try {
+      const parsed = providerRequestSchema.parse(req.body);
+      const existingUser = await storage.getUserByEmail(parsed.email);
+      if (existingUser) {
+        return res
+          .status(409)
+          .json({ message: "A provider with that email already exists" });
+      }
+
+      const tempPassword = randomBytes(8).toString("hex");
+      const hashedPassword = await hashPassword(tempPassword);
+
+      const created = await storage.createProviderRequest(parsed);
+      await storage.createUser({
+        name: parsed.name,
+        email: parsed.email,
+        phone: parsed.phone || "",
+        password: hashedPassword,
+        role: "provider",
+        company: parsed.company,
+        categories: parsed.categories,
+        experience: parsed.experience,
+        isApproved: false,
+        metadata: parsed.description ? { description: parsed.description } : undefined,
+      } as any);
+      res.status(201).json(created);
+    } catch (error: any) {
+      if (error?.issues) {
+        return res.status(400).json({
+          error: "Validation error",
+          details: error.issues.map((issue: any) => ({
+            path: issue.path.join("."),
+            message: issue.message,
+          })),
+        });
+      }
+      next(error);
+    }
+  });
+
+  app.get("/api/admin/provider-requests", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const rows = await db
+        .select({
+          id: providerRequests.id,
+          name: providerRequests.name,
+          email: providerRequests.email,
+          company: providerRequests.company,
+          categories: providerRequests.categories,
+          experience: providerRequests.experience,
+          description: providerRequests.description,
+          createdAt: providerRequests.createdAt,
+          providerId: users.id,
+        })
+        .from(providerRequests)
+        .leftJoin(users, eq(users.email, providerRequests.email))
+        .orderBy(desc(providerRequests.createdAt));
+
+      res.json(rows);
     } catch (error) {
       next(error);
     }

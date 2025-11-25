@@ -317,9 +317,40 @@ export const companies = pgTable("companies", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const providerRequests = pgTable("provider_requests", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  company: text("company"),
+  categories: varchar("categories", { length: 100 }).array(),
+  experience: integer("experience").notNull().default(0),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const mongoIdMappings = pgTable("mongo_id_mappings", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  mongoId: text("mongo_id").notNull(),
+  postgresId: varchar("postgres_id").notNull(),
+  entityType: text("entity_type").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const insertCompanySchema = createInsertSchema(companies);
 export type Company = typeof companies.$inferSelect;
 export type InsertCompany = typeof companies.$inferInsert;
+
+export const insertProviderRequestSchema = createInsertSchema(providerRequests).omit({
+  id: true,
+  createdAt: true,
+});
+export type ProviderRequest = typeof providerRequests.$inferSelect;
+export type InsertProviderRequest = z.infer<typeof insertProviderRequestSchema>;
 
 // Orders table (from MongoDB)
 export const orders = pgTable("orders", {

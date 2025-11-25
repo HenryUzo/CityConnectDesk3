@@ -4,17 +4,19 @@ import { getQueryFn } from "@/lib/queryClient";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
+  ArrowDown,
   ArrowRight,
-  Briefcase,
-  Activity,
-  DollarSign,
+  ArrowUp,
+  Bell,
+  ChevronDown,
+  ChevronRight,
   Dice4,
   Eye,
   EyeOff,
-  Users,
+  MoreVertical,
 } from "lucide-react";
+import { AreaChart, ResponsiveContainer, Area } from "recharts";
 import { Link } from "wouter";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -67,6 +69,74 @@ type BusinessOverview = {
     createdAt: string | null;
   }[];
 };
+
+type RecentTransaction = {
+  title: string;
+  amount: number;
+  status: string;
+  month: string;
+};
+
+const FALLBACK_TRANSACTIONS: RecentTransaction[] = [
+  {
+    title: "Jollof Rice and 1 other",
+    amount: 100650,
+    status: "success",
+    month: "06/2024",
+  },
+  {
+    title: "Agbada and 2 others",
+    amount: 100000,
+    status: "success",
+    month: "06/2024",
+  },
+  {
+    title: "Pounded yam bundle",
+    amount: 95500,
+    status: "pending",
+    month: "05/2024",
+  },
+];
+
+const DATE_RANGE_OPTIONS = [
+  { value: "last-7", label: "Last 7 days" },
+  { value: "last-30", label: "Last 30 days" },
+  { value: "this-month", label: "This month" },
+];
+
+const formatStatusLabel = (status?: string) =>
+  status
+    ? status
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    : "Unknown";
+
+const getTransactionBadgeVariant = (
+  status: string,
+): "default" | "secondary" | "outline" => {
+  const normalized = status.toLowerCase();
+  if (["success", "completed", "approved"].includes(normalized)) {
+    return "default";
+  }
+  if (normalized === "pending") {
+    return "secondary";
+  }
+  return "outline";
+};
+
+const REVENUE_TREND = [35, 42, 38, 48, 55, 62, 75];
+const REQUEST_TREND = [25, 22, 26, 24, 21, 19, 16];
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"];
+
+const REVENUE_CHART_DATA = MONTH_LABELS.map((label, index) => ({
+  month: label,
+  value: REVENUE_TREND[index] ?? REVENUE_TREND[REVENUE_TREND.length - 1],
+}));
+
+const REQUEST_CHART_DATA = MONTH_LABELS.map((label, index) => ({
+  month: label,
+  value: REQUEST_TREND[index] ?? REQUEST_TREND[REQUEST_TREND.length - 1],
+}));
 
 const PASSWORD_LENGTH = 12;
 
@@ -127,6 +197,63 @@ export default function CompanyDashboard() {
     return map;
   }, [serviceCategoryOptions]);
 
+  const [dateRange, setDateRange] = useState("last-30");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [exportAll, setExportAll] = useState(false);
+
+  const firstCompanyName = companies[0]?.name ?? "Ray";
+  const greetingName = firstCompanyName ? firstCompanyName.split(" ")[0] : "John";
+  const marketplaceName = companies[0]?.name
+    ? `${firstCompanyName}'s Marketplace`
+    : "Ray's Marketplace";
+
+  const customersCount = companies.length;
+  const providersCount = stats.totalProviders;
+  const revenueTrendPositive = true;
+  const requestTrendPositive = false;
+  const userTrendPositive = true;
+
+  const recentTransactions = useMemo(() => {
+    if (stats.recentActivity.length === 0) {
+      return FALLBACK_TRANSACTIONS;
+    }
+    return stats.recentActivity.slice(0, 4).map((item, index) => {
+      const label = item.category
+        ? item.category.replace(/_/g, " ")
+        : "General request";
+      const capitalizedLabel =
+        label.charAt(0).toUpperCase() + label.slice(1).toLowerCase();
+      return {
+        title: `${capitalizedLabel}`,
+        amount: 100000 + index * 4500,
+        status: item.status,
+        month: item.createdAt
+          ? new Date(item.createdAt).toLocaleDateString("en-US", {
+              month: "2-digit",
+              year: "numeric",
+            })
+          : "—",
+      };
+    });
+  }, [stats.recentActivity]);
+
+  const filteredActivity = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    if (!query) {
+      return stats.recentActivity;
+    }
+    return stats.recentActivity.filter((item) => {
+      const category = item.category
+        ? item.category.replace(/_/g, " ").toLowerCase()
+        : "";
+      const status = item.status?.toLowerCase() ?? "";
+      const id = item.id?.toLowerCase() ?? "";
+      return (
+        category.includes(query) || status.includes(query) || id.includes(query)
+      );
+    });
+  }, [searchTerm, stats.recentActivity]);
+
   const [showProviderModal, setShowProviderModal] = useState(false);
   const providerForm = useForm<CreateProviderInput>({
     resolver: zodResolver(createProviderSchema),
@@ -157,206 +284,373 @@ export default function CompanyDashboard() {
   });
 
   return (
-    <div className="min-h-screen bg-white dark:bg-gradient-to-b dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 py-10">
-      <div className="max-w-7xl mx-auto px-4 lg:px-6 space-y-10">
-        <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between text-slate-900 dark:text-white">
-          <div className="space-y-2">
-            <p className="text-[0.7rem] tracking-[0.5em] uppercase text-slate-600 dark:text-white/60">
-              CityConnect Business Suite
-            </p>
-            <h1 className="text-3xl sm:text-4xl font-semibold">
-              Business partner overview
-            </h1>
-            <p className="text-sm text-slate-700 dark:text-white/70 max-w-xl">
-              Track how the marketplace is performing today &mdash; providers in
-              the network, open estate requests, and revenue flowing through the
-              platform.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <ThemeToggle />
-            <Link href="/company-registration">
-              <Button
-                variant="secondary"
-                className="bg-white text-slate-900 hover:bg-slate-100 dark:bg-slate-800 dark:text-white dark:hover:bg-slate-700"
-              >
-                <Briefcase className="mr-2 h-4 w-4" />
-                Register another business
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <nav className="bg-white border-b border-slate-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex flex-col">
+              <span className="text-lg font-semibold tracking-tight text-foreground">
+                CityConnect
+              </span>
+              <span className="text-xs uppercase tracking-[0.5em] text-slate-400">
+                Business suite
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" className="p-2">
+                <Bell className="h-4 w-4 text-slate-500" />
               </Button>
-            </Link>
-            <Button
-              variant="default"
-              className="bg-slate-100 text-slate-900 hover:bg-slate-200 dark:bg-slate-800 dark:text-white dark:hover:bg-slate-700"
-              onClick={() => setShowProviderModal(true)}
-            >
-              <Users className="mr-2 h-4 w-4" />
-              Create service providers
-            </Button>
-            <Link href="/">
-              <Button
-                variant="outline"
-                className="border-slate-300/30 text-slate-900 dark:border-white/30 dark:text-white"
-              >
-                Back to home
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </Link>
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-cyan-500 text-white font-semibold flex items-center justify-center text-sm">
+                  {greetingName.charAt(0)}
+                </div>
+                <div className="text-sm font-semibold text-foreground">
+                  {greetingName}
+                </div>
+              </div>
+              <Link href="/">
+                <Button variant="destructive" size="sm">
+                  Logout
+                </Button>
+              </Link>
+            </div>
           </div>
-        </header>
+        </div>
+      </nav>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
+        <section className="space-y-1">
+          <p className="text-lg font-semibold text-slate-900">Hi {greetingName}</p>
+          <p className="text-sm text-slate-500">
+            Here is a brief overview of the activities on {marketplaceName}
+          </p>
+        </section>
 
         {error && (
-          <div className="rounded-lg bg-red-900/40 border border-red-500/40 text-red-50 px-4 py-3 text-sm">
+          <div className="rounded-2xl border border-rose-100 bg-rose-50/70 px-4 py-3 text-sm text-rose-600">
             Unable to load marketplace overview. Please try again shortly.
           </div>
         )}
 
-        <section className="grid gap-6 md:grid-cols-3">
-          <Card className="bg-white border-slate-200 text-slate-900 shadow-[0_20px_45px_rgba(34,197,94,0.25)] dark:bg-slate-900/80 dark:border-slate-800 dark:text-white">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-slate-600 dark:text-white/70">
-                Providers in network
-              </CardTitle>
-              <Users className="h-4 w-4 text-emerald-400" />
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-semibold">{stats.totalProviders}</p>
-              <p className="text-xs text-slate-600 dark:text-white/60 mt-1">
-                Verified providers across all estates
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-white border-slate-200 text-slate-900 shadow-[0_20px_45px_rgba(34,197,94,0.25)] dark:bg-slate-900/80 dark:border-slate-800 dark:text-white">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-slate-600 dark:text-white/70">
-                Active estate requests
-              </CardTitle>
-              <Activity className="h-4 w-4 text-emerald-400" />
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-semibold">{stats.activeRequests}</p>
-              <p className="text-xs text-slate-600 dark:text-white/60 mt-1">
-                Requests currently awaiting provider action
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-white border-slate-200 text-slate-900 shadow-[0_20px_45px_rgba(16,185,129,0.3)] dark:bg-slate-900/80 dark:border-slate-800 dark:text-white">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-slate-600 dark:text-white/70">
-                Gross marketplace revenue
-              </CardTitle>
-              <DollarSign className="h-4 w-4 text-emerald-400" />
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-semibold">
-                ₦{stats.totalRevenue.toLocaleString("en-NG")}
-              </p>
-              <p className="text-xs text-slate-600 dark:text-white/60 mt-1">
-                Aggregated from completed orders
-              </p>
-            </CardContent>
-          </Card>
-        </section>
-
-        <section className="grid gap-6 lg:grid-cols-[1.4fr,0.9fr]">
-          <Card className="bg-white border-slate-200 text-slate-900 dark:bg-slate-900/80 dark:border-slate-800 dark:text-white">
-            <CardHeader>
-              <CardTitle className="text-base">
-                Recent provider activity
-              </CardTitle>
-              <p className="text-xs text-slate-600 dark:text-white/60">
-                A snapshot of the latest estate service requests flowing through
-                the network.
-              </p>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <p className="text-xs text-slate-600 dark:text-white/60">
-                  Loading activity…
-                </p>
-              ) : stats.recentActivity.length === 0 ? (
-                <p className="text-xs text-slate-600 dark:text-white/60">
-                  No activity recorded yet. Once residents begin booking
-                  services, requests will appear here.
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  {stats.recentActivity.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between rounded-xl border border-slate-200/10 bg-white/50 dark:border-white/5 dark:bg-slate-950/60 px-3 py-2.5 text-xs"
-                    >
-                      <div>
-                        <p className="font-medium text-slate-900 dark:text-white">
-                          {item.category || "General request"}
-                        </p>
-                        <p className="text-[0.7rem] text-slate-600 dark:text-white/60">
-                          Created{" "}
-                          {item.createdAt
-                            ? new Date(item.createdAt).toLocaleString()
-                            : "unknown"}
-                        </p>
-                      </div>
-                      <span
-                        className={`inline-flex items-center rounded-full px-3 py-1 text-[0.7rem] font-medium ${
-                          item.status === "completed"
-                            ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/40"
-                            : item.status === "pending"
-                              ? "bg-amber-500/10 text-amber-300 border border-amber-500/40"
-                              : "bg-slate-700/60 text-slate-100 border border-slate-500/40"
-                        }`}
-                      >
-                        {item.status}
-                      </span>
-                    </div>
-                  ))}
+        <section className="grid gap-4 md:grid-cols-3">
+          <Card className="relative overflow-hidden shadow-xl border border-slate-100/80 rounded-[20px] flex flex-col">
+            <Button
+              variant="ghost"
+              className="absolute top-3 right-3 rounded-full p-2 text-slate-400 hover:text-slate-700"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+            <CardHeader className="flex items-start justify-between pb-2">
+              <div className="space-y-1">
+                <CardTitle className="text-sm font-medium text-slate-500">
+                  Total Revenue
+                </CardTitle>
+                <div className="flex items-center gap-1 text-[0.65rem] font-semibold">
+                  {revenueTrendPositive ? (
+                    <ArrowUp className="h-4 w-4 text-emerald-500" />
+                  ) : (
+                    <ArrowDown className="h-4 w-4 text-rose-500" />
+                  )}
+                  <span
+                    className={
+                      revenueTrendPositive ? "text-emerald-500" : "text-rose-500"
+                    }
+                  >
+                    {revenueTrendPositive ? "+40%" : "-8%"} vs last month
+                  </span>
                 </div>
-              )}
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 mt-auto">
+              <div className="flex items-center justify-between gap-6">
+                <div className="space-y-1">
+                  <p className="text-3xl font-semibold text-slate-900">
+                    ₦{stats.totalRevenue.toLocaleString("en-NG")}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Verified providers across all estates
+                  </p>
+                </div>
+                <div className="w-28 h-16">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={REVENUE_CHART_DATA}>
+                      <defs>
+                        <linearGradient id="revenueChartGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#22c55e" stopOpacity={0.4} />
+                          <stop offset="95%" stopColor="#22c55e" stopOpacity={0.05} />
+                        </linearGradient>
+                      </defs>
+                      <Area
+                        type="monotone"
+                        dataKey="value"
+                        stroke="#16a34a"
+                        strokeWidth={2}
+                        fill="url(#revenueChartGradient)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
             </CardContent>
           </Card>
 
-          <Card className="bg-white border-slate-200 text-slate-900 dark:bg-slate-900/80 dark:border-slate-800 dark:text-white">
-            <CardHeader>
-              <CardTitle className="text-base">
-                Connect with the marketplace team
-              </CardTitle>
-              <p className="text-xs text-slate-600 dark:text-white/60">
-                Use your preferred channels to coordinate onboarding, compliance
-                checks, and upcoming campaigns. A richer, in-app chat can be
-                plugged in here later.
-              </p>
+          <Card className="relative overflow-hidden shadow-xl border border-slate-100/80 rounded-[20px] flex flex-col">
+            <Button
+              variant="ghost"
+              className="absolute top-3 right-3 rounded-full p-2 text-slate-400 hover:text-slate-700"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+            <CardHeader className="flex items-start justify-between pb-2">
+              <div className="space-y-1">
+                <CardTitle className="text-sm font-medium text-slate-500">
+                  Active Requests
+                </CardTitle>
+                <div className="flex items-center gap-1 text-[0.65rem] font-semibold">
+                  <ArrowDown className="h-4 w-4 text-rose-500" />
+                  <span className="text-rose-500">-10% vs last month</span>
+                </div>
+              </div>
             </CardHeader>
-            <CardContent className="space-y-3 text-xs text-slate-700 dark:text-white/70">
-              <div className="rounded-lg border border-slate-200/20 bg-white/50 dark:border-white/10 dark:bg-slate-950/60 px-3 py-2.5">
-                <p className="font-medium text-slate-900 dark:text-white mb-1">
-                  Email
-                </p>
-                <p className="text-slate-700 dark:text-white">
-                  business@cityconnect.ng
-                </p>
+            <CardContent className="pt-0 mt-auto">
+              <div className="flex items-center justify-between gap-6">
+                <div className="space-y-1">
+                  <p className="text-3xl font-semibold text-slate-900">
+                    {stats.activeRequests}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Requests currently awaiting provider action
+                  </p>
+                </div>
+                <div className="w-28 h-16">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={REQUEST_CHART_DATA}>
+                      <defs>
+                        <linearGradient id="requestChartGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.4} />
+                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0.05} />
+                        </linearGradient>
+                      </defs>
+                      <Area
+                        type="monotone"
+                        dataKey="value"
+                        stroke="#dc2626"
+                        strokeWidth={2}
+                        fill="url(#requestChartGradient)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
-              <div className="rounded-lg border border-slate-200/20 bg-white/50 dark:border-white/10 dark:bg-slate-950/60 px-3 py-2.5">
-                <p className="font-medium text-slate-900 dark:text-white mb-1">
-                  WhatsApp
-                </p>
-                <p className="text-slate-700 dark:text-white">
-                  +234 800 000 0000
-                </p>
-              </div>
-              <div className="rounded-lg border border-dashed border-emerald-500/50 bg-emerald-500/5 dark:bg-emerald-500/10 px-3 py-2.5">
-                <p className="font-medium text-emerald-700 dark:text-emerald-200 mb-1">
-                  In-app chat coming soon
-                </p>
-                <p className="text-[0.7rem] text-emerald-700/80 dark:text-emerald-100/80">
-                  This space is reserved for a live messaging panel between
-                  admins and business partners.
-                </p>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-md border border-slate-100">
+            <CardHeader className="pb-1">
+              <CardTitle className="text-sm font-semibold text-slate-900">
+                Total Users
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-1">
+              <div className="grid grid-cols-2 gap-6">
+                {[
+                  { label: "Providers", value: providersCount },
+                  { label: "Customers", value: customersCount || 0 },
+                ].map((item) => (
+                  <div key={item.label} className="space-y-2">
+                    <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                      {item.label}
+                    </span>
+                    <p className="text-3xl font-semibold text-slate-900">
+                      {item.value}
+                    </p>
+                    <div className="flex items-center gap-1 text-sm font-semibold text-emerald-500">
+                      <ArrowUp className="h-4 w-4" />
+                      <span>+20%</span>
+                    </div>
+                    <p className="text-xs font-medium text-slate-400">
+                      vs last month
+                    </p>
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>
         </section>
-      </div>
+
+        <section className="grid gap-6 lg:grid-cols-[1.6fr,1fr]">
+          <Card className="shadow-lg border border-slate-100">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base text-slate-900">
+                    Recent activity
+                  </CardTitle>
+                  <p className="text-xs text-slate-500">
+                    Track the latest servings flowing through the marketplace.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Select value={dateRange} onValueChange={setDateRange}>
+                    <SelectTrigger className="min-w-[180px]">
+                      <SelectValue placeholder="Select date range" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DATE_RANGE_OPTIONS.map((range) => (
+                        <SelectItem key={range.value} value={range.value}>
+                          {range.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                    placeholder="Search for Users"
+                    className="w-full max-w-xs"
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4 pt-0">
+              <div className="flex flex-wrap items-center gap-4 justify-between">
+                <label className="flex items-center gap-2 text-sm text-slate-500">
+                  <Checkbox
+                    checked={exportAll}
+                    onCheckedChange={(value) => setExportAll(Boolean(value))}
+                  />
+                  Export all
+                </label>
+                <Button variant="destructive" size="sm">
+                  Export all
+                </Button>
+              </div>
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                    <tr>
+                      <th className="px-4 py-3">Date</th>
+                      <th className="px-4 py-3">Activity</th>
+                      <th className="px-4 py-3">Request ID</th>
+                      <th className="px-4 py-3">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!filteredActivity.length ? (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="px-4 py-6 text-center text-xs uppercase text-slate-400"
+                        >
+                          No activity recorded yet
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredActivity.map((activity) => (
+                        <tr
+                          key={activity.id}
+                          className="border-t border-slate-100 text-slate-600"
+                        >
+                          <td className="px-4 py-4">
+                            {activity.createdAt
+                              ? new Date(activity.createdAt).toLocaleDateString()
+                              : "—"}
+                          </td>
+                          <td className="px-4 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-xs font-semibold text-slate-500">
+                                {activity.category
+                                  ? activity.category.charAt(0).toUpperCase()
+                                  : "G"}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-slate-900">
+                                  {activity.category
+                                    ? activity.category.replace(/_/g, " ")
+                                    : "General request"}
+                                </p>
+                                <p className="text-[0.65rem] text-slate-400">
+                                  {formatStatusLabel(activity.status)}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 font-mono text-[0.8rem] text-slate-500">
+                            #{activity.id.slice(0, 8)}
+                          </td>
+                          <td className="px-4 py-4">
+                            <Badge
+                              variant={getTransactionBadgeVariant(activity.status)}
+                            >
+                              {formatStatusLabel(activity.status)}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-lg border border-slate-100">
+            <CardHeader className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">
+                    Latest Transactions
+                  </span>
+                  <span className="text-xs font-semibold text-slate-500">Chat</span>
+                </div>
+                <Button variant="ghost" className="p-2">
+                  <ChevronRight className="h-4 w-4 text-slate-400" />
+                </Button>
+              </div>
+              <p className="text-xs text-slate-500">
+                Review what residents are ordering across Ray's marketplace.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3 pt-0">
+              {recentTransactions.map((tx) => (
+                <div
+                  key={`${tx.title}-${tx.month}-${tx.amount}`}
+                  className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-sm font-semibold text-slate-500">
+                        🍲
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">
+                          {tx.title}
+                        </p>
+                        <p className="text-[0.7rem] text-slate-500">{tx.month}</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 text-right">
+                      <p className="text-lg font-semibold text-slate-900">
+                        ₦{tx.amount.toLocaleString("en-NG")}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant={getTransactionBadgeVariant(tx.status)}
+                          className="py-1 px-3 text-xs"
+                        >
+                          {formatStatusLabel(tx.status)}
+                        </Badge>
+                        <ChevronDown className="h-4 w-4 text-slate-400" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </section>
+      </main>
+
       <Dialog open={showProviderModal} onOpenChange={setShowProviderModal}>
         <DialogContent className="max-w-xl">
           <DialogHeader>

@@ -4,6 +4,8 @@ import {
   wallets,
   transactions,
   companies,
+  providerRequests,
+  mongoIdMappings,
   requestMessages,
   requestBills,
   requestBillItems,
@@ -19,6 +21,8 @@ import {
   type InsertTransaction,
   type Company,
   type InsertCompany,
+  type ProviderRequest,
+  type InsertProviderRequest,
   type RequestMessage,
   type InsertRequestMessage,
   type RequestBill,
@@ -71,6 +75,10 @@ export interface IStorage {
   getUserStats(): Promise<any>;
   getCompanies(): Promise<Company[]>;
   createCompany(company: InsertCompany): Promise<Company>;
+  createProviderRequest(request: InsertProviderRequest): Promise<ProviderRequest>;
+  getProviderRequests(): Promise<ProviderRequest[]>;
+  deleteUser(userId: string): Promise<boolean>;
+  getPostgresIdFromMongoId(entityType: string, mongoId: string): Promise<string | null>;
   
   sessionStore: session.Store;
 }
@@ -571,6 +579,28 @@ export class DatabaseStorage implements IStorage {
     return provider || undefined;
   }
 
+  async deleteUser(userId: string): Promise<boolean> {
+    const deleted = await db
+      .delete(users)
+      .where(eq(users.id, userId))
+      .returning();
+    return deleted.length > 0;
+  }
+
+  async getPostgresIdFromMongoId(entityType: string, mongoId: string): Promise<string | null> {
+    const [row] = await db
+      .select({ postgresId: mongoIdMappings.postgresId })
+      .from(mongoIdMappings)
+      .where(
+        and(
+          eq(mongoIdMappings.entityType, entityType),
+          eq(mongoIdMappings.mongoId, mongoId),
+        ),
+      )
+      .limit(1);
+    return row?.postgresId || null;
+  }
+
   
 
   async getUserStats(): Promise<any> {
@@ -601,6 +631,24 @@ export class DatabaseStorage implements IStorage {
   async createCompany(company: InsertCompany): Promise<Company> {
     const [row] = await db.insert(companies).values(company).returning();
     return row;
+  }
+
+  async createProviderRequest(
+    request: InsertProviderRequest,
+  ): Promise<ProviderRequest> {
+    const [row] = await db
+      .insert(providerRequests)
+      .values({ ...request, createdAt: new Date() })
+      .returning();
+    return row;
+  }
+
+  async getProviderRequests(): Promise<ProviderRequest[]> {
+    const rows = await db
+      .select()
+      .from(providerRequests)
+      .orderBy(desc(providerRequests.createdAt));
+    return rows;
   }
 }
 

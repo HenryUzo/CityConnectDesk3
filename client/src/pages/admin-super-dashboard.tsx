@@ -2,6 +2,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   createContext,
   useContext,
   ReactNode,
@@ -98,6 +99,7 @@ import {
   ClipboardList,
   Clock,
   DollarSign,
+  Bell,
   Download,
   Edit,
   Eye,
@@ -821,6 +823,32 @@ const UsersManagement = () => {
     },
   });
 
+  const deleteUserMutation = useMutation({
+    mutationFn: (userId: string) =>
+      adminApiRequest("DELETE", `/api/admin/users/${userId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "User deleted successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error deleting user",
+        description: error.response?.data?.error || "Failed to delete user",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleDeleteUser = (userId?: string) => {
+    if (!userId) return;
+    const confirmed = confirm(
+      "Deleting this user is permanent and cannot be undone. Continue?",
+    );
+    if (!confirmed) return;
+    deleteUserMutation.mutate(userId);
+  };
+
   // Create user – POST to /api/admin/users
   const createUserMutation = useMutation({
     mutationFn: (userData: any) =>
@@ -1280,6 +1308,22 @@ const UsersManagement = () => {
                             <p>Preview user details</p>
                           </TooltipContent>
                         </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDeleteUser(userId)}
+                              disabled={deleteUserMutation.isPending}
+                              data-testid={`button-delete-user-${userId}`}
+                            >
+                              <Trash2 className="w-4 h-4 text-rose-500" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Delete user permanently</p>
+                          </TooltipContent>
+                        </Tooltip>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1668,6 +1712,8 @@ const ProvidersManagement = () => {
     experience: 0,
     description: "",
   });
+  const providerRequestCountRef = useRef(0);
+  const providerRequestInitializedRef = useRef(false);
 
   const { toast } = useToast();
   const { user } = useAdminAuth();
@@ -1710,7 +1756,7 @@ const ProvidersManagement = () => {
       name: "",
       email: "",
       phone: "",
-      password: undefined,
+      password: "",
       company: "",
       categories: [],
       experience: 0,
@@ -1754,6 +1800,12 @@ const ProvidersManagement = () => {
     queryKey: ["/api/admin/categories"],
     queryFn: () => adminApiRequest("GET", "/api/admin/categories"),
   });
+  const { data: providerRequests = [] } = useQuery({
+    queryKey: ["admin/provider-requests"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/provider-requests"),
+    refetchInterval: 15_000,
+    staleTime: 15_000,
+  });
   const categoryOptions =
     Array.isArray(categoriesList) && categoriesList.length > 0
       ? categoriesList
@@ -1763,11 +1815,29 @@ const ProvidersManagement = () => {
             label: c.name || c.key,
           }))
       : [
-          { value: "electrician", label: "Electrician" },
-          { value: "plumber", label: "Plumber" },
-          { value: "carpenter", label: "Carpenter" },
-          { value: "market_runner", label: "Market Runner" },
-        ];
+      { value: "electrician", label: "Electrician" },
+      { value: "plumber", label: "Plumber" },
+      { value: "carpenter", label: "Carpenter" },
+      { value: "market_runner", label: "Market Runner" },
+    ];
+  useEffect(() => {
+    if (!providerRequestInitializedRef.current) {
+      providerRequestInitializedRef.current = true;
+      providerRequestCountRef.current = providerRequests.length;
+      return;
+    }
+    if (providerRequests.length > providerRequestCountRef.current) {
+      const diff = providerRequests.length - providerRequestCountRef.current;
+      const newest = providerRequests[0];
+      toast({
+        title: `${diff} new provider request${diff > 1 ? "s" : ""}`,
+        description: newest?.name
+          ? `${newest.name} just submitted a request.`
+          : undefined,
+      });
+    }
+    providerRequestCountRef.current = providerRequests.length;
+  }, [providerRequests, toast]);
   const assignEstateMutation = useMutation({
     mutationFn: ({ providerId, estateId }: { providerId: string; estateId: string }) =>
       adminApiRequest("POST", "/api/admin/memberships", {
@@ -1984,7 +2054,7 @@ const ProvidersManagement = () => {
       name: provider.name || "",
       email: provider.email || "",
       phone: provider.phone || "",
-      password: undefined,
+      password: "",
       company: provider.company || "",
       categories: Array.isArray(provider.categories) ? provider.categories : [],
       experience: provider.experience || 0,
@@ -2041,13 +2111,21 @@ const ProvidersManagement = () => {
             Approve and manage service providers
           </p>
         </div>
-        <Button
-          onClick={() => setShowAddProvider(true)}
-          data-testid="button-add-provider"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Add Provider
-        </Button>
+        <div className="flex items-center gap-2">
+          {providerRequests.length > 0 && (
+            <Badge variant="secondary" className="text-xs uppercase tracking-wide">
+              {providerRequests.length} new request
+              {providerRequests.length > 1 ? "s" : ""}
+            </Badge>
+          )}
+          <Button
+            onClick={() => setShowAddProvider(true)}
+            data-testid="button-add-provider"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Add Provider
+          </Button>
+        </div>
       </div>
 
       {/* Global/Estate Toggle - Only for Super Admins */}
@@ -2512,7 +2590,7 @@ const ProvidersManagement = () => {
           }
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-4xl w-full">
           <DialogHeader>
             <DialogTitle>{editingProvider ? "Edit Service Provider" : "Add New Service Provider"}</DialogTitle>
             <DialogDescription>
@@ -2527,8 +2605,8 @@ const ProvidersManagement = () => {
               onSubmit={providerForm.handleSubmit(onSubmit)}
               className="space-y-6"
             >
-              <div className="grid gap-4 py-4">
-                <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 py-4 sm:grid-cols-3">
+                <div>
                   <FormField
                     control={providerForm.control}
                     name="name"
@@ -2546,6 +2624,8 @@ const ProvidersManagement = () => {
                       </FormItem>
                     )}
                   />
+                </div>
+                <div>
                   <FormField
                     control={providerForm.control}
                     name="email"
@@ -2565,8 +2645,7 @@ const ProvidersManagement = () => {
                     )}
                   />
                 </div>
-
-                <div className="grid grid-cols-2 gap-4">
+                <div>
                   <FormField
                     control={providerForm.control}
                     name="phone"
@@ -2584,177 +2663,188 @@ const ProvidersManagement = () => {
                       </FormItem>
                     )}
                   />
+                </div>
+
                 {!editingProvider && (
+                  <div>
+                    <FormField
+                      control={providerForm.control}
+                      name="password"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Password *</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="password"
+                              placeholder="Enter password"
+                              {...field}
+                              data-testid="input-provider-password"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                )}
+
+                <div>
                   <FormField
                     control={providerForm.control}
-                    name="password"
+                    name="company"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Password *</FormLabel>
+                        <FormLabel>Company</FormLabel>
+                        <Select
+                          value={field.value || "independent"}
+                          onValueChange={(value) =>
+                            field.onChange(value === "independent" ? "" : value)
+                          }
+                          disabled={isCompaniesLoading}
+                        >
+                          <FormControl>
+                            <SelectTrigger data-testid="select-provider-company">
+                              <SelectValue placeholder="Select company" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="independent">Independent</SelectItem>
+                            {companyOptions.map((company: any) => (
+                              <SelectItem key={company.id || company._id || company.name} value={company.name}>
+                                {company.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <div>
+                  <FormField
+                    control={providerForm.control}
+                    name="experience"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Years of Experience</FormLabel>
                         <FormControl>
                           <Input
-                            type="password"
-                            placeholder="Enter password"
+                            type="number"
+                            placeholder="Enter years of experience"
                             {...field}
-                            data-testid="input-provider-password"
+                            onChange={(e) =>
+                              field.onChange(parseInt(e.target.value) || 0)
+                            }
+                            data-testid="input-provider-experience"
                           />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
-                )}
                 </div>
 
-                <FormField
-                  control={providerForm.control}
-                  name="company"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Company</FormLabel>
-                      <Select
-                        value={field.value || "independent"}
-                        onValueChange={(value) =>
-                          field.onChange(value === "independent" ? "" : value)
-                        }
-                        disabled={isCompaniesLoading}
-                      >
+                <div className="sm:col-span-3">
+                  <FormField
+                    control={providerForm.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Description</FormLabel>
                         <FormControl>
-                          <SelectTrigger data-testid="select-provider-company">
-                            <SelectValue placeholder="Select company" />
-                          </SelectTrigger>
+                          <Textarea
+                            placeholder="Brief description of services offered"
+                            {...field}
+                            data-testid="textarea-provider-description"
+                          />
                         </FormControl>
-                        <SelectContent>
-                          <SelectItem value="independent">Independent</SelectItem>
-                          {companyOptions.map((company: any) => (
-                            <SelectItem key={company.id || company._id || company.name} value={company.name}>
-                              {company.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
 
-                <FormField
-                  control={providerForm.control}
-                  name="experience"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Years of Experience</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="number"
-                          placeholder="Enter years of experience"
-                          {...field}
-                          onChange={(e) =>
-                            field.onChange(parseInt(e.target.value) || 0)
-                          }
-                          data-testid="input-provider-experience"
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={providerForm.control}
-                  name="description"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Description</FormLabel>
-                      <FormControl>
-                        <Textarea
-                          placeholder="Brief description of services offered"
-                          {...field}
-                          data-testid="textarea-provider-description"
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={providerForm.control}
-                  name="categories"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Service Categories *</FormLabel>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="w-full justify-between"
+                <div className="sm:col-span-3">
+                  <FormField
+                    control={providerForm.control}
+                    name="categories"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Service Categories *</FormLabel>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="w-full justify-between"
+                            >
+                              {field.value?.length
+                                ? `${field.value.length} selected`
+                                : "Select categories"}
+                              <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-60" />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent
+                            align="start"
+                            sideOffset={0}
+                            className="w-full p-0"
                           >
-                            {field.value?.length
-                              ? `${field.value.length} selected`
-                              : "Select categories"}
-                            <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-60" />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent
-                          align="start"
-                          sideOffset={6}
-                          className="w-[calc(100%-16px)] sm:w-[620px] max-w-full p-0"
-                        >
-                          <ScrollArea className="max-h-64 sm:max-h-80 overflow-y-auto p-3">
-                            <div className="space-y-2">
-                              {categoryOptions.map((category) => {
-                                const categoryValue = category.value;
-                                const label = category.label;
-                                const checked = field.value?.includes(categoryValue);
-                                return (
-                                  <div key={categoryValue} className="flex items-center space-x-2">
-                                    <Checkbox
-                                      id={`category-${categoryValue}`}
-                                      checked={checked}
-                                      onCheckedChange={(checkedState) => {
-                                        const isChecked = checkedState === true;
-                                        const next = isChecked
-                                          ? Array.from(new Set([...(field.value || []), categoryValue]))
-                                          : (field.value || []).filter((c) => c !== categoryValue);
-                                        field.onChange(next);
-                                      }}
-                                      data-testid={`checkbox-category-${categoryValue}`}
-                                    />
-                                    <Label
-                                      htmlFor={`category-${categoryValue}`}
-                                      className="cursor-pointer"
-                                    >
-                                      {label}
-                                    </Label>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </ScrollArea>
-                        </PopoverContent>
-                      </Popover>
-                      {field.value?.length ? (
-                        <div className="flex flex-wrap gap-2 mt-2">
-                          {field.value.map((category: any) => {
-                            const label =
-                              typeof category === "string"
-                                ? category.replace("_", " ")
-                                : category?.label || category?.value || "Category";
-                            const value = typeof category === "string" ? category : category?.value || label;
-                            return (
-                              <Badge key={value} variant="outline">
-                                {label}
-                              </Badge>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                            <ScrollArea className="max-h-64 sm:max-h-80 overflow-y-auto p-3">
+                              <div className="space-y-2">
+                                {categoryOptions.map((category) => {
+                                  const categoryValue = category.value;
+                                  const label = category.label;
+                                  const checked = field.value?.includes(categoryValue);
+                                  return (
+                                    <div key={categoryValue} className="flex items-center space-x-2">
+                                      <Checkbox
+                                        id={`category-${categoryValue}`}
+                                        checked={checked}
+                                        onCheckedChange={(checkedState) => {
+                                          const isChecked = checkedState === true;
+                                          const next = isChecked
+                                            ? Array.from(new Set([...(field.value || []), categoryValue]))
+                                            : (field.value || []).filter((c) => c !== categoryValue);
+                                          field.onChange(next);
+                                        }}
+                                        data-testid={`checkbox-category-${categoryValue}`}
+                                      />
+                                      <Label
+                                        htmlFor={`category-${categoryValue}`}
+                                        className="cursor-pointer"
+                                      >
+                                        {label}
+                                      </Label>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </ScrollArea>
+                          </PopoverContent>
+                        </Popover>
+                        {field.value?.length ? (
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {field.value.map((category: any) => {
+                              const label =
+                                typeof category === "string"
+                                  ? category.replace("_", " ")
+                                  : category?.label || category?.value || "Category";
+                              const value = typeof category === "string" ? category : category?.value || label;
+                              return (
+                                <Badge key={value} variant="outline">
+                                  {label}
+                                </Badge>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
               </div>
 
               <DialogFooter>
@@ -4573,7 +4663,99 @@ export default function AdminSuperDashboard() {
   })();
   const setActiveTab = (tab: string) => setLocation(`/admin-dashboard/${tab}`);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-
+  const [requestDialogOpen, setRequestDialogOpen] = useState(false);
+  const isSuperAdmin = user?.globalRole === "super_admin";
+  const { data: providerRequests = [] } = useQuery({
+    queryKey: ["admin/provider-requests"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/provider-requests"),
+    enabled: isSuperAdmin,
+    refetchInterval: 15_000,
+    staleTime: 15_000,
+  });
+  const { toast } = useToast();
+  const notificationCount = providerRequests.length;
+  const acceptRequestMutation = useMutation({
+    mutationFn: (providerId: string) =>
+      adminApiRequest("POST", `/api/admin/providers/${providerId}/approve`),
+    onSuccess: async (_data, providerId) => {
+      queryClient.setQueryData(["admin/provider-requests"], (old: any[] | undefined) =>
+        old?.filter((request) => request.providerId !== providerId),
+      );
+      await queryClient.invalidateQueries({ queryKey: ["admin/provider-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/providers"] });
+      toast({ title: "Provider approved" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error approving provider",
+        description:
+          error.response?.data?.error || "Failed to approve provider",
+        variant: "destructive",
+      });
+    },
+  });
+  const declineRequestMutation = useMutation({
+    mutationFn: ({ requestId, reason }: { requestId: string; reason: string }) =>
+      adminApiRequest("POST", `/api/admin/provider-requests/${requestId}/decline`, { reason }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin/provider-requests"] });
+      toast({ title: "Provider declined" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error declining provider",
+        description:
+          error.response?.data?.error || "Failed to decline provider",
+        variant: "destructive",
+      });
+    },
+  });
+  const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
+  const [selectedRequestForDecline, setSelectedRequestForDecline] = useState<any>(null);
+  const [declineReason, setDeclineReason] = useState("");
+  const handleConfirmDecline = () => {
+    if (!selectedRequestForDecline?.providerId) {
+      toast({
+        title: "Provider not registered",
+        description: "No user record found for this request yet.",
+        variant: "destructive",
+      });
+      setDeclineDialogOpen(false);
+      return;
+    }
+    declineRequestMutation.mutate({
+      requestId: selectedRequestForDecline.id,
+      reason: declineReason || "No reason provided",
+    });
+    setDeclineDialogOpen(false);
+    setSelectedRequestForDecline(null);
+    setDeclineReason("");
+  };
+  const handleAcceptRequest = (request: any) => {
+    if (!request.providerId) {
+      toast({
+        title: "Provider not registered",
+        description: "No user record found for this request yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+    acceptRequestMutation.mutate(request.providerId);
+  };
+  const handleDeclineRequest = (request: any) => {
+    setSelectedRequestForDecline(request);
+    setDeclineReason("");
+    setRequestDialogOpen(false);
+    setTimeout(() => setDeclineDialogOpen(true), 400);
+  };
+  const handleInvestigateRequest = (request: any) => {
+    toast({
+      title: "Investigate request",
+      description: `${request.name || "Provider"}'s details are available in Provider Management.`,
+    });
+  };
   useEffect(() => {
     if (location === "/admin-dashboard" || location === "/admin-dashboard/") {
       setLocation("/admin-dashboard/dashboard")
@@ -4621,9 +4803,197 @@ export default function AdminSuperDashboard() {
               <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
                 {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
               </h1>
-              <div></div>
+              {isSuperAdmin && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setRequestDialogOpen(true)}
+                  aria-label="View provider requests"
+                >
+                  <Bell className="w-4 h-4" />
+                </Button>
+              )}
             </div>
           </div>
+
+          {isSuperAdmin && (
+            <div className="hidden lg:flex justify-end bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setRequestDialogOpen(true)}
+                aria-label="View provider requests"
+              >
+                <Bell className="w-4 h-4" />
+              </Button>
+              {notificationCount > 0 && (
+                <span className="ml-2 text-[0.65rem] font-semibold uppercase tracking-wide text-primary">
+                  {notificationCount > 9 ? "9+" : notificationCount} new request
+                  {notificationCount > 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+          )}
+
+          {isSuperAdmin && (
+            <>
+            <Dialog open={requestDialogOpen} onOpenChange={setRequestDialogOpen}>
+              <DialogContent className="max-w-3xl w-[90vw]">
+                <DialogHeader>
+                  <DialogTitle>Provider requests</DialogTitle>
+                  <DialogDescription>
+                    Review company dashboard submissions.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 mt-4">
+                  {providerRequests.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No pending provider requests.
+                    </p>
+                  ) : (
+                    providerRequests.map((request: any) => (
+                      <div
+                        key={request.id}
+                        className="rounded-xl border border-border bg-white dark:bg-gray-900 p-4 shadow-sm"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-foreground">
+                              {request.name || "Unknown name"}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {request.email}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {request.description || "No description provided"}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            Received{" "}
+                            {request.createdAt
+                              ? new Date(request.createdAt).toLocaleString()
+                              : "—"}
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() => handleAcceptRequest(request)}
+                            disabled={!request.providerId || acceptRequestMutation.isPending}
+                          >
+                            Accept
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleInvestigateRequest(request)}
+                          >
+                            Investigate
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleDeclineRequest(request)}
+                            disabled={declineRequestMutation.isPending}
+                          >
+                            Decline
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setRequestDialogOpen(false)}
+                  >
+                    Close
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            <Dialog open={declineDialogOpen} onOpenChange={(open) => {
+              setDeclineDialogOpen(open);
+              if (!open) {
+                setSelectedRequestForDecline(null);
+                setDeclineReason("");
+              }
+            }}>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Decline provider request</DialogTitle>
+                  <DialogDescription>
+                    Provide a reason before declining.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {selectedRequestForDecline?.name || "Provider"} – {selectedRequestForDecline?.email}
+                  </p>
+                  <Textarea
+                    value={declineReason}
+                    onChange={(event) => setDeclineReason(event.target.value)}
+                    placeholder="Explain why this provider is being declined"
+                    rows={4}
+                  />
+                </div>
+                <DialogFooter className="justify-end">
+                  <Button variant="outline" onClick={() => setDeclineDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleConfirmDecline}
+                    disabled={declineRequestMutation.isPending}
+                  >
+                    Decline
+                  </Button>
+                </DialogFooter>
+            </DialogContent>
+          </Dialog>
+            <Dialog open={declineDialogOpen} onOpenChange={(open) => {
+              setDeclineDialogOpen(open);
+              if (!open) {
+                setSelectedRequestForDecline(null);
+                setDeclineReason("");
+              }
+            }}>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Decline provider request</DialogTitle>
+                  <DialogDescription>
+                    Provide a reason before declining.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {selectedRequestForDecline?.name || "Provider"} – {selectedRequestForDecline?.email}
+                  </p>
+                  <Textarea
+                    value={declineReason}
+                    onChange={(event) => setDeclineReason(event.target.value)}
+                    placeholder="Explain why this provider is being declined"
+                    rows={4}
+                  />
+                </div>
+                <DialogFooter className="justify-end">
+                  <Button variant="outline" onClick={() => setDeclineDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleConfirmDecline}
+                    disabled={declineRequestMutation.isPending}
+                  >
+                    Decline
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            </>
+          )}
 
           {/* Page Content */}
           <div className="p-6">
@@ -6298,7 +6668,7 @@ const StoresManagement = () => {
     const [inventoryView, setInventoryView] = useState<"card" | "table">("table");
     const goToStores = () => setLocation("/admin-dashboard/stores");
 
-  const { data: storeProviders = [] } = useQuery({
+  const { data: storeProviders } = useQuery({
     queryKey: ["/api/admin/store-owner-providers"],
     queryFn: () =>
       adminApiRequest("GET", "/api/admin/users/all", {
@@ -6326,11 +6696,22 @@ const StoresManagement = () => {
       (p: any) => (p.id || p._id) === selectedOwnerId && isStoreOwnerProvider(p),
     );
     if (!owner) return;
-    setFormData((prev) => ({
-      ...prev,
-      phone: owner.phone || prev.phone || "",
-      email: owner.email || prev.email || "",
-    }));
+
+    setFormData((prev) => {
+      const nextPhone = owner.phone || prev.phone || "";
+      const nextEmail = owner.email || prev.email || "";
+
+      // Avoid triggering a new render if nothing actually changed
+      if (prev.phone === nextPhone && prev.email === nextEmail) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        phone: nextPhone,
+        email: nextEmail,
+      };
+    });
   }, [selectedOwnerId, storeProviders]);
 
   const createStoreMutation = useMutation({
@@ -6417,6 +6798,7 @@ const StoresManagement = () => {
       }
     }, [itemCategories, isInventoryPage]);
     useEffect(() => {
+      if (!isInventoryPage) return;
       if (!inventoryEditingItem) {
         inventoryEditForm.reset({
           name: "",
@@ -6439,7 +6821,7 @@ const StoresManagement = () => {
         image: primaryImage,
       });
       setInventoryEditPreview(primaryImage);
-    }, [inventoryEditingItem, inventoryEditForm, itemCategories, getPrimaryImage]);
+    }, [inventoryEditingItem, itemCategories, getPrimaryImage, isInventoryPage]);
 
     const createInventoryMutation = useMutation({
       mutationFn: (payload: any) =>
@@ -6469,7 +6851,7 @@ const StoresManagement = () => {
         category: itemCategories?.[0]?.name || "",
         image: "",
       });
-    }, [inventoryEditForm, itemCategories]);
+    }, [itemCategories]);
 
     const updateInventoryMutation = useMutation({
       mutationFn: ({ id, ...data }: { id: string } & Record<string, any>) =>
