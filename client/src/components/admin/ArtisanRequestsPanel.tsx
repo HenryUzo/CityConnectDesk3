@@ -4,6 +4,13 @@ import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { AdminAPI } from "@/lib/adminApi";
 
 type RequestStatus =
@@ -25,26 +32,28 @@ interface ServiceRequest {
 
 interface ArtisanRequestsPanelProps {
   selectedEstateId: string | null;
+  estates: any[];
+  onSelectEstate: (estateId: string | null) => void;
 }
 
-export default function ArtisanRequestsPanel({ selectedEstateId }: ArtisanRequestsPanelProps) {
+export default function ArtisanRequestsPanel({
+  selectedEstateId,
+  estates,
+  onSelectEstate,
+}: ArtisanRequestsPanelProps) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<RequestStatus | "all">("pending");
   const enabled = Boolean(selectedEstateId);
-  if (!enabled) {
-    return (
-      <Card>
-        <CardHeader>
-          <div className="text-lg font-semibold">Artisan Requests</div>
-        </CardHeader>
-        <CardContent>
-          <div className="text-sm text-muted-foreground">
-            Select an estate to view artisan service requests.
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+
+  const estateOptions = useMemo(() => {
+    if (!Array.isArray(estates) || estates.length === 0) return [];
+    return estates
+      .map((estate, idx) => {
+        const id = estate?._id || estate?.id || estate?.slug || `estate-${idx}`;
+        return id ? { value: String(id), label: estate.name || estate.slug || id } : null;
+      })
+      .filter(Boolean) as { value: string; label: string }[];
+  }, [estates]);
 
   const { data, isLoading, error } = useQuery<ServiceRequest[], Error>({
     queryKey: [
@@ -58,6 +67,7 @@ export default function ArtisanRequestsPanel({ selectedEstateId }: ArtisanReques
       // Use the typed AdminAPI wrapper: returns JSON directly
       return await AdminAPI.bridge.getServiceRequests(params);
     },
+    enabled,
     refetchInterval: enabled ? 5000 : false,
     placeholderData: (prev) => prev,
   });
@@ -74,95 +84,139 @@ export default function ArtisanRequestsPanel({ selectedEstateId }: ArtisanReques
     );
   }, [data, q]);
 
-  if (error) {
-    return (
-      <Card>
-        <CardHeader>
+  return (
+    <Card className="p-0">
+      <div className="h-32 w-full overflow-hidden rounded-t-xl">
+        <img
+          src="https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=1600&q=80"
+          alt="Service Request banner"
+          className="w-full h-full object-cover"
+        />
+      </div>
+      <CardHeader>
+        <div className="flex flex-col gap-3">
           <div className="text-lg font-semibold">Artisan Requests</div>
-        </CardHeader>
-        <CardContent>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <span className="text-xs text-muted-foreground">Estate</span>
+              <Select
+                value={selectedEstateId ?? ""}
+                onValueChange={(value) => onSelectEstate(value || null)}
+                className="w-full sm:w-64"
+              >
+                <SelectTrigger data-testid="select-requests-estate">
+                  <SelectValue placeholder="Select an estate" />
+                </SelectTrigger>
+                <SelectContent>
+                  {estateOptions.length > 0 ? (
+                    estateOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <SelectItem value="none" disabled>
+                      {enabled ? "No estates available" : "Loading estates..."}
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <Badge variant="outline" className="text-xs text-muted-foreground">
+              {selectedEstateId
+                ? estateOptions.find((option) => option.value === selectedEstateId)?.label ||
+                  "Selected estate"
+                : "No estate selected"}
+            </Badge>
+          </div>
+        </div>
+      </CardHeader>
+      <div className="px-4 sm:px-6 pb-3 space-y-3">
+        <div className="flex flex-col sm:flex-row gap-2">
+          <select
+            className="px-3 py-2 border rounded-md bg-background w-full sm:w-48"
+            value={status}
+            onChange={(e) => setStatus(e.target.value as any)}
+          >
+            <option value="pending">Pending</option>
+            <option value="assigned">Assigned</option>
+            <option value="in_progress">In Progress</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+            <option value="all">All</option>
+          </select>
+          <Input
+            placeholder="Search description..."
+            className="w-full sm:w-64"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+      </div>
+      <CardContent>
+        {error ? (
           <div className="text-sm text-red-600 whitespace-pre-wrap">
             Failed to load requests{"\n"}
             {error.message}
             {"\n\n"}
             <span className="text-xs text-muted-foreground">
-              Tip: make sure you&apos;re logged in as an Admin and an Estate is
-              selected. (The hook auto-selects the first estate once /api/admin/estates loads.)
+              Tip: log in as an Admin and select an estate so we can show its
+              artisan requests.
             </span>
           </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-4">
-          <div className="text-lg font-semibold">Artisan Requests</div>
-          <div className="flex gap-2">
-            <select
-              className="px-3 py-2 border rounded-md bg-background"
-              value={status}
-              onChange={(e) => setStatus(e.target.value as any)}
-            >
-              <option value="pending">Pending</option>
-              <option value="assigned">Assigned</option>
-              <option value="in_progress">In Progress</option>
-              <option value="completed">Completed</option>
-              <option value="cancelled">Cancelled</option>
-              <option value="all">All</option>
-            </select>
-            <Input
-              placeholder="Search description..."
-              className="w-64"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+        ) : !enabled ? (
+          <div className="text-sm text-muted-foreground">
+            Select an estate to view artisan service requests.
           </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
+        ) : isLoading ? (
           <div className="text-sm text-muted-foreground">Loading...</div>
+        ) : requests.length === 0 ? (
+          <div className="text-sm text-muted-foreground">No requests.</div>
         ) : (
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
             {requests.map((r: ServiceRequest) => (
               <div
                 key={r.id}
-                className="border rounded-lg p-4 flex items-start justify-between"
+                className="border border-border rounded-xl p-4 flex flex-col gap-3 bg-white dark:bg-gray-900 shadow-sm"
               >
-                <div>
-                  <div className="font-semibold">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="font-semibold text-base capitalize">
                     {r.category?.replaceAll("_", " ") || "Request"}
                   </div>
-                  <div className="text-sm text-muted-foreground">
-                    {r.description}
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Badge variant="secondary">
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant="default"
+                      className="bg-emerald-50 text-emerald-600 border-0 px-2 py-1 text-xs"
+                    >
                       {r.status.replaceAll("_", " ")}
                     </Badge>
                     {r.billedAmount && (
-                      <Badge>₦ {Number(r.billedAmount).toLocaleString()}</Badge>
+                      <Badge
+                        variant="secondary"
+                        className="px-2 py-1 text-xs"
+                      >
+                        ₦ {Number(r.billedAmount).toLocaleString()}
+                      </Badge>
                     )}
                   </div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {new Date(r.createdAt).toLocaleString()}
-                  </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <p className="text-sm text-muted-foreground">
+                  {r.description}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {new Date(r.createdAt).toLocaleString()}
+                </p>
+                <div className="flex items-center gap-2 justify-end">
                   <Button size="sm" variant="outline">
                     View
                   </Button>
                   {r.status === "pending" && <Button size="sm">Assign</Button>}
-                  {r.status === "in_progress" && <Button size="sm">Bill</Button>}
+                  {r.status === "in_progress" && (
+                    <Button size="sm">Bill</Button>
+                  )}
                 </div>
               </div>
             ))}
-            {requests.length === 0 && (
-              <div className="text-sm text-muted-foreground">No requests.</div>
-            )}
           </div>
         )}
       </CardContent>

@@ -3,6 +3,7 @@ import {
   useEffect,
   useCallback,
   useRef,
+  useMemo,
   createContext,
   useContext,
   ReactNode,
@@ -269,6 +270,15 @@ const EMOJI_OPTIONS = Array.from(
 // Admin auth context (local to this page file)
 type AdminUser = any;
 
+const normalizeAdminUser = (rawUser: any): AdminUser | null => {
+  if (!rawUser) return null;
+  return {
+    ...rawUser,
+    memberships: Array.isArray(rawUser.memberships) ? rawUser.memberships : [],
+    globalRole: rawUser.globalRole ?? rawUser.global_role ?? rawUser.role ?? null,
+  };
+};
+
 const AdminAuthContext = createContext<
   | {
       user: AdminUser | null;
@@ -278,7 +288,6 @@ const AdminAuthContext = createContext<
       login: (email: string, password: string) => Promise<any>;
       logout: () => void;
       isLoading: boolean;
-      refreshToken: () => Promise<void>;
       sessionChecked: boolean;
     }
   | null
@@ -334,14 +343,37 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     }
   }, []);
 
-  // Mark session as checked without issuing a cookie-based /api/user call.
-  // Admin auth is handled via explicit login + stored tokens, so we avoid
-  // an extra 401 for users who haven't logged in yet.
   useEffect(() => {
-    if (!sessionChecked) {
-      setSessionChecked(true);
-    }
-  }, [sessionChecked]);
+    if (sessionChecked) return;
+    let cancelled = false;
+
+    const bootstrapSession = async () => {
+      try {
+        const sessionUser: any = await adminApiRequest("GET", "/api/user");
+        if (cancelled) return;
+        const normalizedUser = normalizeAdminUser(sessionUser);
+        setUser(normalizedUser);
+        const memberships = normalizedUser?.memberships ?? [];
+        if (memberships.length > 0 && !selectedEstateId) {
+          setSelectedEstateId(memberships[0].estateId);
+        }
+      } catch {
+        if (!cancelled) {
+          setUser(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setSessionChecked(true);
+        }
+      }
+    };
+
+    bootstrapSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionChecked, selectedEstateId]);
 
   const refreshToken = async () => {
     const refreshTokenValue = sessionStorage.getItem("admin_refresh_token");
@@ -359,18 +391,17 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
       // Race-proof: Set tokens immediately
       setAdminToken(response.accessToken);
       setToken(response.accessToken);
-      // Ensure memberships is always an array to avoid runtime reads of undefined
-      setUser(response.user ? { ...response.user, memberships: Array.isArray(response.user.memberships) ? response.user.memberships : [] } : null);
+      const normalizedUser = normalizeAdminUser(response.user);
+      setUser(normalizedUser);
       sessionStorage.setItem("admin_refresh_token", response.refreshToken);
 
       // Restore estate selection if user has memberships
-      const memberships = Array.isArray(response?.user?.memberships)
-        ? response.user.memberships
-        : [];
+      const memberships = normalizedUser?.memberships ?? [];
       if (memberships.length > 0 && !selectedEstateId) {
         const firstEstate = memberships[0].estateId;
         setSelectedEstateId(firstEstate);
       }
+      setSessionChecked(true);
     } catch (error) {
       // Refresh failed, clear tokens and redirect to login
       logout();
@@ -403,15 +434,16 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
           sessionStorage.setItem("admin_refresh_token", refreshToken);
         }
 
-        // Ensure memberships is always an array to avoid runtime reads of undefined elsewhere
-        setUser(userObj ? { ...userObj, memberships: Array.isArray(userObj.memberships) ? userObj.memberships : [] } : null);
+        const normalizedUser = normalizeAdminUser(userObj);
+        setUser(normalizedUser);
 
         // Auto-select first estate for tenant scoping
-        const memberships = Array.isArray(userObj?.memberships) ? userObj.memberships : [];
+        const memberships = normalizedUser?.memberships ?? [];
         if (memberships.length > 0) {
           const firstEstate = memberships[0].estateId;
           setSelectedEstateId(firstEstate);
         }
+        setSessionChecked(true);
 
       return response;
     } catch (error) {
@@ -426,6 +458,8 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     setAdminToken(null);               // <- ensures adminApi stops sending Authorization
     setToken(null);
     setUser(null);
+    setSelectedEstateId(null);
+    setSessionChecked(true);
 
     sessionStorage.removeItem("admin_refresh_token");
     sessionStorage.removeItem("admin_access_token");
@@ -446,7 +480,6 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
         login,
         logout,
         isLoading,
-        refreshToken,
         sessionChecked,
       }}
     >
@@ -4654,7 +4687,7 @@ const DashboardStats = () => {
 
 // Main Admin Dashboard Component
 export default function AdminSuperDashboard() {
-  const { user, token, sessionChecked, selectedEstateId } = useAdminAuth();
+  const { user, token, sessionChecked, selectedEstateId, setSelectedEstateId } = useAdminAuth();
   const [location, setLocation] = useLocation();
   const activeTab = (() => {
     if (!location.startsWith("/admin-dashboard")) return "dashboard";
@@ -4672,6 +4705,29 @@ export default function AdminSuperDashboard() {
     refetchInterval: 15_000,
     staleTime: 15_000,
   });
+  const { data: estateList = [] } = useQuery({
+    queryKey: ["admin-estates"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
+    enabled: Boolean(user),
+  });
+  useEffect(() => {
+    if (!sessionChecked || !user || selectedEstateId) return;
+    if (!Array.isArray(estateList) || estateList.length === 0) return;
+    const firstEstate = estateList[0];
+    const estateId = firstEstate?._id || firstEstate?.id || firstEstate?.slug;
+    if (estateId) {
+      setSelectedEstateId(String(estateId));
+    }
+  }, [estateList, selectedEstateId, sessionChecked, user]);
+  const estateOptions = useMemo(() => {
+    if (!Array.isArray(estateList) || estateList.length === 0) return [];
+    return estateList
+      .map((estate: any, idx: number) => {
+        const estateId = estate?._id || estate?.id || estate?.slug || `estate-${idx}`;
+        return estateId ? { value: String(estateId), label: estate.name || estate.slug || estateId } : null;
+      })
+      .filter(Boolean) as { value: string; label: string }[];
+  }, [estateList]);
   const { toast } = useToast();
   const notificationCount = providerRequests.length;
   const acceptRequestMutation = useMutation({
@@ -4756,6 +4812,12 @@ export default function AdminSuperDashboard() {
       description: `${request.name || "Provider"}'s details are available in Provider Management.`,
     });
   };
+
+  const handleEstateSelection = (estateId: string) => {
+    const normalized = estateId || null;
+    setSelectedEstateId(normalized);
+    setCurrentEstate(normalized);
+  };
   useEffect(() => {
     if (location === "/admin-dashboard" || location === "/admin-dashboard/") {
       setLocation("/admin-dashboard/dashboard")
@@ -4813,6 +4875,45 @@ export default function AdminSuperDashboard() {
                   <Bell className="w-4 h-4" />
                 </Button>
               )}
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="text-sm font-medium text-muted-foreground">
+                {selectedEstateId ? "Viewing estate" : "Choose an estate"}
+              </div>
+              <Select
+                value={selectedEstateId ?? ""}
+                onValueChange={handleEstateSelection}
+                className="w-full sm:w-64"
+              >
+                <SelectTrigger data-testid="select-global-estate">
+                  <SelectValue placeholder="Select an estate" />
+                </SelectTrigger>
+                <SelectContent>
+                  {estateOptions.length > 0 ? (
+                    estateOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <SelectItem value="loading" disabled>
+                      {sessionChecked ? "No estates available" : "Loading estates..."}
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+              <Badge
+                variant="outline"
+                className="text-xs text-muted-foreground flex-1"
+              >
+                {selectedEstateId
+                  ? estateOptions.find((option) => option.value === selectedEstateId)?.label ||
+                    "Selected estate"
+                  : "No estate selected"}
+              </Badge>
             </div>
           </div>
 
@@ -5078,10 +5179,18 @@ export default function AdminSuperDashboard() {
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "orders" && <OrdersManagement />}
             {activeTab === "requests" && (
-              <ArtisanRequestsPanel selectedEstateId={selectedEstateId} />
+              <ArtisanRequestsPanel
+                selectedEstateId={selectedEstateId}
+                estates={estateList}
+                onSelectEstate={handleEstateSelection}
+              />
             )}
             {activeTab === "artisanRequests" && (
-              <ArtisanRequestsPanel selectedEstateId={selectedEstateId} />
+              <ArtisanRequestsPanel
+                selectedEstateId={selectedEstateId}
+                estates={estateList}
+                onSelectEstate={handleEstateSelection}
+              />
             )}
 
             {/* Removed generic under-development placeholder section */}
@@ -7907,6 +8016,13 @@ const ItemCategoriesPage = () => {
     <div className="space-y-6">
       <Card>
         <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="w-full mb-4 sm:mb-0">
+            <img
+              src="https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1600&q=80"
+              alt="Service categories illustration"
+              className="w-full h-44 object-cover rounded-lg shadow-sm"
+            />
+          </div>
           <div>
             <CardTitle>Item Categories</CardTitle>
             <CardDescription>Manage marketplace item categories.</CardDescription>
