@@ -324,7 +324,7 @@ export default function BookArtisan() {
         </div>
 
         <nav className="flex-1 py-4">
-          <Link href="/book-artisan">
+          <Link href="/service-categories">
             <button className="w-full px-4 py-3 flex items-center space-x-3 text-white hover:bg-emerald-700 transition-colors">
               <Wrench className="w-5 h-5" />
               <span>Service Categories</span>

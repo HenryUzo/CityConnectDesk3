@@ -138,7 +138,7 @@ export function ResidentLayout({ title, children }: ResidentLayoutProps) {
       <main className="flex-1 ml-72">
         {/* Header with Action Buttons */}
         <header className="bg-white border-b border-gray-200 px-8 py-6 flex items-center justify-between sticky top-0 z-10">
-          <div>
+          <div className="w-full">
             <h1 className="text-2xl font-bold text-gray-900">{title}</h1>
           </div>
         </header>

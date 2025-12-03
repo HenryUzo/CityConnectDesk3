@@ -27,9 +27,15 @@ async function run() {
 
     // Use a fresh pg Pool to avoid importing drizzle/db which may reference schema columns
     const pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
-    const existingRes = await pgPool.query('SELECT id FROM users WHERE email = $1', [email]);
+    const existingRes = await pgPool.query('SELECT id, global_role FROM users WHERE email = $1', [email]);
     if (existingRes.rows.length) {
-      console.log('Admin already exists:', email);
+      const existing = existingRes.rows[0];
+      if (existing.global_role !== 'super_admin') {
+        await pgPool.query('UPDATE users SET global_role = $1 WHERE id = $2', ['super_admin', existing.id]);
+        console.log('Promoted existing admin to super_admin:', email);
+      } else {
+        console.log('Admin already exists:', email);
+      }
       await pgPool.end();
       return;
     }
@@ -37,9 +43,9 @@ async function run() {
     const hashed = await hashPassword(password);
 
     const res = await pgPool.query(
-      `INSERT INTO users (name, first_name, last_name, email, phone, password, role, is_approved, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()) RETURNING id`,
-      [name, firstName, lastName, email, phone, hashed, 'admin', true]
+      `INSERT INTO users (name, first_name, last_name, email, phone, password, role, global_role, is_approved, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW()) RETURNING id`,
+      [name, firstName, lastName, email, phone, hashed, 'admin', 'super_admin', true]
     );
 
     const userId = res.rows?.[0]?.id;

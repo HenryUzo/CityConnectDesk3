@@ -8,7 +8,7 @@ import {
   ReactNode,
 } from "react";
 import { useLocation, Link } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, type UseMutationResult } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import {
   adminApiRequest,
@@ -17,7 +17,7 @@ import {
   getCurrentEstate,
 } from "@/lib/adminApi";
 import { useToast } from "@/hooks/use-toast";
-import { useForm } from "react-hook-form";
+import { useForm, UseFormReturn, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   createMarketplaceItemSchema,
@@ -39,6 +39,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import CompanyRegistrationFormFields, {
+  CompanyForm,
+  companySchema,
+  defaultCompanyFormValues,
+  isCompanyCoreFieldsComplete,
+} from "@/components/company/CompanyRegistrationFormFields";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
@@ -612,7 +618,7 @@ const AdminSidebar = ({
 const [location, setLocation] = useLocation();
   const menuItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "estates", label: "Estates", icon: Building2 },
+    { id: "estates", label: "Estate Management", icon: Building2 },
     { id: "users", label: "Users", icon: Users },
     { id: "providers", label: "Providers", icon: UserCheck },
     { id: "companies", label: "Companies", icon: Briefcase },
@@ -6943,12 +6949,20 @@ const OrdersManagement = () => {
 const CompaniesManagement = () => {
   const { toast } = useToast();
   const [showAddCompany, setShowAddCompany] = useState(false);
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-    contactEmail: "",
-    phone: "",
+  const companyForm = useForm<CompanyForm>({
+    resolver: zodResolver(companySchema),
+    defaultValues: defaultCompanyFormValues,
   });
+  useEffect(() => {
+    if (showAddCompany) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [showAddCompany]);
 
   const { data: companies = [], isLoading } = useQuery({
     queryKey: ["admin-companies"],
@@ -6956,11 +6970,11 @@ const CompaniesManagement = () => {
   });
 
   const createCompanyMutation = useMutation({
-    mutationFn: (payload: any) =>
+    mutationFn: (payload: CompanyForm) =>
       adminApiRequest("POST", "/api/admin/companies", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
-      setForm({ name: "", description: "", contactEmail: "", phone: "" });
+      companyForm.reset(defaultCompanyFormValues);
       setShowAddCompany(false);
       toast({ title: "Company created successfully" });
     },
@@ -6973,13 +6987,9 @@ const CompaniesManagement = () => {
     },
   });
 
-  const handleSubmit = () => {
-    if (!form.name.trim()) {
-      toast({ title: "Name is required", variant: "destructive" });
-      return;
-    }
-    createCompanyMutation.mutate(form);
-  };
+  const handleCompanySubmit = companyForm.handleSubmit((values) => {
+    createCompanyMutation.mutate(values);
+  });
 
   return (
     <div className="space-y-6">
@@ -6998,55 +7008,42 @@ const CompaniesManagement = () => {
         </Button>
       </div>
 
-      <Dialog open={showAddCompany} onOpenChange={setShowAddCompany}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add Company</DialogTitle>
-            <DialogDescription>Create a new provider company.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <Input
-              placeholder="Company Name *"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              data-testid="input-company-name"
-            />
-            <Input
-              placeholder="Contact Email"
-              value={form.contactEmail}
-              onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
-              data-testid="input-company-email"
-            />
-            <Input
-              placeholder="Phone"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              data-testid="input-company-phone"
-            />
-            <Textarea
-              placeholder="Description"
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={3}
-              data-testid="textarea-company-description"
-            />
+      {showAddCompany && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => {
+              setShowAddCompany(false);
+              companyForm.reset(defaultCompanyFormValues);
+            }}
+          />
+          <div className="relative z-10 w-[90%] sm:w-[900px] max-w-[90%] rounded-lg bg-background p-6 shadow-lg">
+            <div className="flex flex-col space-y-1.5 text-left">
+              <h2 className="text-lg font-semibold">Add Company</h2>
+              <p className="text-sm text-muted-foreground">Create a new provider company.</p>
+            </div>
+            <form className="space-y-6" onSubmit={handleCompanySubmit}>
+              <CompanyRegistrationFormFields form={companyForm} />
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setShowAddCompany(false);
+                    companyForm.reset(defaultCompanyFormValues);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <CompanySaveButton
+                  form={companyForm}
+                  mutation={createCompanyMutation}
+                />
+              </div>
+            </form>
           </div>
-          <DialogFooter className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setShowAddCompany(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                handleSubmit();
-              }}
-              disabled={createCompanyMutation.isPending}
-              data-testid="button-create-company"
-            >
-              {createCompanyMutation.isPending ? "Saving..." : "Save Company"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+      )}
 
       <div className="grid grid-cols-1">
         <Card>
@@ -7091,6 +7088,82 @@ const CompaniesManagement = () => {
         </Card>
       </div>
     </div>
+  );
+};
+
+type CompanySaveButtonProps = {
+  form: UseFormReturn<CompanyForm>;
+  mutation: UseMutationResult<unknown, unknown, CompanyForm, unknown>;
+};
+
+const CompanySaveButton = ({ form, mutation }: CompanySaveButtonProps) => {
+  const [
+    name,
+    contactEmail,
+    phone,
+    description,
+    registrationNumber,
+    taxId,
+    businessType,
+    industry,
+    yearEstablished,
+    addressLine1,
+    city,
+    country,
+    state,
+    lga,
+  ] = useWatch({
+    control: form.control,
+    name: [
+      "name",
+      "contactEmail",
+      "phone",
+      "description",
+      "businessDetails.registrationNumber",
+      "businessDetails.taxId",
+      "businessDetails.businessType",
+      "businessDetails.industry",
+      "businessDetails.yearEstablished",
+      "locationDetails.addressLine1",
+      "locationDetails.city",
+      "locationDetails.country",
+      "locationDetails.state",
+      "locationDetails.lga",
+    ],
+  });
+  const currentValues = form.getValues();
+  const ready = isCompanyCoreFieldsComplete({
+    ...currentValues,
+    name,
+    contactEmail,
+    phone,
+    description,
+    businessDetails: {
+      ...currentValues.businessDetails,
+      registrationNumber,
+      taxId,
+      businessType,
+      industry,
+      yearEstablished,
+    },
+    locationDetails: {
+      ...currentValues.locationDetails,
+      addressLine1,
+      city,
+      country,
+      state,
+      lga,
+    },
+  });
+
+  return (
+    <Button
+      type="submit"
+      disabled={mutation.isPending || !ready}
+      data-testid="button-create-company"
+    >
+      {mutation.isPending ? "Saving..." : "Save Company"}
+    </Button>
   );
 };
 

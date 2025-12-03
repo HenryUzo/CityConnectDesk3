@@ -17,12 +17,14 @@ import ProviderStoreItems from "@/pages/provider-store-items";
 import AdminDashboard from "@/pages/admin-dashboard";
 import AdminSuperDashboard from "@/pages/admin-super-dashboard";
 import BookArtisan from "@/pages/book-artisan";
+import ServiceCategories from "@/pages/service-categories";
 import BookMarketRun from "@/pages/book-market-run";
 import TrackOrders from "@/pages/track-orders";
 import CheckoutDiagnosis from "@/pages/checkout-diagnosis";
 import PaymentPolicy from "@/pages/payment-policy";
 import PaymentConfirmation from "@/pages/payment-confirmation";
 import NotFound from "@/pages/not-found";
+
 
 function Router() {
   return (
@@ -49,6 +51,7 @@ function Router() {
           <AdminSuperDashboard />
         </AdminAuthProvider>
       </Route>
+      <ProtectedRoute path="/service-categories" component={ServiceCategories} />
       <ProtectedRoute path="/book-artisan" component={BookArtisan} />
       <ProtectedRoute path="/checkout-diagnosis" component={CheckoutDiagnosis} />
       <ProtectedRoute path="/payment-policy" component={PaymentPolicy} />

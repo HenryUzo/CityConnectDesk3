@@ -200,6 +200,7 @@ export const categories = pgTable("categories", {
   emoji: text("emoji"),
   description: text("description"),
   icon: text("icon"),
+  tag: text("tag").notNull().default("Facility Management 🏗️"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

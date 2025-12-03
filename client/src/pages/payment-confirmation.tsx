@@ -8,6 +8,7 @@ import { residentFetch } from "@/lib/residentApi";
 export default function PaymentConfirmation() {
   const [status, setStatus] = useState<"loading" | "success" | "failed">("loading");
   const [reference, setReference] = useState<string | null>(null);
+  const [failureMessage, setFailureMessage] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -25,11 +26,21 @@ export default function PaymentConfirmation() {
         const res = await residentFetch<{ status: string }>(`/api/paystack/verify?reference=${encodeURIComponent(ref)}`);
         if (res?.status === "success") {
           setStatus("success");
+          setFailureMessage(null);
         } else {
           setStatus("failed");
+          setFailureMessage(
+            res?.message || "We could not confirm this payment. Please try again."
+          );
+          toast({
+            title: "Verification failed",
+            description: res?.message || "The payment could not be confirmed",
+            variant: "destructive",
+          });
         }
       } catch (err: any) {
         setStatus("failed");
+        setFailureMessage(err?.message || "Could not verify payment");
         toast({ title: "Verification error", description: err?.message || "Could not verify payment", variant: "destructive" });
       }
     })();
@@ -58,6 +69,9 @@ export default function PaymentConfirmation() {
           <div>
             <p className="text-red-700 font-semibold">Payment not confirmed.</p>
             <p className="text-sm text-gray-700 mt-2">Reference: <span className="font-mono">{reference || "-"}</span></p>
+            {failureMessage && (
+              <p className="text-sm text-gray-500 mt-1">{failureMessage}</p>
+            )}
             <div className="mt-6 flex justify-end space-x-2">
               <Link href="/checkout-diagnosis">
                 <Button variant="outline">Back to checkout</Button>

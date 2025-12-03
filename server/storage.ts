@@ -12,6 +12,7 @@ import {
   inspections,
   deviceAssignments,
   auditLogs,
+  orders,
   type User,
   type InsertUser,
   type ServiceRequest,
@@ -33,16 +34,59 @@ import {
   type Inspection,
   type InsertInspection,
   type DeviceAssignment,
+  type Order,
   type AuditLog,
   type InsertAuditLog,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, count, sql } from "drizzle-orm";
+import { eq, and, desc, count, sql, asc, or, inArray, sum } from "drizzle-orm";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
 import { pool } from "./db";
 
 const PostgresSessionStore = connectPg(session);
+
+type OrderUserSummary = Pick<User, "id" | "name" | "email" | "phone">;
+
+export interface OrdersPagination {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface OrdersQueryParams {
+  search?: string;
+  status?: string;
+  hasDispute?: boolean;
+  startDate?: string;
+  endDate?: string;
+  minTotal?: number;
+  maxTotal?: number;
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+}
+
+export interface OrderStats {
+  totalOrders: number;
+  totalRevenue: number;
+  disputedOrders: number;
+  avgOrderValue: number;
+}
+
+export interface AdminOrder extends Order {
+  _id: string;
+  buyer: OrderUserSummary | null;
+  vendor: OrderUserSummary | null;
+  total: number;
+}
+
+export interface OrdersListResult {
+  orders: AdminOrder[];
+  pagination: OrdersPagination;
+}
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -91,7 +135,22 @@ export interface IStorage {
   deleteProviderRequest(requestId: string): Promise<void>;
   getPostgresIdFromMongoId(entityType: string, mongoId: string): Promise<string | null>;
   createAuditLog(entry: InsertAuditLog): Promise<AuditLog>;
-  
+  getOrders(params?: OrdersQueryParams): Promise<OrdersListResult>;
+  getOrderStats(): Promise<OrderStats>;
+  updateOrderStatus(orderId: string, status: string): Promise<Order | undefined>;
+  createOrderDispute(
+    orderId: string,
+    payload: { reason: string; description?: string },
+  ): Promise<Order | undefined>;
+  updateOrderDispute(
+    orderId: string,
+    payload: {
+      status: string;
+      resolution: string;
+      refundAmount?: number;
+    },
+  ): Promise<Order | undefined>;
+
   sessionStore: session.Store;
 }
 
@@ -720,6 +779,221 @@ export class DatabaseStorage implements IStorage {
     await db
       .delete(providerRequests)
       .where(eq(providerRequests.id, requestId));
+  }
+
+  async getOrders(params: OrdersQueryParams = {}): Promise<OrdersListResult> {
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.max(1, params.limit ?? 20);
+    const offset = (page - 1) * limit;
+    const whereClauses: any[] = [];
+    if (params.status) {
+      whereClauses.push(eq(orders.status, params.status as any));
+    }
+    if (params.hasDispute !== undefined) {
+      const disputeCondition = params.hasDispute
+        ? sql`${orders.dispute} IS NOT NULL AND (${orders.dispute}->>'reason') <> ''`
+        : sql`${orders.dispute} IS NULL OR (${orders.dispute}->>'reason') = ''`;
+      whereClauses.push(disputeCondition);
+    }
+    if (params.startDate) {
+      const start = new Date(params.startDate);
+      if (!isNaN(start.getTime())) {
+        whereClauses.push(sql`${orders.createdAt} >= ${start}`);
+      }
+    }
+    if (params.endDate) {
+      const end = new Date(params.endDate);
+      if (!isNaN(end.getTime())) {
+        whereClauses.push(sql`${orders.createdAt} <= ${end}`);
+      }
+    }
+    if (params.minTotal !== undefined && !Number.isNaN(params.minTotal)) {
+      whereClauses.push(sql`${orders.total} >= ${params.minTotal}`);
+    }
+    if (params.maxTotal !== undefined && !Number.isNaN(params.maxTotal)) {
+      whereClauses.push(sql`${orders.total} <= ${params.maxTotal}`);
+    }
+
+    if (params.search) {
+      const trimmed = params.search.trim();
+      if (trimmed) {
+        const likeTerm = `%${trimmed}%`;
+        const matchingUsers = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            or(
+              sql`${users.name} ILIKE ${likeTerm}`,
+              sql`${users.email} ILIKE ${likeTerm}`,
+              sql`${users.phone} ILIKE ${likeTerm}`,
+            ),
+          );
+        const searchConditions: any[] = [sql`${orders.id} ILIKE ${likeTerm}`];
+        if (matchingUsers.length) {
+          const userIds = matchingUsers.map((u) => u.id);
+          searchConditions.push(inArray(orders.buyerId, userIds));
+          searchConditions.push(inArray(orders.vendorId, userIds));
+        }
+        let combined = searchConditions[0];
+        for (let i = 1; i < searchConditions.length; i += 1) {
+          combined = or(combined, searchConditions[i]);
+        }
+        whereClauses.push(combined);
+      }
+    }
+
+    const whereCondition = whereClauses.length ? and(...whereClauses) : undefined;
+    let totalQuery = db.select({ count: count() }).from(orders);
+    if (whereCondition) {
+      totalQuery = totalQuery.where(whereCondition);
+    }
+    const [totalRow] = await totalQuery;
+    const total = Number(totalRow?.count ?? 0);
+
+    let mainQuery = db
+      .select({
+        id: orders.id,
+        estateId: orders.estateId,
+        storeId: orders.storeId,
+        buyerId: orders.buyerId,
+        vendorId: orders.vendorId,
+        items: orders.items,
+        total: orders.total,
+        currency: orders.currency,
+        status: orders.status,
+        deliveryAddress: orders.deliveryAddress,
+        paymentMethod: orders.paymentMethod,
+        dispute: orders.dispute,
+        createdAt: orders.createdAt,
+        updatedAt: orders.updatedAt,
+      })
+      .from(orders);
+    if (whereCondition) {
+      mainQuery = mainQuery.where(whereCondition);
+    }
+
+    const normalizedSortOrder =
+      params.sortOrder && params.sortOrder.toLowerCase() === "asc"
+        ? "asc"
+        : "desc";
+    const sortColumn = params.sortBy === "total" ? orders.total : orders.createdAt;
+    const orderByClause = normalizedSortOrder === "asc" ? asc(sortColumn) : desc(sortColumn);
+    const orderRows = await mainQuery
+      .orderBy(orderByClause)
+      .limit(limit)
+      .offset(offset);
+
+    const userIds = Array.from(
+      new Set(
+        orderRows
+          .flatMap((orderRow) => [orderRow.buyerId, orderRow.vendorId])
+          .filter(Boolean),
+      ),
+    );
+    const userRows = userIds.length
+      ? await db
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            phone: users.phone,
+          })
+          .from(users)
+          .where(inArray(users.id, userIds))
+      : [];
+    const userMap = new Map(userRows.map((userRow) => [userRow.id, userRow]));
+
+    const formattedOrders: AdminOrder[] = orderRows.map((orderRow) => ({
+      ...orderRow,
+      _id: orderRow.id,
+      total: Number(orderRow.total),
+      buyer: userMap.get(orderRow.buyerId) ?? null,
+      vendor: userMap.get(orderRow.vendorId) ?? null,
+    }));
+
+    const pagination: OrdersPagination = {
+      total,
+      page,
+      limit,
+      totalPages: limit > 0 ? Math.ceil(total / limit) : 0,
+    };
+
+    return {
+      orders: formattedOrders,
+      pagination,
+    };
+  }
+
+  async getOrderStats(): Promise<OrderStats> {
+    const [totalRow] = await db.select({ count: count() }).from(orders);
+    const [revenueRow] = await db.select({ total: sum(orders.total) }).from(orders);
+    const [disputeRow] = await db
+      .select({ count: count() })
+      .from(orders)
+      .where(sql`${orders.dispute} IS NOT NULL AND (${orders.dispute}->>'reason') <> ''`);
+
+    const totalOrders = Number(totalRow?.count ?? 0);
+    const totalRevenue = Number(revenueRow?.total ?? 0);
+    const disputedOrders = Number(disputeRow?.count ?? 0);
+
+    return {
+      totalOrders,
+      totalRevenue,
+      disputedOrders,
+      avgOrderValue: totalOrders ? totalRevenue / totalOrders : 0,
+    };
+  }
+
+  async updateOrderStatus(orderId: string, status: string): Promise<Order | undefined> {
+    const [order] = await db
+      .update(orders)
+      .set({ status: status as any, updatedAt: new Date() })
+      .where(eq(orders.id, orderId))
+      .returning();
+    return order || undefined;
+  }
+
+  async createOrderDispute(
+    orderId: string,
+    payload: { reason: string; description?: string },
+  ): Promise<Order | undefined> {
+    const dispute = {
+      reason: payload.reason,
+      description: payload.description ?? null,
+      status: "open",
+      createdAt: new Date().toISOString(),
+    };
+    const [order] = await db
+      .update(orders)
+      .set({ dispute, updatedAt: new Date() })
+      .where(eq(orders.id, orderId))
+      .returning();
+    return order || undefined;
+  }
+
+  async updateOrderDispute(
+    orderId: string,
+    payload: { status: string; resolution: string; refundAmount?: number },
+  ): Promise<Order | undefined> {
+    const [existing] = await db
+      .select()
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1);
+    if (!existing) return undefined;
+    const updatedDispute = {
+      ...(existing.dispute ?? {}),
+      status: payload.status,
+      resolution: payload.resolution,
+      refundAmount: payload.refundAmount ?? existing.dispute?.refundAmount ?? null,
+      resolvedAt: new Date().toISOString(),
+    };
+    const [order] = await db
+      .update(orders)
+      .set({ dispute: updatedDispute, updatedAt: new Date() })
+      .where(eq(orders.id, orderId))
+      .returning();
+    return order || undefined;
   }
 }
 

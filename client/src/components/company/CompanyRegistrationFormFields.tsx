@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Briefcase, CreditCard, MapPin } from "lucide-react";
+import { Briefcase, CheckCircle, AlertCircle, CreditCard, MapPin } from "lucide-react";
 import { UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -91,6 +90,41 @@ const nigeriaStates: Record<string, string[]> = {
 const countryStateMap: Record<string, string[]> = {
   Nigeria: Object.keys(nigeriaStates),
 };
+
+const hasValue = (value: unknown) => {
+  if (value === "" || value === null || value === undefined) return false;
+  if (typeof value === "number") return !Number.isNaN(value);
+  return String(value).trim().length > 0;
+};
+
+export const isBusinessSectionComplete = (values: Partial<CompanyForm>) => {
+  const required = [
+    values.name,
+    values.contactEmail,
+    values.phone,
+    values.description,
+    values.businessDetails?.registrationNumber,
+    values.businessDetails?.taxId,
+    values.businessDetails?.businessType,
+    values.businessDetails?.industry,
+    values.businessDetails?.yearEstablished,
+  ];
+  return required.every(hasValue);
+};
+
+export const isLocationSectionComplete = (values: Partial<CompanyForm>) => {
+  const required = [
+    values.locationDetails?.addressLine1,
+    values.locationDetails?.city,
+    values.locationDetails?.country,
+    values.locationDetails?.state,
+    values.locationDetails?.lga,
+  ];
+  return required.every(hasValue);
+};
+
+export const isCompanyCoreFieldsComplete = (values: Partial<CompanyForm>) =>
+  isBusinessSectionComplete(values) && isLocationSectionComplete(values);
 
 export const companySchema = z.object({
   name: z.string().min(2, "Business name is required"),
@@ -200,6 +234,8 @@ const RequiredLabel = ({ children }: { children: React.ReactNode }) => (
   </>
 );
 
+export type CompanyFormSection = "business" | "bank" | "location";
+
 type FormTabsProps = {
   form: UseFormReturn<CompanyForm>;
   activeTab?: CompanyFormSection;
@@ -216,10 +252,18 @@ const CompanyRegistrationFormFields = ({
   const {
     register,
     formState: { errors },
-    watch,
   } = form;
-  const [activeTab, setActiveTab] = useState<TabId>("business");
-  const values = watch();
+  const isControlled = activeTab !== undefined;
+  const [internalTab, setInternalTab] = useState<TabId>(activeTab ?? "business");
+
+  useEffect(() => {
+    if (activeTab && activeTab !== internalTab) {
+      setInternalTab(activeTab);
+    }
+  }, [activeTab, internalTab]);
+
+  const currentTab = isControlled ? (activeTab as TabId) : internalTab;
+  const values = form.getValues();
   const selectedCountry = values.locationDetails?.country || "";
   const selectedState = (values.locationDetails?.state || "") as keyof typeof nigeriaStates;
   const stateOptions = countryStateMap[selectedCountry] ?? [];
@@ -227,11 +271,45 @@ const CompanyRegistrationFormFields = ({
   const isBusinessReady = isBusinessSectionComplete(values);
   const isLocationReady = isLocationSectionComplete(values);
 
+  const lastFocusedFieldRef = useRef<HTMLElement | null>(null);
+  const handleFieldFocus = (event: React.FocusEvent<HTMLElement>) => {
+    lastFocusedFieldRef.current = event.currentTarget;
+  };
+  useEffect(() => {
+    if (
+      lastFocusedFieldRef.current &&
+      document.activeElement === document.body &&
+      lastFocusedFieldRef.current !== document.activeElement
+    ) {
+      requestAnimationFrame(() => {
+        lastFocusedFieldRef.current?.focus();
+      });
+    }
+  });
+  const attachFocusHandlers = <T extends { onBlur?: (...args: any[]) => void; onFocus?: (...args: any[]) => void }>(
+    field: T,
+  ) => ({
+    ...field,
+    onFocus: (event: React.FocusEvent<any>) => {
+      handleFieldFocus(event as React.FocusEvent<HTMLElement>);
+      field.onFocus?.(event);
+    },
+    onBlur: field.onBlur,
+  });
+
+  const handleTabChange = (value: string) => {
+    const nextTab = value as TabId;
+    if (!isControlled) {
+      setInternalTab(nextTab);
+    }
+    onTabChange?.(nextTab);
+  };
+
   const TabCard = ({
-  icon,
-  title,
-  children,
-}: {
+    icon,
+    title,
+    children,
+  }: {
     icon: JSX.Element;
     title: string;
     children: React.ReactNode;
@@ -250,44 +328,71 @@ const CompanyRegistrationFormFields = ({
     </div>
   );
 
-  return (
-    <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TabId)} className="space-y-4">
-      <TabsList className="space-x-2">
-        <TabsTrigger value="business">
-          <span className="flex items-center gap-1">
-            {businessIcon}
-            Business
-          </span>
-        </TabsTrigger>
-        <TabsTrigger value="bank">
-          <span className="flex items-center gap-1">
-            <CreditCard className="w-3 h-3" />
-            Bank
-          </span>
-        </TabsTrigger>
-        <TabsTrigger value="location">
-          <span className="flex items-center gap-1">
-            {locationIcon}
-            Location
-          </span>
-        </TabsTrigger>
-      </TabsList>
+  const businessIcon = isBusinessReady ? (
+    <CheckCircle className="w-4 h-4 text-emerald-500" />
+  ) : (
+    <AlertCircle className="w-4 h-4 text-orange-500" />
+  );
+  const locationIcon = isLocationReady ? (
+    <CheckCircle className="w-4 h-4 text-emerald-500" />
+  ) : (
+    <AlertCircle className="w-4 h-4 text-orange-500" />
+  );
 
-      <TabsContent value="business">
+  const tabs: Array<{ id: CompanyFormSection; label: string; icon: JSX.Element }> = [
+    { id: "business", label: "Business", icon: businessIcon },
+    { id: "bank", label: "Bank", icon: <CreditCard className="w-3 h-3" /> },
+    { id: "location", label: "Location", icon: locationIcon },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground">
+        {tabs.map((tab) => {
+          const isActive = currentTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => handleTabChange(tab.id)}
+              className={`inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+                isActive
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <span className="flex items-center gap-1">
+                {tab.icon}
+                {tab.label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {currentTab === "business" && (
         <TabCard icon={<Briefcase className="w-5 h-5" />} title="Business Details">
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="name">Business Name</Label>
-              <Input id="name" {...register("name")} placeholder="e.g. Lekki Facilities" />
+              <Label htmlFor="name">
+                <RequiredLabel>Business Name</RequiredLabel>
+              </Label>
+              <Input
+                id="name"
+                {...attachFocusHandlers(register("name"))}
+                placeholder="e.g. Lekki Facilities"
+              />
               {errors.name && (
                 <p className="text-xs text-destructive mt-1">{errors.name.message}</p>
               )}
             </div>
             <div>
-              <Label htmlFor="contactEmail">Primary Contact Email</Label>
+              <Label htmlFor="contactEmail">
+                <RequiredLabel>Primary Contact Email</RequiredLabel>
+              </Label>
               <Input
                 id="contactEmail"
-                {...register("contactEmail")}
+                {...attachFocusHandlers(register("contactEmail"))}
                 placeholder="contact@business.com"
               />
               {errors.contactEmail && (
@@ -297,17 +402,25 @@ const CompanyRegistrationFormFields = ({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="phone">Business Phone</Label>
-              <Input id="phone" {...register("phone")} placeholder="+234 809 000 1234" />
+              <Label htmlFor="phone">
+                <RequiredLabel>Business Phone</RequiredLabel>
+              </Label>
+              <Input
+                id="phone"
+                {...attachFocusHandlers(register("phone"))}
+                placeholder="+234 809 000 1234"
+              />
               {errors.phone && (
                 <p className="text-xs text-destructive mt-1">{errors.phone.message}</p>
               )}
             </div>
             <div>
-              <Label htmlFor="description">Describe your services</Label>
+              <Label htmlFor="description">
+                <RequiredLabel>Describe your services</RequiredLabel>
+              </Label>
               <Textarea
                 id="description"
-                {...register("description")}
+                {...attachFocusHandlers(register("description"))}
                 rows={2}
                 placeholder="Summarize how your company operates"
               />
@@ -315,10 +428,12 @@ const CompanyRegistrationFormFields = ({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="registrationNumber">Business registration number</Label>
+              <Label htmlFor="registrationNumber">
+                <RequiredLabel>Business registration number</RequiredLabel>
+              </Label>
               <Input
                 id="registrationNumber"
-                {...register("businessDetails.registrationNumber")}
+                {...attachFocusHandlers(register("businessDetails.registrationNumber"))}
               />
               {errors.businessDetails?.registrationNumber && (
                 <p className="text-xs text-destructive mt-1">
@@ -327,8 +442,10 @@ const CompanyRegistrationFormFields = ({
               )}
             </div>
             <div>
-              <Label htmlFor="taxId">Tax / TIN</Label>
-              <Input id="taxId" {...register("businessDetails.taxId")} />
+              <Label htmlFor="taxId">
+                <RequiredLabel>Tax / TIN</RequiredLabel>
+              </Label>
+              <Input id="taxId" {...attachFocusHandlers(register("businessDetails.taxId"))} />
               {errors.businessDetails?.taxId && (
                 <p className="text-xs text-destructive mt-1">
                   {errors.businessDetails.taxId.message}
@@ -338,10 +455,12 @@ const CompanyRegistrationFormFields = ({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="businessType">Business Type</Label>
+              <Label htmlFor="businessType">
+                <RequiredLabel>Business Type</RequiredLabel>
+              </Label>
               <select
                 id="businessType"
-                {...register("businessDetails.businessType")}
+                {...attachFocusHandlers(register("businessDetails.businessType"))}
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 <option value="">Select business type</option>
@@ -358,10 +477,12 @@ const CompanyRegistrationFormFields = ({
               )}
             </div>
             <div>
-              <Label htmlFor="industry">Industry</Label>
+              <Label htmlFor="industry">
+                <RequiredLabel>Industry</RequiredLabel>
+              </Label>
               <select
                 id="industry"
-                {...register("businessDetails.industry")}
+                {...attachFocusHandlers(register("businessDetails.industry"))}
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 <option value="">Select industry</option>
@@ -380,13 +501,17 @@ const CompanyRegistrationFormFields = ({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="yearEstablished">Year established</Label>
+              <Label htmlFor="yearEstablished">
+                <RequiredLabel>Year established</RequiredLabel>
+              </Label>
               <Input
                 id="yearEstablished"
                 type="number"
-                {...register("businessDetails.yearEstablished", {
-                  valueAsNumber: true,
-                })}
+                {...attachFocusHandlers(
+                  register("businessDetails.yearEstablished", {
+                    valueAsNumber: true,
+                  }),
+                )}
                 min={1900}
                 max={new Date().getFullYear()}
               />
@@ -400,7 +525,7 @@ const CompanyRegistrationFormFields = ({
               <Label htmlFor="website">Website (optional)</Label>
               <Input
                 id="website"
-                {...register("businessDetails.website")}
+                {...attachFocusHandlers(register("businessDetails.website"))}
                 placeholder="https://example.com"
               />
               {errors.businessDetails?.website && (
@@ -411,16 +536,16 @@ const CompanyRegistrationFormFields = ({
             </div>
           </div>
         </TabCard>
-      </TabsContent>
+      )}
 
-      <TabsContent value="bank">
+      {currentTab === "bank" && (
         <TabCard icon={<CreditCard className="w-5 h-5" />} title="Bank & payouts">
           <div className="grid gap-4 md:grid-cols-2">
             <div>
               <Label htmlFor="bankName">Bank</Label>
               <select
                 id="bankName"
-                {...register("bankDetails.bankName")}
+                {...attachFocusHandlers(register("bankDetails.bankName"))}
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 <option value="">Select bank</option>
@@ -438,7 +563,10 @@ const CompanyRegistrationFormFields = ({
             </div>
             <div>
               <Label htmlFor="accountName">Account Name</Label>
-              <Input id="accountName" {...register("bankDetails.accountName")} />
+              <Input
+                id="accountName"
+                {...attachFocusHandlers(register("bankDetails.accountName"))}
+              />
               {errors.bankDetails?.accountName && (
                 <p className="text-xs text-destructive mt-1">
                   {errors.bankDetails.accountName.message}
@@ -449,7 +577,10 @@ const CompanyRegistrationFormFields = ({
           <div className="grid gap-4 md:grid-cols-2">
             <div>
               <Label htmlFor="accountNumber">Account Number</Label>
-              <Input id="accountNumber" {...register("bankDetails.accountNumber")} />
+              <Input
+                id="accountNumber"
+                {...attachFocusHandlers(register("bankDetails.accountNumber"))}
+              />
               {errors.bankDetails?.accountNumber && (
                 <p className="text-xs text-destructive mt-1">
                   {errors.bankDetails.accountNumber.message}
@@ -458,33 +589,41 @@ const CompanyRegistrationFormFields = ({
             </div>
             <div>
               <Label htmlFor="routingNumber">Routing / Sort Code</Label>
-              <Input id="routingNumber" {...register("bankDetails.routingNumber")} />
+              <Input
+                id="routingNumber"
+                {...attachFocusHandlers(register("bankDetails.routingNumber"))}
+              />
             </div>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
               <Label htmlFor="swiftCode">SWIFT / IBAN</Label>
-              <Input id="swiftCode" {...register("bankDetails.swiftCode")} />
+              <Input id="swiftCode" {...attachFocusHandlers(register("bankDetails.swiftCode"))} />
             </div>
             <div>
               <Label htmlFor="bankNotes">Instructions</Label>
               <Textarea
                 id="bankNotes"
-                {...register("bankDetails.notes")}
+                {...attachFocusHandlers(register("bankDetails.notes"))}
                 rows={2}
                 placeholder="e.g. preferred payout cadence"
               />
             </div>
           </div>
         </TabCard>
-      </TabsContent>
+      )}
 
-      <TabsContent value="location">
+      {currentTab === "location" && (
         <TabCard icon={<MapPin className="w-5 h-5" />} title="Business Location">
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="addressLine1">Address Line 1</Label>
-              <Input id="addressLine1" {...register("locationDetails.addressLine1")} />
+              <Label htmlFor="addressLine1">
+                <RequiredLabel>Address Line 1</RequiredLabel>
+              </Label>
+              <Input
+                id="addressLine1"
+                {...attachFocusHandlers(register("locationDetails.addressLine1"))}
+              />
               {errors.locationDetails?.addressLine1 && (
                 <p className="text-xs text-destructive mt-1">
                   {errors.locationDetails.addressLine1.message}
@@ -493,13 +632,18 @@ const CompanyRegistrationFormFields = ({
             </div>
             <div>
               <Label htmlFor="addressLine2">Address Line 2</Label>
-              <Input id="addressLine2" {...register("locationDetails.addressLine2")} />
+              <Input
+                id="addressLine2"
+                {...attachFocusHandlers(register("locationDetails.addressLine2"))}
+              />
             </div>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="city">City</Label>
-              <Input id="city" {...register("locationDetails.city")} />
+              <Label htmlFor="city">
+                <RequiredLabel>City</RequiredLabel>
+              </Label>
+              <Input id="city" {...attachFocusHandlers(register("locationDetails.city"))} />
               {errors.locationDetails?.city && (
                 <p className="text-xs text-destructive mt-1">
                   {errors.locationDetails.city.message}
@@ -507,11 +651,13 @@ const CompanyRegistrationFormFields = ({
               )}
             </div>
             <div>
-              <Label htmlFor="country">Country</Label>
+              <Label htmlFor="country">
+                <RequiredLabel>Country</RequiredLabel>
+              </Label>
               <Input
                 id="country"
                 list="country-list"
-                {...register("locationDetails.country")}
+                {...attachFocusHandlers(register("locationDetails.country"))}
                 placeholder="Search countries"
               />
               <datalist id="country-list">
@@ -528,11 +674,13 @@ const CompanyRegistrationFormFields = ({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="state">State</Label>
-              {(stateOptions.length > 0) ? (
+              <Label htmlFor="state">
+                <RequiredLabel>State</RequiredLabel>
+              </Label>
+              {stateOptions.length > 0 ? (
                 <select
                   id="state"
-                  {...register("locationDetails.state")}
+                  {...attachFocusHandlers(register("locationDetails.state"))}
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="">Select state</option>
@@ -545,7 +693,7 @@ const CompanyRegistrationFormFields = ({
               ) : (
                 <Input
                   id="state"
-                  {...register("locationDetails.state")}
+                  {...attachFocusHandlers(register("locationDetails.state"))}
                   placeholder="Type your state"
                 />
               )}
@@ -556,11 +704,13 @@ const CompanyRegistrationFormFields = ({
               )}
             </div>
             <div>
-              <Label htmlFor="lga">LGA</Label>
+              <Label htmlFor="lga">
+                <RequiredLabel>LGA</RequiredLabel>
+              </Label>
               {lgaOptions.length > 0 ? (
                 <select
                   id="lga"
-                  {...register("locationDetails.lga")}
+                  {...attachFocusHandlers(register("locationDetails.lga"))}
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="">Select LGA</option>
@@ -573,7 +723,7 @@ const CompanyRegistrationFormFields = ({
               ) : (
                 <Input
                   id="lga"
-                  {...register("locationDetails.lga")}
+                  {...attachFocusHandlers(register("locationDetails.lga"))}
                   placeholder="Type your LGA"
                 />
               )}
@@ -591,9 +741,11 @@ const CompanyRegistrationFormFields = ({
                 id="latitude"
                 type="number"
                 step="any"
-                {...register("locationDetails.coordinates.latitude", {
-                  valueAsNumber: true,
-                })}
+                {...attachFocusHandlers(
+                  register("locationDetails.coordinates.latitude", {
+                    valueAsNumber: true,
+                  }),
+                )}
               />
             </div>
             <div>
@@ -602,15 +754,17 @@ const CompanyRegistrationFormFields = ({
                 id="longitude"
                 type="number"
                 step="any"
-                {...register("locationDetails.coordinates.longitude", {
-                  valueAsNumber: true,
-                })}
+                {...attachFocusHandlers(
+                  register("locationDetails.coordinates.longitude", {
+                    valueAsNumber: true,
+                  }),
+                )}
               />
             </div>
           </div>
         </TabCard>
-      </TabsContent>
-    </Tabs>
+      )}
+    </div>
   );
 };
 
