@@ -235,6 +235,30 @@ async function ensureMongoIdMappingTable() {
   `);
 }
 
+async function ensureRefreshTokensTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+      id varchar(255) PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id varchar(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_id varchar(255) NOT NULL UNIQUE,
+      expires_at timestamp NOT NULL,
+      is_revoked boolean NOT NULL DEFAULT false,
+      created_at timestamp DEFAULT now(),
+      revoked_at timestamp NULL
+    );
+  `);
+  
+  // Add index on user_id for faster queries
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON refresh_tokens(user_id);
+  `);
+  
+  // Add index on token_id for faster lookups
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS refresh_tokens_token_id_idx ON refresh_tokens(token_id);
+  `);
+}
+
 // Boot sequence
 (async () => {
   try {
@@ -245,6 +269,7 @@ async function ensureMongoIdMappingTable() {
     await ensureProviderRequestsTable();
     await ensureTransactionsColumns();
     await ensureMongoIdMappingTable();
+    await ensureRefreshTokensTable();
     log("[DB] Schema guard OK");
   } catch (e) {
     console.error("[DB] Schema guard failed:", e);

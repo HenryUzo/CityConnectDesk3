@@ -2,6 +2,9 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
 import { setupAuth } from "./auth";
+import { setupJWTAuth } from "./jwt-auth";
+import { authenticateJWT, requireAuth, requireAdmin, requireProvider, requireResident } from "./auth-middleware";
+import { compatAuth } from "./auth-compat";
 import { storage } from "./storage";
 import { db } from "./db";
 import {
@@ -74,8 +77,19 @@ const CreateServiceRequest = insertServiceRequestSchema.extend({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup authentication routes
+  // Setup JWT authentication routes (new unified system)
+  setupJWTAuth(app);
+  
+  // Apply JWT authentication middleware globally to API routes
+  // This sets req.auth if a valid JWT token is present
+  app.use("/api", authenticateJWT);
+  
+  // Keep legacy session-based auth for backward compatibility during migration
+  // This will be removed after full migration
   setupAuth(app);
+  
+  // Compatibility middleware to support both old and new auth
+  app.use("/api", compatAuth);
 
   // Debug endpoint (DEV ONLY): check Paystack secret key loading
   app.get("/api/debug/paystack-key", (req, res) => {
@@ -561,13 +575,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin Routes
-  app.get("/api/admin/users", async (req, res, next) => {
+  // Admin Routes - Using new RBAC middleware
+  app.get("/api/admin/users", requireAdmin, async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
       const { role } = req.query;
       const users = await storage.getUsers(role as string);
       res.json(users);
@@ -577,12 +587,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Unified list with search + role filter (used by admin dashboard)
-  app.get("/api/admin/users/all", async (req, res, next) => {
+  app.get("/api/admin/users/all", requireAdmin, async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
       const { role, search } = req.query as { role?: string; search?: string };
       const list = await storage.getUsers(role);
       const filtered = search
@@ -603,12 +609,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create user
-  app.post("/api/admin/users", async (req, res, next) => {
+  app.post("/api/admin/users", requireAdmin, async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
       const { name, email, phone, password, role, globalRole, isActive, isApproved, company } = req.body || {};
       const roleValue = role || globalRole;
       if (!name || !email || !phone || !password || !roleValue) {
@@ -640,12 +642,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update user
-  app.patch("/api/admin/users/:id", async (req, res, next) => {
+  app.patch("/api/admin/users/:id", requireAdmin, async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
       const { id } = req.params;
       const updates: any = { ...req.body, updatedAt: new Date() };
       if (req.body?.password) {
@@ -663,12 +661,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: reset a user's password (admin-only)
-  app.post("/api/admin/users/:id/reset-password", async (req, res, next) => {
+  app.post("/api/admin/users/:id/reset-password", requireAdmin, async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
       const { id } = req.params;
       if (!id) return res.status(400).json({ message: "User id is required" });
 
@@ -695,11 +689,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/admin/users/:id", async (req, res, next) => {
+  app.delete("/api/admin/users/:id", requireAdmin, async (req, res, next) => {
     try {
-      if (!isAdminOrSuper(req)) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
 
       const { id } = req.params;
       if (!id) {

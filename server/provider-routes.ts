@@ -12,32 +12,22 @@ import {
 import { eq, and, or, like, desc } from "drizzle-orm";
 import { z } from "zod";
 import { storage } from "./storage";
+import { requireAuth, requireProvider } from "./auth-middleware";
 
 const router = Router();
 
-// Custom Request interface for provider routes
-interface ProviderRequest {
-  isAuthenticated: () => boolean;
-  user?: any;
-  storeMembership?: any;
-  params: any;
-  query: any;
-  body: any;
-}
-
-// Middleware to ensure user is authenticated as provider
-const requireProvider = (req: ProviderRequest, res: any, next: any) => {
-  if (!req.isAuthenticated() || req.user?.role !== "provider") {
-    return res.status(401).json({ error: "Unauthorized. Provider access required." });
-  }
-  next();
-};
+// Apply authentication middleware to all provider routes
+router.use(requireProvider);
 
 // Middleware to verify provider has access to a store
-const verifyStoreAccess = async (req: ProviderRequest, res: any, next: any) => {
+const verifyStoreAccess = async (req: any, res: any, next: any) => {
   try {
     const storeId = req.params.id || req.params.storeId;
-    const providerId = req.user!.id;
+    const providerId = req.auth?.userId;
+
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
 
     const [membership] = await db.select()
       .from(storeMembers)
@@ -61,9 +51,13 @@ const verifyStoreAccess = async (req: ProviderRequest, res: any, next: any) => {
 };
 
 // GET /api/provider/stores - Get all stores I'm a member of
-router.get("/stores", requireProvider, async (req: ProviderRequest, res) => {
+router.get("/stores", async (req: any, res) => {
   try {
-    const providerId = req.user!.id;
+    const providerId = req.auth?.userId;
+
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
 
     const memberships = await db.select({
       membership: storeMembers,
@@ -92,9 +86,13 @@ router.get("/stores", requireProvider, async (req: ProviderRequest, res) => {
 });
 
 // POST /api/provider/stores - Create a new store (self-registration)
-router.post("/stores", requireProvider, async (req: ProviderRequest, res) => {
+router.post("/stores", async (req: any, res) => {
   try {
-    const providerId = req.user!.id;
+    const providerId = req.auth?.userId;
+    
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
     
     // Validation schema for store creation (no estate ID - will be allocated by admin)
     const createStoreSchema = z.object({
@@ -147,7 +145,7 @@ router.post("/stores", requireProvider, async (req: ProviderRequest, res) => {
 });
 
 // GET /api/provider/stores/:id/items - Get all items for my store
-router.get("/stores/:id/items", requireProvider, verifyStoreAccess, async (req: ProviderRequest, res) => {
+router.get("/stores/:id/items", verifyStoreAccess, async (req: any, res) => {
   try {
     const storeId = req.params.id;
     const { search, category, isActive } = req.query;
@@ -183,10 +181,10 @@ router.get("/stores/:id/items", requireProvider, verifyStoreAccess, async (req: 
 });
 
 // POST /api/provider/stores/:id/items - Add item to store
-router.post("/stores/:id/items", requireProvider, verifyStoreAccess, async (req: ProviderRequest, res) => {
+router.post("/stores/:id/items", verifyStoreAccess, async (req: any, res) => {
   try {
     const storeId = req.params.id;
-    const providerId = req.user!.id;
+    const providerId = req.auth?.userId; // Use JWT auth
     const membership = req.storeMembership;
 
     // Check if provider has permission to manage items
@@ -273,7 +271,7 @@ router.post("/stores/:id/items", requireProvider, verifyStoreAccess, async (req:
 });
 
 // PATCH /api/provider/stores/:storeId/items/:itemId - Update item
-router.patch("/stores/:storeId/items/:itemId", requireProvider, verifyStoreAccess, async (req: ProviderRequest, res) => {
+router.patch("/stores/:storeId/items/:itemId", verifyStoreAccess, async (req: any, res) => {
   try {
     const { storeId, itemId } = req.params;
     const membership = req.storeMembership;
@@ -342,7 +340,7 @@ router.patch("/stores/:storeId/items/:itemId", requireProvider, verifyStoreAcces
 });
 
 // DELETE /api/provider/stores/:storeId/items/:itemId - Delete item
-router.delete("/stores/:storeId/items/:itemId", requireProvider, verifyStoreAccess, async (req: ProviderRequest, res) => {
+router.delete("/stores/:storeId/items/:itemId", verifyStoreAccess, async (req: any, res) => {
   try {
     const { storeId, itemId } = req.params;
     const membership = req.storeMembership;
@@ -382,9 +380,13 @@ router.delete("/stores/:storeId/items/:itemId", requireProvider, verifyStoreAcce
 });
 
 // POST /api/provider/company-registration - Register new company profile
-router.post("/company-registration", async (req: ProviderRequest, res) => {
+router.post("/company-registration", async (req: any, res) => {
   try {
-    const providerId = req.user!.id;
+    const providerId = req.auth?.userId;
+
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
 
     const createCompanySchema = z.object({
       name: z.string().min(2, "Business name is required"),

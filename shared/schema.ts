@@ -868,5 +868,20 @@ export const session = pgTable("session", {
   expire: timestamp("expire", { mode: "date" }).notNull(),
 });
 
+// Refresh Tokens for JWT authentication
+export const refreshTokens = pgTable("refresh_tokens", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  tokenId: varchar("token_id", { length: 255 }).notNull().unique(), // Unique identifier for the token
+  expiresAt: timestamp("expires_at").notNull(),
+  isRevoked: boolean("is_revoked").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+});
+
 export type ResidentLoginData = z.infer<typeof residentLoginSchema>;
 export type ProviderLoginData = z.infer<typeof providerLoginSchema>;
