@@ -24,6 +24,10 @@ import {
   transactions,
   companies,
   providerRequests,
+  broadcastMessages,
+  insertBroadcastMessageSchema,
+  impersonationSessions,
+  insertImpersonationSessionSchema,
 } from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
@@ -1914,6 +1918,419 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(request);
     } catch (error) {
       console.error("Error fetching service request:", error);
+      next(error);
+    }
+  });
+
+  // ============================================
+  // SUPER ADMIN FEATURES
+  // ============================================
+
+  // Broadcast Messages API
+  app.get("/api/admin/broadcast-messages", requireAdmin, async (req, res, next) => {
+    try {
+      const messages = await db
+        .select()
+        .from(broadcastMessages)
+        .orderBy(desc(broadcastMessages.createdAt));
+      res.json(messages);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/broadcast-messages", requireAdmin, async (req, res, next) => {
+    try {
+      const userId = req.auth?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const data = insertBroadcastMessageSchema.parse({
+        ...req.body,
+        senderId: userId,
+      });
+
+      const [message] = await db
+        .insert(broadcastMessages)
+        .values(data)
+        .returning();
+
+      // If status is 'sent', mark as sent now
+      if (data.status === "sent") {
+        // Get recipient count based on target
+        let recipientCount = 0;
+        if (data.target === "all_users") {
+          const result = await db.select({ count: count() }).from(users);
+          recipientCount = result[0]?.count || 0;
+        } else if (data.target === "all_residents") {
+          const result = await db
+            .select({ count: count() })
+            .from(users)
+            .where(eq(users.role, "resident"));
+          recipientCount = result[0]?.count || 0;
+        } else if (data.target === "all_providers") {
+          const result = await db
+            .select({ count: count() })
+            .from(users)
+            .where(eq(users.role, "provider"));
+          recipientCount = result[0]?.count || 0;
+        } else if (data.target === "estate_residents" && data.estateId) {
+          const result = await db
+            .select({ count: count() })
+            .from(memberships)
+            .where(
+              and(
+                eq(memberships.estateId, data.estateId),
+                eq(memberships.role, "resident")
+              )
+            );
+          recipientCount = result[0]?.count || 0;
+        } else if (data.target === "estate_providers" && data.estateId) {
+          const result = await db
+            .select({ count: count() })
+            .from(memberships)
+            .where(
+              and(
+                eq(memberships.estateId, data.estateId),
+                eq(memberships.role, "provider")
+              )
+            );
+          recipientCount = result[0]?.count || 0;
+        }
+
+        await db
+          .update(broadcastMessages)
+          .set({
+            sentAt: new Date(),
+            recipientCount,
+            deliveredCount: recipientCount, // For now, assume all delivered
+          })
+          .where(eq(broadcastMessages.id, message.id));
+      }
+
+      // Log the broadcast action
+      await db.insert(auditLogs).values({
+        actorId: userId,
+        estateId: data.estateId || null,
+        action: "broadcast_message_created",
+        target: "broadcast_message",
+        targetId: message.id,
+        meta: { subject: data.subject, target: data.target },
+      });
+
+      res.json(message);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin Impersonation API
+  app.post("/api/admin/impersonate", requireAdmin, async (req, res, next) => {
+    try {
+      const superAdminId = req.auth?.id;
+      const superAdminRole = req.auth?.globalRole;
+      
+      if (!superAdminId || superAdminRole !== "super_admin") {
+        return res.status(403).json({ message: "Only super admins can impersonate users" });
+      }
+
+      const { targetUserId, reason } = req.body;
+      if (!targetUserId) {
+        return res.status(400).json({ message: "Target user ID is required" });
+      }
+
+      // Get target user
+      const [targetUser] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, targetUserId))
+        .limit(1);
+
+      if (!targetUser) {
+        return res.status(404).json({ message: "Target user not found" });
+      }
+
+      // Don't allow impersonating another super admin
+      if (targetUser.globalRole === "super_admin") {
+        return res.status(403).json({ message: "Cannot impersonate another super admin" });
+      }
+
+      // End any existing active impersonation sessions
+      await db
+        .update(impersonationSessions)
+        .set({ isActive: false, endedAt: new Date() })
+        .where(
+          and(
+            eq(impersonationSessions.superAdminId, superAdminId),
+            eq(impersonationSessions.isActive, true)
+          )
+        );
+
+      // Create new impersonation session
+      const [session] = await db
+        .insert(impersonationSessions)
+        .values({
+          superAdminId,
+          targetUserId,
+          reason: reason || "Support request",
+          ipAddress: req.ip,
+        })
+        .returning();
+
+      // Log the impersonation
+      await db.insert(auditLogs).values({
+        actorId: superAdminId,
+        action: "admin_impersonation_started",
+        target: "user",
+        targetId: targetUserId,
+        meta: { reason, sessionId: session.id },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+
+      res.json({
+        session,
+        targetUser: {
+          id: targetUser.id,
+          name: targetUser.name,
+          email: targetUser.email,
+          role: targetUser.role,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/impersonate/end", requireAdmin, async (req, res, next) => {
+    try {
+      const superAdminId = req.auth?.id;
+      if (!superAdminId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { sessionId } = req.body;
+      if (!sessionId) {
+        return res.status(400).json({ message: "Session ID is required" });
+      }
+
+      // End the session
+      const [session] = await db
+        .update(impersonationSessions)
+        .set({ isActive: false, endedAt: new Date() })
+        .where(
+          and(
+            eq(impersonationSessions.id, sessionId),
+            eq(impersonationSessions.superAdminId, superAdminId),
+            eq(impersonationSessions.isActive, true)
+          )
+        )
+        .returning();
+
+      if (!session) {
+        return res.status(404).json({ message: "Active session not found" });
+      }
+
+      // Log the end of impersonation
+      await db.insert(auditLogs).values({
+        actorId: superAdminId,
+        action: "admin_impersonation_ended",
+        target: "user",
+        targetId: session.targetUserId,
+        meta: { sessionId },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/admin/impersonate/active", requireAdmin, async (req, res, next) => {
+    try {
+      const superAdminId = req.auth?.id;
+      if (!superAdminId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const sessions = await db
+        .select()
+        .from(impersonationSessions)
+        .where(
+          and(
+            eq(impersonationSessions.superAdminId, superAdminId),
+            eq(impersonationSessions.isActive, true)
+          )
+        );
+
+      res.json(sessions);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Enhanced Audit Logs API
+  app.get("/api/admin/audit-logs/enhanced", requireAdmin, async (req, res, next) => {
+    try {
+      const { estateId, action, startDate, endDate, limit = "100" } = req.query;
+      
+      let query = db.select().from(auditLogs);
+      const conditions = [];
+
+      if (estateId && typeof estateId === "string") {
+        conditions.push(eq(auditLogs.estateId, estateId));
+      }
+
+      if (action && typeof action === "string") {
+        conditions.push(eq(auditLogs.action, action));
+      }
+
+      if (startDate && typeof startDate === "string") {
+        conditions.push(sql`${auditLogs.createdAt} >= ${new Date(startDate)}`);
+      }
+
+      if (endDate && typeof endDate === "string") {
+        conditions.push(sql`${auditLogs.createdAt} <= ${new Date(endDate)}`);
+      }
+
+      if (conditions.length > 0) {
+        query = query.where(and(...conditions));
+      }
+
+      const logs = await query
+        .orderBy(desc(auditLogs.createdAt))
+        .limit(parseInt(limit as string, 10));
+
+      res.json(logs);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Enhanced Dashboard Stats with Filters
+  app.get("/api/admin/dashboard/stats/enhanced", requireAdmin, async (req, res, next) => {
+    try {
+      const { estateId, startDate, endDate } = req.query;
+      
+      // Build base conditions
+      const conditions = [];
+      if (estateId && typeof estateId === "string") {
+        conditions.push(eq(serviceRequests.estateId, estateId));
+      }
+      if (startDate && typeof startDate === "string") {
+        conditions.push(sql`${serviceRequests.createdAt} >= ${new Date(startDate)}`);
+      }
+      if (endDate && typeof endDate === "string") {
+        conditions.push(sql`${serviceRequests.createdAt} <= ${new Date(endDate)}`);
+      }
+
+      // Get service request stats
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+      
+      const [totalRequests] = await db
+        .select({ count: count() })
+        .from(serviceRequests)
+        .where(whereClause);
+
+      const [pendingRequests] = await db
+        .select({ count: count() })
+        .from(serviceRequests)
+        .where(
+          whereClause
+            ? and(whereClause, eq(serviceRequests.status, "pending"))
+            : eq(serviceRequests.status, "pending")
+        );
+
+      const [inProgressRequests] = await db
+        .select({ count: count() })
+        .from(serviceRequests)
+        .where(
+          whereClause
+            ? and(whereClause, eq(serviceRequests.status, "in_progress"))
+            : eq(serviceRequests.status, "in_progress")
+        );
+
+      const [completedRequests] = await db
+        .select({ count: count() })
+        .from(serviceRequests)
+        .where(
+          whereClause
+            ? and(whereClause, eq(serviceRequests.status, "completed"))
+            : eq(serviceRequests.status, "completed")
+        );
+
+      // Get active vendors (providers)
+      const activeVendorsConditions = estateId
+        ? [eq(memberships.estateId, estateId as string), eq(memberships.role, "provider"), eq(memberships.isActive, true)]
+        : [eq(users.role, "provider"), eq(users.isActive, true)];
+
+      const [activeVendors] = estateId
+        ? await db
+            .select({ count: count() })
+            .from(memberships)
+            .where(and(...activeVendorsConditions))
+        : await db
+            .select({ count: count() })
+            .from(users)
+            .where(and(...activeVendorsConditions));
+
+      // Get dues/payment stats
+      const paymentConditions = [];
+      if (estateId && typeof estateId === "string") {
+        paymentConditions.push(eq(serviceRequests.estateId, estateId));
+      }
+      if (startDate && typeof startDate === "string") {
+        paymentConditions.push(sql`${serviceRequests.createdAt} >= ${new Date(startDate)}`);
+      }
+      if (endDate && typeof endDate === "string") {
+        paymentConditions.push(sql`${serviceRequests.createdAt} <= ${new Date(endDate)}`);
+      }
+
+      const paymentWhereClause = paymentConditions.length > 0 ? and(...paymentConditions) : undefined;
+
+      const [totalDues] = await db
+        .select({ total: sum(serviceRequests.billedAmount) })
+        .from(serviceRequests)
+        .where(paymentWhereClause);
+
+      const [paidDues] = await db
+        .select({ total: sum(serviceRequests.billedAmount) })
+        .from(serviceRequests)
+        .where(
+          paymentWhereClause
+            ? and(paymentWhereClause, eq(serviceRequests.paymentStatus, "completed"))
+            : eq(serviceRequests.paymentStatus, "completed")
+        );
+
+      const [pendingDues] = await db
+        .select({ total: sum(serviceRequests.billedAmount) })
+        .from(serviceRequests)
+        .where(
+          paymentWhereClause
+            ? and(paymentWhereClause, eq(serviceRequests.paymentStatus, "pending"))
+            : eq(serviceRequests.paymentStatus, "pending")
+        );
+
+      res.json({
+        serviceRequests: {
+          total: totalRequests.count || 0,
+          pending: pendingRequests.count || 0,
+          inProgress: inProgressRequests.count || 0,
+          completed: completedRequests.count || 0,
+        },
+        vendors: {
+          active: activeVendors.count || 0,
+        },
+        dues: {
+          total: parseFloat(totalDues.total || "0"),
+          paid: parseFloat(paidDues.total || "0"),
+          pending: parseFloat(pendingDues.total || "0"),
+        },
+      });
+    } catch (error) {
       next(error);
     }
   });
