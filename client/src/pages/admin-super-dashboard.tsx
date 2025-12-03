@@ -3,7 +3,6 @@ import {
   useEffect,
   useCallback,
   useRef,
-  useMemo,
   createContext,
   useContext,
   ReactNode,
@@ -116,6 +115,7 @@ import {
   Search,
   Settings,
   Shield,
+  ShieldOff,
   ShoppingBag,
   Star,
   Store,
@@ -253,6 +253,33 @@ const EMOJI_GROUPS = [
   { value: "📦", names: ["Storage Box", "Gift Box", "Shipping Box", "Moving Box", "Organizer Box", "Folding Box", "Clear Box", "Decor Box", "Box Bundle", "Box Set"] },
   { value: "🛒", names: ["Shopping Cart Token", "Shopping Basket Tag", "Reusable Tote", "Market Bag", "Grocery Tote", "Foldable Tote", "Insulated Bag", "Eco Bag", "Canvas Bag", "Cart Clip"] },
 ];
+
+const CATEGORY_TAG_OPTIONS = [
+  "Security & Access Control",
+  "Transportation & Mobility",
+  "Utilities & Infrastructure",
+  "Facility Management",
+  "Repairs & Home Services",
+  "Emergency Services",
+  "Wellness & Health",
+  "Domestic Help",
+  "Food & Groceries",
+  "Laundry & Cleaning",
+  "Pet Services",
+  "Recreation & Events",
+  "Education & Kids",
+  "Marketplace & Classifieds",
+  "Estate Dues & Payments",
+  "Resident Records",
+  "Communication",
+  "Smart Home & IoT",
+  "Insurance",
+  "Legal & Compliance",
+  "Real Estate Services",
+  "Corporate / SME Services",
+];
+
+const DEFAULT_CATEGORY_TAG = CATEGORY_TAG_OPTIONS[0];
 
 // Normalize to a unique set of emoji options (strip variation selectors to avoid duplicate keys)
 const normalizeEmoji = (val: string) => (val || "").replace(/\uFE0F/g, "").trim();
@@ -598,7 +625,7 @@ const [location, setLocation] = useLocation();
     { id: "orders", label: "Orders", icon: Package },
     { id: "analytics", label: "Analytics", icon: FileBarChart },
     { id: "notifications", label: "Notifications", icon: MessageSquare },
-    { id: "settings", label: "Settings", icon: Settings },
+    
     { id: "audit", label: "Audit Logs", icon: Shield },
 
   ];
@@ -660,21 +687,24 @@ const [location, setLocation] = useLocation();
         </div>
 
         {/* Navigation */}
-        <div className="px-4 pb-2 space-y-2">
+        <div className="px-4 pb-2 space-y-2 lg:hidden">
+          {/* Mobile-only copies of the action buttons (desktop copies live in header) */}
           <Link href="/company-registration">
-            <Button variant="secondary" className="w-full">
-              Register a business
+            <Button variant="secondary" className="w-full flex items-center justify-center sm:justify-start px-3 py-2">
+              <Building2 className="w-4 h-4" />
+              <span className="ml-2 hidden sm:inline">Register a business</span>
             </Button>
           </Link>
           <Button
             variant="outline"
-            className="w-full"
+            className="w-full flex items-center justify-center sm:justify-start px-3 py-2"
             onClick={() => {
               setLocation("/admin-dashboard/providers");
               setIsMobileOpen(false);
             }}
           >
-            Add provider
+            <UserPlus className="w-4 h-4" />
+            <span className="ml-2 hidden sm:inline">Add provider</span>
           </Button>
         </div>
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
@@ -868,6 +898,41 @@ const UsersManagement = () => {
       toast({
         title: "Error deleting user",
         description: error.response?.data?.error || "Failed to delete user",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Reset password (admin) – calls server endpoint that may return a generated temp password
+  const [showTempPasswordModal, setShowTempPasswordModal] = useState(false);
+  const [tempPassword, setTempPassword] = useState<string | null>(null);
+  const [tempPasswordUser, setTempPasswordUser] = useState<any>(null);
+  // Confirmation dialog state for resetting password
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetConfirmUserId, setResetConfirmUserId] = useState<string | null>(null);
+  const [resetConfirmUser, setResetConfirmUser] = useState<any>(null);
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: (userId: string) =>
+      adminApiRequest("POST", `/api/admin/users/${userId}/reset-password`),
+    onSuccess: (data: any, userId: string) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      // If server returned a generated temp password, show it in a modal so admin can copy it
+      if (data?.tempPassword) {
+        setTempPassword(data.tempPassword);
+        // find the user in cache to show a friendly label
+        const found = (users || []).find((u: any) => (u.id || u._id || u.email) === userId);
+        setTempPasswordUser(found || { id: userId });
+        setShowTempPasswordModal(true);
+      } else {
+        toast({ title: "Password reset successfully" });
+      }
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error resetting password",
+        description: error.response?.data?.error || "Failed to reset password",
         variant: "destructive",
       });
     },
@@ -1357,6 +1422,26 @@ const UsersManagement = () => {
                             <p>Delete user permanently</p>
                           </TooltipContent>
                         </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setResetConfirmUser(user);
+                                setResetConfirmUserId(userId);
+                                setResetConfirmOpen(true);
+                              }}
+                              disabled={resetPasswordMutation.isLoading}
+                              data-testid={`button-reset-password-${userId}`}
+                            >
+                              <ShieldOff className="w-4 h-4 text-yellow-600" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Reset password</p>
+                          </TooltipContent>
+                        </Tooltip>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1712,6 +1797,74 @@ const UsersManagement = () => {
 
                 <div className="flex justify-end">
                   <Button variant="outline" onClick={() => setPreviewUser(null)}>
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+        {/* Confirmation dialog before performing reset */}
+        <Dialog open={resetConfirmOpen} onOpenChange={(open) => setResetConfirmOpen(open)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Confirm password reset</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to reset the password for {resetConfirmUser?.email || resetConfirmUser?.name || resetConfirmUserId}?
+                This will generate a temporary password if none is provided.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setResetConfirmOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => {
+                  if (!resetConfirmUserId) return;
+                  resetPasswordMutation.mutate(resetConfirmUserId);
+                  setResetConfirmOpen(false);
+                  setResetConfirmUserId(null);
+                  setResetConfirmUser(null);
+                }}
+                disabled={resetPasswordMutation.isLoading}
+              >
+                {resetPasswordMutation.isLoading ? "Resetting..." : "Confirm reset"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Temp password modal shown after admin-triggered reset */}
+        <Dialog open={showTempPasswordModal} onOpenChange={(open) => !open && setShowTempPasswordModal(false)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Temporary Password</DialogTitle>
+              <DialogDescription>
+                A temporary password was generated for this user. Copy it and share securely.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="py-4 space-y-4">
+              <div className="rounded border p-3 bg-gray-50 dark:bg-gray-800">
+                <p className="text-sm font-medium">User</p>
+                <p className="text-sm text-muted-foreground break-all">{tempPasswordUser?.email || tempPasswordUser?.name || tempPasswordUser?.id}</p>
+              </div>
+              <div className="rounded border p-3 bg-white dark:bg-gray-900 flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-muted-foreground">Temporary password</p>
+                  <p className="text-lg font-semibold tracking-wide">{tempPassword}</p>
+                </div>
+                <div className="flex flex-col space-y-2">
+                  <Button
+                    onClick={() => {
+                      try {
+                        navigator.clipboard.writeText(tempPassword || "");
+                        toast({ title: "Copied to clipboard" });
+                      } catch (e) {
+                        toast({ title: "Unable to copy", variant: "destructive" });
+                      }
+                    }}
+                  >
+                    Copy
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowTempPasswordModal(false)}>
                     Close
                   </Button>
                 </div>
@@ -2920,9 +3073,128 @@ const CategoriesManagement = () => {
     description: "",
     icon: "",
     scope: "estate",
+    tag: DEFAULT_CATEGORY_TAG,
   });
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
-  const emojiOptions = ["🔧","🧹","🛠️","⚡","🚰","🔌","📦","🧑‍🔧","🏠","🧰","🚿","✨","🧼","🧽","🪠","🪜","🔨","⛑️"];
+  const BASE_EMOJI_OPTIONS = [
+    "🔧",
+    "🧹",
+    "🛠️",
+    "⚡",
+    "🚰",
+    "🔌",
+    "📦",
+    "🧑‍🔧",
+    "🏠",
+    "🧰",
+    "🚿",
+    "✨",
+    "🧼",
+    "🧽",
+    "🪠",
+    "🪜",
+    "🔨",
+    "⛑️",
+  ];
+
+  const SERVICE_CATEGORY_EMOJI = [
+    "🛡️",
+    "🚶‍♂️",
+    "🚧",
+    "🎥",
+    "🚨",
+    "👮‍♂️",
+    "🚗",
+    "🚌",
+    "🚕",
+    "🚐",
+    "🚛",
+    "⚙️",
+    "💡",
+    "💧",
+    "🌊",
+    "🗑️",
+    "🏗️",
+    "🧾",
+    "🌳",
+    "🐜",
+    "🌬️",
+    "🔋",
+    "🪚",
+    "🔑",
+    "🎨",
+    "🔥",
+    "🧱",
+    "🏃‍♂️",
+    "🚑",
+    "🩺",
+    "🧘‍♂️",
+    "👩‍⚕️",
+    "👵",
+    "💊",
+    "👶",
+    "👩‍🍼",
+    "🚘",
+    "🌱",
+    "🏊‍♂️",
+    "🥦",
+    "🧺",
+    "🍱",
+    "🥕",
+    "🛒",
+    "🧴",
+    "👕",
+    "👔",
+    "🛋️",
+    "🐭",
+    "🚫",
+    "🐾",
+    "✂️",
+    "🐶",
+    "🐕",
+    "🦴",
+    "🎉",
+    "⚽",
+    "🎊",
+    "🏡",
+    "🏊‍♀️",
+    "🎓",
+    "📚",
+    "🏫",
+    "🎵",
+    "💃",
+    "💻",
+    "🔁",
+    "🏬",
+    "📄",
+    "💳",
+    "📥",
+    "💰",
+    "🧾",
+    "💵",
+    "📁",
+    "🪪",
+    "👨‍👩‍👧‍👦",
+    "🚙",
+    "📘",
+    "🏢",
+    "📢",
+    "📣",
+    "📯",
+    "📊",
+    "🔒",
+    "📈",
+    "🤖",
+    "📱",
+    "📨",
+    "🤝",
+    "🚚",
+    "🔍",
+    "🕒",
+    "✅",
+  ];
+
+  const emojiOptions = Array.from(new Set([...BASE_EMOJI_OPTIONS, ...SERVICE_CATEGORY_EMOJI]));
 
   const { user } = useAdminAuth();
   const { toast } = useToast();
@@ -2992,11 +3264,39 @@ const CategoriesManagement = () => {
     },
   });
 
+  const toggleCategoryStatusMutation = useMutation({
+    mutationFn: ({
+      categoryId,
+      newStatus,
+    }: {
+      categoryId: string;
+      newStatus: boolean;
+    }) =>
+      adminApiRequest("PATCH", `/api/admin/categories/${categoryId}`, {
+        isActive: newStatus,
+      }),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
+      toast({
+        title: `Category ${variables.newStatus ? "activated" : "deactivated"}`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error updating category status",
+        description:
+          error.response?.data?.error || "Failed to update category status",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const categoryData = {
       ...formData,
       key: formData.key || formData.name.toLowerCase().replace(/\s+/g, "_"),
+      tag: formData.tag || DEFAULT_CATEGORY_TAG,
     };
     createCategoryMutation.mutate(categoryData);
   };
@@ -3027,6 +3327,20 @@ const CategoriesManagement = () => {
     }
   };
 
+  const handleToggleCategoryStatus = (
+    categoryId: string | undefined,
+    currentStatus: boolean,
+  ) => {
+    if (!categoryId) {
+      toast({ title: "Category id missing", variant: "destructive" });
+      return;
+    }
+    toggleCategoryStatusMutation.mutate({
+      categoryId,
+      newStatus: !currentStatus,
+    });
+  };
+
   const resetForm = () => {
     setFormData({
       name: "",
@@ -3034,6 +3348,7 @@ const CategoriesManagement = () => {
       description: "",
       icon: "",
       scope: "estate",
+      tag: DEFAULT_CATEGORY_TAG,
     });
   };
 
@@ -3045,6 +3360,7 @@ const CategoriesManagement = () => {
       description: category.description || "",
       icon: category.icon || "",
       scope: category.scope || "estate",
+      tag: category.tag || DEFAULT_CATEGORY_TAG,
     });
   };
 
@@ -3133,6 +3449,7 @@ const CategoriesManagement = () => {
                 <TableHead>Name</TableHead>
                 <TableHead>Key</TableHead>
                 <TableHead>Scope</TableHead>
+                <TableHead>Tag</TableHead>
                 <TableHead>Description</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Actions</TableHead>
@@ -3171,6 +3488,11 @@ const CategoriesManagement = () => {
                       {category.scope}
                     </Badge>
                   </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-xs uppercase tracking-wide">
+                      {category.tag || "Not tagged"}
+                    </Badge>
+                  </TableCell>
                   <TableCell className="max-w-xs truncate">
                     {category.description || "-"}
                   </TableCell>
@@ -3199,6 +3521,26 @@ const CategoriesManagement = () => {
                         data-testid={`button-delete-category-${category._id || category.id}`}
                       >
                         <XCircle className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          handleToggleCategoryStatus(
+                            category._id || category.id,
+                            category.isActive,
+                          )
+                        }
+                        className={category.isActive ? "text-amber-600 hover:text-amber-700" : "text-emerald-600 hover:text-emerald-700"}
+                        disabled={toggleCategoryStatusMutation.isPending}
+                        data-testid={`button-toggle-category-${category._id || category.id}`}
+                        title={category.isActive ? "Deactivate category" : "Activate category"}
+                      >
+                        {category.isActive ? (
+                          <ShieldOff className="w-4 h-4" />
+                        ) : (
+                          <Shield className="w-4 h-4" />
+                        )}
                       </Button>
                     </div>
                   </TableCell>
@@ -3312,6 +3654,47 @@ const CategoriesManagement = () => {
                 </Select>
               </div>
             )}
+            <div>
+              <label className="text-sm font-medium">Tag</label>
+              <Select
+                value={formData.tag}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, tag: value })
+                }
+              >
+                <SelectTrigger data-testid="select-category-tag">
+                  <SelectValue placeholder="Select a tag" />
+                </SelectTrigger>
+                <SelectContent className="max-h-60" sideOffset={5} align="start">
+                  {CATEGORY_TAG_OPTIONS.map((tag) => (
+                    <SelectItem key={tag} value={tag}>
+                      {tag}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Tag</label>
+              <Select
+                value={formData.tag}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, tag: value })
+                }
+                data-testid="select-edit-category-tag"
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a tag" />
+                </SelectTrigger>
+                <SelectContent className="max-h-60" sideOffset={5} align="start">
+                  {CATEGORY_TAG_OPTIONS.map((tag) => (
+                    <SelectItem key={tag} value={tag}>
+                      {tag}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <DialogFooter>
               <Button
                 type="button"
@@ -4719,15 +5102,6 @@ export default function AdminSuperDashboard() {
       setSelectedEstateId(String(estateId));
     }
   }, [estateList, selectedEstateId, sessionChecked, user]);
-  const estateOptions = useMemo(() => {
-    if (!Array.isArray(estateList) || estateList.length === 0) return [];
-    return estateList
-      .map((estate: any, idx: number) => {
-        const estateId = estate?._id || estate?.id || estate?.slug || `estate-${idx}`;
-        return estateId ? { value: String(estateId), label: estate.name || estate.slug || estateId } : null;
-      })
-      .filter(Boolean) as { value: string; label: string }[];
-  }, [estateList]);
   const { toast } = useToast();
   const notificationCount = providerRequests.length;
   const acceptRequestMutation = useMutation({
@@ -4865,75 +5239,75 @@ export default function AdminSuperDashboard() {
               <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
                 {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
               </h1>
-              {isSuperAdmin && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setRequestDialogOpen(true)}
-                  aria-label="View provider requests"
-                >
-                  <Bell className="w-4 h-4" />
-                </Button>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-              <div className="text-sm font-medium text-muted-foreground">
-                {selectedEstateId ? "Viewing estate" : "Choose an estate"}
+              <div className="flex items-center space-x-2">
+                {isSuperAdmin && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setRequestDialogOpen(true)}
+                      aria-label="View provider requests"
+                    >
+                      <Bell className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setLocation("/admin-dashboard/settings")}
+                      aria-label="Settings"
+                    >
+                      <Settings className="w-4 h-4" />
+                    </Button>
+                  </>
+                )}
               </div>
-              <Select
-                value={selectedEstateId ?? ""}
-                onValueChange={handleEstateSelection}
-                className="w-full sm:w-64"
-              >
-                <SelectTrigger data-testid="select-global-estate">
-                  <SelectValue placeholder="Select an estate" />
-                </SelectTrigger>
-                <SelectContent>
-                  {estateOptions.length > 0 ? (
-                    estateOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))
-                  ) : (
-                    <SelectItem value="loading" disabled>
-                      {sessionChecked ? "No estates available" : "Loading estates..."}
-                    </SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-              <Badge
-                variant="outline"
-                className="text-xs text-muted-foreground flex-1"
-              >
-                {selectedEstateId
-                  ? estateOptions.find((option) => option.value === selectedEstateId)?.label ||
-                    "Selected estate"
-                  : "No estate selected"}
-              </Badge>
             </div>
           </div>
 
           {isSuperAdmin && (
-            <div className="hidden lg:flex justify-end bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setRequestDialogOpen(true)}
-                aria-label="View provider requests"
-              >
-                <Bell className="w-4 h-4" />
-              </Button>
-              {notificationCount > 0 && (
-                <span className="ml-2 text-[0.65rem] font-semibold uppercase tracking-wide text-primary">
-                  {notificationCount > 9 ? "9+" : notificationCount} new request
-                  {notificationCount > 1 ? "s" : ""}
-                </span>
-              )}
-            </div>
+            <div className="hidden lg:flex justify-end bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-3">
+                <div className="flex items-center space-x-2">
+                  <Link href="/company-registration">
+                    <Button variant="secondary" size="sm" className="px-2 sm:px-3 h-8 flex items-center">
+                      <Building2 className="w-4 h-4" />
+                      <span className="ml-2 hidden sm:inline">Register a business</span>
+                    </Button>
+                  </Link>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="px-2 sm:px-3 h-8 flex items-center"
+                    onClick={() => setLocation("/admin-dashboard/providers")}
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span className="ml-2 hidden sm:inline">Add provider</span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setRequestDialogOpen(true)}
+                    aria-label="View provider requests"
+                    className="h-8 w-8 p-0"
+                  >
+                    <Bell className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setLocation("/admin-dashboard/settings")}
+                    aria-label="Settings"
+                    className="h-8 w-8 p-0"
+                  >
+                    <Settings className="w-4 h-4" />
+                  </Button>
+                  {notificationCount > 0 && (
+                    <span className="ml-2 text-[0.65rem] font-semibold uppercase tracking-wide text-primary">
+                      {notificationCount > 9 ? "9+" : notificationCount} new request
+                      {notificationCount > 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+              </div>
           )}
 
           {isSuperAdmin && (
@@ -5097,7 +5471,7 @@ export default function AdminSuperDashboard() {
           )}
 
           {/* Page Content */}
-          <div className="p-6">
+          <div className="py-6 px-0">
             {activeTab === "dashboard" && (
               <div>
                 <div className="mb-6">
@@ -5178,14 +5552,7 @@ export default function AdminSuperDashboard() {
             {activeTab === "stores" && <StoresManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "orders" && <OrdersManagement />}
-            {activeTab === "requests" && (
-              <ArtisanRequestsPanel
-                selectedEstateId={selectedEstateId}
-                estates={estateList}
-                onSelectEstate={handleEstateSelection}
-              />
-            )}
-            {activeTab === "artisanRequests" && (
+            {["requests", "artisanRequests"].includes(activeTab) && (
               <ArtisanRequestsPanel
                 selectedEstateId={selectedEstateId}
                 estates={estateList}

@@ -10,9 +10,32 @@ import { setupVite, serveStatic, log } from "./vite";
 const app = express();
 app.set("trust proxy", 1);
 
-// Body parsers
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// Body parsers (use raw body for Paystack webhooks to validate signatures)
+const paystackWebhookPaths = new Set([
+  "/api/payments/paystack/webhook",
+  "/api/paystack/webhook",
+]);
+const jsonParser = express.json();
+const urlencodedParser = express.urlencoded({ extended: false });
+const rawPaystackParser = express.raw({ type: "*/*" });
+
+function isPaystackWebhookPath(path: string) {
+  return paystackWebhookPaths.has(path);
+}
+
+app.use((req, res, next) => {
+  if (isPaystackWebhookPath(req.path)) {
+    return rawPaystackParser(req, res, next);
+  }
+  return jsonParser(req, res, next);
+});
+
+app.use((req, res, next) => {
+  if (isPaystackWebhookPath(req.path)) {
+    return next();
+  }
+  return urlencodedParser(req, res, next);
+});
 app.use(cookieParser());
 
 // CORS (safe defaults for dev; keep credentials if you use cookies)
@@ -159,6 +182,47 @@ async function ensureProviderRequestsTable() {
   `);
 }
 
+async function ensureTransactionsColumns() {
+  try {
+    await db.execute(sql`
+      ALTER TABLE transactions
+        ADD COLUMN IF NOT EXISTS reference text,
+        ADD COLUMN IF NOT EXISTS gateway text DEFAULT 'paystack',
+        ADD COLUMN IF NOT EXISTS meta jsonb DEFAULT '{}'::jsonb;
+    `);
+
+    // Backfill any NULL references with generated UUID text
+    await db.execute(sql`
+      UPDATE transactions
+      SET reference = COALESCE(reference, gen_random_uuid()::text)
+      WHERE reference IS NULL;
+    `);
+
+    // Try to make the column NOT NULL and add a unique constraint if possible
+    try {
+      await db.execute(sql`
+        ALTER TABLE transactions
+          ALTER COLUMN reference SET NOT NULL;
+      `);
+      // Add unique constraint if it doesn't already exist
+      await db.execute(sql`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'transactions_reference_unique'
+          ) THEN
+            ALTER TABLE transactions ADD CONSTRAINT transactions_reference_unique UNIQUE (reference);
+          END IF;
+        END$$;
+      `);
+    } catch (e) {
+      console.warn("Could not set transactions.reference NOT NULL or add unique constraint:", e?.message || e);
+    }
+  } catch (err) {
+    console.error("ensureTransactionsColumns failed:", err?.message || err);
+  }
+}
+
 async function ensureMongoIdMappingTable() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS mongo_id_mappings (
@@ -179,6 +243,7 @@ async function ensureMongoIdMappingTable() {
     await ensureUsersColumns();
     await ensureCompaniesTable();
     await ensureProviderRequestsTable();
+    await ensureTransactionsColumns();
     await ensureMongoIdMappingTable();
     log("[DB] Schema guard OK");
   } catch (e) {

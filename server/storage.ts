@@ -70,6 +70,11 @@ export interface IStorage {
   // Transactions
   createTransaction(transaction: InsertTransaction): Promise<Transaction>;
   getTransactionsByWallet(walletId: string): Promise<Transaction[]>;
+  getTransactionByReference(reference: string): Promise<Transaction | undefined>;
+  updateTransactionByReference(
+    reference: string,
+    updates: Partial<Transaction>,
+  ): Promise<Transaction | undefined>;
   
   // Admin functions
   getUsers(role?: string): Promise<User[]>;
@@ -551,6 +556,27 @@ export class DatabaseStorage implements IStorage {
       .where(eq(transactions.walletId, walletId))
       .orderBy(desc(transactions.createdAt));
     return transactionList;
+  }
+
+  async getTransactionByReference(reference: string): Promise<Transaction | undefined> {
+    const [tx] = await db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.reference, reference))
+      .limit(1);
+    return tx || undefined;
+  }
+
+  async updateTransactionByReference(
+    reference: string,
+    updates: Partial<Transaction>,
+  ): Promise<Transaction | undefined> {
+    const [tx] = await db
+      .update(transactions)
+      .set({ ...updates })
+      .where(eq(transactions.reference, reference))
+      .returning();
+    return tx || undefined;
   }
 
   // Admin functions

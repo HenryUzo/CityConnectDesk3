@@ -1,300 +1,299 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useLocation } from "wouter";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-
+import { Link } from "wouter";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { 
-  Home, 
-  Wrench, 
   ShoppingBag, 
-  ClipboardList, 
-  LogOut,
-  Plus,
-  Clock,
-  CheckCircle,
-  Menu,
-  Settings
+  Wrench,
+  MoreVertical,
+  ArrowUp,
+  CheckCircle2,
+  CalendarDays,
+  Zap
 } from "lucide-react";
-import { useState } from "react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
+import { ResidentLayout } from "@/components/resident/ResidentLayout";
 
 export default function ResidentDashboard() {
-  const { user, logoutMutation } = useAuth();
-  const [, setLocation] = useLocation();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { user } = useAuth();
 
   const { data: serviceRequests = [] } = useQuery({
     queryKey: ["/api/service-requests"],
   });
 
-  const handleLogout = async () => {
-    await logoutMutation.mutateAsync();
-    setLocation("/");
-  };
-
   // Type the service requests properly
   const typedServiceRequests = (serviceRequests as any[]) || [];
 
   const stats = {
-    active: typedServiceRequests.filter((r) => ['pending', 'assigned', 'in_progress'].includes(r.status)).length,
-    completed: typedServiceRequests.filter((r) => r.status === 'completed').length
+    maintenanceSchedule: 0,
+    activeContracts: typedServiceRequests.filter((r) => ['pending', 'assigned', 'in_progress'].includes(r.status)).length,
+    completedRequests: typedServiceRequests.filter((r) => r.status === 'completed').length
   };
 
-  const recentActivity = typedServiceRequests
-    .slice(0, 3)
-    .map((request) => ({
-      ...request,
-      statusColor: request.status === 'completed' ? 'bg-green-100 text-green-800' :
-                  request.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
-                  request.status === 'assigned' ? 'bg-blue-100 text-blue-800' :
-                  'bg-gray-100 text-gray-800'
-    }));
+  const statCards = [
+    {
+      key: "maintenance",
+      title: "Maintenance Schedule",
+      value: stats.maintenanceSchedule,
+      icon: CalendarDays,
+      iconBg: "bg-emerald-50 text-emerald-600",
+      metaLabel: "Next: Fridge Maintenance",
+      metaValue: "₦20,000",
+      button: {
+        label: "Manage Subscriptions",
+        href: "/book-artisan",
+        variant: "solid",
+      },
+    },
+    {
+      key: "contracts",
+      title: "Active Contracts",
+      value: stats.activeContracts,
+      icon: Zap,
+      iconBg: "bg-blue-50 text-blue-600",
+      trend: "20% vs last month",
+      button: {
+        label: "Go to Orders",
+        href: "/track-orders",
+        variant: "outline",
+      },
+    },
+    {
+      key: "completed",
+      title: "Completed Request",
+      value: stats.completedRequests,
+      icon: CheckCircle2,
+      iconBg: "bg-emerald-50 text-emerald-600",
+      trend: "20% vs last month",
+      button: {
+        label: "View Contracts",
+        href: "/track-orders",
+        variant: "outline",
+      },
+    },
+  ];
 
-  // Navigation component for mobile
-  const NavigationItems = ({ onLinkClick }: { onLinkClick?: () => void }) => (
-    <nav className="space-y-2">
-      <Button variant="default" className="w-full justify-start h-12" asChild>
-        <Link href="/resident" data-testid="link-dashboard" onClick={onLinkClick}>
-          <Home className="w-5 h-5 mr-3" />
-          Dashboard Overview
-        </Link>
-      </Button>
-      <Button variant="ghost" className="w-full justify-start h-12" asChild>
-        <Link href="/book-artisan" data-testid="link-book-artisan" onClick={onLinkClick}>
-          <Wrench className="w-5 h-5 mr-3" />
-          Book Artisan Repair
-        </Link>
-      </Button>
-      <Button variant="ghost" className="w-full justify-start h-12" asChild>
-        <Link href="/book-market-run" data-testid="link-book-market-run" onClick={onLinkClick}>
-          <ShoppingBag className="w-5 h-5 mr-3" />
-          Request Market Run
-        </Link>
-      </Button>
-      <Button variant="ghost" className="w-full justify-start h-12" asChild>
-        <Link href="/track-orders" data-testid="link-track-orders" onClick={onLinkClick}>
-          <ClipboardList className="w-5 h-5 mr-3" />
-          Track Orders
-        </Link>
-      </Button>
-      {user?.role === 'admin' && (
-        <Button variant="ghost" className="w-full justify-start h-12" asChild>
-          <Link href="/admin" data-testid="link-admin-dashboard" onClick={onLinkClick}>
-            <Settings className="w-5 h-5 mr-3" />
-            Admin Dashboard
-          </Link>
-        </Button>
-      )}
-    </nav>
+  // Mock market trends data
+  const marketTrendsData = [
+    { month: 'Jan', tuber: 600, eggs: 400, rice: 300 },
+    { month: 'Feb', tuber: 620, eggs: 410, rice: 310 },
+    { month: 'Mar', tuber: 650, eggs: 420, rice: 320 },
+    { month: 'Apr', tuber: 680, eggs: 430, rice: 330 },
+    { month: 'May', tuber: 700, eggs: 440, rice: 350 },
+    { month: 'Jun', tuber: 720, eggs: 450, rice: 370 },
+    { month: 'Jul', tuber: 750, eggs: 460, rice: 390 },
+    { month: 'Aug', tuber: 780, eggs: 470, rice: 410 },
+    { month: 'Sep', tuber: 800, eggs: 480, rice: 430 },
+    { month: 'Oct', tuber: 820, eggs: 490, rice: 450 },
+    { month: 'Nov', tuber: 850, eggs: 500, rice: 470 },
+    { month: 'Dec', tuber: 880, eggs: 510, rice: 490 },
+  ];
+
+  const pageTitle = (
+    <div>
+      <h1 className="text-2xl font-bold text-gray-900">Welcome back, {user?.name || 'Olivia'}!</h1>
+      <p className="text-sm text-gray-600 mt-1">Track, manage and forecast your activities</p>
+    </div>
   );
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Mobile-First Navigation */}
-      <nav className="bg-card shadow-sm border-b border-border sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-8">
-          <div className="flex justify-between items-center h-14 sm:h-16">
-            {/* Mobile menu button and logo */}
-            <div className="flex items-center space-x-3">
-              {/* Mobile menu button */}
-              <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-                <SheetTrigger asChild>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="lg:hidden h-10 w-10 p-0" 
-                    data-testid="button-mobile-menu"
-                  >
-                    <Menu className="w-5 h-5" />
-                    <span className="sr-only">Open menu</span>
-                  </Button>
-                </SheetTrigger>
-                <SheetContent side="left" className="w-72 p-6">
-                  <div className="mb-6">
-                    <h2 className="text-lg font-semibold text-foreground">Navigation</h2>
+    <ResidentLayout title={pageTitle}>
+      <div className="flex items-center space-x-3 mb-6">
+        <Link href="/book-market-run">
+          <Button variant="outline" className="border-emerald-600 text-emerald-700 hover:bg-emerald-50">
+            <ShoppingBag className="w-4 h-4 mr-2" />
+            Buy something
+          </Button>
+        </Link>
+        <Link href="/book-artisan">
+          <Button className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Wrench className="w-4 h-4 mr-2" />
+            Book Repairs
+          </Button>
+        </Link>
+      </div>
+      {/* Stats Cards Row */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {statCards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <Card key={card.key} className="rounded-3xl border border-gray-100 shadow-sm">
+              <CardContent className="p-6 space-y-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">{card.title}</p>
+                    <p className="text-4xl font-semibold text-gray-900 mt-2">{card.value}</p>
                   </div>
-                  <NavigationItems onLinkClick={() => setMobileMenuOpen(false)} />
-                </SheetContent>
-              </Sheet>
-              
-              {/* Logo and title */}
-              <div className="flex items-center">
-                <h1 className="text-lg sm:text-xl font-bold text-primary">CityConnect</h1>
-                <span className="ml-2 sm:ml-3 text-xs sm:text-sm text-muted-foreground hidden sm:inline">
-                  Resident Dashboard
-                </span>
-              </div>
-            </div>
-            
-            {/* Logout */}
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={handleLogout} 
-                data-testid="button-logout"
-                className="h-10 w-10 p-0"
-              >
-                <LogOut className="w-4 h-4" />
-                <span className="sr-only">Logout</span>
-              </Button>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-8 py-4 sm:py-6 lg:py-8">
-        <div className="grid lg:grid-cols-4 gap-4 sm:gap-6 lg:gap-8">
-          {/* Desktop Sidebar - Hidden on mobile */}
-          <div className="hidden lg:block lg:col-span-1">
-            <NavigationItems />
-          </div>
-
-          {/* Main Content */}
-          <div className="lg:col-span-3 space-y-4 sm:space-y-6">
-            {/* Welcome Section */}
-            <div className="text-center sm:text-left">
-              <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2">
-                Welcome back, <span data-testid="text-user-name">{user?.name}!</span>
-              </h2>
-              <p className="text-sm sm:text-base text-muted-foreground">Here's what's happening with your services</p>
-            </div>
-
-            {/* Stats Cards - Mobile-first responsive grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 lg:gap-6">
-              <Card className="hover:shadow-md transition-shadow">
-                <CardContent className="p-4 sm:p-6">
-                  <div className="flex items-center justify-between">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs sm:text-sm font-medium text-muted-foreground mb-1">Active Requests</p>
-                      <p className="text-xl sm:text-2xl font-bold text-foreground" data-testid="text-active-requests">
-                        {stats.active}
-                      </p>
-                    </div>
-                    <div className="bg-accent/10 p-2 sm:p-3 rounded-lg ml-3">
-                      <Clock className="w-5 h-5 sm:w-6 sm:h-6 text-accent" />
-                    </div>
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${card.iconBg}`}>
+                    <Icon className="w-6 h-6" />
                   </div>
-                </CardContent>
-              </Card>
-
-              <Card className="hover:shadow-md transition-shadow">
-                <CardContent className="p-4 sm:p-6">
-                  <div className="flex items-center justify-between">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs sm:text-sm font-medium text-muted-foreground mb-1">Completed</p>
-                      <p className="text-xl sm:text-2xl font-bold text-foreground" data-testid="text-completed-requests">
-                        {stats.completed}
-                      </p>
-                    </div>
-                    <div className="bg-secondary/10 p-2 sm:p-3 rounded-lg ml-3">
-                      <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-secondary" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Quick Actions - Mobile-optimized */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 lg:gap-6">
-              <Link to="/book-artisan">
-                <Card className="hover:shadow-md transition-shadow cursor-pointer">
-                  <CardHeader className="pb-3 sm:pb-6">
-                    <CardTitle className="flex items-center text-base sm:text-lg">
-                      <Wrench className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-primary" />
-                      Book Artisan Repair
-                    </CardTitle>
-                    <CardDescription className="text-sm">
-                      Electrician, Plumber, Carpenter services
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="pt-0">
-                    <Button className="w-full h-11 sm:h-10" data-testid="button-book-artisan">
-                      <Plus className="w-4 h-4 mr-2" />
-                      Book Now
-                    </Button>
-                  </CardContent>
-                </Card>
-              </Link>
-
-              <Link to="/book-market-run">
-                <Card className="hover:shadow-md transition-shadow cursor-pointer">
-                  <CardHeader className="pb-3 sm:pb-6">
-                    <CardTitle className="flex items-center text-base sm:text-lg">
-                      <ShoppingBag className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-secondary" />
-                      Request Market Run
-                    </CardTitle>
-                    <CardDescription className="text-sm">
-                      Groceries, Deliveries, Errands
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="pt-0">
-                    <Button variant="secondary" className="w-full h-11 sm:h-10" data-testid="button-request-market-run">
-                      <Plus className="w-4 h-4 mr-2" />
-                      Request Now
-                    </Button>
-                  </CardContent>
-                </Card>
-              </Link>
-            </div>
-
-            {/* Recent Activity - Mobile-optimized */}
-            <Card>
-              <CardHeader className="pb-3 sm:pb-6">
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
-                  <CardTitle className="text-lg sm:text-xl">Recent Activity</CardTitle>
-                  <Button variant="outline" size="sm" className="self-start sm:self-auto h-9" asChild>
-                    <Link to="/track-orders" data-testid="link-view-all-orders">
-                      View All
-                    </Link>
-                  </Button>
                 </div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3 sm:space-y-4">
-                  {recentActivity.length > 0 ? (
-                    recentActivity.map((activity: any) => (
-                      <div 
-                        key={activity.id} 
-                        className="flex items-start sm:items-center space-x-3 sm:space-x-4 p-3 sm:p-4 bg-muted rounded-lg"
-                        data-testid={`activity-${activity.id}`}
-                      >
-                        <div className="bg-primary text-primary-foreground w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center flex-shrink-0">
-                          {activity.category === 'market_runner' ? (
-                            <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5" />
-                          ) : (
-                            <Wrench className="w-4 h-4 sm:w-5 sm:h-5" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-foreground text-sm sm:text-base break-words">{activity.description}</p>
-                          <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                            {activity.providerId ? `Assigned to provider` : 'Pending assignment'} • 
-                            {new Date(activity.createdAt).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <div className="flex-shrink-0">
-                          <Badge className={`${activity.statusColor} text-xs px-2 py-1`}>
-                            {activity.status.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
-                          </Badge>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-center py-6 sm:py-8 text-muted-foreground">
-                      <ClipboardList className="w-10 h-10 sm:w-12 sm:h-12 mx-auto mb-3 sm:mb-4 opacity-50" />
-                      <p className="text-sm sm:text-base">No recent activity</p>
-                      <p className="text-xs sm:text-sm">Start by booking a service!</p>
-                    </div>
-                  )}
-                </div>
+                {card.trend && (
+                  <div className="flex items-center text-sm text-emerald-600">
+                    <ArrowUp className="w-4 h-4 mr-1" />
+                    <span>{card.trend}</span>
+                  </div>
+                )}
+                {card.metaLabel && (
+                  <div className="flex items-center justify-between text-sm text-gray-600">
+                    <span>{card.metaLabel}</span>
+                    {card.metaValue && (
+                      <span className="font-semibold text-gray-900">{card.metaValue}</span>
+                    )}
+                  </div>
+                )}
+                {card.button && (
+                  <Link href={card.button.href}>
+                    <Button
+                      className={`w-full rounded-full ${
+                        card.button.variant === "outline"
+                          ? "bg-transparent border border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                          : "bg-emerald-600 hover:bg-emerald-700 text-white"
+                      }`}
+                      variant={card.button.variant === "outline" ? "outline" : "default"}
+                    >
+                      {card.button.label}
+                    </Button>
+                  </Link>
+                )}
               </CardContent>
             </Card>
-          </div>
-        </div>
+          );
+        })}
       </div>
-    </div>
+
+      {/* Service Banner and Market Trends Row */}
+      <div className="grid grid-cols-3 gap-6">
+        {/* Service Banner - 2 columns */}
+        <Card className="col-span-2 bg-gradient-to-br from-emerald-600 to-emerald-700 text-white overflow-hidden relative">
+          <CardContent className="p-8 relative z-10">
+            <div className="flex items-start justify-between">
+              <div className="space-y-4 max-w-md">
+                <div>
+                  <p className="text-sm opacity-90 mb-2">Book a service</p>
+                  <h2 className="text-3xl font-bold leading-tight">
+                    You don't have to break your back
+                  </h2>
+                </div>
+                <p className="text-emerald-50 text-base">We got it covered</p>
+                <Link href="/book-market-run">
+                  <Button className="bg-white text-emerald-700 hover:bg-emerald-50">
+                    <ShoppingBag className="w-4 h-4 mr-2" />
+                    Buy something
+                  </Button>
+                </Link>
+                <div className="flex space-x-2 mt-4">
+                  <div className="w-2 h-2 bg-white rounded-full"></div>
+                  <div className="w-2 h-2 bg-white/50 rounded-full"></div>
+                  <div className="w-2 h-2 bg-white/50 rounded-full"></div>
+                </div>
+              </div>
+              <div className="absolute right-0 top-0 h-full w-1/2">
+                <img
+                  src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop"
+                  alt="Service professional"
+                  className="h-full w-full object-cover opacity-90"
+                />
+              </div>
+            </div>
+          </CardContent>
+          <button className="absolute top-4 right-4 text-white/80 hover:text-white z-20">
+            <MoreVertical className="w-5 h-5" />
+          </button>
+        </Card>
+
+        {/* Market Trends - 1 column */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-base font-semibold">Market Trends</CardTitle>
+            <Link href="/book-market-run">
+              <Button variant="link" className="text-emerald-600 hover:text-emerald-700 p-0 h-auto">
+                <ShoppingBag className="w-4 h-4 mr-1" />
+                Go to Marketplace
+              </Button>
+            </Link>
+          </CardHeader>
+          <CardContent>
+            <div className="h-64 -ml-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={marketTrendsData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                  <XAxis 
+                    dataKey="month" 
+                    tick={{ fontSize: 12, fill: '#6b7280' }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 12, fill: '#6b7280' }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(value) => `₦${value}`}
+                  />
+                  <Tooltip 
+                    contentStyle={{
+                      borderRadius: '0.5rem',
+                      borderColor: '#e5e7eb',
+                      fontSize: '0.875rem',
+                    }}
+                  />
+                  <Legend 
+                    wrapperStyle={{ fontSize: '14px', paddingTop: '10px' }}
+                    iconType="circle"
+                    align="right"
+                    verticalAlign="top"
+                  />
+                  <defs>
+                    <linearGradient id="colorTuber" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#059669" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#059669" stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorEggs" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                    </linearGradient>
+                     <linearGradient id="colorRice" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#34d399" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#34d399" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <Area 
+                    type="monotone" 
+                    dataKey="tuber" 
+                    stroke="#059669" 
+                    strokeWidth={2}
+                    fillOpacity={1}
+                    fill="url(#colorTuber)"
+                    name="Tuber of Yam"
+                    dot={false}
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="eggs" 
+                    stroke="#10b981" 
+                    strokeWidth={2}
+                    fillOpacity={1}
+                    fill="url(#colorEggs)"
+                    name="Crate of Eggs"
+                    dot={false}
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="rice" 
+                    stroke="#34d399" 
+                    strokeWidth={2}
+                    fillOpacity={1}
+                    fill="url(#colorRice)"
+                    name="Bag of Rice"
+                    dot={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </ResidentLayout>
   );
 }

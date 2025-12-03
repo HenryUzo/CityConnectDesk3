@@ -45,15 +45,12 @@ export default function ArtisanRequestsPanel({
   const [status, setStatus] = useState<RequestStatus | "all">("pending");
   const enabled = Boolean(selectedEstateId);
 
-  const estateOptions = useMemo(() => {
-    if (!Array.isArray(estates) || estates.length === 0) return [];
-    return estates
-      .map((estate, idx) => {
-        const id = estate?._id || estate?.id || estate?.slug || `estate-${idx}`;
-        return id ? { value: String(id), label: estate.name || estate.slug || id } : null;
-      })
-      .filter(Boolean) as { value: string; label: string }[];
-  }, [estates]);
+  const estateOptions = (Array.isArray(estates) ? estates : [])
+    .map((estate, idx) => {
+      const id = estate?._id || estate?.id || estate?.slug || `estate-${idx}`;
+      return id ? { value: String(id), label: estate.name || estate.slug || id } : null;
+    })
+    .filter(Boolean) as { value: string; label: string }[];
 
   const { data, isLoading, error } = useQuery<ServiceRequest[], Error>({
     queryKey: [
@@ -86,49 +83,51 @@ export default function ArtisanRequestsPanel({
 
   return (
     <Card className="p-0">
-      <div className="h-32 w-full overflow-hidden rounded-t-xl">
-        <img
-          src="https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=1600&q=80"
-          alt="Service Request banner"
-          className="w-full h-full object-cover"
-        />
+      <div
+        className="relative h-32 w-full overflow-hidden rounded-t-xl"
+        style={{
+          backgroundImage:
+            "linear-gradient(90deg, rgba(15,23,42,0.95), rgba(15,23,42,0.4)), url('https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=1600&q=80')",
+        }}
+      >
+        <div className="absolute inset-0" />
+        <div className="relative h-full flex items-center px-6">
+          <h2 className="text-white font-semibold text-xl">Artisan Requests</h2>
+        </div>
       </div>
-      <CardHeader>
-        <div className="flex flex-col gap-3">
-          <div className="text-lg font-semibold">Artisan Requests</div>
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-              <span className="text-xs text-muted-foreground">Estate</span>
-              <Select
-                value={selectedEstateId ?? ""}
-                onValueChange={(value) => onSelectEstate(value || null)}
-                className="w-full sm:w-64"
-              >
-                <SelectTrigger data-testid="select-requests-estate">
-                  <SelectValue placeholder="Select an estate" />
-                </SelectTrigger>
-                <SelectContent>
-                  {estateOptions.length > 0 ? (
-                    estateOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))
-                  ) : (
-                    <SelectItem value="none" disabled>
-                      {enabled ? "No estates available" : "Loading estates..."}
+      <CardHeader className="pt-6">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+            <span className="text-xs text-muted-foreground">Estate</span>
+            <Select
+              value={selectedEstateId ?? ""}
+              onValueChange={(value) => onSelectEstate(value || null)}
+              className="w-full sm:w-64"
+            >
+              <SelectTrigger data-testid="select-requests-estate">
+                <SelectValue placeholder="Select an estate" />
+              </SelectTrigger>
+              <SelectContent>
+                {estateOptions.length > 0 ? (
+                  estateOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-            <Badge variant="outline" className="text-xs text-muted-foreground">
-              {selectedEstateId
-                ? estateOptions.find((option) => option.value === selectedEstateId)?.label ||
-                  "Selected estate"
-                : "No estate selected"}
-            </Badge>
+                  ))
+                ) : (
+                  <SelectItem value="none" disabled>
+                    {enabled ? "No estates available" : "Loading estates..."}
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
           </div>
+          <Badge variant="outline" className="text-xs text-muted-foreground">
+            {selectedEstateId
+              ? estateOptions.find((option) => option.value === selectedEstateId)?.label ||
+                "Selected estate"
+              : "No estate selected"}
+          </Badge>
         </div>
       </CardHeader>
       <div className="px-4 sm:px-6 pb-3 space-y-3">

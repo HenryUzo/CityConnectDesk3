@@ -1,21 +1,16 @@
 import { useState } from "react";
-import { useAuth } from "@/hooks/use-auth";
 import { useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, ShoppingBag, LogOut, Search, Filter, Star, Clock, MapPin, ShoppingCart, Plus, Minus } from "lucide-react";
+import { ShoppingBag, Search, Star, Clock, MapPin, ShoppingCart, Plus, Minus } from "lucide-react";
+import { ResidentLayout } from "@/components/resident/ResidentLayout";
 
 // Marketplace data types
 interface CartItem {
@@ -145,7 +140,6 @@ const mockVendors: Vendor[] = [
 ];
 
 export default function BookMarketRun() {
-  const { user, logoutMutation } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   
@@ -154,7 +148,6 @@ export default function BookMarketRun() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLocation, setSelectedLocation] = useState('all');
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [selectedVendor, setSelectedVendor] = useState<string | null>(null);
   
   // Filter vendors by type and search
   const filteredVendors = mockVendors.filter(vendor => {
@@ -248,11 +241,6 @@ export default function BookMarketRun() {
       });
     },
   });
-
-  const handleLogout = async () => {
-    await logoutMutation.mutateAsync();
-    setLocation("/");
-  };
   
   const handleCheckout = () => {
     if (cart.length === 0) {
@@ -267,69 +255,41 @@ export default function BookMarketRun() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="bg-card shadow-sm border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <h1 className="text-xl font-bold text-primary">CityConnect</h1>
-              <span className="ml-2 sm:ml-3 text-xs sm:text-sm text-muted-foreground truncate">Market Run</span>
-            </div>
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <Button variant="ghost" size="sm" onClick={handleLogout} className="h-9 w-9 p-0" data-testid="button-logout">
-                <LogOut className="w-4 h-4" />
-              </Button>
+    <ResidentLayout title="Marketplace">
+      <div className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 space-y-3 sm:space-y-0">
+          <div className="flex items-center">
+            <ShoppingBag className="w-8 h-8 text-secondary mr-3" />
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Marketplace</h1>
+              <p className="text-sm sm:text-base text-muted-foreground mt-1">Order food and groceries from local vendors</p>
             </div>
           </div>
-        </div>
-      </nav>
-
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
-        <div className="mb-4 sm:mb-6">
-          <Button 
-            variant="ghost" 
-            onClick={() => setLocation("/resident")} 
-            className="mb-4 h-11 min-h-[44px] px-4"
-            data-testid="button-back-dashboard"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Dashboard
-          </Button>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 space-y-3 sm:space-y-0">
-            <div className="flex flex-col sm:flex-row sm:items-center space-y-3 sm:space-y-0">
-              <ShoppingBag className="w-8 h-8 text-secondary mr-0 sm:mr-3" />
-              <div>
-                <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Marketplace</h1>
-                <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">Order food and groceries from local vendors</p>
-              </div>
-            </div>
-            
-            {/* Cart Summary */}
-            {cart.length > 0 && (
-              <Card className="w-full sm:w-auto mt-4 sm:mt-0">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-2">
-                      <ShoppingCart className="w-5 h-5 text-primary" />
-                      <div>
-                        <p className="font-medium text-sm">{cart.length} items</p>
-                        <p className="text-xs text-muted-foreground">₦{getTotalPrice().toLocaleString()}</p>
-                      </div>
+          
+          {/* Cart Summary */}
+          {cart.length > 0 && (
+            <Card className="w-full sm:w-auto mt-4 sm:mt-0">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <ShoppingCart className="w-5 h-5 text-primary" />
+                    <div>
+                      <p className="font-medium text-sm">{cart.length} items</p>
+                      <p className="text-xs text-muted-foreground">₦{getTotalPrice().toLocaleString()}</p>
                     </div>
-                    <Button 
-                      onClick={handleCheckout}
-                      disabled={submitOrderMutation.isPending}
-                      className="h-9"
-                      data-testid="button-checkout"
-                    >
-                      {submitOrderMutation.isPending ? "Processing..." : "Checkout"}
-                    </Button>
                   </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
+                  <Button 
+                    onClick={handleCheckout}
+                    disabled={submitOrderMutation.isPending}
+                    className="h-9"
+                    data-testid="button-checkout"
+                  >
+                    {submitOrderMutation.isPending ? "Processing..." : "Checkout"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -586,6 +546,6 @@ export default function BookMarketRun() {
           </Card>
         )}
       </div>
-    </div>
+    </ResidentLayout>
   );
 }

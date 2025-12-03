@@ -19,6 +19,9 @@ import AdminSuperDashboard from "@/pages/admin-super-dashboard";
 import BookArtisan from "@/pages/book-artisan";
 import BookMarketRun from "@/pages/book-market-run";
 import TrackOrders from "@/pages/track-orders";
+import CheckoutDiagnosis from "@/pages/checkout-diagnosis";
+import PaymentPolicy from "@/pages/payment-policy";
+import PaymentConfirmation from "@/pages/payment-confirmation";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -47,6 +50,9 @@ function Router() {
         </AdminAuthProvider>
       </Route>
       <ProtectedRoute path="/book-artisan" component={BookArtisan} />
+      <ProtectedRoute path="/checkout-diagnosis" component={CheckoutDiagnosis} />
+      <ProtectedRoute path="/payment-policy" component={PaymentPolicy} />
+      <ProtectedRoute path="/payment-confirmation" component={PaymentConfirmation} />
       <ProtectedRoute path="/book-market-run" component={BookMarketRun} />
       <ProtectedRoute path="/track-orders" component={TrackOrders} />
       <Route component={NotFound} />

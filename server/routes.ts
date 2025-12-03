@@ -34,6 +34,16 @@ import {
   providerRequestSchema,
   updateMarketplaceItemSchema,
 } from "@shared/admin-schema";
+import {
+  createPendingPaystackTransaction,
+  verifyAndFinalizePaystackCharge,
+} from "./payments";
+import { validatePaystackSignature } from "./paystack";
+import { initializePaystackTransaction } from "./paystackService";
+import {
+  handlePaystackVerify,
+  handlePaystackWebhook,
+} from "./paystackHandlers";
 
 const isAdminOrSuper = (req: Express["request"]) =>
   req.isAuthenticated() &&
@@ -65,6 +75,18 @@ const CreateServiceRequest = insertServiceRequestSchema.extend({
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
   setupAuth(app);
+
+  // Debug endpoint (DEV ONLY): check Paystack secret key loading
+  app.get("/api/debug/paystack-key", (req, res) => {
+    const key = process.env.PAYSTACK_SECRET_KEY || "";
+    const masked = key.length > 14 ? `${key.slice(0, 10)}...${key.slice(-4)}` : "[NOT SET]";
+    res.json({
+      keyLoaded: !!key,
+      masked,
+      length: key.length,
+      envFileCheck: "Check .env.local in repo root",
+    });
+  });
 
   app.use("/api/app", appRoutes);
   app.use("/api/provider", providerRoutes);
@@ -175,6 +197,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Admin: Send advice with inspection dates/times to resident
+  app.post("/api/admin/service-requests/:id/advice", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized - Admin only" });
+      }
+
+      const { id } = req.params;
+      const { message, inspectionDates, inspectionTimes } = req.body;
+
+      if (!message || !inspectionDates || !Array.isArray(inspectionDates)) {
+        return res.status(400).json({ message: "Message and inspection dates are required" });
+      }
+
+      // Update the service request with advice metadata
+      const updated = await storage.updateServiceRequest(id, {
+        adviceMessage: message,
+        inspectionDates,
+        inspectionTimes: inspectionTimes || [],
+      });
+
+      if (!updated) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      // TODO: Send notification/email to the resident
+      res.json({ success: true, message: "Advice sent successfully", request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: Assign provider to a service request
+  app.post("/api/admin/service-requests/:id/assign", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized - Admin only" });
+      }
+
+      const { id } = req.params;
+      const { providerId } = req.body;
+
+      if (!providerId) {
+        return res.status(400).json({ message: "Provider ID is required" });
+      }
+
+      const serviceRequest = await storage.assignServiceRequest(id, providerId);
+
+      if (!serviceRequest) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      // TODO: Send notification to the assigned provider
+      res.json({ success: true, message: "Provider assigned successfully", request: serviceRequest });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Wallet Routes
   app.get("/api/wallet", async (req, res, next) => {
     try {
@@ -186,6 +267,296 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(wallet);
     } catch (error) {
       next(error);
+    }
+  });
+
+  // Paystack Payments
+  app.post("/api/payments/paystack/session", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const payload = z
+        .object({
+          amount: z.preprocess((val) => Number(val), z.number().positive()),
+          serviceRequestId: z.string().optional(),
+          description: z.string().optional(),
+        })
+        .parse(req.body || {});
+
+      if (payload.serviceRequestId) {
+        const request = await storage.getServiceRequest(payload.serviceRequestId);
+        if (!request) {
+          return res.status(404).json({ message: "Service request not found" });
+        }
+        const isOwner =
+          req.user?.role === "admin" || request.residentId === req.user?.id;
+        if (!isOwner) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+      }
+
+      const session = await createPendingPaystackTransaction({
+        userId: req.user.id,
+        amount: payload.amount,
+        serviceRequestId: payload.serviceRequestId,
+        description: payload.description,
+        meta: {
+          initiatorId: req.user.id,
+          serviceRequestId: payload.serviceRequestId,
+        },
+      });
+
+      res.json({
+        reference: session.reference,
+        amountKobo: session.amountKobo,
+        amountFormatted: session.amountFormatted,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/paystack/init", async (req, res, next) => {
+    try {
+      const payload = z.object({
+        email: z.string().email(),
+        amountInNaira: z.number().positive(),
+        metadata: z.record(z.any()).optional(),
+        reference: z.string().optional(),
+        callbackUrl: z.string().url().optional(),
+      });
+
+      const { email, amountInNaira, metadata, reference, callbackUrl } = payload.parse(req.body || {});
+
+      const result = await initializePaystackTransaction({
+        email,
+        amountInNaira,
+        metadata,
+        reference,
+        callbackUrl,
+      });
+
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/paystack/webhook", async (req, res) => {
+    const rawBody = req.body;
+    if (!Buffer.isBuffer(rawBody)) {
+      return res.status(400).json({ received: false });
+    }
+
+    const signature = req.header("x-paystack-signature");
+    // Security: reject webhook immediately if the HMAC signature does not match.
+    if (!validatePaystackSignature(rawBody, signature)) {
+      return res.status(401).json({ received: false });
+    }
+
+    try {
+      const payload = JSON.parse(rawBody.toString("utf8"));
+      const event = payload?.event;
+      const data = payload?.data;
+      const reference = data?.reference;
+
+      // Security: capture webhook metadata without storing secrets for auditing.
+      await storage.createAuditLog({
+        actorId: "system",
+        estateId: null,
+        action: "paystack:webhook",
+        target: "transaction",
+        targetId: reference || "unknown",
+        meta: {
+          event,
+          reference,
+          receivedAt: new Date().toISOString(),
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+
+      if (event !== "charge.success" || !reference) {
+        return res.json({ received: true });
+      }
+
+      // TODO: replace this with the real payment/order lookup table keyed by reference.
+      const tx = await storage.getTransactionByReference(reference);
+      if (!tx) {
+        console.warn("Paystack webhook: transaction not found", reference);
+        return res.json({ received: true });
+      }
+
+      // Security: idempotency—if already paid, just acknowledge to avoid double credits.
+      if (tx.status === "completed") {
+        return res.json({ received: true });
+      }
+
+      const amountFromGateway =
+        typeof data.amount === "number" ? data.amount / 100 : null;
+
+      // Security: fail closed when amount or currency differ from what we expect.
+      if (
+        data.currency !== "NGN" ||
+        amountFromGateway === null ||
+        Math.abs(amountFromGateway - Number(tx.amount)) > 0.001
+      ) {
+        return res.json({ received: true });
+      }
+
+      // Security: only now, after all checks pass, do we mark the transaction as paid.
+      await storage.updateTransactionByReference(reference, {
+        status: "completed",
+        description: `Paystack webhook ${data.channel || "charge"}`,
+        meta: {
+          ...(tx.meta as Record<string, unknown>),
+          paystackWebhook: data,
+        },
+      });
+
+      if (tx.serviceRequestId) {
+        // TODO: ensure this ties into the full service-order billing workflow.
+        await storage.updateServiceRequest(tx.serviceRequestId, {
+          paymentStatus: "paid",
+          billedAmount: tx.amount as any,
+        });
+      }
+    } catch (error: any) {
+      console.error("Paystack webhook handler failed", { message: error?.message });
+    }
+
+    return res.json({ received: true });
+  });
+
+  app.get("/api/paystack/verify", async (req, res, next) => {
+    try {
+      const reference = (req.query.reference as string | undefined)?.trim();
+      // Security: refuse requests without a reference to avoid replay attacks.
+      if (!reference) {
+        return res.status(400).json({ status: "failed", message: "reference query param is required" });
+      }
+
+      // TODO: ensure this lookup uses the production payment table keyed by reference.
+      const tx = await storage.getTransactionByReference(reference);
+      if (!tx) {
+        return res.status(404).json({ status: "failed" });
+      }
+
+      if (tx.status === "completed") {
+        return res.json({ status: "success" });
+      }
+
+      const verification = await verifyPaystackTransaction(reference);
+      // Security: make sure Paystack is telling us the charge actually succeeded.
+      const charge = verification.data;
+
+      // Security: enforce currency and success state before touching any DB rows.
+      if (!verification.status || charge?.status !== "success" || charge?.currency !== "NGN") {
+        return res.json({ status: "failed" });
+      }
+
+      const amountFromGateway =
+        typeof charge.amount === "number" ? charge.amount / 100 : null;
+      const expectedAmount = Number(tx.amount);
+      if (amountFromGateway === null || Number.isNaN(amountFromGateway)) {
+        return res.json({ status: "failed" });
+      }
+
+      // Security: guard against tampered amounts by comparing gateway vs expected value.
+      if (Math.abs(amountFromGateway - expectedAmount) > 0.001) {
+        return res.json({ status: "failed" });
+      }
+
+      await storage.updateTransactionByReference(reference, {
+        status: "completed",
+        description: `Paystack ${charge.channel || "charge"}`,
+        meta: {
+          ...(tx.meta as Record<string, unknown>),
+          paystack: charge,
+        },
+      });
+
+      if (tx.serviceRequestId) {
+        // TODO: replace with real billing workflow (e.g., payment record table update) before marking service request paid.
+        await storage.updateServiceRequest(tx.serviceRequestId, {
+          paymentStatus: "paid",
+          billedAmount: tx.amount as any,
+        });
+      }
+
+      res.json({ status: "success" });
+    } catch (error: any) {
+      console.error("Paystack verify GET error", { message: error?.message });
+      res.status(500).json({ status: "failed" });
+    }
+  });
+
+  app.post("/api/payments/paystack/verify", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { reference } = z
+        .object({
+          reference: z.string().min(6),
+        })
+        .parse(req.body || {});
+
+      const tx = await storage.getTransactionByReference(reference);
+      if (!tx) {
+        return res.status(404).json({ message: "Transaction not found" });
+      }
+
+      if (req.user?.role !== "admin") {
+        const wallet = await storage.getWalletByUserId(req.user.id);
+        if (!wallet || wallet.id !== tx.walletId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+      }
+
+      const result = await handlePaystackVerify({
+        reference,
+        storage,
+        transaction: tx,
+      });
+
+      res.json({
+        reference,
+        ...result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/payments/paystack/webhook", async (req, res) => {
+    try {
+      const rawBody = req.body;
+      if (!Buffer.isBuffer(rawBody)) {
+        return res.status(400).json({ message: "Invalid payload" });
+      }
+
+      const signature = req.header("x-paystack-signature") || undefined;
+
+      if (!validatePaystackSignature(rawBody, signature)) {
+        // Security: reject unsigned requests to avoid spoofed credits.
+        return res.status(400).json({ message: "Invalid signature" });
+      }
+
+      const payload = JSON.parse(rawBody.toString("utf8"));
+      const reference = payload?.data?.reference;
+
+      if (reference) {
+        await verifyAndFinalizePaystackCharge(reference);
+      }
+
+      res.json({ received: true });
+    } catch (error) {
+      console.error("Paystack webhook error", error);
+      res.status(500).json({ message: "Webhook processing failed" });
     }
   });
 
@@ -285,6 +656,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
       res.json(user);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: reset a user's password (admin-only)
+  app.post("/api/admin/users/:id/reset-password", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      if (!id) return res.status(400).json({ message: "User id is required" });
+
+      const { password: providedPassword } = req.body || {};
+
+      // If password not provided, generate a secure temporary password
+      let plainPassword = providedPassword;
+      if (!plainPassword) {
+        // 12 bytes -> 24 hex chars (sufficiently random for temp password)
+        plainPassword = randomBytes(12).toString("hex");
+      }
+
+      const hashed = await hashPassword(plainPassword);
+      const user = await storage.updateUser(id, { password: hashed } as any);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      // Return the plaintext only if we generated it (so admins can communicate it)
+      const response: any = { success: true };
+      if (!providedPassword) response.tempPassword = plainPassword;
+
+      res.json(response);
     } catch (error) {
       next(error);
     }
@@ -537,6 +941,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
           cancelled: Number(srCancelled?.c ?? 0),
         },
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/admin/bridge/service-requests", async (req, res, next) => {
+    try {
+      const isAdmin =
+        req.isAuthenticated() &&
+        (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+
+      if (!isAdmin) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const {
+        status,
+        q,
+        estateId,
+        residentId,
+        providerId,
+      } = req.query as {
+        status?: string;
+        q?: string;
+        estateId?: string;
+        residentId?: string;
+        providerId?: string;
+      };
+
+      const all = await storage.getAllServiceRequests();
+
+      const filtered = all.filter((request) => {
+        let matches = true;
+
+        if (status && status !== "all") {
+          matches &&= request.status === status;
+        }
+
+        if (estateId) {
+          matches &&= (request as any).estateId === estateId;
+        }
+
+        if (residentId) {
+          matches &&= request.residentId === residentId;
+        }
+
+        if (providerId) {
+          matches &&= request.providerId === providerId;
+        }
+
+        if (q) {
+          const needle = q.toLowerCase();
+          const haystack = [
+            request.id,
+            request.description,
+            request.category,
+            request.residentId,
+            request.providerId,
+            (request as any).location,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          matches &&= haystack.includes(needle);
+        }
+
+        return matches;
+      });
+
+      res.json(filtered);
     } catch (error) {
       next(error);
     }

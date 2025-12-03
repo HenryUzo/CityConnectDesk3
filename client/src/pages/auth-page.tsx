@@ -24,7 +24,8 @@ type Company = {
 
 
 const residentRegisterSchema = z.object({
-  name: z.string().min(2, "Name must be at least 2 characters"),
+  firstName: z.string().min(2, "First name must be at least 2 characters"),
+  lastName: z.string().min(2, "Last name must be at least 2 characters"),
   email: z.string().email("Invalid email address"),
   phone: z.string().min(10, "Phone number must be at least 10 digits"),
   password: z.string().min(6, "Password must be at least 6 characters"),
@@ -36,7 +37,8 @@ const residentRegisterSchema = z.object({
 });
 
 const providerRegisterSchema = z.object({
-  name: z.string().min(2, "Name must be at least 2 characters"),
+  firstName: z.string().min(2, "First name must be at least 2 characters"),
+  lastName: z.string().min(2, "Last name must be at least 2 characters"),
   email: z.string().email("Invalid email address"),
   phone: z.string().min(10, "Phone number must be at least 10 digits"),
   password: z.string().min(6, "Password must be at least 6 characters"),
@@ -99,7 +101,8 @@ export default function AuthPage() {
   const residentRegisterForm = useForm({
     resolver: zodResolver(residentRegisterSchema),
     defaultValues: {
-      name: "",
+      firstName: "",
+      lastName: "",
       email: "",
       phone: "",
       password: "",
@@ -114,7 +117,8 @@ export default function AuthPage() {
   const providerRegisterForm = useForm({
     resolver: zodResolver(providerRegisterSchema),
     defaultValues: {
-      name: "",
+      firstName: "",
+      lastName: "",
       email: "",
       phone: "",
       password: "",
@@ -194,11 +198,16 @@ export default function AuthPage() {
   const onRegister = async (data: any) => {
     try {
       // Transform location data for submission
+      const fullName = [data.firstName, data.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
       const submitData = {
         ...data,
         role: userType,
         isApproved: userType === "resident", // Residents auto-approved, providers need approval
         username: data.email,
+        name: fullName || data.email || data.username || "",
       };
 
       // For residents, transform location object to string and add coordinates
@@ -384,25 +393,46 @@ export default function AuthPage() {
                     ) : (
                       <Form {...residentRegisterForm}>
                         <form onSubmit={residentRegisterForm.handleSubmit(onRegister)} className="space-y-4 sm:space-y-5 mt-4 sm:mt-6">
-                          <FormField
-                            control={residentRegisterForm.control}
-                            name="name"
-                            render={({ field }) => (
-                              <FormItem className="space-y-1.5 sm:space-y-2">
-                                <FormLabel className="text-sm sm:text-base font-medium">Full Name</FormLabel>
-                                <FormControl>
-                                  <Input 
-                                    {...field} 
-                                    autoComplete="name"
-                                    className="h-11 sm:h-12 text-base"
-                                    placeholder="Enter your full name"
-                                    data-testid="input-name" 
-                                  />
-                                </FormControl>
-                                <FormMessage className="text-xs sm:text-sm" />
-                              </FormItem>
-                            )}
-                          />
+                          <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                            <FormField
+                              control={residentRegisterForm.control}
+                              name="firstName"
+                              render={({ field }) => (
+                                <FormItem className="space-y-1.5 sm:space-y-2">
+                                  <FormLabel className="text-sm sm:text-base font-medium">First Name</FormLabel>
+                                  <FormControl>
+                                    <Input 
+                                      {...field} 
+                                      autoComplete="given-name"
+                                      className="h-11 sm:h-12 text-base"
+                                      placeholder="First name"
+                                      data-testid="input-first-name" 
+                                    />
+                                  </FormControl>
+                                  <FormMessage className="text-xs sm:text-sm" />
+                                </FormItem>
+                              )}
+                            />
+                            <FormField
+                              control={residentRegisterForm.control}
+                              name="lastName"
+                              render={({ field }) => (
+                                <FormItem className="space-y-1.5 sm:space-y-2">
+                                  <FormLabel className="text-sm sm:text-base font-medium">Last Name</FormLabel>
+                                  <FormControl>
+                                    <Input 
+                                      {...field} 
+                                      autoComplete="family-name"
+                                      className="h-11 sm:h-12 text-base"
+                                      placeholder="Last name"
+                                      data-testid="input-last-name" 
+                                    />
+                                  </FormControl>
+                                  <FormMessage className="text-xs sm:text-sm" />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
                           <FormField
                             control={residentRegisterForm.control}
                             name="email"
@@ -557,25 +587,46 @@ export default function AuthPage() {
                     ) : (
                       <Form {...providerRegisterForm}>
                         <form onSubmit={providerRegisterForm.handleSubmit(onRegister)} className="space-y-4 sm:space-y-5">
-                          <FormField
-                            control={providerRegisterForm.control}
-                            name="name"
-                            render={({ field }) => (
-                              <FormItem className="space-y-1.5 sm:space-y-2">
-                                <FormLabel className="text-sm sm:text-base font-medium">Full Name</FormLabel>
-                                <FormControl>
-                                  <Input 
-                                    {...field} 
-                                    autoComplete="name"
-                                    className="h-11 sm:h-12 text-base"
-                                    placeholder="Enter your full name"
-                                    data-testid="input-provider-name" 
-                                  />
-                                </FormControl>
-                                <FormMessage className="text-xs sm:text-sm" />
-                              </FormItem>
-                            )}
-                          />
+                          <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                            <FormField
+                              control={providerRegisterForm.control}
+                              name="firstName"
+                              render={({ field }) => (
+                                <FormItem className="space-y-1.5 sm:space-y-2">
+                                  <FormLabel className="text-sm sm:text-base font-medium">First Name</FormLabel>
+                                  <FormControl>
+                                    <Input 
+                                      {...field} 
+                                      autoComplete="given-name"
+                                      className="h-11 sm:h-12 text-base"
+                                      placeholder="First name"
+                                      data-testid="input-provider-first-name" 
+                                    />
+                                  </FormControl>
+                                  <FormMessage className="text-xs sm:text-sm" />
+                                </FormItem>
+                              )}
+                            />
+                            <FormField
+                              control={providerRegisterForm.control}
+                              name="lastName"
+                              render={({ field }) => (
+                                <FormItem className="space-y-1.5 sm:space-y-2">
+                                  <FormLabel className="text-sm sm:text-base font-medium">Last Name</FormLabel>
+                                  <FormControl>
+                                    <Input 
+                                      {...field} 
+                                      autoComplete="family-name"
+                                      className="h-11 sm:h-12 text-base"
+                                      placeholder="Last name"
+                                      data-testid="input-provider-last-name" 
+                                    />
+                                  </FormControl>
+                                  <FormMessage className="text-xs sm:text-sm" />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
                           <FormField
                             control={providerRegisterForm.control}
                             name="email"
@@ -663,7 +714,7 @@ export default function AuthPage() {
                                     </SelectTrigger>
                                     <SelectContent>
                                       {companies.length === 0 ? (
-                                        <SelectItem value="" disabled>
+                                        <SelectItem value="placeholder" disabled>
                                           {isCompaniesLoading
                                             ? "Loading companies..."
                                             : "No companies available"}

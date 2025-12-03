@@ -1,17 +1,12 @@
 import { useState } from "react";
-import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { 
-  ArrowLeft, 
   ClipboardList, 
-  LogOut, 
-  Wallet,
   Wrench,
   ShoppingBag,
   Clock,
@@ -19,6 +14,7 @@ import {
   Phone,
   X
 } from "lucide-react";
+import { ResidentLayout } from "@/components/resident/ResidentLayout";
 
 type StatusFilter = "all" | "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
 type ServiceRequest = {
@@ -35,8 +31,6 @@ type ServiceRequest = {
 };
 
 export default function TrackOrders() {
-  const { user, logoutMutation } = useAuth();
-  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
@@ -66,11 +60,6 @@ export default function TrackOrders() {
       });
     },
   });
-
-  const handleLogout = async () => {
-    await logoutMutation.mutateAsync();
-    setLocation("/");
-  };
 
   const filteredRequests = serviceRequests.filter((request: any) => {
     if (statusFilter === "all") return true;
@@ -109,46 +98,13 @@ export default function TrackOrders() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="bg-card shadow-sm border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <h1 className="text-xl font-bold text-primary">CityConnect</h1>
-              <span className="ml-3 text-sm text-muted-foreground">Track Orders</span>
-            </div>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center bg-muted rounded-lg px-3 py-1">
-                <Wallet className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Wallet:</span>
-                <span className="ml-2 font-semibold text-foreground">₦25,000</span>
-              </div>
-              <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="button-logout">
-                <LogOut className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6">
-          <Button 
-            variant="ghost" 
-            onClick={() => setLocation("/resident")} 
-            className="mb-4"
-            data-testid="button-back-dashboard"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Dashboard
-          </Button>
-          <div className="flex items-center mb-4">
-            <ClipboardList className="w-8 h-8 text-primary mr-3" />
-            <div>
-              <h1 className="text-3xl font-bold text-foreground">Track Your Requests</h1>
-              <p className="text-muted-foreground mt-2">Monitor the status of all your service requests</p>
-            </div>
+    <ResidentLayout title="Track Your Requests">
+      <div className="space-y-6">
+        <div className="flex items-center">
+          <ClipboardList className="w-8 h-8 text-primary mr-3" />
+          <div>
+            <h1 className="text-3xl font-bold text-foreground">Track Your Requests</h1>
+            <p className="text-muted-foreground mt-1">Monitor the status of all your service requests</p>
           </div>
         </div>
 
@@ -203,124 +159,77 @@ export default function TrackOrders() {
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <Badge className={getUrgencyColor(request.urgency)}>
-                        {request.urgency} Priority
-                      </Badge>
-                      <Badge className={getStatusColor(request.status)}>
-                        {request.status.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
-                      </Badge>
-                    </div>
-                  </div>
-                  
-                  <div className="mb-4">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                      <div>
-                        <span className="text-muted-foreground">Budget:</span>
-                        <span className="font-medium text-foreground ml-1">{request.budget}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Location:</span>
-                        <span className="font-medium text-foreground ml-1">{request.location}</span>
-                      </div>
-                      {request.providerId && (
-                        <div>
-                          <span className="text-muted-foreground">Provider:</span>
-                          <span className="font-medium text-foreground ml-1">Assigned</span>
-                        </div>
-                      )}
+                    <div className="flex items-center gap-2">
+                      <Badge className={`${getStatusColor(request.status)}`}>{request.status.replace('_', ' ')}</Badge>
+                      <Badge className={`${getUrgencyColor(request.urgency)}`}>{request.urgency}</Badge>
                     </div>
                   </div>
 
-                  {/* Progress Timeline */}
-                  {request.status !== 'cancelled' && (
-                    <div className="mb-4">
-                      <div className="flex items-center text-sm">
-                        {getProgressSteps(request.status).map((step, index) => (
-                          <div key={step.key} className="flex items-center">
-                            <div className={`flex items-center ${step.active ? 'text-green-600' : 'text-muted-foreground'}`}>
-                              <div className={`w-3 h-3 rounded-full mr-2 ${step.active ? 'bg-green-600' : 'bg-muted'}`}></div>
-                              <span>{step.label}</span>
-                            </div>
-                            {index < getProgressSteps(request.status).length - 1 && (
-                              <div className={`flex-1 h-px mx-2 ${step.active && getProgressSteps(request.status)[index + 1].active ? 'bg-green-600' : 'bg-muted'}`}></div>
-                            )}
+                  {/* Progress Tracker */}
+                  <div className="my-6">
+                    <div className="flex justify-between">
+                      {getProgressSteps(request.status).map((step, index) => (
+                        <div key={step.key} className="flex-1 flex flex-col items-center relative">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${step.active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
+                            {step.active ? <CheckCircle className="w-5 h-5" /> : <Clock className="w-5 h-5" />}
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {request.specialInstructions && (
-                    <div className="mb-4 p-3 bg-muted rounded-lg">
-                      <p className="text-sm text-foreground italic">
-                        <strong>Special Instructions:</strong> {request.specialInstructions}
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="flex justify-between items-center">
-                    <div className="text-sm text-muted-foreground">
-                      Request ID: #{request.id.slice(0, 8)}
-                    </div>
-                    <div className="flex gap-2">
-                      {request.providerId && request.status !== 'completed' && (
-                        <Button variant="outline" size="sm" data-testid={`button-contact-${request.id}`}>
-                          <Phone className="w-4 h-4 mr-1" />
-                          Contact Provider
-                        </Button>
-                      )}
-                      {request.status === 'pending' && (
-                        <Button 
-                          variant="destructive" 
-                          size="sm"
-                          onClick={() => cancelRequestMutation.mutate(request.id)}
-                          disabled={cancelRequestMutation.isPending}
-                          data-testid={`button-cancel-${request.id}`}
-                        >
-                          <X className="w-4 h-4 mr-1" />
-                          Cancel Request
-                        </Button>
-                      )}
-                      {request.status === 'completed' && (
-                        <Button variant="outline" size="sm" data-testid={`button-rate-${request.id}`}>
-                          Rate Service
-                        </Button>
-                      )}
+                          <p className={`mt-2 text-xs text-center ${step.active ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>{step.label}</p>
+                          {index < getProgressSteps(request.status).length - 1 && (
+                            <div className={`absolute top-4 left-1/2 w-full h-0.5 ${getProgressSteps(request.status)[index + 1].active ? 'bg-primary' : 'bg-muted'}`} />
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <div>
+                      <p className="font-semibold">Budget</p>
+                      <p className="text-muted-foreground">{request.budget}</p>
+                    </div>
+                    <div>
+                      <p className="font-semibold">Location</p>
+                      <p className="text-muted-foreground">{request.location}</p>
+                    </div>
+                    {request.providerId && (
+                      <div>
+                        <p className="font-semibold">Assigned Provider</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Phone className="w-4 h-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">{request.buyer?.name} ({request.buyer?.phone})</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {request.status === 'pending' && (
+                    <div className="mt-6 flex justify-end">
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => cancelRequestMutation.mutate(request.id)}
+                        disabled={cancelRequestMutation.isPending}
+                        data-testid={`button-cancel-${request.id}`}
+                      >
+                        <X className="w-4 h-4 mr-2" />
+                        Cancel Request
+                      </Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             ))
           ) : (
-            <Card>
-              <CardContent className="p-12 text-center">
-                <ClipboardList className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-                <h3 className="text-lg font-semibold text-foreground mb-2">
-                  {statusFilter === "all" ? "No service requests yet" : `No ${statusFilter.replace('_', ' ')} requests`}
-                </h3>
-                <p className="text-muted-foreground mb-6">
-                  {statusFilter === "all" 
-                    ? "Start by booking a service from your dashboard!" 
-                    : `You don't have any ${statusFilter.replace('_', ' ')} requests at the moment.`}
-                </p>
-                {statusFilter === "all" && (
-                  <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                    <Button onClick={() => setLocation("/book-artisan")} data-testid="button-book-artisan">
-                      <Wrench className="w-4 h-4 mr-2" />
-                      Book Artisan
-                    </Button>
-                    <Button variant="secondary" onClick={() => setLocation("/book-market-run")} data-testid="button-book-market-run">
-                      <ShoppingBag className="w-4 h-4 mr-2" />
-                      Request Market Run
-                    </Button>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <div className="text-center py-16">
+              <ClipboardList className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
+              <h3 className="text-lg font-medium text-foreground mb-2">No requests found</h3>
+              <p className="text-muted-foreground">
+                Your active and past service requests will appear here.
+              </p>
+            </div>
           )}
         </div>
       </div>
-    </div>
+    </ResidentLayout>
   );
 }

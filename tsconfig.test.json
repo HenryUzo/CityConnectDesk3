@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["tests/**/*.test.ts", "server/**/*.ts", "shared/**/*.ts"],
+  "exclude": ["node_modules", "dist"],
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"]
+  }
+}

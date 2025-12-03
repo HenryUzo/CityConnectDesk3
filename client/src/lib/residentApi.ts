@@ -1,7 +1,17 @@
 // client/src/lib/residentApi.ts
-const API_BASE =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
-  window.location.origin;
+function getResidentApiBase() {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  if (import.meta.env.DEV && origin) {
+    return origin;
+  }
+  return (
+    import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
+    origin ||
+    "http://localhost:5000"
+  );
+}
+
+const API_BASE = getResidentApiBase();
 
 type FetchInit = RequestInit & { json?: any; headers?: Record<string, string> };
 

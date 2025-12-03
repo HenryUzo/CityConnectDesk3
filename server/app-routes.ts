@@ -2,6 +2,7 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { storage } from "./storage";
+import { insertServiceRequestSchema } from "@shared/schema";
 
 const router = Router();
 
@@ -74,6 +75,86 @@ router.post("/logout", (req, res) => {
 });
 
 // GET my own requests
+const ResidentServiceRequestSchema = z.object({
+  category: z.string().min(1),
+  description: z.string().min(10),
+  urgency: z.enum(["low", "medium", "high", "emergency"]),
+  preferredTime: z.string().optional(),
+  specialInstructions: z.string().optional(),
+  budget: z.string().optional(),
+  location: z.string().optional(),
+  latitude: z.preprocess(
+    (value) => (typeof value === "string" && value.length ? Number(value) : value),
+    z.number().optional(),
+  ),
+  longitude: z.preprocess(
+    (value) => (typeof value === "string" && value.length ? Number(value) : value),
+    z.number().optional(),
+  ),
+});
+
+router.post("/service-requests", async (req: Request, res: Response) => {
+  try {
+    let { id, email } = whoami(req);
+
+    if (!id && !email && process.env.DEV_DEFAULT_RESIDENT_EMAIL) {
+      email = process.env.DEV_DEFAULT_RESIDENT_EMAIL.toLowerCase();
+      console.warn("[/service-requests] Using DEV_DEFAULT_RESIDENT_EMAIL fallback:", email);
+    }
+
+    if (!id && !email) {
+      return res.status(401).json({
+        error: "Resident identity missing. Use /api/app/dev-login or send x-user-id/x-user-email headers.",
+      });
+    }
+
+    if (!id && email) {
+      const users = await storage.getUsers();
+      const match = users.find((u: any) => String(u.email || "").toLowerCase() === email);
+      if (!match) {
+        return res.status(404).json({ error: "No Postgres user found for that email" });
+      }
+      id = match.id;
+    }
+
+    const parsed = ResidentServiceRequestSchema.parse(req.body || {});
+    const user = await storage.getUser(id!);
+    if (!user) {
+      return res.status(404).json({ error: "Resident not found" });
+    }
+
+    const payload = insertServiceRequestSchema.parse({
+      category: parsed.category,
+      description: parsed.description,
+      residentId: id!,
+      urgency: parsed.urgency,
+      budget: parsed.budget || "Not provided",
+      location: parsed.location || user.location || "Not specified",
+      latitude: parsed.latitude ?? null,
+      longitude: parsed.longitude ?? null,
+      preferredTime: parsed.preferredTime
+        ? new Date(parsed.preferredTime)
+        : null,
+      specialInstructions: parsed.specialInstructions || null,
+    });
+
+    const created = await storage.createServiceRequest(payload);
+    res.status(201).json(created);
+  } catch (error: any) {
+    if (error?.issues) {
+      return res.status(400).json({
+        error: "Validation error",
+        details: error.issues.map((issue: any) => ({
+          path: issue.path.join("."),
+          message: issue.message,
+        })),
+      });
+    }
+    console.error("POST /service-requests error", error);
+    res.status(500).json({ error: error.message || "Failed to create service request" });
+  }
+});
+
 router.get("/service-requests/mine", async (req: Request, res: Response) => {
   try {
     let { id, email } = whoami(req);

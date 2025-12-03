@@ -196,6 +196,8 @@ export const categories = pgTable("categories", {
   estateId: varchar("estate_id").references(() => estates.id),
   name: text("name").notNull(),
   key: text("key").notNull(),
+  // Optional emoji for category display (e.g., 🔌)
+  emoji: text("emoji"),
   description: text("description"),
   icon: text("icon"),
   isActive: boolean("is_active").notNull().default(true),
@@ -421,7 +423,11 @@ export const serviceRequests = pgTable("service_requests", {
   specialInstructions: text("special_instructions"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-  // ADD these fields inside serviceRequests table definition
+  // Admin advice and inspection fields
+  adviceMessage: text("advice_message"),
+  inspectionDates: text("inspection_dates").array(), // Array of date strings
+  inspectionTimes: text("inspection_times").array(), // Array of time strings
+  // Other admin fields
   adminNotes: text("admin_notes"),
   assignedAt: timestamp("assigned_at"),
   closedAt: timestamp("closed_at"),
@@ -452,6 +458,10 @@ export const transactions = pgTable("transactions", {
   id: varchar("id")
     .primaryKey()
     .default(sql`gen_random_uuid()`),
+  reference: text("reference")
+    .notNull()
+    .unique(),
+  gateway: text("gateway").notNull().default("paystack"),
   walletId: varchar("wallet_id")
     .notNull()
     .references(() => wallets.id),
@@ -462,6 +472,7 @@ export const transactions = pgTable("transactions", {
   type: transactionTypeEnum("type").notNull(),
   status: transactionStatusEnum("status").notNull().default("pending"),
   description: text("description"),
+  meta: jsonb("meta").notNull().default("{}"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

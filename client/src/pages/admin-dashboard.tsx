@@ -1,26 +1,24 @@
-import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader } from "@/components/ui/card"; // removed CardTitle
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { adminApiRequest } from "@/lib/adminApi"; // add this import
-
-import { 
-  LogOut, 
-  Users, 
-  UserCheck, 
-  ClipboardList, 
+import { adminApiRequest } from "@/lib/adminApi";
+import {
+  Users,
+  UserCheck,
+  ClipboardList,
   AlertTriangle,
   Search,
   Eye,
   Ban,
   CheckCircle,
-  X
+  X,
 } from "lucide-react";
+import { AdminLayout } from "@/components/admin/AdminLayout";
 
 // ---------- Interfaces ----------
 interface Stats {
@@ -51,16 +49,32 @@ interface ServiceRequest {
   status: "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
   createdAt: string;
   providerId?: string;
+  residentId?: string;
+  description?: string;
+  urgency?: string;
+  location?: string;
+  scheduledDate?: string;
+  inspectionDates?: string[];
+  adviceMessage?: string;
+  resident?: {
+    name: string;
+    email: string;
+    phone: string;
+    location?: string;
+  };
+  provider?: {
+    name:string;
+    email: string;
+    phone: string;
+  };
 }
 
 export default function AdminDashboard() {
-  const { logoutMutation } = useAuth();
   const { toast } = useToast();
 
   // Stats
   const { data: stats } = useQuery<Stats>({
     queryKey: ["/api/admin/dashboard/stats"],
-    // (optional) you can leave the default queryFn; the header fix above will attach JWT+estate id
   });
 
   // All users (auto-refresh)
@@ -73,20 +87,21 @@ export default function AdminDashboard() {
     refetchInterval: 5000,
   });
 
-
   // All requests (auto-refresh)
   const { data: allRequests = [] } = useQuery<ServiceRequest[]>({
     queryKey: [`${import.meta.env.VITE_API_URL}/api/service-requests`],
+    queryFn: async () => {
+      const r = await apiRequest("GET", "/api/service-requests");
+      return Array.isArray(r) ? r : [];
+    },
     refetchInterval: 5000,
   });
 
   // Pending providers (auto-refresh)
-    const { data: pendingProviders = [] } = useQuery<User[]>({
+  const { data: pendingProviders = [] } = useQuery<User[]>({
     queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/providers/pending`],
     refetchInterval: 5000,
   });
-
-
 
   const approveProviderMutation = useMutation({
     mutationFn: async (providerId: string) => {
@@ -100,61 +115,16 @@ export default function AdminDashboard() {
         description: "The provider has been successfully approved!",
       });
     },
-    onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
   });
-
-  const handleLogout = async () => {
-    await logoutMutation.mutateAsync();
-  };
 
   const residents = allUsers.filter((u: any) => u.role === "resident");
   const providers = allUsers.filter((u: any) => u.role === "provider");
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'pending': return 'bg-gray-100 text-gray-800';
-      case 'assigned': return 'bg-blue-100 text-blue-800';
-      case 'in_progress': return 'bg-yellow-100 text-yellow-800';
-      case 'completed': return 'bg-green-100 text-green-800';
-      case 'cancelled': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
-
   return (
-    <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="bg-card shadow-sm border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <h1 className="text-xl font-bold text-primary">CityConnect</h1>
-              <span className="ml-3 text-sm text-muted-foreground">Admin Dashboard</span>
-            </div>
-            <div className="flex items-center space-x-4">
-              <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="button-logout">
-                <LogOut className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <h2 className="text-2xl font-bold text-foreground mb-2">Platform Overview</h2>
-          <p className="text-muted-foreground">Monitor and manage your CityConnect platform</p>
-        </div>
-
+    <AdminLayout title="Platform Overview">
+      <div className="space-y-8">
         {/* Stats Cards */}
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
@@ -168,7 +138,7 @@ export default function AdminDashboard() {
                   <Users className="w-6 h-6 text-primary" />
                 </div>
               </div>
-              <p className="text-xs text-secondary mt-2">
+              <p className="text-xs text-muted-foreground mt-2">
                 {residents.length} residents, {providers.length} providers
               </p>
             </CardContent>
@@ -187,7 +157,7 @@ export default function AdminDashboard() {
                   <UserCheck className="w-6 h-6 text-secondary" />
                 </div>
               </div>
-              <p className="text-xs text-accent mt-2">
+              <p className="text-xs text-muted-foreground mt-2">
                 {pendingProviders.length} pending approval
               </p>
             </CardContent>
@@ -206,7 +176,7 @@ export default function AdminDashboard() {
                   <ClipboardList className="w-6 h-6 text-accent" />
                 </div>
               </div>
-              <p className="text-xs text-secondary mt-2">
+              <p className="text-xs text-muted-foreground mt-2">
                 {allRequests.filter((r: any) => ['pending', 'assigned', 'in_progress'].includes(r.status)).length} active
               </p>
             </CardContent>
@@ -242,9 +212,6 @@ export default function AdminDashboard() {
                 </TabsTrigger>
                 <TabsTrigger value="providers" data-testid="tab-providers">
                   Providers ({providers.length})
-                </TabsTrigger>
-                <TabsTrigger value="requests" data-testid="tab-requests">
-                  Requests ({allRequests.length})
                 </TabsTrigger>
               </TabsList>
             </CardHeader>
@@ -411,102 +378,27 @@ export default function AdminDashboard() {
                           <div>
                             <h4 className="font-semibold text-foreground">{provider.name}</h4>
                             <p className="text-sm text-muted-foreground">
-                              {provider.serviceCategory?.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())} • {provider.email}
-                            </p>
-                            <p className="text-sm text-muted-foreground">
-                              {provider.phone} • Joined: {new Date(provider.createdAt).toLocaleDateString()}
+                              {provider.serviceCategory?.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
                             </p>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <Badge className={provider.isApproved ? "bg-green-100 text-green-800" : "bg-orange-100 text-orange-800"}>
+                        <div className="flex items-center space-x-2">
+                          <Badge className={provider.isApproved ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"}>
                             {provider.isApproved ? 'Approved' : 'Pending'}
                           </Badge>
-                          <div className="flex gap-2 mt-2">
-                            <Button variant="ghost" size="sm">
-                              <Eye className="w-4 h-4" />
-                            </Button>
-                            <Button variant="ghost" size="sm">
-                              <Ban className="w-4 h-4" />
-                            </Button>
-                          </div>
+                          <Badge className={provider.isActive ? "bg-secondary/10 text-secondary" : "bg-red-100 text-red-800"}>
+                            {provider.isActive ? 'Active' : 'Inactive'}
+                          </Badge>
                         </div>
-                      </div>
-                      <div className="mt-3 flex items-center text-sm text-muted-foreground">
-                        <span className="mr-4">Rating: <span className="text-foreground font-medium">{provider.rating || 'N/A'}</span></span>
-                        <span className="mr-4">Experience: <span className="text-foreground font-medium">{provider.experience || 0} years</span></span>
                       </div>
                     </div>
                   ))}
                 </div>
               </CardContent>
             </TabsContent>
-
-            <TabsContent value="requests">
-              <CardContent>
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-semibold text-foreground">All Service Requests</h3>
-                  <select className="px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring bg-background">
-                    <option>All Status</option>
-                    <option>Pending</option>
-                    <option>Assigned</option>
-                    <option>In Progress</option>
-                    <option>Completed</option>
-                    <option>Cancelled</option>
-                  </select>
-                </div>
-                
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-border">
-                        <th className="text-left py-3 px-4 font-medium text-foreground">Request ID</th>
-                        <th className="text-left py-3 px-4 font-medium text-foreground">Service</th>
-                        <th className="text-left py-3 px-4 font-medium text-foreground">Resident</th>
-                        <th className="text-left py-3 px-4 font-medium text-foreground">Provider</th>
-                        <th className="text-left py-3 px-4 font-medium text-foreground">Status</th>
-                        <th className="text-left py-3 px-4 font-medium text-foreground">Date</th>
-                        <th className="text-left py-3 px-4 font-medium text-foreground">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {allRequests.map((request: any) => (
-                        <tr key={request.id} className="border-b border-border hover:bg-background" data-testid={`request-${request.id}`}>
-                          <td className="py-3 px-4 text-foreground font-mono text-sm">
-                            #{request.id.slice(0, 8)}
-                          </td>
-                          <td className="py-3 px-4 text-foreground">
-                            {request.category.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
-                          </td>
-                          <td className="py-3 px-4 text-muted-foreground">
-                            Resident User
-                          </td>
-                          <td className="py-3 px-4 text-muted-foreground">
-                            {request.providerId ? 'Assigned' : 'Unassigned'}
-                          </td>
-                          <td className="py-3 px-4">
-                            <Badge className={getStatusColor(request.status)}>
-                              {request.status.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
-                            </Badge>
-                          </td>
-                          <td className="py-3 px-4 text-muted-foreground">
-                            {new Date(request.createdAt).toLocaleDateString()}
-                          </td>
-                          <td className="py-3 px-4">
-                            <Button variant="ghost" size="sm">
-                              <Eye className="w-4 h-4" />
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </TabsContent>
           </Tabs>
         </Card>
       </div>
-    </div>
+    </AdminLayout>
   );
 }
