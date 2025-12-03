@@ -23,7 +23,7 @@ export default function PaymentConfirmation() {
 
     (async () => {
       try {
-        const res = await residentFetch<{ status: string }>(`/api/paystack/verify?reference=${encodeURIComponent(ref)}`);
+        const res = await residentFetch<{ status: string; message?: string }>(`/api/paystack/verify?reference=${encodeURIComponent(ref)}`);
         if (res?.status === "success") {
           setStatus("success");
           setFailureMessage(null);

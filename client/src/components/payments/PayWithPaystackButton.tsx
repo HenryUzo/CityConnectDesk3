@@ -1,28 +1,12 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ensurePaystackScript } from "@/lib/paystack";
 
 type PayWithPaystackButtonProps = {
   email: string;
   amountInNaira: number;
   onPaymentSuccess?: (data: unknown) => void;
 };
-
-declare global {
-  interface Window {
-    PaystackPop?: {
-      setup: (config: {
-        key: string;
-        email: string;
-        amount: number;
-        ref: string;
-        callback: () => void;
-        onClose?: () => void;
-      }) => {
-        openIframe: () => void;
-      };
-    };
-  }
-}
 
 export function PayWithPaystackButton({
   email,

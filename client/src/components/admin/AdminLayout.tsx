@@ -26,7 +26,7 @@ export function AdminLayout({ children, title }: AdminLayoutProps) {
     { href: "/admin/settings", icon: Settings, label: "Settings" },
   ];
 
-  if (user?.isSuperAdmin) {
+  if (user?.globalRole === 'super_admin') {
     navLinks.push({ href: "/admin-super", icon: Building, label: "Super Admin" });
   }
 

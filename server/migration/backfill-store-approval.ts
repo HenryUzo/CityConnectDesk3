@@ -32,7 +32,7 @@ async function backfillStoreApproval() {
     }
 
     // Step 2: Auto-approve all stores that are still pending
-    const pendingStores = existingStores.filter((s) => s.approvalStatus === "pending");
+    const pendingStores = existingStores.filter((s: any) => s.approvalStatus === "pending");
 
     if (pendingStores.length > 0) {
       console.log(`\nAuto-approving ${pendingStores.length} pending stores...`);
@@ -54,7 +54,7 @@ async function backfillStoreApproval() {
     }
 
     // Step 3: Backfill store_estates for stores with estateId
-    const storesWithEstate = existingStores.filter((s) => s.estateId !== null);
+    const storesWithEstate = existingStores.filter((s: any) => s.estateId !== null);
 
     if (storesWithEstate.length > 0) {
       console.log(`\nBackfilling store_estates for ${storesWithEstate.length} stores...`);

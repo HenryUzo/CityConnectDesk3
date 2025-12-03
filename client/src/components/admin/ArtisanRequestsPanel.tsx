@@ -99,20 +99,20 @@ export default function ArtisanRequestsPanel({
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <span className="text-xs text-muted-foreground">Estate</span>
-            <Select
-              value={selectedEstateId ?? ""}
-              onValueChange={(value) => onSelectEstate(value || null)}
-              className="w-full sm:w-64"
-            >
-              <SelectTrigger data-testid="select-requests-estate">
-                <SelectValue placeholder="Select an estate" />
-              </SelectTrigger>
-              <SelectContent>
-                {estateOptions.length > 0 ? (
-                  estateOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
+            <div className="w-full sm:w-64">
+              <Select
+                value={selectedEstateId ?? ""}
+                onValueChange={(value) => onSelectEstate(value || null)}
+              >
+                <SelectTrigger data-testid="select-requests-estate">
+                  <SelectValue placeholder="Select an estate" />
+                </SelectTrigger>
+                <SelectContent>
+                  {estateOptions.length > 0 ? (
+                    estateOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
                   ))
                 ) : (
                   <SelectItem value="none" disabled>
@@ -121,6 +121,7 @@ export default function ArtisanRequestsPanel({
                 )}
               </SelectContent>
             </Select>
+            </div>
           </div>
           <Badge variant="outline" className="text-xs text-muted-foreground">
             {selectedEstateId

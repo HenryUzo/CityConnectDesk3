@@ -38,6 +38,7 @@ import {
   createPendingPaystackTransaction,
   verifyAndFinalizePaystackCharge,
 } from "./payments";
+import { verifyPaystackTransaction } from "./paystack";
 import { validatePaystackSignature } from "./paystack";
 import { initializePaystackTransaction } from "./paystackService";
 import {

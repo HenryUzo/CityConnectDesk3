@@ -215,10 +215,10 @@ async function ensureTransactionsColumns() {
           END IF;
         END$$;
       `);
-    } catch (e) {
+    } catch (e: any) {
       console.warn("Could not set transactions.reference NOT NULL or add unique constraint:", e?.message || e);
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error("ensureTransactionsColumns failed:", err?.message || err);
   }
 }
