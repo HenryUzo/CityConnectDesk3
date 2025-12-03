@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Resident {
+  id           String   @id @default(uuid())
+  fullName     String
+  email        String   @unique
+  phoneNumber  String?
+  estateId     String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  orders       Order[]
+}
+
+model Service {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  orders      Order[]
+}
+
+model Vendor {
+  id           String   @id @default(uuid())
+  name         String
+  serviceId    String
+  estateId     String
+  rating       Float?   @default(0)
+  availability Boolean  @default(true)
+  orders       Order[]
+}
+
+model Order {
+  id          String   @id @default(uuid())
+  residentId  String
+  vendorId    String
+  serviceId   String
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  resident Resident @relation(fields: [residentId], references: [id])
+  vendor   Vendor   @relation(fields: [vendorId], references: [id])
+  service  Service  @relation(fields: [serviceId], references: [id])
+}
