@@ -76,6 +76,9 @@ export interface OrderStats {
   avgOrderValue: number;
 }
 
+// AdminOrder extends Order but overrides 'total' type from string to number
+// because Drizzle's decimal type returns string, but we convert it to number
+// for calculation and display purposes in the admin interface
 export interface AdminOrder extends Omit<Order, 'total'> {
   _id: string;
   buyer: OrderUserSummary | null;
