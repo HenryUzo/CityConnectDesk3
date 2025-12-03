@@ -11,6 +11,7 @@ import {
   revokeAllUserRefreshTokens 
 } from "./refresh-token-service";
 import { requireAuth } from "./auth-middleware";
+import { authRateLimiter } from "./rate-limiter";
 
 const scryptAsync = promisify(scrypt);
 
@@ -32,7 +33,7 @@ export function setupJWTAuth(app: Express) {
    * POST /api/auth/register
    * Register a new user and return JWT tokens
    */
-  app.post("/api/auth/register", async (req: Request, res: Response) => {
+  app.post("/api/auth/register", authRateLimiter, async (req: Request, res: Response) => {
     try {
       const schema = z.object({
         username: z.string().min(3),
@@ -99,7 +100,7 @@ export function setupJWTAuth(app: Express) {
    * POST /api/auth/login
    * Login with email/password or access code and return JWT tokens
    */
-  app.post("/api/auth/login", async (req: Request, res: Response) => {
+  app.post("/api/auth/login", authRateLimiter, async (req: Request, res: Response) => {
     try {
       const { username, password } = req.body;
 
@@ -167,7 +168,7 @@ export function setupJWTAuth(app: Express) {
    * POST /api/auth/refresh
    * Refresh access token using refresh token
    */
-  app.post("/api/auth/refresh", async (req: Request, res: Response) => {
+  app.post("/api/auth/refresh", authRateLimiter, async (req: Request, res: Response) => {
     try {
       const { refreshToken } = req.body;
 
@@ -230,7 +231,7 @@ export function setupJWTAuth(app: Express) {
    * POST /api/auth/logout
    * Logout and revoke refresh token
    */
-  app.post("/api/auth/logout", async (req: Request, res: Response) => {
+  app.post("/api/auth/logout", authRateLimiter, async (req: Request, res: Response) => {
     try {
       const { refreshToken } = req.body;
 
