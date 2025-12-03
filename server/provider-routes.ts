@@ -23,7 +23,11 @@ router.use(requireProvider);
 const verifyStoreAccess = async (req: any, res: any, next: any) => {
   try {
     const storeId = req.params.id || req.params.storeId;
-    const providerId = req.auth?.userId; // Use JWT auth
+    const providerId = req.auth?.userId;
+
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
 
     const [membership] = await db.select()
       .from(storeMembers)
@@ -49,7 +53,11 @@ const verifyStoreAccess = async (req: any, res: any, next: any) => {
 // GET /api/provider/stores - Get all stores I'm a member of
 router.get("/stores", async (req: any, res) => {
   try {
-    const providerId = req.auth?.userId; // Use JWT auth
+    const providerId = req.auth?.userId;
+
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
 
     const memberships = await db.select({
       membership: storeMembers,
@@ -80,7 +88,11 @@ router.get("/stores", async (req: any, res) => {
 // POST /api/provider/stores - Create a new store (self-registration)
 router.post("/stores", async (req: any, res) => {
   try {
-    const providerId = req.auth?.userId; // Use JWT auth
+    const providerId = req.auth?.userId;
+    
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
     
     // Validation schema for store creation (no estate ID - will be allocated by admin)
     const createStoreSchema = z.object({
@@ -370,7 +382,11 @@ router.delete("/stores/:storeId/items/:itemId", verifyStoreAccess, async (req: a
 // POST /api/provider/company-registration - Register new company profile
 router.post("/company-registration", async (req: any, res) => {
   try {
-    const providerId = req.auth?.userId; // Use JWT auth
+    const providerId = req.auth?.userId;
+
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
 
     const createCompanySchema = z.object({
       name: z.string().min(2, "Business name is required"),

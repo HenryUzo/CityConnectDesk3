@@ -74,7 +74,10 @@ export async function revokeAllUserRefreshTokens(userId: string) {
 }
 
 /**
- * Clean up expired tokens (should be run periodically)
+ * Clean up expired refresh tokens from the database
+ * This should be run periodically (e.g., via cron job or scheduled task)
+ * 
+ * @returns Promise<void> The number of deleted tokens is not returned to avoid exposing database internals
  */
 export async function cleanupExpiredTokens() {
   const now = new Date();

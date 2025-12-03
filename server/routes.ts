@@ -642,7 +642,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update user
-  // Update user
   app.patch("/api/admin/users/:id", requireAdmin, async (req, res, next) => {
     try {
       const { id } = req.params;

@@ -1,7 +1,12 @@
 import jwt from "jsonwebtoken";
 import { randomBytes } from "crypto";
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev-jwt-secret";
+// Ensure JWT_SECRET is set at module load time
+if (!process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
+
+const JWT_SECRET: string = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = "15m"; // Access token expires in 15 minutes
 const REFRESH_TOKEN_EXPIRES_IN = "7d"; // Refresh token expires in 7 days
 

@@ -10,6 +10,7 @@ import {
   revokeRefreshToken,
   revokeAllUserRefreshTokens 
 } from "./refresh-token-service";
+import { requireAuth } from "./auth-middleware";
 
 const scryptAsync = promisify(scrypt);
 
@@ -270,14 +271,8 @@ export function setupJWTAuth(app: Express) {
    * GET /api/auth/me
    * Get current user information from JWT token
    */
-  app.get("/api/auth/me", async (req: Request, res: Response) => {
-    // This will be handled by the auth middleware
-    // For now, return 401 if not authenticated
-    if (!req.auth) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-
-    const user = await storage.getUser(req.auth.userId);
+  app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUser(req.auth!.userId);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
