@@ -2,6 +2,9 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
 import { setupAuth } from "./auth";
+import { setupJWTAuth } from "./jwt-auth";
+import { authenticateJWT, requireAuth, requireAdmin, requireProvider, requireResident } from "./auth-middleware";
+import { compatAuth } from "./auth-compat";
 import { storage } from "./storage";
 import { db } from "./db";
 import {
@@ -74,8 +77,19 @@ const CreateServiceRequest = insertServiceRequestSchema.extend({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup authentication routes
+  // Setup JWT authentication routes (new unified system)
+  setupJWTAuth(app);
+  
+  // Apply JWT authentication middleware globally to API routes
+  // This sets req.auth if a valid JWT token is present
+  app.use("/api", authenticateJWT);
+  
+  // Keep legacy session-based auth for backward compatibility during migration
+  // This will be removed after full migration
   setupAuth(app);
+  
+  // Compatibility middleware to support both old and new auth
+  app.use("/api", compatAuth);
 
   // Debug endpoint (DEV ONLY): check Paystack secret key loading
   app.get("/api/debug/paystack-key", (req, res) => {
