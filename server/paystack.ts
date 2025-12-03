@@ -28,6 +28,8 @@ type PaystackVerifyResponse = {
   };
 };
 
+export type { PaystackVerifyResponse };
+
 export async function verifyPaystackTransaction(
   reference: string,
 ): Promise<PaystackVerifyResponse> {

@@ -62,7 +62,7 @@ export default function ProviderCompanyRegistration() {
   };
 
   const onSubmit = async (values: CompanyForm) => {
-    if (registerCompanyMutation.isLoading) return;
+    if (registerCompanyMutation.isPending) return;
     await registerCompanyMutation.mutateAsync(values);
   };
 
@@ -121,12 +121,12 @@ export default function ProviderCompanyRegistration() {
                     size="lg"
                     className="w-full lg:w-auto"
                     disabled={
-                      registerCompanyMutation.isLoading ||
+                      registerCompanyMutation.isPending ||
                       isSubmitting ||
                       !isCoreFieldsComplete
                     }
                   >
-                    {registerCompanyMutation.isLoading
+                    {registerCompanyMutation.isPending
                       ? "Saving..."
                       : "Submit for review"}
                   </Button>

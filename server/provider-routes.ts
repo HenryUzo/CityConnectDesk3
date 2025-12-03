@@ -78,7 +78,7 @@ router.get("/stores", requireProvider, async (req: ProviderRequest, res) => {
       )
     );
 
-    res.json(memberships.map(m => ({
+    res.json(memberships.map((m: any) => ({
       ...m.store,
       membership: {
         role: m.membership.role,

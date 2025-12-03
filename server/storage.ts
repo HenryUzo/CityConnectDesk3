@@ -76,7 +76,7 @@ export interface OrderStats {
   avgOrderValue: number;
 }
 
-export interface AdminOrder extends Order {
+export interface AdminOrder extends Omit<Order, 'total'> {
   _id: string;
   buyer: OrderUserSummary | null;
   vendor: OrderUserSummary | null;
@@ -830,7 +830,7 @@ export class DatabaseStorage implements IStorage {
           );
         const searchConditions: any[] = [sql`${orders.id} ILIKE ${likeTerm}`];
         if (matchingUsers.length) {
-          const userIds = matchingUsers.map((u) => u.id);
+          const userIds = matchingUsers.map((u: any) => u.id);
           searchConditions.push(inArray(orders.buyerId, userIds));
           searchConditions.push(inArray(orders.vendorId, userIds));
         }
@@ -886,7 +886,7 @@ export class DatabaseStorage implements IStorage {
     const userIds = Array.from(
       new Set(
         orderRows
-          .flatMap((orderRow) => [orderRow.buyerId, orderRow.vendorId])
+          .flatMap((orderRow: any) => [orderRow.buyerId, orderRow.vendorId])
           .filter(Boolean),
       ),
     );
@@ -899,11 +899,11 @@ export class DatabaseStorage implements IStorage {
             phone: users.phone,
           })
           .from(users)
-          .where(inArray(users.id, userIds))
+          .where(inArray(users.id, userIds as string[]))
       : [];
-    const userMap = new Map(userRows.map((userRow) => [userRow.id, userRow]));
+    const userMap = new Map(userRows.map((userRow: any) => [userRow.id, userRow]));
 
-    const formattedOrders: AdminOrder[] = orderRows.map((orderRow) => ({
+    const formattedOrders: AdminOrder[] = orderRows.map((orderRow: any) => ({
       ...orderRow,
       _id: orderRow.id,
       total: Number(orderRow.total),
