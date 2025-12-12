@@ -2,11 +2,9 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
 import { setupAuth } from "./auth";
-import { setupJWTAuth } from "./jwt-auth";
-import { authenticateJWT, requireAuth, requireAdmin, requireProvider, requireResident } from "./auth-middleware";
-import { compatAuth } from "./auth-compat";
 import { storage } from "./storage";
 import { db } from "./db";
+import { prisma } from "./lib/prisma";
 import {
   users,
   serviceRequests,
@@ -41,7 +39,6 @@ import {
   createPendingPaystackTransaction,
   verifyAndFinalizePaystackCharge,
 } from "./payments";
-import { verifyPaystackTransaction } from "./paystack";
 import { validatePaystackSignature } from "./paystack";
 import { initializePaystackTransaction } from "./paystackService";
 import {
@@ -76,20 +73,44 @@ const CreateServiceRequest = insertServiceRequestSchema.extend({
     .transform((v) => (typeof v === "number" ? String(v) : v)),
 });
 
+const SERVICE_REQUEST_STATUSES = [
+  "PENDING",
+  "IN_REVIEW",
+  "UNDER_REVIEW",
+  "ASSIGNED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "CANCELLED",
+  "REJECTED",
+];
+
+async function findEstateMembership(userId: string, estateId: string) {
+  return prisma.membership.findFirst({
+    where: {
+      userId,
+      estateId,
+      status: {
+        not: "REJECTED",
+      },
+    },
+  });
+}
+
+function formatEstateFromMembership(membership: { estateId: string; estate?: { id: string; name: string; slug: string } | null; role: string; status: string; isPrimary: boolean }) {
+  const estate = membership.estate;
+  return {
+    id: estate?.id ?? membership.estateId,
+    slug: estate?.slug ?? "",
+    name: estate?.name ?? "Untitled estate",
+    role: membership.role,
+    status: membership.status,
+    isPrimary: membership.isPrimary,
+  };
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup JWT authentication routes (new unified system)
-  setupJWTAuth(app);
-  
-  // Apply JWT authentication middleware globally to API routes
-  // This sets req.auth if a valid JWT token is present
-  app.use("/api", authenticateJWT);
-  
-  // Keep legacy session-based auth for backward compatibility during migration
-  // This will be removed after full migration
+  // Setup authentication routes
   setupAuth(app);
-  
-  // Compatibility middleware to support both old and new auth
-  app.use("/api", compatAuth);
 
   // Debug endpoint (DEV ONLY): check Paystack secret key loading
   app.get("/api/debug/paystack-key", (req, res) => {
@@ -266,6 +287,175 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // TODO: Send notification to the assigned provider
       res.json({ success: true, message: "Provider assigned successfully", request: serviceRequest });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Legacy-friendly Prisma-backed endpoints for the new requests view
+  app.get("/api/my-estates", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const memberships = await prisma.membership.findMany({
+        where: {
+          userId: req.user.id,
+          status: {
+            not: "REJECTED",
+          },
+        },
+        include: {
+          estate: true,
+        },
+        orderBy: {
+          isPrimary: "desc",
+        },
+      });
+
+      res.json(memberships.map(formatEstateFromMembership));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/estates/:estateId/requests", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { estateId } = req.params;
+      if (!estateId) {
+        return res.status(400).json({ message: "Estate ID is required" });
+      }
+
+      const membership = await findEstateMembership(req.user.id, estateId);
+      if (!membership && req.user?.role !== "admin") {
+        return res.status(403).json({ message: "Not a member of that estate" });
+      }
+
+      const requests = await prisma.serviceRequest.findMany({
+        where: {
+          estateId,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      });
+
+      res.json(
+        requests.map((request) => ({
+          ...request,
+          status: request.status?.toUpperCase?.() ?? request.status,
+        }))
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/estates/:estateId/requests", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated() || req.user?.role !== "resident") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { estateId } = req.params;
+      if (!estateId) {
+        return res.status(400).json({ message: "Estate ID is required" });
+      }
+
+      const membership = await findEstateMembership(req.user.id, estateId);
+      if (!membership) {
+        return res.status(403).json({ message: "Not a member of that estate" });
+      }
+
+      const schema = z.object({
+        title: z.string().optional(),
+        description: z.string().min(1, "Description is required"),
+        serviceCategoryId: z.string().optional().nullable(),
+        serviceId: z.string().optional().nullable(),
+        preferredStart: z.string().optional().nullable(),
+        preferredEnd: z.string().optional().nullable(),
+        location: z.string().optional().nullable(),
+      });
+
+      const payload = schema.parse(req.body || {});
+
+      const newRequest = await prisma.serviceRequest.create({
+        data: {
+          residentId: req.user.id,
+          estateId,
+          title: payload.title ?? null,
+          description: payload.description,
+          serviceCategoryId: payload.serviceCategoryId ?? null,
+          serviceId: payload.serviceId ?? null,
+          preferredStart: payload.preferredStart ? new Date(payload.preferredStart) : null,
+          preferredEnd: payload.preferredEnd ? new Date(payload.preferredEnd) : null,
+          location: payload.location ?? null,
+          status: "PENDING",
+        },
+      });
+
+      res.status(201).json({
+        ...newRequest,
+        status: newRequest.status.toUpperCase(),
+      });
+    } catch (error: any) {
+      if (error?.issues) {
+        return res.status(400).json({
+          error: "Validation error",
+          details: error.issues.map((i: any) => ({"path": i.path.join("."), "message": i.message, "expected": i.expected, "received": i.received, "code": i.code })),
+        });
+      }
+      next(error);
+    }
+  });
+
+  app.patch("/api/requests/:id/status", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const { status } = z.object({ status: z.string().min(1) }).parse(req.body || {});
+      const normalized = status.toUpperCase();
+
+      if (!SERVICE_REQUEST_STATUSES.includes(normalized)) {
+        return res.status(400).json({ message: "Invalid status" });
+      }
+
+      const existing = await prisma.serviceRequest.findUnique({
+        where: { id },
+        select: { estateId: true },
+      });
+
+      if (!existing) {
+        return res.status(404).json({ message: "Request not found" });
+      }
+
+      if (req.user?.role !== "admin") {
+        if (!existing.estateId) {
+          return res.status(403).json({ message: "Cannot update requests without an estate" });
+        }
+        const membership = await findEstateMembership(req.user.id, existing.estateId);
+        if (!membership) {
+          return res.status(403).json({ message: "Not a member of that estate" });
+        }
+      }
+
+      const updated = await prisma.serviceRequest.update({
+        where: { id },
+        data: { status: normalized },
+      });
+
+      res.json({
+        ...updated,
+        status: updated.status.toUpperCase(),
+      });
     } catch (error) {
       next(error);
     }
@@ -575,9 +765,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin Routes - Using new RBAC middleware
-  app.get("/api/admin/users", requireAdmin, async (req, res, next) => {
+  // Admin Routes
+  app.get("/api/admin/users", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { role } = req.query;
       const users = await storage.getUsers(role as string);
       res.json(users);
@@ -587,8 +781,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Unified list with search + role filter (used by admin dashboard)
-  app.get("/api/admin/users/all", requireAdmin, async (req, res, next) => {
+  app.get("/api/admin/users/all", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { role, search } = req.query as { role?: string; search?: string };
       const list = await storage.getUsers(role);
       const filtered = search
@@ -609,8 +807,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create user
-  app.post("/api/admin/users", requireAdmin, async (req, res, next) => {
+  app.post("/api/admin/users", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { name, email, phone, password, role, globalRole, isActive, isApproved, company } = req.body || {};
       const roleValue = role || globalRole;
       if (!name || !email || !phone || !password || !roleValue) {
@@ -642,8 +844,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update user
-  app.patch("/api/admin/users/:id", requireAdmin, async (req, res, next) => {
+  app.patch("/api/admin/users/:id", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { id } = req.params;
       const updates: any = { ...req.body, updatedAt: new Date() };
       if (req.body?.password) {
@@ -661,8 +867,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: reset a user's password (admin-only)
-  app.post("/api/admin/users/:id/reset-password", requireAdmin, async (req, res, next) => {
+  app.post("/api/admin/users/:id/reset-password", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { id } = req.params;
       if (!id) return res.status(400).json({ message: "User id is required" });
 
@@ -689,8 +899,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/admin/users/:id", requireAdmin, async (req, res, next) => {
+  app.delete("/api/admin/users/:id", async (req, res, next) => {
     try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
 
       const { id } = req.params;
       if (!id) {

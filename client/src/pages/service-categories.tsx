@@ -142,7 +142,7 @@ export default function ServiceCategories() {
   // Get categories that start with each letter
   const categoriesByLetter = useMemo(() => {
     const map = new Map<string, number>();
-    serviceCategories.forEach((cat: { name: string }) => {
+    serviceCategories.forEach(cat => {
       const firstLetter = cat.name[0].toUpperCase();
       map.set(firstLetter, (map.get(firstLetter) || 0) + 1);
     });
@@ -155,14 +155,14 @@ export default function ServiceCategories() {
 
     // Filter by search query
     if (searchQuery) {
-      filtered = filtered.filter((cat: { name: string }) =>
+      filtered = filtered.filter(cat =>
         cat.name.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 
     // Filter by selected letter
     if (selectedLetter) {
-      filtered = filtered.filter((cat: { name: string }) =>
+      filtered = filtered.filter(cat =>
         cat.name[0].toUpperCase() === selectedLetter
       );
     }
@@ -342,7 +342,7 @@ export default function ServiceCategories() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {filteredCategories.map((category: any) => (
+              {filteredCategories.map((category) => (
                 <Link key={category.id} href="/book-artisan">
                   <Card className="group hover:shadow-lg transition-all duration-200 cursor-pointer border border-gray-200 hover:border-emerald-500 bg-white">
                     <div className="p-6">
@@ -361,7 +361,7 @@ export default function ServiceCategories() {
                       {/* Provider Avatars */}
                       <div className="flex items-center justify-center">
                         <div className="flex -space-x-2">
-                          {category.avatars.slice(0, 5).map((avatar: string, idx: number) => (
+                          {category.avatars.slice(0, 5).map((avatar, idx) => (
                             <Avatar key={idx} className="w-8 h-8 border-2 border-white">
                               <AvatarImage src={avatar} alt={`Provider ${idx + 1}`} />
                               <AvatarFallback className="bg-emerald-500 text-white text-xs">

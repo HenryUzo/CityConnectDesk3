@@ -43,8 +43,65 @@ import { eq, and, desc, count, sql, asc, or, inArray, sum } from "drizzle-orm";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
 import { pool } from "./db";
+import { prisma } from "./lib/prisma";
+import type { User as PrismaUser } from "@prisma/client";
 
 const PostgresSessionStore = connectPg(session);
+
+const SHARED_USER_ROLES = [
+  "resident",
+  "provider",
+  "admin",
+  "super_admin",
+  "estate_admin",
+  "moderator",
+] as const;
+
+type SharedUserRole = (typeof SHARED_USER_ROLES)[number];
+
+const DEFAULT_USER_ROLE: SharedUserRole = "resident";
+
+function normalizeSharedRole(role?: string | null): SharedUserRole {
+  if (!role) return DEFAULT_USER_ROLE;
+  const lower = role.toLowerCase();
+  if (SHARED_USER_ROLES.includes(lower as SharedUserRole)) {
+    return lower as SharedUserRole;
+  }
+  return DEFAULT_USER_ROLE;
+}
+
+function mapPrismaUser(user: PrismaUser & { providerCompany?: { name?: string | null } | null }): User {
+  const sharedRole = normalizeSharedRole(user.globalRole);
+  return {
+    id: user.id,
+    firstName: null,
+    lastName: null,
+    name: user.name ?? user.email,
+    email: user.email,
+    phone: user.phone ?? "",
+    password: user.passwordHash,
+    accessCode: null,
+    role: sharedRole,
+    globalRole: sharedRole,
+    rating: "0",
+    isActive: user.isActive,
+    isApproved: user.isApproved,
+    categories: [],
+    serviceCategory: null,
+    experience: null,
+    company: user.providerCompany?.name ?? null,
+    documents: [],
+    location: null,
+    latitude: null,
+    longitude: null,
+    lastLoginAt: null,
+    metadata: null,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
+
+const includeProviderCompany = { providerCompany: true };
 
 type OrderUserSummary = Pick<User, "id" | "name" | "email" | "phone">;
 
@@ -168,112 +225,32 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUser(id: string): Promise<User | undefined> {
-    const [user] = await db
-      .select({
-        id: users.id,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        name: users.name,
-        email: users.email,
-        phone: users.phone,
-        password: users.password,
-        role: users.role,
-        globalRole: users.globalRole,
-        company: users.company,
-        documents: users.documents,
-        metadata: users.metadata,
-        lastLoginAt: users.lastLoginAt,
-        isActive: users.isActive,
-        isApproved: users.isApproved,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      })
-      .from(users)
-      .where(eq(users.id, id));
-    return (user as unknown as User) || undefined;
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: includeProviderCompany,
+    });
+    return user ? mapPrismaUser(user) : undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db
-      .select({
-        id: users.id,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        name: users.name,
-        email: users.email,
-        phone: users.phone,
-        password: users.password,
-        role: users.role,
-        globalRole: users.globalRole,
-        company: users.company,
-        documents: users.documents,
-        metadata: users.metadata,
-        lastLoginAt: users.lastLoginAt,
-        isActive: users.isActive,
-        isApproved: users.isApproved,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      })
-      .from(users)
-      .where(eq(users.email, username));
-    return (user as unknown as User) || undefined;
+    const user = await prisma.user.findFirst({
+      where: { email: username },
+      include: includeProviderCompany,
+    });
+    return user ? mapPrismaUser(user) : undefined;
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    const [user] = await db
-      .select({
-        id: users.id,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        name: users.name,
-        email: users.email,
-        phone: users.phone,
-        password: users.password,
-        role: users.role,
-        globalRole: users.globalRole,
-        company: users.company,
-        documents: users.documents,
-        metadata: users.metadata,
-        lastLoginAt: users.lastLoginAt,
-        isActive: users.isActive,
-        isApproved: users.isApproved,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      })
-      .from(users)
-      .where(eq(users.email, email));
-    return (user as unknown as User) || undefined;
+    const user = await prisma.user.findFirst({
+      where: { email },
+      include: includeProviderCompany,
+    });
+    return user ? mapPrismaUser(user) : undefined;
   }
 
   async getUserByAccessCode(accessCode: string): Promise<User | undefined> {
-    const [user] = await db
-      .select({
-        id: users.id,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        name: users.name,
-        email: users.email,
-        phone: users.phone,
-        password: users.password,
-        role: users.role,
-        globalRole: users.globalRole,
-        company: users.company,
-        documents: users.documents,
-        metadata: users.metadata,
-        lastLoginAt: users.lastLoginAt,
-        isActive: users.isActive,
-        isApproved: users.isApproved,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      })
-      .from(users)
-      .where(
-        and(
-          eq(users.accessCode, accessCode),
-          eq(users.role, "resident")
-        )
-      );
-    return (user as unknown as User) || undefined;
+    // Access code lookup is not supported in the Prisma-backed user model yet.
+    return undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {

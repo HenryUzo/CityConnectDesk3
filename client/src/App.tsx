@@ -24,6 +24,7 @@ import CheckoutDiagnosis from "@/pages/checkout-diagnosis";
 import PaymentPolicy from "@/pages/payment-policy";
 import PaymentConfirmation from "@/pages/payment-confirmation";
 import NotFound from "@/pages/not-found";
+import { RequestsPage } from "@/pages/requests-page";
 
 
 function Router() {
@@ -58,6 +59,7 @@ function Router() {
       <ProtectedRoute path="/payment-confirmation" component={PaymentConfirmation} />
       <ProtectedRoute path="/book-market-run" component={BookMarketRun} />
       <ProtectedRoute path="/track-orders" component={TrackOrders} />
+      <ProtectedRoute path="/requests" component={RequestsPage} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -96,26 +96,19 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", ts: new Date().toISOString() });
 });
 
-// Schema guard: ensure columns exist (idempotent)
-async function ensureServiceRequestsColumns() {
-  await db.execute(sql`
-    ALTER TABLE service_requests
-      ADD COLUMN IF NOT EXISTS admin_notes      text,
-      ADD COLUMN IF NOT EXISTS assigned_at      timestamp NULL,
-      ADD COLUMN IF NOT EXISTS closed_at        timestamp NULL,
-      ADD COLUMN IF NOT EXISTS close_reason     text,
-      ADD COLUMN IF NOT EXISTS billed_amount    numeric(10,2) DEFAULT '0',
-      ADD COLUMN IF NOT EXISTS payment_status   text DEFAULT 'pending',
-      ADD COLUMN IF NOT EXISTS preferred_time   timestamp NULL;
-  `);
-  await db.execute(sql`
-    ALTER TABLE service_requests
-      ADD COLUMN IF NOT EXISTS estate_id varchar(255);
-  `);
+// Utilities for optional guards
+async function tableExists(tableName: string): Promise<boolean> {
+  const result = await db.execute(sql`SELECT to_regclass(${`public.${tableName}`}) AS oid;`);
+  const row = Array.isArray(result) ? result[0] : (result as any)?.rows?.[0] || (result as any)?.[0];
+  return Boolean(row?.oid);
 }
 
 // Ensure admin-related columns exist on users table
 async function ensureUsersColumns() {
+  if (!(await tableExists("users"))) {
+    console.warn("[DB] Skipping ensureUsersColumns; users table not found");
+    return;
+  }
   await db.execute(sql`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS global_role user_role;
@@ -139,6 +132,10 @@ async function ensureUsersColumns() {
 }
 
 async function ensureCompaniesTable() {
+  if (!(await tableExists("users"))) {
+    console.warn("[DB] Skipping ensureCompaniesTable; users table not found");
+    return;
+  }
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS companies (
       id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -160,6 +157,10 @@ async function ensureCompaniesTable() {
 }
 
 async function ensureProviderRequestsTable() {
+  if (!(await tableExists("users"))) {
+    console.warn("[DB] Skipping ensureProviderRequestsTable; users table not found");
+    return;
+  }
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS provider_requests (
       id varchar(255) PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -184,6 +185,12 @@ async function ensureProviderRequestsTable() {
 
 async function ensureTransactionsColumns() {
   try {
+    const hasTable = await tableExists("transactions");
+    if (!hasTable) {
+      console.warn("[DB] Skipping ensureTransactionsColumns; transactions table not found");
+      return;
+    }
+
     await db.execute(sql`
       ALTER TABLE transactions
         ADD COLUMN IF NOT EXISTS reference text,
@@ -215,10 +222,10 @@ async function ensureTransactionsColumns() {
           END IF;
         END$$;
       `);
-    } catch (e: any) {
+    } catch (e) {
       console.warn("Could not set transactions.reference NOT NULL or add unique constraint:", e?.message || e);
     }
-  } catch (err: any) {
+  } catch (err) {
     console.error("ensureTransactionsColumns failed:", err?.message || err);
   }
 }
@@ -236,6 +243,11 @@ async function ensureMongoIdMappingTable() {
 }
 
 async function ensureRefreshTokensTable() {
+  if (!(await tableExists("users"))) {
+    console.warn("[DB] Skipping ensureRefreshTokensTable; users table not found");
+    return;
+  }
+
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS refresh_tokens (
       id varchar(255) PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -247,12 +259,12 @@ async function ensureRefreshTokensTable() {
       revoked_at timestamp NULL
     );
   `);
-  
+
   // Add index on user_id for faster queries
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON refresh_tokens(user_id);
   `);
-  
+
   // Add index on token_id for faster lookups
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS refresh_tokens_token_id_idx ON refresh_tokens(token_id);
@@ -263,7 +275,6 @@ async function ensureRefreshTokensTable() {
 (async () => {
   try {
     await dbReady;
-    await ensureServiceRequestsColumns();
     await ensureUsersColumns();
     await ensureCompaniesTable();
     await ensureProviderRequestsTable();
@@ -272,7 +283,7 @@ async function ensureRefreshTokensTable() {
     await ensureRefreshTokensTable();
     log("[DB] Schema guard OK");
   } catch (e) {
-    console.error("[DB] Schema guard failed:", e);
+    console.error("[DB] Schema guard failed (non-fatal in dev):", e);
     // keep running so you can see logs and fix in place
   }
 

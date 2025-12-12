@@ -4,49 +4,525 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-model Resident {
-  id           String   @id @default(uuid())
-  fullName     String
-  email        String   @unique
-  phoneNumber  String?
-  estateId     String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  orders       Order[]
+enum UserRole {
+  RESIDENT
+  PROVIDER
+  ESTATE_ADMIN
+  SUPER_ADMIN
+  MODERATOR
+  SUPPORT
+}
+
+enum MembershipStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  REJECTED
+}
+
+enum AccessType {
+  OPEN
+  CODE
+  DOCUMENT
+}
+
+enum ServiceRequestStatus {
+  PENDING
+  IN_REVIEW
+  UNDER_REVIEW
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  REJECTED
+}
+
+enum StoreApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  DELIVERED
+  CANCELLED
+}
+
+enum TransactionType {
+  DEBIT
+  CREDIT
+  REFUND
+  ADJUSTMENT
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum MaintenancePlanStatus {
+  ACTIVE
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNSET
+  PENDING
+  PAID
+  FAILED
+}
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  phone        String? @unique
+  name         String?
+  passwordHash String
+
+  globalRole UserRole?
+
+  isApproved Boolean @default(false)
+  isActive   Boolean @default(true)
+
+  companyId       String?
+  providerCompany Company? @relation("CompanyProviders", fields: [companyId], references: [id])
+
+  memberships Membership[]
+
+  serviceRequestsCreated  ServiceRequest[] @relation("UserServiceRequestsCreated")
+  serviceRequestsAssigned ServiceRequest[] @relation("UserServiceRequestsAssigned")
+
+  inspections Inspection[]
+
+  storesOwned      Store[]       @relation("StoreOwner")
+  approvedStores   Store[]       @relation("StoreApprovedBy")
+  storeMemberships StoreMember[]
+  orders           Order[]       @relation("OrderBuyer")
+
+  ownedCompanies Company[] @relation("CompanyOwner")
+
+  transactions Transaction[]
+
+  auditLogs AuditLog[]
+
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  storeEstates StoreEstate[]
+  assets       Asset[]
+}
+
+model Estate {
+  id   String @id @default(cuid())
+  name String
+  slug String @unique
+
+  address String?
+  city    String?
+  state   String?
+  country String?
+
+  accessType AccessType @default(OPEN)
+  accessCode String?
+
+  settings Json?
+  coverage Json?
+
+  memberships Membership[]
+
+  stores Store[]
+  orders Order[]
+
+  serviceRequests ServiceRequest[]
+
+  storeEstates StoreEstate[]
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  serviceCategories ServiceCategory[]
+}
+
+model Membership {
+  id        String           @id @default(cuid())
+  userId    String
+  estateId  String
+  role      UserRole
+  status    MembershipStatus @default(PENDING)
+  isPrimary Boolean          @default(false)
+
+  user   User   @relation(fields: [userId], references: [id])
+  estate Estate @relation(fields: [estateId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, estateId, role])
+}
+
+model Company {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  contactEmail String?
+  contactPhone String?
+
+  ownerId String
+  owner   User   @relation("CompanyOwner", fields: [ownerId], references: [id])
+
+  providers User[] @relation("CompanyProviders")
+
+  stores Store[]
+
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ServiceCategory {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  icon        String?
+
+  scope String?
+  tag   String?
+
+  estateId String?
+  estate   Estate? @relation(fields: [estateId], references: [id])
+
+  services        Service[]
+  serviceRequests ServiceRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Service {
-  id          String   @id @default(uuid())
-  title       String
+  id          String  @id @default(cuid())
+  name        String
   description String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  orders      Order[]
+
+  categoryId String
+  category   ServiceCategory @relation(fields: [categoryId], references: [id])
+
+  serviceRequests ServiceRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
-model Vendor {
-  id           String   @id @default(uuid())
-  name         String
-  serviceId    String
-  estateId     String
-  rating       Float?   @default(0)
-  availability Boolean  @default(true)
-  orders       Order[]
+model ServiceRequest {
+  id String @id @default(cuid())
+
+  residentId String
+  resident   User   @relation("UserServiceRequestsCreated", fields: [residentId], references: [id])
+
+  estateId String?
+  estate   Estate? @relation(fields: [estateId], references: [id])
+
+  serviceCategoryId String?
+  serviceCategory   ServiceCategory? @relation(fields: [serviceCategoryId], references: [id])
+
+  serviceId String?
+  service   Service? @relation(fields: [serviceId], references: [id])
+
+  title       String?
+  description String
+
+  preferredStart DateTime?
+  preferredEnd   DateTime?
+
+  location  String?
+  latitude  Float?
+  longitude Float?
+
+  requiresInspection Boolean @default(false)
+  adviceMessage      String?
+
+  providerId String?
+  provider   User?   @relation("UserServiceRequestsAssigned", fields: [providerId], references: [id])
+
+  status ServiceRequestStatus @default(PENDING)
+
+  billedAmount  Decimal?      @db.Decimal(10, 2)
+  paymentStatus PaymentStatus @default(UNSET)
+
+  inspection   Inspection?
+  transactions Transaction[]
+
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  maintenancePlans MaintenancePlan[]
+}
+
+model Inspection {
+  id String @id @default(cuid())
+
+  requestId String         @unique
+  request   ServiceRequest @relation(fields: [requestId], references: [id])
+
+  inspectorId String
+  inspector   User   @relation(fields: [inspectorId], references: [id])
+
+  scheduledAt DateTime?
+  completedAt DateTime?
+
+  findings       String?
+  recommendation String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Store {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  contactEmail String?
+  contactPhone String?
+  address      String?
+
+  ownerId String
+  owner   User   @relation("StoreOwner", fields: [ownerId], references: [id])
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+
+  estateId String?
+  estate   Estate? @relation(fields: [estateId], references: [id])
+
+  approvalStatus StoreApprovalStatus @default(PENDING)
+  approvedById   String?
+  approvedBy     User?               @relation("StoreApprovedBy", fields: [approvedById], references: [id])
+  approvedAt     DateTime?
+
+  members       StoreMember[]
+  items         MarketplaceItem[]
+  orders        Order[]
+  deliveryAreas StoreEstate[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model StoreMember {
+  id      String @id @default(cuid())
+  storeId String
+  userId  String
+
+  role               String?
+  canManageInventory Boolean @default(false)
+  canManageOrders    Boolean @default(false)
+
+  store Store @relation(fields: [storeId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([storeId, userId])
+}
+
+model StoreEstate {
+  id            String  @id @default(cuid())
+  storeId       String
+  estateId      String
+  allocatedById String?
+
+  store       Store  @relation(fields: [storeId], references: [id])
+  estate      Estate @relation(fields: [estateId], references: [id])
+  allocatedBy User?  @relation(fields: [allocatedById], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+model ItemCategory {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  items MarketplaceItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model MarketplaceItem {
+  id      String @id @default(cuid())
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id])
+
+  name        String
+  description String?
+
+  price    Decimal @db.Decimal(10, 2)
+  currency String  @default("NGN")
+
+  unitOfMeasure String?
+  stock         Int     @default(0)
+
+  categoryId String?
+  category   ItemCategory? @relation(fields: [categoryId], references: [id])
+
+  isActive Boolean @default(true)
+
+  orderItems OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Order {
-  id          String   @id @default(uuid())
-  residentId  String
-  vendorId    String
-  serviceId   String
-  status      String   @default("pending")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id      String @id @default(cuid())
+  buyerId String
+  buyer   User   @relation("OrderBuyer", fields: [buyerId], references: [id])
 
-  resident Resident @relation(fields: [residentId], references: [id])
-  vendor   Vendor   @relation(fields: [vendorId], references: [id])
-  service  Service  @relation(fields: [serviceId], references: [id])
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id])
+
+  estateId String?
+  estate   Estate? @relation(fields: [estateId], references: [id])
+
+  status   OrderStatus @default(PENDING)
+  total    Decimal     @db.Decimal(10, 2)
+  currency String      @default("NGN")
+
+  deliveryAddress String
+  deliveryFee     Decimal? @db.Decimal(10, 2)
+  serviceFee      Decimal? @db.Decimal(10, 2)
+
+  paymentMethod String?
+  paymentId     String?
+
+  items        OrderItem[]
+  transactions Transaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OrderItem {
+  id String @id @default(cuid())
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  itemId String
+  item   MarketplaceItem @relation(fields: [itemId], references: [id])
+
+  name     String
+  price    Decimal @db.Decimal(10, 2)
+  quantity Int
+
+  createdAt DateTime @default(now())
+}
+
+model ServicePack {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  assetType     String
+  frequencyDays Int
+  price         Decimal? @db.Decimal(10, 2)
+
+  isActive Boolean @default(true)
+
+  assets           Asset[]
+  maintenancePlans MaintenancePlan[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Asset {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  name         String?
+  assetType    String
+  brand        String?
+  model        String?
+  serialNumber String?
+
+  lastServicedAt DateTime?
+
+  servicePackId String?
+  servicePack   ServicePack? @relation(fields: [servicePackId], references: [id])
+
+  maintenancePlans MaintenancePlan[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model MaintenancePlan {
+  id      String  @id @default(cuid())
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id])
+
+  servicePackId String
+  servicePack   ServicePack @relation(fields: [servicePackId], references: [id])
+
+  startDate       DateTime
+  nextServiceDate DateTime?
+  status          MaintenancePlanStatus @default(ACTIVE)
+
+  lastServiceRequestId String?
+  lastServiceRequest   ServiceRequest? @relation(fields: [lastServiceRequestId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Transaction {
+  id String @id @default(cuid())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  amount   Decimal @db.Decimal(14, 2)
+  currency String  @default("NGN")
+
+  type   TransactionType
+  status TransactionStatus @default(PENDING)
+
+  gateway          String?
+  gatewayReference String?
+
+  description String?
+  meta        Json?
+
+  serviceRequestId String?
+  serviceRequest   ServiceRequest? @relation(fields: [serviceRequestId], references: [id])
+
+  orderId String?
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  originalTransactionId String?
+  originalTransaction   Transaction?  @relation("RefundRelation", fields: [originalTransactionId], references: [id])
+  refunds               Transaction[] @relation("RefundRelation")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id           String  @id @default(cuid())
+  userId       String?
+  user         User?   @relation(fields: [userId], references: [id])
+  action       String
+  resourceType String
+  resourceId   String?
+  details      Json?
+
+  createdAt DateTime @default(now())
 }

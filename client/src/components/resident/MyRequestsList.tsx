@@ -1,40 +1,38 @@
-import { useQuery } from "@tanstack/react-query";
-import { Card, CardHeader, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getQueryFn } from "@/lib/queryClient";
-
-type Status = "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
-
-type ServiceRequest = {
-  id: string;
-  category: string;
-  description: string;
-  status: Status;
-  createdAt: string;
-  billedAmount?: number | string | null;
-};
-
-function statusClass(s: Status) {
-  switch (s) {
-    case "pending": return "bg-gray-100 text-gray-800";
-    case "assigned": return "bg-blue-100 text-blue-800";
-    case "in_progress": return "bg-yellow-100 text-yellow-800";
-    case "completed": return "bg-green-100 text-green-800";
-    case "cancelled": return "bg-red-100 text-red-800";
-    default: return "bg-gray-100 text-gray-800";
-  }
-}
+import { useMyEstates } from "@/hooks/useMyEstates";
+import { useServiceRequests } from "@/hooks/useServiceRequests";
 
 export default function MyRequestsList() {
-  const { data = [], error } = useQuery<ServiceRequest[], Error>({
-    // Your resident GET should return only the current user's requests.
-    // If your API needs an explicit filter, change to `/api/service-requests?me=1`.
-    queryKey: ["/api/service-requests"],
-    queryFn: getQueryFn<ServiceRequest[]>({ on401: "returnNull" }),
-    refetchInterval: 5000,
-  });
+  const {
+    data: estates = [],
+    loading: estatesLoading,
+    error: estatesError,
+  } = useMyEstates();
+  const estate = estates[0];
+  const {
+    data: requests = [],
+    loading: requestsLoading,
+    error: requestsError,
+  } = useServiceRequests(estate?.id ?? null);
 
-  if (error) {
+  const isLoading = estatesLoading || requestsLoading;
+  const hasError = !!estatesError || !!requestsError;
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <div className="text-lg font-semibold">My Requests</div>
+        </CardHeader>
+        <CardContent>
+          <div className="text-sm text-muted-foreground">Loading requests…</div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (hasError) {
     return (
       <Card>
         <CardHeader>
@@ -42,21 +40,44 @@ export default function MyRequestsList() {
         </CardHeader>
         <CardContent>
           <div className="text-sm text-red-600">
-            Failed to load: {error.message}
+            Failed to load requests. Please try again later.
           </div>
         </CardContent>
       </Card>
     );
   }
 
-  if (!data || data.length === 0) {
+  if (!estate) {
     return (
       <Card>
         <CardHeader>
           <div className="text-lg font-semibold">My Requests</div>
         </CardHeader>
         <CardContent>
-          <div className="text-sm text-muted-foreground">No requests yet.</div>
+          <div className="text-sm text-muted-foreground">
+            No estates available for your account yet.
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!requests.length) {
+    return (
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold">My Requests</div>
+              <p className="text-xs text-muted-foreground">{estate.name}</p>
+            </div>
+            <Badge variant="outline">{estate.role}</Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="text-sm text-muted-foreground">
+            No service requests yet.
+          </div>
         </CardContent>
       </Card>
     );
@@ -65,33 +86,32 @@ export default function MyRequestsList() {
   return (
     <Card>
       <CardHeader>
-        <div className="text-lg font-semibold">My Requests</div>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-lg font-semibold">My Requests</div>
+            <p className="text-xs text-muted-foreground">{estate.name}</p>
+          </div>
+          <Badge variant="outline">{estate.role}</Badge>
+        </div>
       </CardHeader>
       <CardContent>
-        <div className="space-y-3">
-          {data.map((r) => (
-            <div key={r.id} className="border rounded-lg p-4">
-              <div className="flex items-start justify-between">
+        <div className="space-y-4">
+          {requests.map((request) => (
+            <div key={request.id} className="border rounded-xl p-4 bg-white shadow-sm">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="font-semibold">
-                    {r.category?.replaceAll("_", " ")} •{" "}
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(r.createdAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {r.description}
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Badge className={statusClass(r.status)}>
-                      {r.status.replaceAll("_", " ")}
-                    </Badge>
-                    {r.billedAmount ? (
-                      <Badge>₦ {Number(r.billedAmount).toLocaleString()}</Badge>
-                    ) : null}
-                  </div>
+                  <p className="font-semibold text-base">
+                    {request.title || "Untitled request"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {new Date(request.createdAt).toLocaleString()}
+                  </p>
                 </div>
+                <Badge variant="secondary">{request.status}</Badge>
               </div>
+              <p className="text-sm text-muted-foreground mt-2">
+                {request.description || "No additional details provided."}
+              </p>
             </div>
           ))}
         </div>
