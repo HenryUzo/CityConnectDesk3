@@ -1,5 +1,5 @@
 // client/src/pages/book-artisan.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation } from "@tanstack/react-query";
@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/form";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { 
   Wrench, 
   ChevronLeft, 
@@ -98,6 +99,42 @@ export default function BookArtisan() {
   const { toast } = useToast();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const preferredDateRef = useRef<HTMLInputElement | null>(null);
+  const preferredTimeRef = useRef<HTMLInputElement | null>(null);
+  const timeListRef = useRef<HTMLDivElement | null>(null);
+  const [dateOpen, setDateOpen] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(false);
+  const [calendarBase, setCalendarBase] = useState<Date>(new Date());
+
+  const getNextNDays = (n: number) => {
+    const days: Date[] = [];
+    const today = new Date();
+    for (let i = 0; i < n; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      days.push(d);
+    }
+    return days;
+  };
+
+  const formatDateForInput = (d: Date) => d.toISOString().slice(0, 10); // YYYY-MM-DD
+  const formatDisplayDate = (d: Date) => d.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+
+  const generateTimeSlots = (startHour = 0, endHour = 24, stepMinutes = 30, includeEnd2359 = false) => {
+    const slots: string[] = [];
+    for (let h = startHour; h < endHour; h++) {
+      for (let m = 0; m < 60; m += stepMinutes) {
+        const hh = String(h).padStart(2, "0");
+        const mm = String(m).padStart(2, "0");
+        slots.push(`${hh}:${mm}`);
+      }
+    }
+    if (includeEnd2359) {
+      const last = "23:59";
+      if (!slots.includes(last)) slots.push(last);
+    }
+    return slots;
+  };
 
   // In dev (or when cookies aren't set yet), use the email header fallback automatically.
   useEffect(() => {
@@ -532,19 +569,140 @@ export default function BookArtisan() {
                     <FormField
                       control={form.control}
                       name="preferredDate"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-sm font-medium text-gray-700">Preferred Date</FormLabel>
-                          <FormControl>
-                            <Input 
-                              type="date" 
-                              className="bg-gray-50 border-gray-200"
-                              {...field} 
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
+                      render={({ field }) => {
+                        const renderCalendarGrid = () => {
+                          const base = calendarBase || (field.value ? new Date(field.value) : new Date());
+                          const year = base.getFullYear();
+                          const month = base.getMonth();
+                          const firstDay = new Date(year, month, 1);
+                          const startOffset = firstDay.getDay();
+                          const daysInMonth = new Date(year, month + 1, 0).getDate();
+                          const cells: Array<null | number> = [];
+                          for (let i = 0; i < startOffset; i++) cells.push(null);
+                          for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+                          return (
+                            <div className="grid grid-cols-7 gap-1">
+                              {cells.map((day, idx) => {
+                                const isEmpty = day === null;
+                                const cellDate = isEmpty ? null : new Date(year, month, day as number);
+                                const cellVal = cellDate ? formatDateForInput(cellDate) : '';
+                                const isSelected = field.value === cellVal;
+                                const isToday = cellDate && formatDateForInput(cellDate) === formatDateForInput(new Date());
+                                return (
+                                  <button
+                                    key={idx}
+                                    onClick={() => {
+                                      if (!cellDate) return;
+                                      // debug: log value being passed
+                                      field.onChange(cellVal);
+                                      // debug logging removed
+                                      // ensure react-hook-form internal state is also set on the form instance
+                                      try {
+                                        form.setValue("preferredDate", cellVal);
+                                      } catch (e) {}
+                                      setCalendarBase(new Date(year, month, 1));
+                                      setDateOpen(false);
+                                      // log DOM input value shortly after change
+                                      setTimeout(() => {
+                                        try {
+                                            // debug logging removed
+                                        } catch (e) {
+                                          // ignore
+                                        }
+                                      }, 50);
+                                    }}
+                                    className={`h-8 flex items-center justify-center rounded ${isEmpty ? 'opacity-30 pointer-events-none' : 'hover:bg-gray-100'} ${isSelected ? 'bg-primary text-primary-foreground' : ''} ${isToday && !isSelected ? 'border border-muted' : ''}`}
+                                  >
+                                    {cellDate ? <span className="text-sm">{cellDate.getDate()}</span> : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        };
+
+                        return (
+                          <FormItem>
+                            <FormLabel className="text-sm font-medium text-gray-700">Preferred Date</FormLabel>
+                            <FormControl>
+                              <div className="relative">
+                                <Input
+                                  type="date"
+                                  className="bg-gray-50 border-gray-200 pr-10 date-time-input"
+                                  {...field}
+                                  ref={preferredDateRef}
+                                />
+                                <Popover open={dateOpen} onOpenChange={(open) => {
+                                  setDateOpen(open);
+                                  if (open) setCalendarBase(field.value ? new Date(field.value) : new Date());
+                                }}>
+                                  <PopoverTrigger asChild>
+                                    <button className="absolute right-3 top-1/2 -translate-y-1/2">
+                                      <Calendar className="w-4 h-4 text-gray-400 cursor-pointer" />
+                                    </button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-80 p-3">
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <Select value={String(calendarBase.getMonth())} onValueChange={(v) => {
+                                        const m = Number(v);
+                                        setCalendarBase((prev) => new Date(prev.getFullYear(), m, 1));
+                                      }}>
+                                        <SelectTrigger className="w-36">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {Array.from({ length: 12 }).map((_, i) => (
+                                            <SelectItem key={i} value={String(i)}>{new Date(0, i).toLocaleString(undefined, { month: 'long' })}</SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                      <Select value={String(calendarBase.getFullYear())} onValueChange={(v) => {
+                                        const y = Number(v);
+                                        setCalendarBase((prev) => new Date(y, prev.getMonth(), 1));
+                                      }}>
+                                        <SelectTrigger className="w-28">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {Array.from({ length: 11 }).map((_, i) => {
+                                            const y = new Date().getFullYear() - 5 + i;
+                                            return <SelectItem key={y} value={String(y)}>{String(y)}</SelectItem>;
+                                          })}
+                                        </SelectContent>
+                                      </Select>
+                                      <Button size="sm" variant="outline" onClick={() => {
+                                        const today = new Date();
+                                        field.onChange(formatDateForInput(today));
+                                        // debug logging removed
+                                        try { form.setValue("preferredDate", formatDateForInput(today)); } catch (e) {}
+                                        setCalendarBase(new Date(today.getFullYear(), today.getMonth(), 1));
+                                        setDateOpen(false);
+                                        setTimeout(() => {
+                                          try {
+                                            // debug logging removed
+                                          } catch (e) {}
+                                        }, 50);
+                                      }}>Today</Button>
+                                    </div>
+
+                                    {/* Weekday headers */}
+                                    <div className="grid grid-cols-7 gap-1 text-xs text-muted-foreground mb-1">
+                                      {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+                                        <div key={d} className="text-center">{d}</div>
+                                      ))}
+                                    </div>
+
+                                    {/* Calendar grid for current month */}
+                                    {renderCalendarGrid()}
+                                  </PopoverContent>
+                                </Popover>
+                              </div>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        );
+                      }}
                     />
 
                     <FormField
@@ -552,13 +710,91 @@ export default function BookArtisan() {
                       name="preferredTime"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel className="text-sm font-medium text-gray-700">Preferred Date</FormLabel>
+                          <FormLabel className="text-sm font-medium text-gray-700">Preferred Time</FormLabel>
                           <FormControl>
-                            <Input 
-                              type="time" 
-                              className="bg-gray-50 border-gray-200"
-                              {...field} 
-                            />
+                            <div className="relative">
+                              <Input
+                                type="time"
+                                className="bg-gray-50 border-gray-200 pr-10 date-time-input"
+                                {...field}
+                                ref={preferredTimeRef}
+                              />
+                              <Popover open={timeOpen} onOpenChange={(open) => {
+                                setTimeOpen(open);
+                                if (open) {
+                                  // scroll to selected time after opening
+                                  setTimeout(() => {
+                                    try {
+                                      const container = timeListRef.current;
+                                      if (!container) return;
+                                      const sel = container.querySelector('[data-selected="true"]') as HTMLElement | null;
+                                      if (sel) {
+                                        container.scrollTop = sel.offsetTop - container.clientHeight / 2 + sel.clientHeight / 2;
+                                      } else {
+                                        // scroll to current time slot if available
+                                        const now = preferredTimeRef.current?.value;
+                                        const fallback = now ? container.querySelector(`[data-value="${now}"]`) as HTMLElement | null : null;
+                                        if (fallback) container.scrollTop = fallback.offsetTop - container.clientHeight / 2 + fallback.clientHeight / 2;
+                                      }
+                                    } catch (e) {
+                                      // ignore
+                                    }
+                                  }, 50);
+                                }
+                              }}>
+                                <PopoverTrigger asChild>
+                                  <button className="absolute right-3 top-1/2 -translate-y-1/2">
+                                    <Clock className="w-4 h-4 text-gray-400 cursor-pointer" />
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-48 p-1">
+                                  <div ref={timeListRef} className="max-h-48 overflow-y-auto p-2 space-y-2">
+                                      {(() => {
+                                      const slots = generateTimeSlots(0, 24, 30, true);
+                                      const grouped: Record<string, string[]> = {};
+                                      slots.forEach(s => {
+                                        const hour = s.split(':')[0];
+                                        if (!grouped[hour]) grouped[hour] = [];
+                                        grouped[hour].push(s);
+                                      });
+                                      return Object.keys(grouped).map(hour => (
+                                        <div key={hour} className="space-y-1">
+                                          <div className="text-xs text-muted-foreground px-2">{`${hour}:00`}</div>
+                                          <div className="grid grid-cols-2 gap-2 px-1">
+                                            {grouped[hour].map(t => {
+                                              const selected = field.value === t;
+                                              return (
+                                                <button
+                                                  key={t}
+                                                  data-value={t}
+                                                  data-selected={selected}
+                                                  onClick={() => {
+                                                      // debug: log value being passed
+                                                      field.onChange(t);
+                                                      // debug logging removed
+                                                      try { form.setValue("preferredTime", t); } catch (e) {}
+                                                      setTimeOpen(false);
+                                                      preferredTimeRef.current?.focus();
+                                                      setTimeout(() => {
+                                                        try {
+                                                          // debug logging removed
+                                                        } catch (e) {}
+                                                      }, 50);
+                                                    }}
+                                                  className={`text-left p-2 rounded ${selected ? 'bg-primary text-primary-foreground' : 'hover:bg-gray-100'}`}
+                                                >
+                                                  {t}
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      ));
+                                    })()}
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            </div>
                           </FormControl>
                           <FormMessage />
                         </FormItem>
