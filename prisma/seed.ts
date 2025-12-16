@@ -97,6 +97,17 @@ async function main() {
     },
   });
 
+  await prisma.wallet.upsert({
+    where: { userId: resident.id },
+    update: {
+      balance: '25000',
+    },
+    create: {
+      userId: resident.id,
+      balance: '25000',
+    },
+  });
+
   console.log('Seed complete');
 }
 

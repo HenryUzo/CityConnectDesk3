@@ -71,7 +71,8 @@ export default function MyRequestsList() {
               <div className="text-lg font-semibold">My Requests</div>
               <p className="text-xs text-muted-foreground">{estate.name}</p>
             </div>
-            <Badge variant="outline">{estate.role}</Badge>
+            {/* Role not present on Estate; show estate name instead */}
+            <Badge variant="outline">{estate.name}</Badge>
           </div>
         </CardHeader>
         <CardContent>
@@ -91,7 +92,8 @@ export default function MyRequestsList() {
             <div className="text-lg font-semibold">My Requests</div>
             <p className="text-xs text-muted-foreground">{estate.name}</p>
           </div>
-          <Badge variant="outline">{estate.role}</Badge>
+          {/* Role not present on Estate; show estate name instead */}
+          <Badge variant="outline">{estate.name}</Badge>
         </div>
       </CardHeader>
       <CardContent>

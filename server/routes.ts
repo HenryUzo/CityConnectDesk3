@@ -4,7 +4,6 @@ import { z } from "zod";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
 import { db } from "./db";
-import { prisma } from "./lib/prisma";
 import {
   users,
   serviceRequests,
@@ -39,12 +38,15 @@ import {
   createPendingPaystackTransaction,
   verifyAndFinalizePaystackCharge,
 } from "./payments";
-import { validatePaystackSignature } from "./paystack";
+import { validatePaystackSignature, verifyPaystackTransaction } from "./paystack";
 import { initializePaystackTransaction } from "./paystackService";
 import {
   handlePaystackVerify,
   handlePaystackWebhook,
 } from "./paystackHandlers";
+import { TransactionStatus, Prisma } from "@prisma/client";
+import { requireAuth, requireResident } from "./auth-middleware";
+import { getOpenAI } from "./openaiClient";
 
 const isAdminOrSuper = (req: Express["request"]) =>
   req.isAuthenticated() &&
@@ -73,40 +75,68 @@ const CreateServiceRequest = insertServiceRequestSchema.extend({
     .transform((v) => (typeof v === "number" ? String(v) : v)),
 });
 
-const SERVICE_REQUEST_STATUSES = [
-  "PENDING",
-  "IN_REVIEW",
-  "UNDER_REVIEW",
-  "ASSIGNED",
-  "IN_PROGRESS",
-  "COMPLETED",
-  "CANCELLED",
-  "REJECTED",
-];
+const AIDiagnosisRequestSchema = z.object({
+  category: z.string().min(1, "Category is required"),
+  description: z.string().min(10, "Description must be at least 10 characters"),
+  urgency: z.enum(["low", "medium", "high", "emergency"]).optional(),
+  specialInstructions: z.string().optional(),
+});
 
-async function findEstateMembership(userId: string, estateId: string) {
-  return prisma.membership.findFirst({
-    where: {
-      userId,
-      estateId,
-      status: {
-        not: "REJECTED",
+const AIDiagnosisResponseSchema = z.object({
+  summary: z.string(),
+  probableCauses: z
+    .array(
+      z.object({
+        cause: z.string(),
+        likelihood: z.enum(["low", "medium", "high"]),
+      })
+    )
+    .default([]),
+  severity: z.enum(["low", "medium", "high", "critical"]),
+  shouldAvoidDIY: z.boolean(),
+  safetyNotes: z.array(z.string()).default([]),
+  suggestedChecks: z.array(z.string()).default([]),
+  whenToCallPro: z.string(),
+  suggestedCategory: z.string().optional(),
+});
+
+const AI_RESPONSE_JSON_SCHEMA = {
+  name: "AiDiagnosis",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      summary: { type: "string" },
+      probableCauses: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            cause: { type: "string" },
+            likelihood: { type: "string", enum: ["low", "medium", "high"] },
+          },
+          required: ["cause", "likelihood"],
+        },
       },
+      severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
+      shouldAvoidDIY: { type: "boolean" },
+      safetyNotes: { type: "array", items: { type: "string" } },
+      suggestedChecks: { type: "array", items: { type: "string" } },
+      whenToCallPro: { type: "string" },
+      suggestedCategory: { type: "string" },
     },
-  });
-}
-
-function formatEstateFromMembership(membership: { estateId: string; estate?: { id: string; name: string; slug: string } | null; role: string; status: string; isPrimary: boolean }) {
-  const estate = membership.estate;
-  return {
-    id: estate?.id ?? membership.estateId,
-    slug: estate?.slug ?? "",
-    name: estate?.name ?? "Untitled estate",
-    role: membership.role,
-    status: membership.status,
-    isPrimary: membership.isPrimary,
-  };
-}
+    required: [
+      "summary",
+      "probableCauses",
+      "severity",
+      "shouldAvoidDIY",
+      "safetyNotes",
+      "suggestedChecks",
+      "whenToCallPro",
+    ],
+  },
+};
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
@@ -233,6 +263,86 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/ai/diagnose", requireAuth, requireResident, async (req, res) => {
+    const parsedBody = AIDiagnosisRequestSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      return res.status(400).json({
+        error: "Invalid request body",
+        details: parsedBody.error.flatten(),
+      });
+    }
+
+    try {
+      const { category, description, urgency, specialInstructions } = parsedBody.data;
+      const openai = getOpenAI();
+      const model = process.env.OPENAI_DIAGNOSIS_MODEL || "gpt-4o-mini";
+
+      const aiResponse = await openai.responses.create({
+        model,
+        temperature: 0.2,
+        response_format: {
+          type: "json_schema",
+          json_schema: AI_RESPONSE_JSON_SCHEMA,
+        },
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "text",
+                text:
+                  "You are a home maintenance and repairs assistant for an estate super-app. Always prioritize resident safety. Never suggest unsafe DIY work for electrical faults, gas issues, structural concerns, or serious water leaks. For such hazards, instruct the resident to shut off the source if it is safe to do so and to call a verified professional immediately.",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Resident repair request details:
+Category: ${category}
+Urgency: ${urgency ?? "not specified"}
+Description: ${description}
+Special instructions: ${specialInstructions || "None"}.
+
+Provide the structured JSON response exactly as specified.`,
+              },
+            ],
+          },
+        ],
+      });
+
+      const rawResponse =
+        ((aiResponse as any)?.output ?? [])
+          .flatMap((item: any) => item?.content ?? [])
+          .filter((content: any) => content?.type === "output_text")
+          .map((content: any) => content?.text ?? "")
+          .join("")
+          .trim() || "";
+
+      if (!rawResponse) {
+        throw new Error("AI response was empty");
+      }
+
+      let parsedResponse: unknown;
+      try {
+        parsedResponse = JSON.parse(rawResponse);
+      } catch (error) {
+        console.error("[AI] Unable to parse JSON response:", error, rawResponse);
+        throw new Error("Invalid AI response format");
+      }
+
+      const normalized = AIDiagnosisResponseSchema.parse(parsedResponse);
+      return res.json(normalized);
+    } catch (error) {
+      console.error("[AI] Diagnosis generation failed:", error);
+      return res.status(500).json({
+        error: "Unable to generate AI diagnosis right now.",
+      });
+    }
+  });
+
   // Admin: Send advice with inspection dates/times to resident
   app.post("/api/admin/service-requests/:id/advice", async (req, res, next) => {
     try {
@@ -287,175 +397,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // TODO: Send notification to the assigned provider
       res.json({ success: true, message: "Provider assigned successfully", request: serviceRequest });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  // Legacy-friendly Prisma-backed endpoints for the new requests view
-  app.get("/api/my-estates", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const memberships = await prisma.membership.findMany({
-        where: {
-          userId: req.user.id,
-          status: {
-            not: "REJECTED",
-          },
-        },
-        include: {
-          estate: true,
-        },
-        orderBy: {
-          isPrimary: "desc",
-        },
-      });
-
-      res.json(memberships.map(formatEstateFromMembership));
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.get("/api/estates/:estateId/requests", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const { estateId } = req.params;
-      if (!estateId) {
-        return res.status(400).json({ message: "Estate ID is required" });
-      }
-
-      const membership = await findEstateMembership(req.user.id, estateId);
-      if (!membership && req.user?.role !== "admin") {
-        return res.status(403).json({ message: "Not a member of that estate" });
-      }
-
-      const requests = await prisma.serviceRequest.findMany({
-        where: {
-          estateId,
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
-
-      res.json(
-        requests.map((request) => ({
-          ...request,
-          status: request.status?.toUpperCase?.() ?? request.status,
-        }))
-      );
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post("/api/estates/:estateId/requests", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated() || req.user?.role !== "resident") {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const { estateId } = req.params;
-      if (!estateId) {
-        return res.status(400).json({ message: "Estate ID is required" });
-      }
-
-      const membership = await findEstateMembership(req.user.id, estateId);
-      if (!membership) {
-        return res.status(403).json({ message: "Not a member of that estate" });
-      }
-
-      const schema = z.object({
-        title: z.string().optional(),
-        description: z.string().min(1, "Description is required"),
-        serviceCategoryId: z.string().optional().nullable(),
-        serviceId: z.string().optional().nullable(),
-        preferredStart: z.string().optional().nullable(),
-        preferredEnd: z.string().optional().nullable(),
-        location: z.string().optional().nullable(),
-      });
-
-      const payload = schema.parse(req.body || {});
-
-      const newRequest = await prisma.serviceRequest.create({
-        data: {
-          residentId: req.user.id,
-          estateId,
-          title: payload.title ?? null,
-          description: payload.description,
-          serviceCategoryId: payload.serviceCategoryId ?? null,
-          serviceId: payload.serviceId ?? null,
-          preferredStart: payload.preferredStart ? new Date(payload.preferredStart) : null,
-          preferredEnd: payload.preferredEnd ? new Date(payload.preferredEnd) : null,
-          location: payload.location ?? null,
-          status: "PENDING",
-        },
-      });
-
-      res.status(201).json({
-        ...newRequest,
-        status: newRequest.status.toUpperCase(),
-      });
-    } catch (error: any) {
-      if (error?.issues) {
-        return res.status(400).json({
-          error: "Validation error",
-          details: error.issues.map((i: any) => ({"path": i.path.join("."), "message": i.message, "expected": i.expected, "received": i.received, "code": i.code })),
-        });
-      }
-      next(error);
-    }
-  });
-
-  app.patch("/api/requests/:id/status", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const { id } = req.params;
-      const { status } = z.object({ status: z.string().min(1) }).parse(req.body || {});
-      const normalized = status.toUpperCase();
-
-      if (!SERVICE_REQUEST_STATUSES.includes(normalized)) {
-        return res.status(400).json({ message: "Invalid status" });
-      }
-
-      const existing = await prisma.serviceRequest.findUnique({
-        where: { id },
-        select: { estateId: true },
-      });
-
-      if (!existing) {
-        return res.status(404).json({ message: "Request not found" });
-      }
-
-      if (req.user?.role !== "admin") {
-        if (!existing.estateId) {
-          return res.status(403).json({ message: "Cannot update requests without an estate" });
-        }
-        const membership = await findEstateMembership(req.user.id, existing.estateId);
-        if (!membership) {
-          return res.status(403).json({ message: "Not a member of that estate" });
-        }
-      }
-
-      const updated = await prisma.serviceRequest.update({
-        where: { id },
-        data: { status: normalized },
-      });
-
-      res.json({
-        ...updated,
-        status: updated.status.toUpperCase(),
-      });
     } catch (error) {
       next(error);
     }
@@ -526,7 +467,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/paystack/init", async (req, res, next) => {
     try {
       const payload = z.object({
-        email: z.string().email(),
+        email: z.string().email().optional(),
         amountInNaira: z.number().positive(),
         metadata: z.record(z.any()).optional(),
         reference: z.string().optional(),
@@ -534,9 +475,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const { email, amountInNaira, metadata, reference, callbackUrl } = payload.parse(req.body || {});
+      const resolvedEmail = (email || (req.user?.email ?? "")).toString().trim().toLowerCase();
+      if (!resolvedEmail) {
+        return res.status(400).json({ error: "Email is required to initialize Paystack." });
+      }
 
       const result = await initializePaystackTransaction({
-        email,
+        email: resolvedEmail,
         amountInNaira,
         metadata,
         reference,
@@ -595,7 +540,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Security: idempotency—if already paid, just acknowledge to avoid double credits.
-      if (tx.status === "completed") {
+      if (tx.status === TransactionStatus.COMPLETED) {
         return res.json({ received: true });
       }
 
@@ -613,12 +558,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Security: only now, after all checks pass, do we mark the transaction as paid.
       await storage.updateTransactionByReference(reference, {
-        status: "completed",
+        status: TransactionStatus.COMPLETED,
         description: `Paystack webhook ${data.channel || "charge"}`,
         meta: {
-          ...(tx.meta as Record<string, unknown>),
-          paystackWebhook: data,
-        },
+          ...((tx.meta as Prisma.JsonObject) || {}),
+          paystackWebhook: data as any,
+        } as Prisma.InputJsonObject,
       });
 
       if (tx.serviceRequestId) {
@@ -649,7 +594,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ status: "failed" });
       }
 
-      if (tx.status === "completed") {
+      if (tx.status === TransactionStatus.COMPLETED) {
         return res.json({ status: "success" });
       }
 
@@ -675,12 +620,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       await storage.updateTransactionByReference(reference, {
-        status: "completed",
+        status: TransactionStatus.COMPLETED,
         description: `Paystack ${charge.channel || "charge"}`,
         meta: {
-          ...(tx.meta as Record<string, unknown>),
-          paystack: charge,
-        },
+          ...((tx.meta as Prisma.JsonObject) || {}),
+          paystack: charge as any,
+        } as Prisma.InputJsonObject,
       });
 
       if (tx.serviceRequestId) {
@@ -1375,12 +1320,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public categories endpoint - allow unauthenticated access for client-side lists.
+  // Be defensive: if the DB query fails, return an empty list instead of a 500.
   app.get("/api/categories", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
       const { scope } = req.query as { scope?: string };
       let query = db.select().from(categories);
       if (scope && scope !== "all" && (scope === "global" || scope === "estate")) {
@@ -1388,9 +1331,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const rows = await query.orderBy(desc(categories.createdAt));
-      res.json(rows);
-    } catch (error) {
-      next(error);
+      return res.json(rows);
+    } catch (error: any) {
+      // Log and return a safe fallback so the front-end can use local defaults.
+      console.error("/api/categories error:", error?.message || error);
+      return res.json([]);
     }
   });
 

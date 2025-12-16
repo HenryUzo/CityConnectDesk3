@@ -1432,7 +1432,7 @@ const UsersManagement = () => {
                                 setResetConfirmUserId(userId);
                                 setResetConfirmOpen(true);
                               }}
-                              disabled={resetPasswordMutation.isLoading}
+                              disabled={(resetPasswordMutation as any).isPending ?? false}
                               data-testid={`button-reset-password-${userId}`}
                             >
                               <ShieldOff className="w-4 h-4 text-yellow-600" />
@@ -1824,9 +1824,9 @@ const UsersManagement = () => {
                   setResetConfirmUserId(null);
                   setResetConfirmUser(null);
                 }}
-                disabled={resetPasswordMutation.isLoading}
+                disabled={(resetPasswordMutation as any).isPending ?? false}
               >
-                {resetPasswordMutation.isLoading ? "Resetting..." : "Confirm reset"}
+                {(resetPasswordMutation as any).isPending ? "Resetting..." : "Confirm reset"}
               </Button>
             </div>
           </DialogContent>
@@ -5187,7 +5187,7 @@ export default function AdminSuperDashboard() {
     });
   };
 
-  const handleEstateSelection = (estateId: string) => {
+  const handleEstateSelection = (estateId: string | null) => {
     const normalized = estateId || null;
     setSelectedEstateId(normalized);
     setCurrentEstate(normalized);

@@ -96,19 +96,26 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", ts: new Date().toISOString() });
 });
 
-// Utilities for optional guards
-async function tableExists(tableName: string): Promise<boolean> {
-  const result = await db.execute(sql`SELECT to_regclass(${`public.${tableName}`}) AS oid;`);
-  const row = Array.isArray(result) ? result[0] : (result as any)?.rows?.[0] || (result as any)?.[0];
-  return Boolean(row?.oid);
+// Schema guard: ensure columns exist (idempotent)
+async function ensureServiceRequestsColumns() {
+  await db.execute(sql`
+    ALTER TABLE service_requests
+      ADD COLUMN IF NOT EXISTS admin_notes      text,
+      ADD COLUMN IF NOT EXISTS assigned_at      timestamp NULL,
+      ADD COLUMN IF NOT EXISTS closed_at        timestamp NULL,
+      ADD COLUMN IF NOT EXISTS close_reason     text,
+      ADD COLUMN IF NOT EXISTS billed_amount    numeric(10,2) DEFAULT '0',
+      ADD COLUMN IF NOT EXISTS payment_status   text DEFAULT 'pending',
+      ADD COLUMN IF NOT EXISTS preferred_time   timestamp NULL;
+  `);
+  await db.execute(sql`
+    ALTER TABLE service_requests
+      ADD COLUMN IF NOT EXISTS estate_id varchar(255);
+  `);
 }
 
 // Ensure admin-related columns exist on users table
 async function ensureUsersColumns() {
-  if (!(await tableExists("users"))) {
-    console.warn("[DB] Skipping ensureUsersColumns; users table not found");
-    return;
-  }
   await db.execute(sql`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS global_role user_role;
@@ -131,11 +138,23 @@ async function ensureUsersColumns() {
   `);
 }
 
+// Ensure minimal users table exists so schema guard ALTERs can run.
+async function ensureUsersTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS users (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text,
+      email text,
+      phone text,
+      password text,
+      role text DEFAULT 'resident',
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+}
+
 async function ensureCompaniesTable() {
-  if (!(await tableExists("users"))) {
-    console.warn("[DB] Skipping ensureCompaniesTable; users table not found");
-    return;
-  }
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS companies (
       id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -157,10 +176,6 @@ async function ensureCompaniesTable() {
 }
 
 async function ensureProviderRequestsTable() {
-  if (!(await tableExists("users"))) {
-    console.warn("[DB] Skipping ensureProviderRequestsTable; users table not found");
-    return;
-  }
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS provider_requests (
       id varchar(255) PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -183,50 +198,64 @@ async function ensureProviderRequestsTable() {
   `);
 }
 
+// Ensure the service_requests table exists (minimal schema) so the schema-guard ALTERs can run safely.
+async function ensureServiceRequestsTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS service_requests (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      resident_id varchar,
+      provider_id varchar,
+      category varchar,
+      description text,
+      status text DEFAULT 'pending',
+      budget text DEFAULT '0',
+      urgency varchar DEFAULT 'medium',
+      preferred_time timestamp NULL,
+      special_instructions text,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+}
+
 async function ensureTransactionsColumns() {
   try {
-    const hasTable = await tableExists("transactions");
-    if (!hasTable) {
-      console.warn("[DB] Skipping ensureTransactionsColumns; transactions table not found");
-      return;
-    }
-
     await db.execute(sql`
       ALTER TABLE transactions
-        ADD COLUMN IF NOT EXISTS reference text,
+        ADD COLUMN IF NOT EXISTS "gatewayReference" text,
         ADD COLUMN IF NOT EXISTS gateway text DEFAULT 'paystack',
         ADD COLUMN IF NOT EXISTS meta jsonb DEFAULT '{}'::jsonb;
     `);
 
-    // Backfill any NULL references with generated UUID text
+    // Backfill any NULL gatewayReference with generated UUID text
     await db.execute(sql`
       UPDATE transactions
-      SET reference = COALESCE(reference, gen_random_uuid()::text)
-      WHERE reference IS NULL;
+      SET "gatewayReference" = COALESCE("gatewayReference", gen_random_uuid()::text)
+      WHERE "gatewayReference" IS NULL;
     `);
 
     // Try to make the column NOT NULL and add a unique constraint if possible
     try {
       await db.execute(sql`
         ALTER TABLE transactions
-          ALTER COLUMN reference SET NOT NULL;
+          ALTER COLUMN "gatewayReference" SET NOT NULL;
       `);
       // Add unique constraint if it doesn't already exist
       await db.execute(sql`
         DO $$
         BEGIN
           IF NOT EXISTS (
-            SELECT 1 FROM pg_constraint WHERE conname = 'transactions_reference_unique'
+            SELECT 1 FROM pg_constraint WHERE conname = 'transactions_gatewayreference_unique'
           ) THEN
-            ALTER TABLE transactions ADD CONSTRAINT transactions_reference_unique UNIQUE (reference);
+            ALTER TABLE transactions ADD CONSTRAINT transactions_gatewayreference_unique UNIQUE ("gatewayReference");
           END IF;
         END$$;
       `);
     } catch (e) {
-      console.warn("Could not set transactions.reference NOT NULL or add unique constraint:", e?.message || e);
+      console.warn("Could not set transactions.gatewayReference NOT NULL or add unique constraint:", (e as any)?.message || String(e));
     }
   } catch (err) {
-    console.error("ensureTransactionsColumns failed:", err?.message || err);
+    console.error("ensureTransactionsColumns failed:", (err as any)?.message || String(err));
   }
 }
 
@@ -242,48 +271,21 @@ async function ensureMongoIdMappingTable() {
   `);
 }
 
-async function ensureRefreshTokensTable() {
-  if (!(await tableExists("users"))) {
-    console.warn("[DB] Skipping ensureRefreshTokensTable; users table not found");
-    return;
-  }
-
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS refresh_tokens (
-      id varchar(255) PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id varchar(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      token_id varchar(255) NOT NULL UNIQUE,
-      expires_at timestamp NOT NULL,
-      is_revoked boolean NOT NULL DEFAULT false,
-      created_at timestamp DEFAULT now(),
-      revoked_at timestamp NULL
-    );
-  `);
-
-  // Add index on user_id for faster queries
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON refresh_tokens(user_id);
-  `);
-
-  // Add index on token_id for faster lookups
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS refresh_tokens_token_id_idx ON refresh_tokens(token_id);
-  `);
-}
-
 // Boot sequence
 (async () => {
   try {
     await dbReady;
+    await ensureServiceRequestsTable();
+    await ensureServiceRequestsColumns();
+    await ensureUsersTable();
     await ensureUsersColumns();
     await ensureCompaniesTable();
     await ensureProviderRequestsTable();
     await ensureTransactionsColumns();
     await ensureMongoIdMappingTable();
-    await ensureRefreshTokensTable();
     log("[DB] Schema guard OK");
   } catch (e) {
-    console.error("[DB] Schema guard failed (non-fatal in dev):", e);
+    console.error("[DB] Schema guard failed:", e);
     // keep running so you can see logs and fix in place
   }
 

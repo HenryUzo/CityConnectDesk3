@@ -27,7 +27,16 @@ export const ServiceRequestsTable: React.FC<Props> = ({ estateId }) => {
     }
 
     const updated = await res.json();
-    setData((prev) => prev.map((r) => (r.id === updated.id ? normalizeRequest(updated) : r)));
+    setData((prev) =>
+      prev.map((r) =>
+        r.id === updated.id
+          ? ({
+              ...normalizeRequest(updated),
+              status: normalizeStatus(updated.status ?? "pending"),
+            } as ServiceRequest)
+          : r,
+      ),
+    );
   }
 
   if (!estateId) return <div>No estate selected.</div>;

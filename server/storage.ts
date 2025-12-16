@@ -1,8 +1,6 @@
 import {
   users,
   serviceRequests,
-  wallets,
-  transactions,
   companies,
   providerRequests,
   mongoIdMappings,
@@ -17,10 +15,6 @@ import {
   type InsertUser,
   type ServiceRequest,
   type InsertServiceRequest,
-  type Wallet,
-  type InsertWallet,
-  type Transaction,
-  type InsertTransaction,
   type Company,
   type InsertCompany,
   type ProviderRequest,
@@ -42,11 +36,17 @@ import { db } from "./db";
 import { eq, and, desc, count, sql, asc, or, inArray, sum } from "drizzle-orm";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
+const PostgresSessionStore = connectPg(session);
 import { pool } from "./db";
 import { prisma } from "./lib/prisma";
-import type { User as PrismaUser } from "@prisma/client";
-
-const PostgresSessionStore = connectPg(session);
+import { Prisma } from "@prisma/client";
+import type {
+  Transaction as PrismaTransaction,
+  TransactionStatus,
+  TransactionType,
+  Wallet as PrismaWallet,
+  User as PrismaUser,
+} from "@prisma/client";
 
 const SHARED_USER_ROLES = [
   "resident",
@@ -58,7 +58,6 @@ const SHARED_USER_ROLES = [
 ] as const;
 
 type SharedUserRole = (typeof SHARED_USER_ROLES)[number];
-
 const DEFAULT_USER_ROLE: SharedUserRole = "resident";
 
 function normalizeSharedRole(role?: string | null): SharedUserRole {
@@ -148,6 +147,26 @@ export interface OrdersListResult {
   pagination: OrdersPagination;
 }
 
+type WalletCreationInput = {
+  userId: string;
+  balance?: string;
+  currency?: string;
+};
+
+type CreateTransactionInput = {
+  walletId: string;
+  serviceRequestId?: string | null;
+  userId?: string;
+  amount: string;
+  type: TransactionType;
+  status: TransactionStatus;
+  description?: string | null;
+  reference: string;
+  meta?: Prisma.InputJsonValue | null;
+  currency?: string;
+  gateway?: string;
+};
+
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -167,18 +186,18 @@ export interface IStorage {
   assignServiceRequest(id: string, providerId: string): Promise<ServiceRequest | undefined>;
   
   // Wallets
-  getWalletByUserId(userId: string): Promise<Wallet | undefined>;
-  createWallet(wallet: InsertWallet): Promise<Wallet>;
-  updateWalletBalance(userId: string, amount: string): Promise<Wallet | undefined>;
-  
+  getWalletByUserId(userId: string): Promise<PrismaWallet | undefined>;
+  createWallet(wallet: WalletCreationInput): Promise<PrismaWallet>;
+  updateWalletBalance(userId: string, amount: string): Promise<PrismaWallet | undefined>;
+
   // Transactions
-  createTransaction(transaction: InsertTransaction): Promise<Transaction>;
-  getTransactionsByWallet(walletId: string): Promise<Transaction[]>;
-  getTransactionByReference(reference: string): Promise<Transaction | undefined>;
+  createTransaction(transaction: CreateTransactionInput): Promise<PrismaTransaction>;
+  getTransactionsByWallet(walletId: string): Promise<PrismaTransaction[]>;
+  getTransactionByReference(reference: string): Promise<PrismaTransaction | undefined>;
   updateTransactionByReference(
     reference: string,
-    updates: Partial<Transaction>,
-  ): Promise<Transaction | undefined>;
+    updates: Prisma.TransactionUpdateInput,
+  ): Promise<PrismaTransaction | undefined>;
   
   // Admin functions
   getUsers(role?: string): Promise<User[]>;
@@ -557,65 +576,120 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Wallets
-  async getWalletByUserId(userId: string): Promise<Wallet | undefined> {
-    const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, userId));
-    return wallet || undefined;
+  async getWalletByUserId(userId: string): Promise<PrismaWallet | undefined> {
+    const res = await prisma.wallet.findUnique({ where: { userId } });
+    return res ?? undefined;
   }
 
-  async createWallet(wallet: InsertWallet): Promise<Wallet> {
-    const [newWallet] = await db
-      .insert(wallets)
-      .values(wallet)
-      .returning();
-    return newWallet;
+  async createWallet(wallet: WalletCreationInput): Promise<PrismaWallet> {
+    return prisma.wallet.create({
+      data: {
+        userId: wallet.userId,
+        balance: wallet.balance ?? "0",
+        currency: wallet.currency ?? "NGN",
+      },
+    });
   }
 
-  async updateWalletBalance(userId: string, amount: string): Promise<Wallet | undefined> {
-    const [wallet] = await db
-      .update(wallets)
-      .set({ balance: amount, updatedAt: new Date() })
-      .where(eq(wallets.userId, userId))
-      .returning();
-    return wallet || undefined;
+  async updateWalletBalance(userId: string, amount: string): Promise<PrismaWallet | undefined> {
+    try {
+      return await prisma.wallet.update({
+        where: { userId },
+        data: {
+          balance: amount,
+          updatedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   // Transactions
-  async createTransaction(transaction: InsertTransaction): Promise<Transaction> {
-    const [newTransaction] = await db
-      .insert(transactions)
-      .values(transaction)
-      .returning();
-    return newTransaction;
+  async createTransaction(transaction: CreateTransactionInput): Promise<PrismaTransaction> {
+    const {
+      walletId,
+      serviceRequestId,
+      userId,
+      amount,
+      type,
+      status,
+      description,
+      reference,
+      meta,
+      currency,
+      gateway,
+    } = transaction;
+
+    const data: Prisma.TransactionCreateInput = {
+      amount,
+      type,
+      status,
+      description: description ?? null,
+      // map our internal `reference` to Prisma's `gatewayReference` field
+      gatewayReference: reference,
+      meta: meta ?? undefined,
+      currency: currency ?? "NGN",
+      gateway: gateway ?? "paystack",
+      ...(serviceRequestId
+        ? {
+            serviceRequest: {
+              connect: { id: serviceRequestId },
+            },
+          }
+        : {}),
+      ...(walletId
+        ? {
+            wallet: {
+              connect: { id: walletId },
+            },
+          }
+        : {}),
+      ...(userId
+        ? {
+            user: {
+              connect: { id: userId },
+            },
+          }
+        : {}),
+    };
+
+    return prisma.transaction.create({
+      data,
+    });
   }
 
-  async getTransactionsByWallet(walletId: string): Promise<Transaction[]> {
-    const transactionList = await db
-      .select()
-      .from(transactions)
-      .where(eq(transactions.walletId, walletId))
-      .orderBy(desc(transactions.createdAt));
-    return transactionList;
+  async getTransactionsByWallet(walletId: string): Promise<PrismaTransaction[]> {
+    return prisma.transaction.findMany({
+      where: { walletId },
+      orderBy: { createdAt: "desc" },
+    });
   }
 
-  async getTransactionByReference(reference: string): Promise<Transaction | undefined> {
-    const [tx] = await db
-      .select()
-      .from(transactions)
-      .where(eq(transactions.reference, reference))
-      .limit(1);
-    return tx || undefined;
+  async getTransactionByReference(reference: string): Promise<PrismaTransaction | undefined> {
+    // gatewayReference is not defined as a unique field in Prisma schema, so use findFirst
+    const tx = await prisma.transaction.findFirst({ where: { gatewayReference: reference } });
+    return tx ?? undefined;
   }
 
   async updateTransactionByReference(
     reference: string,
-    updates: Partial<Transaction>,
-  ): Promise<Transaction | undefined> {
-    const [tx] = await db
-      .update(transactions)
-      .set({ ...updates })
-      .where(eq(transactions.reference, reference))
-      .returning();
-    return tx || undefined;
+    updates: Prisma.TransactionUpdateInput,
+  ): Promise<PrismaTransaction | undefined> {
+    try {
+      // Find the transaction by gatewayReference then update by id (since gatewayReference may not be unique)
+      const tx = await prisma.transaction.findFirst({ where: { gatewayReference: reference } });
+      if (!tx) return undefined;
+      return await prisma.transaction.update({ where: { id: tx.id }, data: updates });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   // Admin functions

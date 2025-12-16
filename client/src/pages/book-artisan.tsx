@@ -93,6 +93,17 @@ const FALLBACK_SERVICE_CATEGORIES = [
 
 type ArtisanRequestFormData = z.infer<typeof artisanRequestSchema>;
 
+type AiDiagnosis = {
+  summary: string;
+  probableCauses: { cause: string; likelihood: "low" | "medium" | "high" }[];
+  severity: "low" | "medium" | "high" | "critical";
+  shouldAvoidDIY: boolean;
+  safetyNotes: string[];
+  suggestedChecks: string[];
+  whenToCallPro: string;
+  suggestedCategory?: string;
+};
+
 export default function BookArtisan() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
@@ -105,6 +116,7 @@ export default function BookArtisan() {
   const [dateOpen, setDateOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
   const [calendarBase, setCalendarBase] = useState<Date>(new Date());
+  const [aiResult, setAiResult] = useState<AiDiagnosis | null>(null);
 
   const getNextNDays = (n: number) => {
     const days: Date[] = [];
@@ -157,6 +169,8 @@ export default function BookArtisan() {
       diagnosisType: "regular",
     },
   });
+  const watchedCategory = form.watch("category");
+  const watchedDescription = form.watch("description");
 
   // Fetch service categories from server (global scope)
   const { data: categories = [], isLoading: isCategoriesLoading } = useQuery({
@@ -241,6 +255,44 @@ export default function BookArtisan() {
     }
   }, [categoryOptions, form]);
 
+  const diagnoseMutation = useMutation<AiDiagnosis, Error, void>({
+    mutationFn: async () => {
+      const values = form.getValues();
+      const payload = {
+        category: values.category,
+        description: values.description,
+        urgency: values.urgency,
+        specialInstructions: values.specialInstructions,
+      };
+      return await residentFetch<AiDiagnosis>("/api/ai/diagnose", {
+        method: "POST",
+        json: payload,
+      });
+    },
+    onMutate: () => {
+      setAiResult(null);
+    },
+    onSuccess: (data) => {
+      setAiResult(data);
+      toast({
+        title: "AI diagnosis ready",
+        description: "Review the suggestions before you confirm your booking.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "AI diagnosis failed",
+        description:
+          "We couldn't analyze this issue right now. Please try again or submit your request.",
+        variant: "destructive",
+      });
+      console.error("AI diagnosis error:", error);
+    },
+  });
+  const canRequestDiagnosis =
+    Boolean(watchedCategory?.trim()) &&
+    Boolean(watchedDescription?.trim());
+
   const submitRequestMutation = useMutation({
     mutationFn: async (data: ArtisanRequestFormData) => {
       // shape for server
@@ -279,6 +331,7 @@ export default function BookArtisan() {
         title: "Request submitted",
         description: "Your artisan repair request has been submitted.",
       });
+      setAiResult(null);
       setLocation("/resident");
     },
     onError: (error: Error) => {
@@ -293,6 +346,15 @@ export default function BookArtisan() {
   const onSubmit = (data: ArtisanRequestFormData) => {
     submitRequestMutation.mutate(data);
   };
+
+  const handleCityBuddyDiagnosis = form.handleSubmit(async () => {
+    form.setValue("diagnosisType", "regular");
+    try {
+      await diagnoseMutation.mutateAsync();
+    } catch {
+      // allow user to continue even when AI preview fails
+    }
+  });
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -424,7 +486,7 @@ export default function BookArtisan() {
                           <FormLabel className="text-sm font-medium text-gray-700">Title</FormLabel>
                           <FormControl>
                             <Input 
-                              placeholder="Artisan Bookings" 
+                              placeholder="Enter request title" 
                               className="bg-gray-50 border-gray-200"
                               {...field} 
                             />
@@ -447,7 +509,7 @@ export default function BookArtisan() {
                           >
                             <FormControl>
                               <SelectTrigger className="bg-gray-50 border-gray-200">
-                                <SelectValue placeholder="Store Owner" />
+                                <SelectValue placeholder="Select a service category" />
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
@@ -478,14 +540,34 @@ export default function BookArtisan() {
                         >
                           <FormControl>
                             <SelectTrigger className="bg-gray-50 border-gray-200">
-                              <SelectValue placeholder="Medium" />
+                              <SelectValue placeholder="Select urgency level" />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="low">🟢 Low</SelectItem>
-                            <SelectItem value="medium">🟡 Medium</SelectItem>
-                            <SelectItem value="high">🟠 High</SelectItem>
-                            <SelectItem value="emergency">🔴 Emergency</SelectItem>
+                            <SelectItem value="low">
+                              <div className="flex flex-col">
+                                <span>🟢 Low</span>
+                                <span className="text-xs text-muted-foreground">Resolve in a week or more</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="medium">
+                              <div className="flex flex-col">
+                                <span>🟡 Medium</span>
+                                <span className="text-xs text-muted-foreground">Resolve in 3–5 days</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="high">
+                              <div className="flex flex-col">
+                                <span>🟠 High</span>
+                                <span className="text-xs text-muted-foreground">Resolve in 1–2 days</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="emergency">
+                              <div className="flex flex-col">
+                                <span>🔴 Emergency</span>
+                                <span className="text-xs text-muted-foreground">Resolve within 12–24 hours</span>
+                              </div>
+                            </SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -552,13 +634,13 @@ export default function BookArtisan() {
                           </div>
                           <FormControl>
                             <Textarea
-                              placeholder="I'm a Product Designer based in Melbourne, Australia. I specialise in UX/UI design, brand strategy, and Webflow development."
+                              placeholder="Describe the issue and what needs fixing"
                               className="resize-none border-0 focus-visible:ring-0 min-h-[120px]"
                               {...field}
                             />
                           </FormControl>
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">275 characters left</p>
+                        <p className="text-xs text-gray-500 mt-1">Provide a clear description of the problem</p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -632,6 +714,7 @@ export default function BookArtisan() {
                                   className="bg-gray-50 border-gray-200 pr-10 date-time-input"
                                   {...field}
                                   ref={preferredDateRef}
+                                  placeholder="Select preferred date"
                                 />
                                 <Popover open={dateOpen} onOpenChange={(open) => {
                                   setDateOpen(open);
@@ -718,6 +801,7 @@ export default function BookArtisan() {
                                 className="bg-gray-50 border-gray-200 pr-10 date-time-input"
                                 {...field}
                                 ref={preferredTimeRef}
+                                  placeholder="Select preferred time"
                               />
                               <Popover open={timeOpen} onOpenChange={(open) => {
                                 setTimeOpen(open);
@@ -831,13 +915,13 @@ export default function BookArtisan() {
                           </div>
                           <FormControl>
                             <Textarea
-                              placeholder="I'm a Product Designer based in Melbourne, Australia. I specialise in UX/UI design, brand strategy, and Webflow development."
+                                  placeholder="Add any special instructions for the artisan"
                               className="resize-none border-0 focus-visible:ring-0 min-h-[120px]"
                               {...field}
                             />
                           </FormControl>
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">275 characters left</p>
+                            <p className="text-xs text-gray-500 mt-1">Optional: share preferences or access details</p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -854,7 +938,7 @@ export default function BookArtisan() {
                             Professional Servicing
                           </FormLabel>
                           <p className="text-xs text-gray-500 mt-1">
-                            I'm open and available for freelance work.
+                            Enable professional servicing for this request
                           </p>
                         </div>
                         <FormControl>
@@ -877,26 +961,38 @@ export default function BookArtisan() {
                     >
                       Cancel
                     </Button>
+
+                    {/* CityBuddy Diagnosis (uses diagnosisType = "regular" under the hood) */}
                     <Button
-                      type="submit"
+                      type="button"
                       variant="outline"
                       className="flex-1 border-emerald-600 text-emerald-600 hover:bg-emerald-50"
-                      disabled={submitRequestMutation.isPending}
-                      onClick={() => form.setValue('diagnosisType', 'regular')}
+                      disabled={
+                        submitRequestMutation.isPending ||
+                        diagnoseMutation.isPending ||
+                        !canRequestDiagnosis
+                      }
+                      onClick={handleCityBuddyDiagnosis}
                     >
                       <div className="flex flex-col items-center">
-                        <span className="font-medium">Regular Diagnosis (Free)</span>
-                        <span className="text-xs opacity-75">⚡ 50% Certainty</span>
+                        <span className="font-medium">CityBuddy Diagnosis (Free)</span>
+                        <span className="text-xs opacity-75">
+                          ? AI-powered prediction & repair guidance
+                        </span>
                       </div>
                     </Button>
+
+                    {/* Professional Diagnosis (paid) */}
                     <Button
                       type="button"
                       className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
                       onClick={() => setLocation("/checkout-diagnosis")}
                     >
                       <div className="flex flex-col items-center">
-                        <span className="font-medium">Request Professional Diagnosis (₦6,000)</span>
-                        <span className="text-xs opacity-90">✓ 100% Certainty, Shorter repair duration</span>
+                        <span className="font-medium">Request Professional Diagnosis (?6,000)</span>
+                        <span className="text-xs opacity-90">
+                          ? 100% Certainty, Shorter repair duration
+                        </span>
                       </div>
                     </Button>
                   </div>
@@ -904,6 +1000,77 @@ export default function BookArtisan() {
               </Form>
             </CardContent>
           </Card>
+          {aiResult && (
+            <Card className="mt-6 border-emerald-200 bg-emerald-50/60">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-emerald-800">
+                  <Wrench className="w-4 h-4 text-emerald-700" />
+                  AI Diagnosis Summary
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm text-gray-800">
+                <p>{aiResult.summary}</p>
+                {aiResult.probableCauses.length > 0 && (
+                  <div>
+                    <p className="font-semibold mb-1">Most likely causes:</p>
+                    <ul className="list-disc list-inside space-y-1">
+                      {aiResult.probableCauses.map((cause, idx) => (
+                        <li key={`${cause.cause}-${idx}`}>
+                          <span className="font-medium">{cause.cause}</span>{" "}
+                          <span className="text-xs uppercase text-gray-500">
+                            ({cause.likelihood} likelihood)
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {aiResult.safetyNotes.length > 0 && (
+                  <div>
+                    <p className="font-semibold mb-1">Safety notes:</p>
+                    <ul className="list-disc list-inside space-y-1">
+                      {aiResult.safetyNotes.map((note, idx) => (
+                        <li key={`safety-${idx}`}>{note}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {aiResult.suggestedChecks.length > 0 && (
+                  <div>
+                    <p className="font-semibold mb-1">Checks you can try now:</p>
+                    <ul className="list-disc list-inside space-y-1">
+                      {aiResult.suggestedChecks.map((check, idx) => (
+                        <li key={`check-${idx}`}>{check}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div>
+                  <p className="font-semibold mb-1">Severity</p>
+                  <p className="capitalize">{aiResult.severity}</p>
+                </div>
+                <div>
+                  <p className="font-semibold mb-1">When to call a professional:</p>
+                  <p>{aiResult.whenToCallPro}</p>
+                </div>
+                {aiResult.suggestedCategory && (
+                  <p className="text-xs text-gray-600 mt-2">
+                    Suggested service category:{" "}
+                    <span className="font-medium">{aiResult.suggestedCategory}</span>
+                  </p>
+                )}
+                {aiResult.shouldAvoidDIY && (
+                  <p className="text-sm font-semibold text-rose-700">
+                    Avoid DIY fixes for this issue. Use a verified professional.
+                  </p>
+                )}
+                <p className="text-[11px] text-gray-500 mt-2">
+                  Disclaimer: This AI diagnosis is only a guide and may be inaccurate. For electrical, gas,
+                  structural, or water leak issues, always use a verified professional and follow estate safety rules.
+                </p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </div>

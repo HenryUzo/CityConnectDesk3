@@ -1,6 +1,8 @@
 import { PaystackVerifyResponse, verifyPaystackTransaction } from "./paystack";
-import type { Transaction } from "@shared/schema";
 import type { IStorage } from "./storage";
+import { TransactionStatus } from "@prisma/client";
+import type { Transaction as PrismaTransaction } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 export type PaystackVerifyStorage = Pick<
   IStorage,
@@ -21,14 +23,14 @@ export async function handlePaystackVerify({
   reference: string;
   storage: PaystackVerifyStorage;
   verifyFn?: (ref: string) => Promise<PaystackVerifyResponse>;
-  transaction?: Transaction | null;
+  transaction?: PrismaTransaction | null;
 }): Promise<PaystackVerifyResult> {
   if (!reference) return { status: "failed", alreadyProcessed: false };
   const tx = transaction || (await storage.getTransactionByReference(reference));
   if (!tx) {
     return { status: "failed", alreadyProcessed: false };
   }
-  if (tx.status === "completed") {
+  if (tx.status === TransactionStatus.COMPLETED) {
     return { status: "success", alreadyProcessed: true };
   }
 
@@ -48,12 +50,12 @@ export async function handlePaystackVerify({
   }
 
   await storage.updateTransactionByReference(reference, {
-    status: "completed",
+    status: TransactionStatus.COMPLETED,
     description: `Paystack ${charge.channel || "charge"}`,
     meta: {
-      ...(tx.meta as Record<string, unknown>),
-      paystack: charge,
-    },
+      ...((tx.meta as Prisma.JsonObject) || {}),
+      paystack: charge as any,
+    } as Prisma.InputJsonObject,
   });
 
   if (tx.serviceRequestId) {
@@ -133,7 +135,7 @@ export async function handlePaystackWebhook({
       return { statusCode: 200, body: { received: true } };
     }
 
-    if (tx.status === "completed") {
+    if (tx.status === TransactionStatus.COMPLETED) {
       return { statusCode: 200, body: { received: true } };
     }
 
@@ -147,7 +149,7 @@ export async function handlePaystackWebhook({
     }
 
     await storage.updateTransactionByReference(reference, {
-      status: "completed",
+      status: TransactionStatus.COMPLETED,
       description: `Paystack webhook ${data.channel || "charge"}`,
       meta: {
         ...(tx.meta as Record<string, unknown>),

@@ -1,7 +1,9 @@
 import { nanoid } from "nanoid";
-import type { Wallet } from "@shared/schema";
+import { TransactionStatus, TransactionType } from "@prisma/client";
+import type { Wallet } from "@prisma/client";
 import { storage } from "./storage";
 import { verifyPaystackTransaction } from "./paystack";
+import { Prisma } from "@prisma/client";
 
 type CreatePendingTxArgs = {
   userId: string;
@@ -46,15 +48,14 @@ export async function createPendingPaystackTransaction(
 
   await storage.createTransaction({
     walletId: wallet.id,
-    serviceRequestId: args.serviceRequestId,
+    userId: args.userId,
+    serviceRequestId: args.serviceRequestId ?? null,
     amount: amountFormatted,
-    type: "debit",
-    status: "pending",
+    type: TransactionType.DEBIT,
+    status: TransactionStatus.PENDING,
     description: args.description ?? "Service payment",
     reference,
-    meta: {
-      ...(args.meta || {}),
-    },
+    meta: args.meta as Prisma.InputJsonObject,
   });
 
   return {
@@ -70,7 +71,7 @@ export async function verifyAndFinalizePaystackCharge(reference: string) {
   if (!tx) {
     throw new Error(`Transaction with reference ${reference} not found`);
   }
-  if (tx.status === "completed") {
+  if (tx.status === TransactionStatus.COMPLETED) {
     return { transaction: tx, alreadyProcessed: true };
   }
 
@@ -89,12 +90,12 @@ export async function verifyAndFinalizePaystackCharge(reference: string) {
   }
 
   const updatedTx = await storage.updateTransactionByReference(reference, {
-    status: "completed",
+    status: TransactionStatus.COMPLETED,
     description: `Paystack ${charge.channel || "charge"}`,
     meta: {
-      ...(tx.meta as Record<string, unknown>),
-      paystack: charge,
-    },
+      ...((tx.meta as Prisma.JsonObject) || {}),
+      paystack: charge as any,
+    } as Prisma.InputJsonObject,
   });
 
   if (tx.serviceRequestId) {

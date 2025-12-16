@@ -101,12 +101,12 @@
 
 @layer base {
   .date-time-input::-webkit-calendar-picker-indicator {
-    opacity: 0;
-    pointer-events: none;
+    display: none;
   }
-
-  .date-time-input::-webkit-clear-button,
-  .date-time-input::-webkit-datetime-edit {
+  /* Only hide the calendar/time icon; leave the text render intact so selected values are visible.
+     Hiding `::-webkit-datetime-edit` removes the displayed value in Chromium browsers (Edge/Chrome).
+     Therefore we do not hide it. Keep clear-button hidden if desired. */
+  .date-time-input::-webkit-clear-button {
     display: none;
   }
 }

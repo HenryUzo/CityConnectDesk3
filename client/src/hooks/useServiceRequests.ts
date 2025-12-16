@@ -13,7 +13,7 @@ function normalizeStatus(status: string | undefined | null) {
 }
 
 function normalizeRequest(request: ServiceRequest): ServiceRequest {
-  return { ...request, status: normalizeStatus(request.status) };
+  return { ...request, status: normalizeStatus(request.status) } as ServiceRequest;
 }
 
 export function useServiceRequests(estateId: string | null) {
