@@ -97,6 +97,21 @@ export default function AdminDashboard() {
     refetchInterval: 5000,
   });
 
+  // AI Settings
+  const { data: aiSettings } = useQuery<any>({
+    queryKey: ["/api/admin/ai/settings"],
+    queryFn: async () => await adminApiRequest("GET", "/api/admin/ai/settings"),
+  });
+
+  const updateAISettings = useMutation({
+    mutationFn: async (body: { provider: string; model?: string }) =>
+      await adminApiRequest("PATCH", "/api/admin/ai/settings", body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/ai/settings"] });
+      toast({ title: "AI settings saved", description: "Provider configuration updated." });
+    },
+  });
+
   // Pending providers (auto-refresh)
   const { data: pendingProviders = [] } = useQuery<User[]>({
     queryKey: [`${import.meta.env.VITE_API_URL}/api/admin/providers/pending`],
@@ -212,6 +227,9 @@ export default function AdminDashboard() {
                 </TabsTrigger>
                 <TabsTrigger value="providers" data-testid="tab-providers">
                   Providers ({providers.length})
+                </TabsTrigger>
+                <TabsTrigger value="ai-settings" data-testid="tab-ai-settings">
+                  AI Settings
                 </TabsTrigger>
               </TabsList>
             </CardHeader>
@@ -393,6 +411,64 @@ export default function AdminDashboard() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </CardContent>
+            </TabsContent>
+
+            <TabsContent value="ai-settings">
+              <CardContent>
+                <h3 className="text-lg font-semibold text-foreground mb-4">AI Provider Configuration</h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div className="space-y-3">
+                    <label className="text-sm text-muted-foreground">Provider</label>
+                    <select
+                      className="px-3 py-2 border border-input rounded-md bg-background"
+                      value={aiSettings?.active?.provider || "openai"}
+                      onChange={(e) => updateAISettings.mutate({ provider: e.target.value, model: aiSettings?.active?.model })}
+                      data-testid="select-ai-provider"
+                    >
+                      {(aiSettings?.available || ["openai", "ollama", "gemini"]).map((p: string) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-sm text-muted-foreground">Model (optional)</label>
+                    <Input
+                      placeholder="e.g., gpt-4o-mini"
+                      value={aiSettings?.active?.model || ""}
+                      onChange={(e) => updateAISettings.mutate({ provider: aiSettings?.active?.provider || "openai", model: e.target.value })}
+                      data-testid="input-ai-model"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <Button
+                    onClick={() => updateAISettings.mutate({ provider: aiSettings?.active?.provider || "openai", model: aiSettings?.active?.model })}
+                    disabled={updateAISettings.isPending}
+                    data-testid="button-save-ai-settings"
+                  >
+                    Save
+                  </Button>
+                </div>
+
+                <div className="mt-8">
+                  <h4 className="text-sm font-medium text-foreground mb-3">Provider Status</h4>
+                  <div className="space-y-2">
+                    {(["openai", "ollama", "gemini"] as const).map((p) => {
+                      const configured = aiSettings?.status?.[p]?.configured;
+                      return (
+                        <div key={p} className="flex items-center justify-between p-3 bg-muted rounded-md" data-testid={`ai-status-${p}`}>
+                          <span className="text-sm text-foreground capitalize">{p}</span>
+                          <Badge className={configured ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}>
+                            {configured ? "Configured ✅" : "Missing key ❌"}
+                          </Badge>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </CardContent>
             </TabsContent>

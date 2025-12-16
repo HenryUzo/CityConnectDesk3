@@ -46,7 +46,8 @@ import {
 } from "./paystackHandlers";
 import { TransactionStatus, Prisma } from "@prisma/client";
 import { requireAuth, requireResident } from "./auth-middleware";
-import { getOpenAI } from "./openaiClient";
+import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
+import * as ai from "./ai";
 
 const isAdminOrSuper = (req: Express["request"]) =>
   req.isAuthenticated() &&
@@ -82,7 +83,7 @@ const AIDiagnosisRequestSchema = z.object({
   specialInstructions: z.string().optional(),
 });
 
-const AIDiagnosisResponseSchema = z.object({
+export const AIDiagnosisResponseSchema = z.object({
   summary: z.string(),
   probableCauses: z
     .array(
@@ -97,46 +98,44 @@ const AIDiagnosisResponseSchema = z.object({
   safetyNotes: z.array(z.string()).default([]),
   suggestedChecks: z.array(z.string()).default([]),
   whenToCallPro: z.string(),
-  suggestedCategory: z.string().optional(),
+  suggestedCategory: z.string().nullable(),
 });
 
-const AI_RESPONSE_JSON_SCHEMA = {
-  name: "AiDiagnosis",
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      summary: { type: "string" },
-      probableCauses: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            cause: { type: "string" },
-            likelihood: { type: "string", enum: ["low", "medium", "high"] },
-          },
-          required: ["cause", "likelihood"],
+const AiDiagnosisSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    summary: { type: "string" },
+    probableCauses: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          cause: { type: "string" },
+          likelihood: { type: "string", enum: ["low", "medium", "high"] },
         },
+        required: ["cause", "likelihood"],
       },
-      severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
-      shouldAvoidDIY: { type: "boolean" },
-      safetyNotes: { type: "array", items: { type: "string" } },
-      suggestedChecks: { type: "array", items: { type: "string" } },
-      whenToCallPro: { type: "string" },
-      suggestedCategory: { type: "string" },
     },
-    required: [
-      "summary",
-      "probableCauses",
-      "severity",
-      "shouldAvoidDIY",
-      "safetyNotes",
-      "suggestedChecks",
-      "whenToCallPro",
-    ],
+    severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    shouldAvoidDIY: { type: "boolean" },
+    safetyNotes: { type: "array", items: { type: "string" } },
+    suggestedChecks: { type: "array", items: { type: "string" } },
+    whenToCallPro: { type: "string" },
+    suggestedCategory: { anyOf: [{ type: "string" }, { type: "null" }] },
   },
-};
+  required: [
+    "summary",
+    "probableCauses",
+    "severity",
+    "shouldAvoidDIY",
+    "safetyNotes",
+    "suggestedChecks",
+    "whenToCallPro",
+    "suggestedCategory",
+  ],
+} as const;
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
@@ -152,6 +151,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       length: key.length,
       envFileCheck: "Check .env.local in repo root",
     });
+  });
+
+  // Debug endpoint: check OpenAI configuration and basic access
+  app.get("/api/debug/ai-health", async (_req, res) => {
+    try {
+      const result = await verifyOpenAI();
+      res.json({ ok: result.ok, model: result.model, output: result.output ?? null, error: result.ok ? undefined : result.error });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, model: getDiagnosisModel(), error: error?.message || String(error) });
+    }
   });
 
   app.use("/api/app", appRoutes);
@@ -273,74 +282,100 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     try {
+      // Simple per-user/IP rate limiting (burst: 3 per minute)
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+      const userKey = `${req.user?.id ?? "anon"}:${ip}`;
+      const now = Date.now();
+      const windowMs = 60_000;
+      const maxRequests = 3;
+      // in-memory store
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__aiRate ||= new Map<string, { count: number; windowStart: number }>();
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const rate = global.__aiRate.get(userKey) || { count: 0, windowStart: now };
+      if (now - rate.windowStart > windowMs) {
+        rate.count = 0;
+        rate.windowStart = now;
+      }
+      rate.count += 1;
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__aiRate.set(userKey, rate);
+      if (rate.count > maxRequests) {
+        return res.status(429).json({ error: "Rate limit exceeded. Try again shortly." });
+      }
+
+      // Simple caching: key by user+description for 5 minutes
+      const cacheKey = `${userKey}:${parsedBody.data.category}:${parsedBody.data.description}`;
+      const ttlMs = 5 * 60_000;
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__aiCache ||= new Map<string, { expires: number; data: unknown }>();
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const cached = global.__aiCache.get(cacheKey);
+      if (cached && cached.expires > now) {
+        try {
+          const normalized = AIDiagnosisResponseSchema.parse(cached.data);
+          return res.json(normalized);
+        } catch {
+          // ignore parse errors and continue to live call
+        }
+      }
+
       const { category, description, urgency, specialInstructions } = parsedBody.data;
-      const openai = getOpenAI();
-      const model = process.env.OPENAI_DIAGNOSIS_MODEL || "gpt-4o-mini";
-
-      const aiResponse = await openai.responses.create({
-        model,
-        temperature: 0.2,
-        response_format: {
-          type: "json_schema",
-          json_schema: AI_RESPONSE_JSON_SCHEMA,
-        },
-        input: [
-          {
-            role: "system",
-            content: [
-              {
-                type: "text",
-                text:
-                  "You are a home maintenance and repairs assistant for an estate super-app. Always prioritize resident safety. Never suggest unsafe DIY work for electrical faults, gas issues, structural concerns, or serious water leaks. For such hazards, instruct the resident to shut off the source if it is safe to do so and to call a verified professional immediately.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `Resident repair request details:
-Category: ${category}
-Urgency: ${urgency ?? "not specified"}
-Description: ${description}
-Special instructions: ${specialInstructions || "None"}.
-
-Provide the structured JSON response exactly as specified.`,
-              },
-            ],
-          },
-        ],
-      });
-
-      const rawResponse =
-        ((aiResponse as any)?.output ?? [])
-          .flatMap((item: any) => item?.content ?? [])
-          .filter((content: any) => content?.type === "output_text")
-          .map((content: any) => content?.text ?? "")
-          .join("")
-          .trim() || "";
-
-      if (!rawResponse) {
-        throw new Error("AI response was empty");
-      }
-
-      let parsedResponse: unknown;
-      try {
-        parsedResponse = JSON.parse(rawResponse);
-      } catch (error) {
-        console.error("[AI] Unable to parse JSON response:", error, rawResponse);
-        throw new Error("Invalid AI response format");
-      }
-
-      const normalized = AIDiagnosisResponseSchema.parse(parsedResponse);
+      const normalized = await ai.diagnose({ category, description, urgency, specialInstructions });
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__aiCache.set(cacheKey, { expires: now + ttlMs, data: normalized });
       return res.json(normalized);
     } catch (error) {
+      // Optional fallback order: try other providers before failing
+      try {
+        const { provider } = ai.getActiveProvider();
+        const fallbacks = ai.availableProviders().filter((p) => p !== provider);
+        const { category, description, urgency, specialInstructions } = parsedBody.data as any;
+        for (const p of fallbacks) {
+          try {
+            ai.setActiveProvider(p);
+            const normalized = await ai.diagnose({ category, description, urgency, specialInstructions });
+            return res.json(normalized);
+          } catch {
+            // continue
+          }
+        }
+      } catch {}
       console.error("[AI] Diagnosis generation failed:", error);
       return res.status(500).json({
         error: "Unable to generate AI diagnosis right now.",
       });
     }
+  });
+
+  // Admin AI settings endpoints
+  app.get("/api/admin/ai/settings", async (req, res) => {
+    if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized - Admin only" });
+    const active = await ai.getActiveProvider();
+    const available = ai.availableProviders();
+    const status = {
+      openai: { configured: !!process.env.OPENAI_API_KEY },
+      ollama: { configured: !!(process.env.OLLAMA_BASE_URL || process.env.OLLAMA_HOST) },
+      gemini: { configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY) },
+    };
+    res.json({ active, available, status });
+  });
+
+  app.patch("/api/admin/ai/settings", async (req, res) => {
+    if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized - Admin only" });
+    const provider = req.body?.provider as any;
+    const model = req.body?.model as string | undefined;
+    if (!provider || !ai.availableProviders().includes(provider)) {
+      return res.status(400).json({ message: "Invalid provider" });
+    }
+    await ai.setActiveProvider(provider, model);
+    res.json({ success: true, active: await ai.getActiveProvider() });
   });
 
   // Admin: Send advice with inspection dates/times to resident

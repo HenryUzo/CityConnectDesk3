@@ -122,6 +122,24 @@ async function ensureUsersColumns() {
   `);
   await db.execute(sql`
     ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS first_name text,
+      ADD COLUMN IF NOT EXISTS last_name text,
+      ADD COLUMN IF NOT EXISTS access_code text,
+      ADD COLUMN IF NOT EXISTS role user_role DEFAULT 'resident'::user_role,
+      ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS is_approved boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS categories varchar(100)[],
+      ADD COLUMN IF NOT EXISTS service_category service_category,
+      ADD COLUMN IF NOT EXISTS experience integer,
+      ADD COLUMN IF NOT EXISTS location text,
+      ADD COLUMN IF NOT EXISTS latitude double precision,
+      ADD COLUMN IF NOT EXISTS longitude double precision,
+      ADD COLUMN IF NOT EXISTS rating numeric(3,2) DEFAULT '0',
+      ADD COLUMN IF NOT EXISTS created_at timestamp DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT now();
+  `);
+  await db.execute(sql`
+    ALTER TABLE users
       ADD COLUMN IF NOT EXISTS company text;
   `);
   await db.execute(sql`
@@ -218,6 +236,47 @@ async function ensureServiceRequestsTable() {
   `);
 }
 
+// Ensure required Postgres extensions and enums exist before column ALTERs
+async function ensureExtensionsAndEnums() {
+  // gen_random_uuid() requires pgcrypto
+  await db.execute(sql`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
+
+  // Ensure user_role enum exists (used by users.global_role and others)
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'user_role'
+      ) THEN
+        CREATE TYPE user_role AS ENUM (
+          'resident',
+          'provider',
+          'admin',
+          'super_admin',
+          'estate_admin',
+          'moderator'
+        );
+      END IF;
+    END$$;
+  `);
+
+  // Ensure service_category enum exists for provider fields and service requests
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'service_category'
+      ) THEN
+        CREATE TYPE service_category AS ENUM (
+          'electrician', 'plumber', 'carpenter', 'hvac_technician', 'painter', 'tiler', 'mason',
+          'roofer', 'gardener', 'cleaner', 'security_guard', 'cook', 'laundry_service', 'pest_control',
+          'welder', 'mechanic', 'phone_repair', 'appliance_repair', 'tailor', 'market_runner', 'item_vendor'
+        );
+      END IF;
+    END$$;
+  `);
+}
+
 async function ensureTransactionsColumns() {
   try {
     await db.execute(sql`
@@ -275,6 +334,8 @@ async function ensureMongoIdMappingTable() {
 (async () => {
   try {
     await dbReady;
+    // Create required extensions and enums first to avoid ALTER type errors
+    await ensureExtensionsAndEnums();
     await ensureServiceRequestsTable();
     await ensureServiceRequestsColumns();
     await ensureUsersTable();

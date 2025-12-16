@@ -121,6 +121,13 @@ export const storeApprovalStatusEnum = pgEnum("store_approval_status", [
   "rejected",
 ]);
 
+// Simple app settings (key/value) table for global configs
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull().default("{}"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Estates table (from MongoDB)
 export const estates = pgTable("estates", {
   id: varchar("id")

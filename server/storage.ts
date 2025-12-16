@@ -11,6 +11,7 @@ import {
   deviceAssignments,
   auditLogs,
   orders,
+  wallets,
   type User,
   type InsertUser,
   type ServiceRequest,
@@ -31,6 +32,7 @@ import {
   type Order,
   type AuditLog,
   type InsertAuditLog,
+  type Wallet,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, count, sql, asc, or, inArray, sum } from "drizzle-orm";
@@ -244,32 +246,30 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUser(id: string): Promise<User | undefined> {
-    const user = await prisma.user.findUnique({
-      where: { id },
-      include: includeProviderCompany,
-    });
-    return user ? mapPrismaUser(user) : undefined;
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user || undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const user = await prisma.user.findFirst({
-      where: { email: username },
-      include: includeProviderCompany,
-    });
-    return user ? mapPrismaUser(user) : undefined;
+    const normalized = (username || "").trim();
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(or(eq(users.email, normalized), eq(users.name, normalized)));
+    return user || undefined;
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    const user = await prisma.user.findFirst({
-      where: { email },
-      include: includeProviderCompany,
-    });
-    return user ? mapPrismaUser(user) : undefined;
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user || undefined;
   }
 
   async getUserByAccessCode(accessCode: string): Promise<User | undefined> {
-    // Access code lookup is not supported in the Prisma-backed user model yet.
-    return undefined;
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.accessCode, accessCode));
+    return user || undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
@@ -577,119 +577,138 @@ export class DatabaseStorage implements IStorage {
 
   // Wallets
   async getWalletByUserId(userId: string): Promise<PrismaWallet | undefined> {
-    const res = await prisma.wallet.findUnique({ where: { userId } });
-    return res ?? undefined;
+    const [res] = await db.select().from(wallets).where(eq(wallets.userId, userId));
+    return (res as any as PrismaWallet) ?? undefined;
   }
 
   async createWallet(wallet: WalletCreationInput): Promise<PrismaWallet> {
-    return prisma.wallet.create({
-      data: {
+    const [w] = await db
+      .insert(wallets)
+      .values({
         userId: wallet.userId,
         balance: wallet.balance ?? "0",
-        currency: wallet.currency ?? "NGN",
-      },
-    });
+      })
+      .returning();
+    return w as any as PrismaWallet;
   }
 
   async updateWalletBalance(userId: string, amount: string): Promise<PrismaWallet | undefined> {
-    try {
-      return await prisma.wallet.update({
-        where: { userId },
-        data: {
-          balance: amount,
-          updatedAt: new Date(),
-        },
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
-        return undefined;
-      }
-      throw error;
-    }
+    const [w] = await db
+      .update(wallets)
+      .set({ balance: amount, updatedAt: new Date() })
+      .where(eq(wallets.userId, userId))
+      .returning();
+    return (w as any as PrismaWallet) ?? undefined;
   }
 
   // Transactions
   async createTransaction(transaction: CreateTransactionInput): Promise<PrismaTransaction> {
-    const {
-      walletId,
-      serviceRequestId,
-      userId,
-      amount,
-      type,
-      status,
-      description,
-      reference,
-      meta,
-      currency,
-      gateway,
-    } = transaction;
-
-    const data: Prisma.TransactionCreateInput = {
-      amount,
-      type,
-      status,
-      description: description ?? null,
-      // map our internal `reference` to Prisma's `gatewayReference` field
-      gatewayReference: reference,
-      meta: meta ?? undefined,
-      currency: currency ?? "NGN",
-      gateway: gateway ?? "paystack",
-      ...(serviceRequestId
-        ? {
-            serviceRequest: {
-              connect: { id: serviceRequestId },
-            },
-          }
-        : {}),
-      ...(walletId
-        ? {
-            wallet: {
-              connect: { id: walletId },
-            },
-          }
-        : {}),
-      ...(userId
-        ? {
-            user: {
-              connect: { id: userId },
-            },
-          }
-        : {}),
+    const toDrizzleType = (t: TransactionType): any =>
+      t === ("CREDIT" as any) ? "credit" : "debit";
+    const toDrizzleStatus = (s: TransactionStatus): any => {
+      if (s === ("COMPLETED" as any)) return "completed";
+      if (s === ("FAILED" as any)) return "failed";
+      return "pending";
     };
 
-    return prisma.transaction.create({
-      data,
-    });
+    const [row] = await db
+      .insert(transactions)
+      .values({
+        walletId: transaction.walletId,
+        serviceRequestId: transaction.serviceRequestId ?? null,
+        amount: transaction.amount,
+        type: toDrizzleType(transaction.type),
+        status: toDrizzleStatus(transaction.status),
+        description: transaction.description ?? null,
+        reference: transaction.reference,
+        meta: (transaction.meta as any) ?? {},
+        gateway: transaction.gateway ?? "paystack",
+      })
+      .returning();
+
+    return this.#mapDrizzleTxToPrismaLike(row) as any as PrismaTransaction;
   }
 
   async getTransactionsByWallet(walletId: string): Promise<PrismaTransaction[]> {
-    return prisma.transaction.findMany({
-      where: { walletId },
-      orderBy: { createdAt: "desc" },
-    });
+    const rows = await db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.walletId, walletId))
+      .orderBy(desc(transactions.createdAt));
+    return rows.map((r) => this.#mapDrizzleTxToPrismaLike(r) as any as PrismaTransaction);
   }
 
   async getTransactionByReference(reference: string): Promise<PrismaTransaction | undefined> {
-    // gatewayReference is not defined as a unique field in Prisma schema, so use findFirst
-    const tx = await prisma.transaction.findFirst({ where: { gatewayReference: reference } });
-    return tx ?? undefined;
+    const [row] = await db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.reference, reference))
+      .limit(1);
+    return row ? (this.#mapDrizzleTxToPrismaLike(row) as any as PrismaTransaction) : undefined;
   }
 
   async updateTransactionByReference(
     reference: string,
     updates: Prisma.TransactionUpdateInput,
   ): Promise<PrismaTransaction | undefined> {
-    try {
-      // Find the transaction by gatewayReference then update by id (since gatewayReference may not be unique)
-      const tx = await prisma.transaction.findFirst({ where: { gatewayReference: reference } });
-      if (!tx) return undefined;
-      return await prisma.transaction.update({ where: { id: tx.id }, data: updates });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
-        return undefined;
-      }
-      throw error;
+    const toDrizzleStatus = (s: any): any => {
+      if (s === ("COMPLETED" as any)) return "completed";
+      if (s === ("FAILED" as any)) return "failed";
+      if (s === ("PENDING" as any)) return "pending";
+      return undefined;
+    };
+
+    const patch: any = {};
+    if (updates.status) {
+      const sVal = (updates.status as any);
+      patch.status = toDrizzleStatus(typeof sVal === "object" && "set" in sVal ? (sVal as any).set : sVal);
     }
+    if (updates.description !== undefined) {
+      const dVal = updates.description as any;
+      patch.description = typeof dVal === "object" && dVal?.set !== undefined ? dVal.set : dVal;
+    }
+    if (updates.meta !== undefined) {
+      const mVal = updates.meta as any;
+      patch.meta = typeof mVal === "object" && mVal?.set !== undefined ? mVal.set : mVal;
+    }
+
+    const [row] = await db
+      .update(transactions)
+      .set({ ...patch, ...(Object.keys(patch).length ? { } : {}) })
+      .where(eq(transactions.reference, reference))
+      .returning();
+
+    return row ? (this.#mapDrizzleTxToPrismaLike(row) as any as PrismaTransaction) : undefined;
+  }
+
+  #mapDrizzleTxToPrismaLike(row: any) {
+    const toPrismaStatus = (s: string): any => {
+      switch (String(s).toLowerCase()) {
+        case "completed":
+          return "COMPLETED";
+        case "failed":
+          return "FAILED";
+        default:
+          return "PENDING";
+      }
+    };
+    const toPrismaType = (t: string): any => (String(t).toLowerCase() === "credit" ? "CREDIT" : "DEBIT");
+    return {
+      id: row.id,
+      walletId: row.walletId,
+      serviceRequestId: row.serviceRequestId,
+      amount: row.amount,
+      type: toPrismaType(row.type),
+      status: toPrismaStatus(row.status),
+      description: row.description,
+      meta: row.meta,
+      gateway: row.gateway,
+      gatewayReference: row.reference,
+      createdAt: row.createdAt,
+      // Prisma model has updatedAt; Drizzle doesn't. Omit or reuse createdAt.
+      updatedAt: row.createdAt,
+      currency: (row.currency ?? "NGN"),
+    };
   }
 
   // Admin functions

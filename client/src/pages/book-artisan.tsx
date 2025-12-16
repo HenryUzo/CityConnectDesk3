@@ -31,13 +31,13 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
-import { 
-  Wrench, 
-  ChevronLeft, 
-  Home, 
-  BarChart3, 
-  Layers, 
-  FileText, 
+import {
+  Wrench,
+  ChevronLeft,
+  Home,
+  BarChart3,
+  Layers,
+  FileText,
   Flag,
   Users,
   Settings,
@@ -52,9 +52,14 @@ import {
   Clock,
   Shirt,
   ShoppingBag,
-  MapPin
+  MapPin,
+  Bot,
+  AlertTriangle,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { residentFetch } from "@/lib/residentApi";
+import { cn } from "@/lib/utils";
 
 const artisanRequestSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -104,6 +109,13 @@ type AiDiagnosis = {
   suggestedCategory?: string;
 };
 
+type AiMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  variant?: "normal" | "warning";
+};
+
 export default function BookArtisan() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
@@ -116,6 +128,8 @@ export default function BookArtisan() {
   const [dateOpen, setDateOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
   const [calendarBase, setCalendarBase] = useState<Date>(new Date());
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
+  const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
   const [aiResult, setAiResult] = useState<AiDiagnosis | null>(null);
 
   const getNextNDays = (n: number) => {
@@ -171,6 +185,18 @@ export default function BookArtisan() {
   });
   const watchedCategory = form.watch("category");
   const watchedDescription = form.watch("description");
+  const buildUserMessageContent = () => {
+    const values = form.getValues();
+    const lines = [
+      `Category: ${values.category}`,
+      `Urgency: ${values.urgency}`,
+      `Description: ${values.description}`,
+    ];
+    if (values.specialInstructions) {
+      lines.push(`Special instructions: ${values.specialInstructions}`);
+    }
+    return lines.join("\n");
+  };
 
   // Fetch service categories from server (global scope)
   const { data: categories = [], isLoading: isCategoriesLoading } = useQuery({
@@ -270,10 +296,71 @@ export default function BookArtisan() {
       });
     },
     onMutate: () => {
+      setIsAiPanelOpen(true);
       setAiResult(null);
+      setAiMessages([
+        {
+          id: "user-issue",
+          role: "user",
+          content: buildUserMessageContent(),
+        },
+      ]);
     },
     onSuccess: (data) => {
       setAiResult(data);
+      const userMessage = {
+        id: "user-issue",
+        role: "user" as const,
+        content: buildUserMessageContent(),
+      };
+
+      const assistantMessages: AiMessage[] = [];
+
+      assistantMessages.push({
+        id: "assistant-summary",
+        role: "assistant",
+        content: data.summary,
+      });
+
+      if (data.probableCauses?.length) {
+        assistantMessages.push({
+          id: "assistant-causes",
+          role: "assistant",
+          content: data.probableCauses
+            .map((cause) => `${cause.cause} (${cause.likelihood} likelihood)`)
+            .join("\n"),
+        });
+      }
+
+      if (data.suggestedChecks?.length) {
+        assistantMessages.push({
+          id: "assistant-steps",
+          role: "assistant",
+          content: ["Steps you can try now:", ...data.suggestedChecks].join("\n"),
+        });
+      }
+
+      if (data.safetyNotes?.length) {
+        assistantMessages.push({
+          id: "assistant-safety",
+          role: "assistant",
+          variant: "warning",
+          content: ["Safety notes:", ...data.safetyNotes].join("\n"),
+        });
+      }
+
+      assistantMessages.push({
+        id: "assistant-severity",
+        role: "assistant",
+        variant:
+          data.shouldAvoidDIY || data.severity === "high" || data.severity === "critical"
+            ? "warning"
+            : "normal",
+        content: `Rating: ${data.severity.toUpperCase()}. When to call a professional: ${data.whenToCallPro}`,
+      });
+
+      setAiMessages([userMessage, ...assistantMessages]);
+
       toast({
         title: "AI diagnosis ready",
         description: "Review the suggestions before you confirm your booking.",
@@ -287,6 +374,16 @@ export default function BookArtisan() {
         variant: "destructive",
       });
       console.error("AI diagnosis error:", error);
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-error-${Date.now()}`,
+          role: "assistant",
+          variant: "warning",
+          content:
+            "CityBuddy couldn't analyze this issue right now. Please try again or submit your request.",
+        },
+      ]);
     },
   });
   const canRequestDiagnosis =
@@ -1000,76 +1097,140 @@ export default function BookArtisan() {
               </Form>
             </CardContent>
           </Card>
-          {aiResult && (
-            <Card className="mt-6 border-emerald-200 bg-emerald-50/60">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-emerald-800">
-                  <Wrench className="w-4 h-4 text-emerald-700" />
-                  AI Diagnosis Summary
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm text-gray-800">
-                <p>{aiResult.summary}</p>
-                {aiResult.probableCauses.length > 0 && (
-                  <div>
-                    <p className="font-semibold mb-1">Most likely causes:</p>
-                    <ul className="list-disc list-inside space-y-1">
-                      {aiResult.probableCauses.map((cause, idx) => (
-                        <li key={`${cause.cause}-${idx}`}>
-                          <span className="font-medium">{cause.cause}</span>{" "}
-                          <span className="text-xs uppercase text-gray-500">
-                            ({cause.likelihood} likelihood)
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+          {isAiPanelOpen && (
+            <>
+              <div
+                className="fixed inset-0 bg-black/30 z-40"
+                onClick={() => {
+                  if (!diagnoseMutation.isPending) {
+                    setIsAiPanelOpen(false);
+                  }
+                }}
+              />
+              <div
+                className={cn(
+                  "fixed inset-y-0 right-0 z-50 w-full max-w-md bg-white shadow-xl border-l border-gray-200 transform transition-transform duration-300",
+                  isAiPanelOpen ? "translate-x-0" : "translate-x-full"
                 )}
-                {aiResult.safetyNotes.length > 0 && (
-                  <div>
-                    <p className="font-semibold mb-1">Safety notes:</p>
-                    <ul className="list-disc list-inside space-y-1">
-                      {aiResult.safetyNotes.map((note, idx) => (
-                        <li key={`safety-${idx}`}>{note}</li>
-                      ))}
-                    </ul>
+              >
+                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-emerald-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">CityBuddy Diagnosis</p>
+                      <p className="text-xs text-gray-500">Early insight into what might be wrong and what to do next.</p>
+                    </div>
                   </div>
-                )}
-                {aiResult.suggestedChecks.length > 0 && (
-                  <div>
-                    <p className="font-semibold mb-1">Checks you can try now:</p>
-                    <ul className="list-disc list-inside space-y-1">
-                      {aiResult.suggestedChecks.map((check, idx) => (
-                        <li key={`check-${idx}`}>{check}</li>
-                      ))}
-                    </ul>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                      CityBuddy • AI
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => !diagnoseMutation.isPending && setIsAiPanelOpen(false)}
+                      className="rounded-full p-1 hover:bg-gray-100"
+                    >
+                      <X className="w-4 h-4 text-gray-500" />
+                    </button>
                   </div>
-                )}
-                <div>
-                  <p className="font-semibold mb-1">Severity</p>
-                  <p className="capitalize">{aiResult.severity}</p>
                 </div>
-                <div>
-                  <p className="font-semibold mb-1">When to call a professional:</p>
-                  <p>{aiResult.whenToCallPro}</p>
+
+                <div className="flex flex-col h-full">
+                  <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 text-sm">
+                    {aiMessages.map((message) => {
+                      const isAssistant = message.role === "assistant";
+                      const alignment = isAssistant ? "justify-start" : "justify-end";
+                      const bubbleClass = isAssistant
+                        ? message.variant === "warning"
+                          ? "bg-rose-50 border border-rose-100 text-rose-800"
+                          : "bg-emerald-50 border border-emerald-100 text-gray-800"
+                        : "bg-white border border-gray-200 text-gray-800";
+
+                      return (
+                        <div key={message.id} className={`flex ${alignment}`}>
+                          {isAssistant ? (
+                            <div className="flex items-start gap-2">
+                              <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
+                                <Bot className="w-4 h-4 text-emerald-700" />
+                              </div>
+                              <div className={`rounded-2xl px-4 py-3 text-xs whitespace-pre-line ${bubbleClass}`}>
+                                {message.variant === "warning" && (
+                                  <div className="flex items-center gap-1 mb-1 text-[11px] font-semibold">
+                                    <AlertTriangle className="w-3 h-3 text-rose-500" />
+                                    CityBuddy caution
+                                  </div>
+                                )}
+                                <p className="whitespace-pre-line">{message.content}</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-row-reverse items-start gap-2">
+                              <div className="w-8 h-8 rounded-full bg-gray-200" />
+                              <div className={`rounded-2xl px-4 py-3 text-xs whitespace-pre-line ${bubbleClass}`}>
+                                <p className="whitespace-pre-line">{message.content}</p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {diagnoseMutation.isPending && (
+                      <div className="flex items-start gap-2">
+                        <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
+                          <Bot className="w-4 h-4 text-emerald-700" />
+                        </div>
+                        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3">
+                          <div className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" />
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce delay-150" />
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce delay-300" />
+                          </div>
+                          <p className="text-xs text-emerald-800 mt-2">
+                            CityBuddy is analyzing your issue…
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border-t border-gray-200 px-5 py-3 space-y-2">
+                    {aiResult &&
+                    (aiResult.shouldAvoidDIY ||
+                      aiResult.severity === "high" ||
+                      aiResult.severity === "critical") ? (
+                      <div className="flex items-center gap-3 rounded-xl bg-rose-50 border border-rose-200 px-3 py-2">
+                        <div className="flex-1">
+                          <p className="text-xs font-semibold text-rose-700">This issue looks sensitive.</p>
+                          <p className="text-[11px] text-rose-600">
+                            CityBuddy recommends a professional diagnosis to avoid further damage or safety risk.
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap"
+                          onClick={() => setLocation("/checkout-diagnosis")}
+                        >
+                          Request Professional Diagnosis
+                        </Button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-[11px] text-emerald-700 hover:underline"
+                        onClick={() => setLocation("/checkout-diagnosis")}
+                      >
+                        Still not sure? Request professional diagnosis
+                      </button>
+                    )}
+                    <p className="text-[10px] text-gray-500">
+                      CityBuddy is an AI assistant for guidance only. For electrical, gas, structural, or major water leak issues,
+                      always use a verified professional and follow estate safety rules.
+                    </p>
+                  </div>
                 </div>
-                {aiResult.suggestedCategory && (
-                  <p className="text-xs text-gray-600 mt-2">
-                    Suggested service category:{" "}
-                    <span className="font-medium">{aiResult.suggestedCategory}</span>
-                  </p>
-                )}
-                {aiResult.shouldAvoidDIY && (
-                  <p className="text-sm font-semibold text-rose-700">
-                    Avoid DIY fixes for this issue. Use a verified professional.
-                  </p>
-                )}
-                <p className="text-[11px] text-gray-500 mt-2">
-                  Disclaimer: This AI diagnosis is only a guide and may be inaccurate. For electrical, gas,
-                  structural, or water leak issues, always use a verified professional and follow estate safety rules.
-                </p>
-              </CardContent>
-            </Card>
+              </div>
+            </>
           )}
         </div>
       </div>
