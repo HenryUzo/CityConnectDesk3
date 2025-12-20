@@ -245,31 +245,46 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  private async mapUser(user: PrismaUser | null): Promise<User | undefined> {
+    if (!user) return undefined;
+    const mapped = mapPrismaUser(user);
+    return mapped;
+  }
+
   async getUser(id: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.id, id));
-    return user || undefined;
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: includeProviderCompany,
+    });
+    return this.mapUser(user);
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
     const normalized = (username || "").trim();
-    const [user] = await db
-      .select()
-      .from(users)
-      .where(or(eq(users.email, normalized), eq(users.name, normalized)));
-    return user || undefined;
+    let user = await prisma.user.findUnique({
+      where: { email: normalized },
+      include: includeProviderCompany,
+    });
+    if (!user) {
+      user = await prisma.user.findFirst({
+        where: { name: normalized },
+        include: includeProviderCompany,
+      });
+    }
+    return this.mapUser(user);
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.email, email));
-    return user || undefined;
+    const user = await prisma.user.findUnique({
+      where: { email },
+      include: includeProviderCompany,
+    });
+    return this.mapUser(user);
   }
 
   async getUserByAccessCode(accessCode: string): Promise<User | undefined> {
-    const [user] = await db
-      .select()
-      .from(users)
-      .where(eq(users.accessCode, accessCode));
-    return user || undefined;
+    // Prisma User model currently does not expose accessCode, so return undefined.
+    return undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
