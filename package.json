@@ -12,6 +12,8 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "db:push": "drizzle-kit push",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init-or-update-schema",
     "db:test": "tsx prisma-test.ts",
