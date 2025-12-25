@@ -2,9 +2,6 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
 import { setupAuth } from "./auth";
-import { setupJWTAuth } from "./jwt-auth";
-import { authenticateJWT, requireAuth, requireAdmin, requireProvider, requireResident } from "./auth-middleware";
-import { compatAuth } from "./auth-compat";
 import { storage } from "./storage";
 import { db } from "./db";
 import {
@@ -45,13 +42,20 @@ import {
   createPendingPaystackTransaction,
   verifyAndFinalizePaystackCharge,
 } from "./payments";
-import { verifyPaystackTransaction } from "./paystack";
-import { validatePaystackSignature } from "./paystack";
+import { validatePaystackSignature, verifyPaystackTransaction } from "./paystack";
 import { initializePaystackTransaction } from "./paystackService";
 import {
   handlePaystackVerify,
   handlePaystackWebhook,
 } from "./paystackHandlers";
+import { TransactionStatus, Prisma } from "@prisma/client";
+import type { Transaction as PrismaTransaction } from "@prisma/client";
+import { requireAuth, requireResident } from "./auth-middleware";
+import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
+import * as ai from "./ai";
+import { runDiagnosis, GEMINI_FALLBACK_DIAGNOSIS, GEMINI_SAFETY_FALLBACK } from "./ai/diagnose";
+import { generateGeminiContent } from "./ai/geminiClient";
+import { resolveActiveEstateContext, requireActiveEstateMembership } from "./middlewares/estate-context";
 
 const isAdminOrSuper = (req: Express["request"]) =>
   req.isAuthenticated() &&
@@ -80,20 +84,70 @@ const CreateServiceRequest = insertServiceRequestSchema.extend({
     .transform((v) => (typeof v === "number" ? String(v) : v)),
 });
 
+const AIDiagnosisRequestSchema = z.object({
+  category: z.string().min(1, "Category is required"),
+  description: z.string().min(10, "Description must be at least 10 characters"),
+  urgency: z.enum(["low", "medium", "high", "emergency"]).optional(),
+  specialInstructions: z.string().optional(),
+});
+
+export const AIDiagnosisResponseSchema = z.object({
+  summary: z.string(),
+  probableCauses: z
+    .array(
+      z.object({
+        cause: z.string(),
+        likelihood: z.enum(["low", "medium", "high"]),
+      })
+    )
+    .default([]),
+  severity: z.enum(["low", "medium", "high", "critical"]),
+  shouldAvoidDIY: z.boolean(),
+  safetyNotes: z.array(z.string()).default([]),
+  suggestedChecks: z.array(z.string()).default([]),
+  whenToCallPro: z.string(),
+  suggestedCategory: z.string().nullable(),
+});
+
+const AiDiagnosisSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    summary: { type: "string" },
+    probableCauses: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          cause: { type: "string" },
+          likelihood: { type: "string", enum: ["low", "medium", "high"] },
+        },
+        required: ["cause", "likelihood"],
+      },
+    },
+    severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    shouldAvoidDIY: { type: "boolean" },
+    safetyNotes: { type: "array", items: { type: "string" } },
+    suggestedChecks: { type: "array", items: { type: "string" } },
+    whenToCallPro: { type: "string" },
+    suggestedCategory: { anyOf: [{ type: "string" }, { type: "null" }] },
+  },
+  required: [
+    "summary",
+    "probableCauses",
+    "severity",
+    "shouldAvoidDIY",
+    "safetyNotes",
+    "suggestedChecks",
+    "whenToCallPro",
+    "suggestedCategory",
+  ],
+} as const;
+
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup JWT authentication routes (new unified system)
-  setupJWTAuth(app);
-  
-  // Apply JWT authentication middleware globally to API routes
-  // This sets req.auth if a valid JWT token is present
-  app.use("/api", authenticateJWT);
-  
-  // Keep legacy session-based auth for backward compatibility during migration
-  // This will be removed after full migration
+  // Setup authentication routes
   setupAuth(app);
-  
-  // Compatibility middleware to support both old and new auth
-  app.use("/api", compatAuth);
 
   // Debug endpoint (DEV ONLY): check Paystack secret key loading
   app.get("/api/debug/paystack-key", (req, res) => {
@@ -107,9 +161,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
+  // Debug endpoint: check OpenAI configuration and basic access
+  app.get("/api/debug/ai-health", async (_req, res) => {
+    try {
+      const result = await verifyOpenAI();
+      res.json({ ok: result.ok, model: result.model, output: result.output ?? null, error: result.ok ? undefined : result.error });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, model: getDiagnosisModel(), error: error?.message || String(error) });
+    }
+  });
+
   app.use("/api/app", appRoutes);
   app.use("/api/provider", providerRoutes);
   app.use("/api/marketplace", marketplaceRoutes);
+
+  const formatPaystackVerifySuccess = (tx?: PrismaTransaction | null) => ({
+    status: "success" as const,
+    serviceRequestId: tx?.serviceRequestId ?? null,
+    transactionStatus: tx?.status ?? null,
+  });
 
   // Password hashing helper (mirror of auth.ts)
   const scryptAsync = promisify(scrypt);
@@ -120,8 +190,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // Service Requests Routes
-  app.post("/api/service-requests", async (req, res, next) => {
-    try {
+  app.post(
+    "/api/service-requests",
+    requireAuth,
+    resolveActiveEstateContext,
+    requireActiveEstateMembership,
+    async (req, res, next) => {
+      try {
       if (!req.isAuthenticated() || req.user?.role !== "resident") {
         return res.status(401).json({ message: "Unauthorized" });
       }
@@ -129,6 +204,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const parsed = CreateServiceRequest.parse({
         ...req.body,
         residentId: req.user.id,
+        estateId: req.auth?.activeEstateId,
       });
 
       const created = await storage.createServiceRequest(parsed);
@@ -197,6 +273,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/service-requests/my", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const estateId =
+        (req.header("x-estate-id") as string | undefined)?.trim() ||
+        (req.query.estateId as string | undefined);
+
+      const requests = await storage.getServiceRequestsByResident(userId, {
+        estateId: estateId ? estateId : undefined,
+      });
+
+      res.json({ data: requests });
+    } catch (error) {
+      console.error("Failed to fetch my service requests", error);
+      res.status(500).json({ message: "Unable to load service requests" });
+    }
+  });
+
   app.post("/api/service-requests/:id/accept", async (req, res, next) => {
     try {
       if (!req.isAuthenticated() || req.user?.role !== "provider") {
@@ -214,6 +312,152 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       next(error);
     }
+  });
+
+  app.post("/api/ai/diagnose", requireAuth, requireResident, async (req, res) => {
+    const parsedBody = AIDiagnosisRequestSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      return res.status(400).json({
+        error: "Invalid request body",
+        details: parsedBody.error.flatten(),
+      });
+    }
+
+    try {
+      // Simple per-user/IP rate limiting (burst: 3 per minute)
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+      const userKey = `${req.user?.id ?? "anon"}:${ip}`;
+      const now = Date.now();
+      const windowMs = 60_000;
+      const maxRequests = 3;
+      // in-memory store
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__aiRate ||= new Map<string, { count: number; windowStart: number }>();
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const rate = global.__aiRate.get(userKey) || { count: 0, windowStart: now };
+      if (now - rate.windowStart > windowMs) {
+        rate.count = 0;
+        rate.windowStart = now;
+      }
+      rate.count += 1;
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__aiRate.set(userKey, rate);
+      if (rate.count > maxRequests) {
+        return res.status(429).json({ error: "Rate limit exceeded. Try again shortly." });
+      }
+
+      // Simple caching: key by user+description for 5 minutes
+      const cacheKey = `${userKey}:${parsedBody.data.category}:${parsedBody.data.description}`;
+      const ttlMs = 5 * 60_000;
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__aiCache ||= new Map<string, { expires: number; data: unknown }>();
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const cached = global.__aiCache.get(cacheKey);
+      if (cached && cached.expires > now) {
+        try {
+          const normalized = AIDiagnosisResponseSchema.parse(cached.data);
+          return res.json(normalized);
+        } catch {
+          // ignore parse errors and continue to live call
+        }
+      }
+
+      const { category, description, urgency, specialInstructions } = parsedBody.data;
+      const activeProvider = await ai.getActiveProvider();
+      const useGeminiDirect =
+        activeProvider.provider === "gemini" || process.env.AI_PROVIDER === "gemini";
+      const geminiModel =
+        activeProvider.model || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+      let normalized;
+      if (useGeminiDirect) {
+        try {
+          normalized = await runDiagnosis({
+            category,
+            description,
+            urgency,
+            specialInstructions,
+            model: geminiModel,
+          });
+        } catch (error) {
+          console.error("[AI][Gemini] Diagnosis failed. Returning fallback.", error);
+          return res.json(GEMINI_FALLBACK_DIAGNOSIS);
+        }
+      } else {
+        normalized = await ai.diagnose({ category, description, urgency, specialInstructions });
+      }
+
+      if (normalized !== GEMINI_SAFETY_FALLBACK) {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        global.__aiCache.set(cacheKey, { expires: now + ttlMs, data: normalized });
+      }
+      return res.json(normalized);
+    } catch (error) {
+      // Optional fallback order: try other providers before failing
+      try {
+        const { provider } = await ai.getActiveProvider();
+        const fallbacks = ai.availableProviders().filter((p) => p !== provider);
+        const { category, description, urgency, specialInstructions } = parsedBody.data as any;
+        for (const p of fallbacks) {
+          try {
+            ai.setActiveProvider(p);
+            const normalized = await ai.diagnose({ category, description, urgency, specialInstructions });
+            return res.json(normalized);
+          } catch {
+            // continue
+          }
+        }
+      } catch {}
+      console.error("[AI] Diagnosis generation failed:", error);
+      return res.status(500).json({
+        error: "Unable to generate AI diagnosis right now.",
+      });
+    }
+  });
+
+  app.get("/api/ai/health", async (req, res) => {
+    const provider = "gemini";
+    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    const configured = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY);
+    let ok = false;
+    if (configured) {
+      try {
+        const { text, blocked } = await generateGeminiContent(model, "CityConnect health check ping");
+        ok = Boolean(text?.trim()) && !blocked;
+      } catch {
+        ok = false;
+      }
+    }
+    res.json({ ok, provider, model, configured });
+  });
+
+  // Admin AI settings endpoints
+  app.get("/api/admin/ai/settings", async (req, res) => {
+    if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized - Admin only" });
+    const active = await ai.getActiveProvider();
+    const available = ai.availableProviders();
+    const status = {
+      openai: { configured: !!process.env.OPENAI_API_KEY },
+      ollama: { configured: !!(process.env.OLLAMA_BASE_URL || process.env.OLLAMA_HOST) },
+      gemini: { configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY) },
+    };
+    res.json({ active, available, status });
+  });
+
+  app.patch("/api/admin/ai/settings", async (req, res) => {
+    if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized - Admin only" });
+    const provider = req.body?.provider as any;
+    const model = req.body?.model as string | undefined;
+    if (!provider || !ai.availableProviders().includes(provider)) {
+      return res.status(400).json({ message: "Invalid provider" });
+    }
+    await ai.setActiveProvider(provider, model);
+    res.json({ success: true, active: await ai.getActiveProvider() });
   });
 
   // Admin: Send advice with inspection dates/times to resident
@@ -340,7 +584,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/paystack/init", async (req, res, next) => {
     try {
       const payload = z.object({
-        email: z.string().email(),
+        email: z.string().email().optional(),
         amountInNaira: z.number().positive(),
         metadata: z.record(z.any()).optional(),
         reference: z.string().optional(),
@@ -348,9 +592,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const { email, amountInNaira, metadata, reference, callbackUrl } = payload.parse(req.body || {});
+      const resolvedEmail = (email || (req.user?.email ?? "")).toString().trim().toLowerCase();
+      if (!resolvedEmail) {
+        return res.status(400).json({ error: "Email is required to initialize Paystack." });
+      }
 
       const result = await initializePaystackTransaction({
-        email,
+        email: resolvedEmail,
         amountInNaira,
         metadata,
         reference,
@@ -409,7 +657,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Security: idempotency—if already paid, just acknowledge to avoid double credits.
-      if (tx.status === "completed") {
+      if (tx.status === TransactionStatus.COMPLETED) {
         return res.json({ received: true });
       }
 
@@ -427,12 +675,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Security: only now, after all checks pass, do we mark the transaction as paid.
       await storage.updateTransactionByReference(reference, {
-        status: "completed",
+        status: TransactionStatus.COMPLETED,
         description: `Paystack webhook ${data.channel || "charge"}`,
         meta: {
-          ...(tx.meta as Record<string, unknown>),
-          paystackWebhook: data,
-        },
+          ...((tx.meta as Prisma.JsonObject) || {}),
+          paystackWebhook: data as any,
+        } as Prisma.InputJsonObject,
       });
 
       if (tx.serviceRequestId) {
@@ -458,14 +706,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // TODO: ensure this lookup uses the production payment table keyed by reference.
-      const tx = await storage.getTransactionByReference(reference);
-      if (!tx) {
-        return res.status(404).json({ status: "failed" });
-      }
+    const tx = await storage.getTransactionByReference(reference);
+    if (!tx) {
+      return res.status(404).json({ status: "failed", message: "Transaction not found" });
+    }
 
-      if (tx.status === "completed") {
-        return res.json({ status: "success" });
-      }
+    if (tx.status === TransactionStatus.COMPLETED) {
+      return res.json(formatPaystackVerifySuccess(tx));
+    }
 
       const verification = await verifyPaystackTransaction(reference);
       // Security: make sure Paystack is telling us the charge actually succeeded.
@@ -488,16 +736,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ status: "failed" });
       }
 
-      await storage.updateTransactionByReference(reference, {
-        status: "completed",
-        description: `Paystack ${charge.channel || "charge"}`,
-        meta: {
-          ...(tx.meta as Record<string, unknown>),
-          paystack: charge,
-        },
-      });
+    const updatedTx = await storage.updateTransactionByReference(reference, {
+      status: TransactionStatus.COMPLETED,
+      description: `Paystack ${charge.channel || "charge"}`,
+      meta: {
+        ...((tx.meta as Prisma.JsonObject) || {}),
+        paystack: charge as any,
+      } as Prisma.InputJsonObject,
+    });
 
-      if (tx.serviceRequestId) {
+    if (tx.serviceRequestId) {
         // TODO: replace with real billing workflow (e.g., payment record table update) before marking service request paid.
         await storage.updateServiceRequest(tx.serviceRequestId, {
           paymentStatus: "paid",
@@ -505,8 +753,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      res.json({ status: "success" });
-    } catch (error: any) {
+    const finalTx = updatedTx ?? tx;
+    res.json(formatPaystackVerifySuccess(finalTx));
+  } catch (error: any) {
       console.error("Paystack verify GET error", { message: error?.message });
       res.status(500).json({ status: "failed" });
     }
@@ -542,9 +791,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         transaction: tx,
       });
 
+      const refreshed = await storage.getTransactionByReference(reference);
+      const responseTx = refreshed ?? tx;
+
       res.json({
         reference,
         ...result,
+        serviceRequestId: responseTx?.serviceRequestId ?? null,
+        transactionStatus: responseTx?.status ?? null,
       });
     } catch (error) {
       next(error);
@@ -579,9 +833,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin Routes - Using new RBAC middleware
-  app.get("/api/admin/users", requireAdmin, async (req, res, next) => {
+  // Admin Routes
+  app.get("/api/admin/users", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { role } = req.query;
       const users = await storage.getUsers(role as string);
       res.json(users);
@@ -591,8 +849,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Unified list with search + role filter (used by admin dashboard)
-  app.get("/api/admin/users/all", requireAdmin, async (req, res, next) => {
+  app.get("/api/admin/users/all", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { role, search } = req.query as { role?: string; search?: string };
       const list = await storage.getUsers(role);
       const filtered = search
@@ -613,8 +875,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create user
-  app.post("/api/admin/users", requireAdmin, async (req, res, next) => {
+  app.post("/api/admin/users", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { name, email, phone, password, role, globalRole, isActive, isApproved, company } = req.body || {};
       const roleValue = role || globalRole;
       if (!name || !email || !phone || !password || !roleValue) {
@@ -646,8 +912,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update user
-  app.patch("/api/admin/users/:id", requireAdmin, async (req, res, next) => {
+  app.patch("/api/admin/users/:id", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { id } = req.params;
       const updates: any = { ...req.body, updatedAt: new Date() };
       if (req.body?.password) {
@@ -665,8 +935,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: reset a user's password (admin-only)
-  app.post("/api/admin/users/:id/reset-password", requireAdmin, async (req, res, next) => {
+  app.post("/api/admin/users/:id/reset-password", async (req, res, next) => {
     try {
+      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const { id } = req.params;
       if (!id) return res.status(400).json({ message: "User id is required" });
 
@@ -693,8 +967,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/admin/users/:id", requireAdmin, async (req, res, next) => {
+  app.delete("/api/admin/users/:id", async (req, res, next) => {
     try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
 
       const { id } = req.params;
       if (!id) {
@@ -1166,12 +1443,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public categories endpoint - allow unauthenticated access for client-side lists.
+  // Be defensive: if the DB query fails, return an empty list instead of a 500.
   app.get("/api/categories", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
       const { scope } = req.query as { scope?: string };
       let query = db.select().from(categories);
       if (scope && scope !== "all" && (scope === "global" || scope === "estate")) {
@@ -1179,9 +1454,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const rows = await query.orderBy(desc(categories.createdAt));
-      res.json(rows);
-    } catch (error) {
-      next(error);
+      return res.json(rows);
+    } catch (error: any) {
+      // Log and return a safe fallback so the front-end can use local defaults.
+      console.error("/api/categories error:", error?.message || error);
+      return res.json([]);
     }
   });
 

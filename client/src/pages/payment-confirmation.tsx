@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "wouter";
+import { useLocation, Link } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -10,6 +10,7 @@ export default function PaymentConfirmation() {
   const [reference, setReference] = useState<string | null>(null);
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -23,25 +24,45 @@ export default function PaymentConfirmation() {
 
     (async () => {
       try {
-        const res = await residentFetch<{ status: string; message?: string }>(`/api/paystack/verify?reference=${encodeURIComponent(ref)}`);
+        const res = await residentFetch<{
+          status: "success" | "failed";
+          message?: string;
+          serviceRequestId?: string | null;
+        }>("/api/payments/paystack/verify", {
+          method: "POST",
+          json: { reference: ref },
+        });
+
         if (res?.status === "success") {
-          setStatus("success");
-          setFailureMessage(null);
-        } else {
-          setStatus("failed");
-          setFailureMessage(
-            res?.message || "We could not confirm this payment. Please try again."
-          );
           toast({
-            title: "Verification failed",
-            description: res?.message || "The payment could not be confirmed",
-            variant: "destructive",
+            title: "Payment received",
+            description: "Your booking has been confirmed.",
           });
+          if (res.serviceRequestId) {
+            setLocation(`/track-orders?highlight=${encodeURIComponent(res.serviceRequestId)}`);
+          } else {
+            setLocation(`/resident?paid=1&reference=${encodeURIComponent(ref)}`);
+          }
+          return;
         }
+
+        setStatus("failed");
+        setFailureMessage(
+          res?.message || "We could not confirm this payment. Please try again."
+        );
+        toast({
+          title: "Verification failed",
+          description: res?.message || "The payment could not be confirmed",
+          variant: "destructive",
+        });
       } catch (err: any) {
         setStatus("failed");
         setFailureMessage(err?.message || "Could not verify payment");
-        toast({ title: "Verification error", description: err?.message || "Could not verify payment", variant: "destructive" });
+        toast({
+          title: "Verification error",
+          description: err?.message || "Could not verify payment",
+          variant: "destructive",
+        });
       }
     })();
   }, []);

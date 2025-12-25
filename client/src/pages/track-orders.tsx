@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -33,6 +33,9 @@ type ServiceRequest = {
 export default function TrackOrders() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const highlightScrolledRef = useRef(false);
+  const highlightTimerRef = useRef<number | null>(null);
 
   const { data: serviceRequests = [], isLoading } = useQuery<ServiceRequest[]>({
     queryKey: ["/api/service-requests"],
@@ -97,6 +100,46 @@ export default function TrackOrders() {
     return steps;
   };
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const highlight = params.get("highlight");
+    if (highlight) {
+      setHighlightId(highlight);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      !highlightId ||
+      highlightScrolledRef.current
+    ) {
+      return;
+    }
+
+    const node = document.querySelector<HTMLElement>(`[data-highlight-id="${highlightId}"]`);
+    if (!node) return;
+
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    highlightScrolledRef.current = true;
+
+    highlightTimerRef.current = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      params.delete("highlight");
+      const search = params.toString();
+      const base = `${window.location.pathname}${search ? `?${search}` : ""}`;
+      window.history.replaceState(null, "", base);
+    }, 2200);
+
+    return () => {
+      if (highlightTimerRef.current) {
+        window.clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = null;
+      }
+    };
+  }, [highlightId]);
+
   return (
     <ResidentLayout title="Track Your Requests">
       <div className="space-y-6">
@@ -139,8 +182,22 @@ export default function TrackOrders() {
               <p className="text-muted-foreground">Loading your requests...</p>
             </div>
           ) : filteredRequests.length > 0 ? (
-            filteredRequests.map((request: any) => (
-              <Card key={request.id} className="hover:shadow-md transition-shadow" data-testid={`request-${request.id}`}>
+            filteredRequests.map((request: any) => {
+              const isHighlighted = highlightId === request.id;
+              const cardClasses = [
+                "transition-shadow hover:shadow-lg",
+                isHighlighted ? "ring-2 ring-emerald-500 shadow-2xl bg-emerald-50/60" : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
+
+              return (
+                <Card
+                  key={request.id}
+                  className={cardClasses}
+                  data-testid={`request-${request.id}`}
+                  data-highlight-id={request.id}
+                >
                 <CardContent className="p-6">
                   <div className="flex flex-col md:flex-row md:items-center justify-between mb-4">
                     <div className="flex items-center mb-4 md:mb-0">
@@ -217,8 +274,9 @@ export default function TrackOrders() {
                     </div>
                   )}
                 </CardContent>
-              </Card>
-            ))
+                </Card>
+              );
+            })
           ) : (
             <div className="text-center py-16">
               <ClipboardList className="w-12 h-12 mx-auto text-muted-foreground mb-4" />

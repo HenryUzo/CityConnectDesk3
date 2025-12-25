@@ -6,10 +6,40 @@ import { storage } from "./storage";
 declare global {
   namespace Express {
     interface Request {
-      auth?: JWTPayload & { id: string };
+      auth?: AuthContext;
     }
   }
 }
+
+interface AuthMembership {
+  id: string;
+  estateId: string;
+  userId: string;
+  status?: string | null;
+  isActive?: boolean | null;
+  isPrimary?: boolean | null;
+  role?: string | null;
+}
+
+interface AuthContext extends JWTPayload {
+  id: string;
+  activeEstateId?: string;
+  membership?: AuthMembership;
+}
+
+function ensureDevAuth(req: Request) {
+  if (req.auth) return req.auth;
+  if (process.env.NODE_ENV === "development" && req.user?.id) {
+    req.auth = {
+      id: req.user.id,
+      userId: req.user.id,
+      role: req.user?.role ?? undefined,
+      globalRole: req.user?.globalRole ?? undefined,
+    } as JWTPayload & { id: string };
+    return req.auth;
+  }
+  return undefined;
+ }
 
 /**
  * Middleware to authenticate JWT token
@@ -41,7 +71,8 @@ export function authenticateJWT(req: Request, res: Response, next: NextFunction)
  * Must be used after authenticateJWT
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  if (!req.auth) {
+  const auth = ensureDevAuth(req);
+  if (!auth) {
     return res.status(401).json({ message: "Authentication required" });
   }
   next();
@@ -53,12 +84,13 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
  */
 export function requireRole(...allowedRoles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!req.auth) {
+    const auth = ensureDevAuth(req);
+    if (!auth) {
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    const userRole = req.auth.role;
-    const userGlobalRole = req.auth.globalRole;
+    const userRole = auth.role;
+    const userGlobalRole = auth.globalRole;
 
     // Check if user has any of the allowed roles
     const hasRole = allowedRoles.some(

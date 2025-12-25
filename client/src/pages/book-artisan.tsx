@@ -1,5 +1,5 @@
 // client/src/pages/book-artisan.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation } from "@tanstack/react-query";
@@ -30,13 +30,14 @@ import {
 } from "@/components/ui/form";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { 
-  Wrench, 
-  ChevronLeft, 
-  Home, 
-  BarChart3, 
-  Layers, 
-  FileText, 
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import {
+  Wrench,
+  ChevronLeft,
+  Home,
+  BarChart3,
+  Layers,
+  FileText,
   Flag,
   Users,
   Settings,
@@ -51,9 +52,14 @@ import {
   Clock,
   Shirt,
   ShoppingBag,
-  MapPin
+  MapPin,
+  Bot,
+  AlertTriangle,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { residentFetch } from "@/lib/residentApi";
+import { cn } from "@/lib/utils";
 
 const artisanRequestSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -92,12 +98,69 @@ const FALLBACK_SERVICE_CATEGORIES = [
 
 type ArtisanRequestFormData = z.infer<typeof artisanRequestSchema>;
 
+type AiDiagnosis = {
+  summary: string;
+  probableCauses: { cause: string; likelihood: "low" | "medium" | "high" }[];
+  severity: "low" | "medium" | "high" | "critical";
+  shouldAvoidDIY: boolean;
+  safetyNotes: string[];
+  suggestedChecks: string[];
+  whenToCallPro: string;
+  suggestedCategory?: string;
+};
+
+type AiMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  variant?: "normal" | "warning";
+};
+
 export default function BookArtisan() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const preferredDateRef = useRef<HTMLInputElement | null>(null);
+  const preferredTimeRef = useRef<HTMLInputElement | null>(null);
+  const timeListRef = useRef<HTMLDivElement | null>(null);
+  const [dateOpen, setDateOpen] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(false);
+  const [calendarBase, setCalendarBase] = useState<Date>(new Date());
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
+  const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
+  const [aiResult, setAiResult] = useState<AiDiagnosis | null>(null);
+
+  const getNextNDays = (n: number) => {
+    const days: Date[] = [];
+    const today = new Date();
+    for (let i = 0; i < n; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      days.push(d);
+    }
+    return days;
+  };
+
+  const formatDateForInput = (d: Date) => d.toISOString().slice(0, 10); // YYYY-MM-DD
+  const formatDisplayDate = (d: Date) => d.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+
+  const generateTimeSlots = (startHour = 0, endHour = 24, stepMinutes = 30, includeEnd2359 = false) => {
+    const slots: string[] = [];
+    for (let h = startHour; h < endHour; h++) {
+      for (let m = 0; m < 60; m += stepMinutes) {
+        const hh = String(h).padStart(2, "0");
+        const mm = String(m).padStart(2, "0");
+        slots.push(`${hh}:${mm}`);
+      }
+    }
+    if (includeEnd2359) {
+      const last = "23:59";
+      if (!slots.includes(last)) slots.push(last);
+    }
+    return slots;
+  };
 
   // In dev (or when cookies aren't set yet), use the email header fallback automatically.
   useEffect(() => {
@@ -120,6 +183,20 @@ export default function BookArtisan() {
       diagnosisType: "regular",
     },
   });
+  const watchedCategory = form.watch("category");
+  const watchedDescription = form.watch("description");
+  const buildUserMessageContent = () => {
+    const values = form.getValues();
+    const lines = [
+      `Category: ${values.category}`,
+      `Urgency: ${values.urgency}`,
+      `Description: ${values.description}`,
+    ];
+    if (values.specialInstructions) {
+      lines.push(`Special instructions: ${values.specialInstructions}`);
+    }
+    return lines.join("\n");
+  };
 
   // Fetch service categories from server (global scope)
   const { data: categories = [], isLoading: isCategoriesLoading } = useQuery({
@@ -204,6 +281,115 @@ export default function BookArtisan() {
     }
   }, [categoryOptions, form]);
 
+  const diagnoseMutation = useMutation<AiDiagnosis, Error, void>({
+    mutationFn: async () => {
+      const values = form.getValues();
+      const payload = {
+        category: values.category,
+        description: values.description,
+        urgency: values.urgency,
+        specialInstructions: values.specialInstructions,
+      };
+      return await residentFetch<AiDiagnosis>("/api/ai/diagnose", {
+        method: "POST",
+        json: payload,
+      });
+    },
+    onMutate: () => {
+      setIsAiPanelOpen(true);
+      setAiResult(null);
+      setAiMessages([
+        {
+          id: "user-issue",
+          role: "user",
+          content: buildUserMessageContent(),
+        },
+      ]);
+    },
+    onSuccess: (data) => {
+      setAiResult(data);
+      const userMessage = {
+        id: "user-issue",
+        role: "user" as const,
+        content: buildUserMessageContent(),
+      };
+
+      const assistantMessages: AiMessage[] = [];
+
+      assistantMessages.push({
+        id: "assistant-summary",
+        role: "assistant",
+        content: data.summary,
+      });
+
+      if (data.probableCauses?.length) {
+        assistantMessages.push({
+          id: "assistant-causes",
+          role: "assistant",
+          content: data.probableCauses
+            .map((cause) => `${cause.cause} (${cause.likelihood} likelihood)`)
+            .join("\n"),
+        });
+      }
+
+      if (data.suggestedChecks?.length) {
+        assistantMessages.push({
+          id: "assistant-steps",
+          role: "assistant",
+          content: ["Steps you can try now:", ...data.suggestedChecks].join("\n"),
+        });
+      }
+
+      if (data.safetyNotes?.length) {
+        assistantMessages.push({
+          id: "assistant-safety",
+          role: "assistant",
+          variant: "warning",
+          content: ["Safety notes:", ...data.safetyNotes].join("\n"),
+        });
+      }
+
+      assistantMessages.push({
+        id: "assistant-severity",
+        role: "assistant",
+        variant:
+          data.shouldAvoidDIY || data.severity === "high" || data.severity === "critical"
+            ? "warning"
+            : "normal",
+        content: `Rating: ${data.severity.toUpperCase()}. When to call a professional: ${data.whenToCallPro}`,
+      });
+
+      setAiMessages([userMessage, ...assistantMessages]);
+
+      toast({
+        title: "AI diagnosis ready",
+        description: "Review the suggestions before you confirm your booking.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "AI diagnosis failed",
+        description:
+          "We couldn't analyze this issue right now. Please try again or submit your request.",
+        variant: "destructive",
+      });
+      console.error("AI diagnosis error:", error);
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-error-${Date.now()}`,
+          role: "assistant",
+          variant: "warning",
+          content:
+            "CityBuddy couldn't analyze this issue right now. Please try again or submit your request.",
+        },
+      ]);
+    },
+  });
+  const canRequestDiagnosis =
+    Boolean(watchedCategory?.trim()) &&
+    Boolean(watchedDescription?.trim());
+
   const submitRequestMutation = useMutation({
     mutationFn: async (data: ArtisanRequestFormData) => {
       // shape for server
@@ -242,6 +428,7 @@ export default function BookArtisan() {
         title: "Request submitted",
         description: "Your artisan repair request has been submitted.",
       });
+      setAiResult(null);
       setLocation("/resident");
     },
     onError: (error: Error) => {
@@ -256,6 +443,15 @@ export default function BookArtisan() {
   const onSubmit = (data: ArtisanRequestFormData) => {
     submitRequestMutation.mutate(data);
   };
+
+  const handleCityBuddyDiagnosis = form.handleSubmit(async () => {
+    form.setValue("diagnosisType", "regular");
+    try {
+      await diagnoseMutation.mutateAsync();
+    } catch {
+      // allow user to continue even when AI preview fails
+    }
+  });
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -387,7 +583,7 @@ export default function BookArtisan() {
                           <FormLabel className="text-sm font-medium text-gray-700">Title</FormLabel>
                           <FormControl>
                             <Input 
-                              placeholder="Artisan Bookings" 
+                              placeholder="Enter request title" 
                               className="bg-gray-50 border-gray-200"
                               {...field} 
                             />
@@ -410,7 +606,7 @@ export default function BookArtisan() {
                           >
                             <FormControl>
                               <SelectTrigger className="bg-gray-50 border-gray-200">
-                                <SelectValue placeholder="Store Owner" />
+                                <SelectValue placeholder="Select a service category" />
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
@@ -441,14 +637,34 @@ export default function BookArtisan() {
                         >
                           <FormControl>
                             <SelectTrigger className="bg-gray-50 border-gray-200">
-                              <SelectValue placeholder="Medium" />
+                              <SelectValue placeholder="Select urgency level" />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="low">🟢 Low</SelectItem>
-                            <SelectItem value="medium">🟡 Medium</SelectItem>
-                            <SelectItem value="high">🟠 High</SelectItem>
-                            <SelectItem value="emergency">🔴 Emergency</SelectItem>
+                            <SelectItem value="low">
+                              <div className="flex flex-col">
+                                <span>🟢 Low</span>
+                                <span className="text-xs text-muted-foreground">Resolve in a week or more</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="medium">
+                              <div className="flex flex-col">
+                                <span>🟡 Medium</span>
+                                <span className="text-xs text-muted-foreground">Resolve in 3–5 days</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="high">
+                              <div className="flex flex-col">
+                                <span>🟠 High</span>
+                                <span className="text-xs text-muted-foreground">Resolve in 1–2 days</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="emergency">
+                              <div className="flex flex-col">
+                                <span>🔴 Emergency</span>
+                                <span className="text-xs text-muted-foreground">Resolve within 12–24 hours</span>
+                              </div>
+                            </SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -515,13 +731,13 @@ export default function BookArtisan() {
                           </div>
                           <FormControl>
                             <Textarea
-                              placeholder="I'm a Product Designer based in Melbourne, Australia. I specialise in UX/UI design, brand strategy, and Webflow development."
+                              placeholder="Describe the issue and what needs fixing"
                               className="resize-none border-0 focus-visible:ring-0 min-h-[120px]"
                               {...field}
                             />
                           </FormControl>
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">275 characters left</p>
+                        <p className="text-xs text-gray-500 mt-1">Provide a clear description of the problem</p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -532,19 +748,141 @@ export default function BookArtisan() {
                     <FormField
                       control={form.control}
                       name="preferredDate"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-sm font-medium text-gray-700">Preferred Date</FormLabel>
-                          <FormControl>
-                            <Input 
-                              type="date" 
-                              className="bg-gray-50 border-gray-200"
-                              {...field} 
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
+                      render={({ field }) => {
+                        const renderCalendarGrid = () => {
+                          const base = calendarBase || (field.value ? new Date(field.value) : new Date());
+                          const year = base.getFullYear();
+                          const month = base.getMonth();
+                          const firstDay = new Date(year, month, 1);
+                          const startOffset = firstDay.getDay();
+                          const daysInMonth = new Date(year, month + 1, 0).getDate();
+                          const cells: Array<null | number> = [];
+                          for (let i = 0; i < startOffset; i++) cells.push(null);
+                          for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+                          return (
+                            <div className="grid grid-cols-7 gap-1">
+                              {cells.map((day, idx) => {
+                                const isEmpty = day === null;
+                                const cellDate = isEmpty ? null : new Date(year, month, day as number);
+                                const cellVal = cellDate ? formatDateForInput(cellDate) : '';
+                                const isSelected = field.value === cellVal;
+                                const isToday = cellDate && formatDateForInput(cellDate) === formatDateForInput(new Date());
+                                return (
+                                  <button
+                                    key={idx}
+                                    onClick={() => {
+                                      if (!cellDate) return;
+                                      // debug: log value being passed
+                                      field.onChange(cellVal);
+                                      // debug logging removed
+                                      // ensure react-hook-form internal state is also set on the form instance
+                                      try {
+                                        form.setValue("preferredDate", cellVal);
+                                      } catch (e) {}
+                                      setCalendarBase(new Date(year, month, 1));
+                                      setDateOpen(false);
+                                      // log DOM input value shortly after change
+                                      setTimeout(() => {
+                                        try {
+                                            // debug logging removed
+                                        } catch (e) {
+                                          // ignore
+                                        }
+                                      }, 50);
+                                    }}
+                                    className={`h-8 flex items-center justify-center rounded ${isEmpty ? 'opacity-30 pointer-events-none' : 'hover:bg-gray-100'} ${isSelected ? 'bg-primary text-primary-foreground' : ''} ${isToday && !isSelected ? 'border border-muted' : ''}`}
+                                  >
+                                    {cellDate ? <span className="text-sm">{cellDate.getDate()}</span> : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        };
+
+                        return (
+                          <FormItem>
+                            <FormLabel className="text-sm font-medium text-gray-700">Preferred Date</FormLabel>
+                            <FormControl>
+                              <div className="relative">
+                                <Input
+                                  type="date"
+                                  className="bg-gray-50 border-gray-200 pr-10 date-time-input"
+                                  {...field}
+                                  ref={preferredDateRef}
+                                  placeholder="Select preferred date"
+                                />
+                                <Popover open={dateOpen} onOpenChange={(open) => {
+                                  setDateOpen(open);
+                                  if (open) setCalendarBase(field.value ? new Date(field.value) : new Date());
+                                }}>
+                                  <PopoverTrigger asChild>
+                                    <button className="absolute right-3 top-1/2 -translate-y-1/2">
+                                      <Calendar className="w-4 h-4 text-gray-400 cursor-pointer" />
+                                    </button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-80 p-3">
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <Select value={String(calendarBase.getMonth())} onValueChange={(v) => {
+                                        const m = Number(v);
+                                        setCalendarBase((prev) => new Date(prev.getFullYear(), m, 1));
+                                      }}>
+                                        <SelectTrigger className="w-36">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {Array.from({ length: 12 }).map((_, i) => (
+                                            <SelectItem key={i} value={String(i)}>{new Date(0, i).toLocaleString(undefined, { month: 'long' })}</SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                      <Select value={String(calendarBase.getFullYear())} onValueChange={(v) => {
+                                        const y = Number(v);
+                                        setCalendarBase((prev) => new Date(y, prev.getMonth(), 1));
+                                      }}>
+                                        <SelectTrigger className="w-28">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {Array.from({ length: 11 }).map((_, i) => {
+                                            const y = new Date().getFullYear() - 5 + i;
+                                            return <SelectItem key={y} value={String(y)}>{String(y)}</SelectItem>;
+                                          })}
+                                        </SelectContent>
+                                      </Select>
+                                      <Button size="sm" variant="outline" onClick={() => {
+                                        const today = new Date();
+                                        field.onChange(formatDateForInput(today));
+                                        // debug logging removed
+                                        try { form.setValue("preferredDate", formatDateForInput(today)); } catch (e) {}
+                                        setCalendarBase(new Date(today.getFullYear(), today.getMonth(), 1));
+                                        setDateOpen(false);
+                                        setTimeout(() => {
+                                          try {
+                                            // debug logging removed
+                                          } catch (e) {}
+                                        }, 50);
+                                      }}>Today</Button>
+                                    </div>
+
+                                    {/* Weekday headers */}
+                                    <div className="grid grid-cols-7 gap-1 text-xs text-muted-foreground mb-1">
+                                      {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+                                        <div key={d} className="text-center">{d}</div>
+                                      ))}
+                                    </div>
+
+                                    {/* Calendar grid for current month */}
+                                    {renderCalendarGrid()}
+                                  </PopoverContent>
+                                </Popover>
+                              </div>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        );
+                      }}
                     />
 
                     <FormField
@@ -552,13 +890,92 @@ export default function BookArtisan() {
                       name="preferredTime"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel className="text-sm font-medium text-gray-700">Preferred Date</FormLabel>
+                          <FormLabel className="text-sm font-medium text-gray-700">Preferred Time</FormLabel>
                           <FormControl>
-                            <Input 
-                              type="time" 
-                              className="bg-gray-50 border-gray-200"
-                              {...field} 
-                            />
+                            <div className="relative">
+                              <Input
+                                type="time"
+                                className="bg-gray-50 border-gray-200 pr-10 date-time-input"
+                                {...field}
+                                ref={preferredTimeRef}
+                                  placeholder="Select preferred time"
+                              />
+                              <Popover open={timeOpen} onOpenChange={(open) => {
+                                setTimeOpen(open);
+                                if (open) {
+                                  // scroll to selected time after opening
+                                  setTimeout(() => {
+                                    try {
+                                      const container = timeListRef.current;
+                                      if (!container) return;
+                                      const sel = container.querySelector('[data-selected="true"]') as HTMLElement | null;
+                                      if (sel) {
+                                        container.scrollTop = sel.offsetTop - container.clientHeight / 2 + sel.clientHeight / 2;
+                                      } else {
+                                        // scroll to current time slot if available
+                                        const now = preferredTimeRef.current?.value;
+                                        const fallback = now ? container.querySelector(`[data-value="${now}"]`) as HTMLElement | null : null;
+                                        if (fallback) container.scrollTop = fallback.offsetTop - container.clientHeight / 2 + fallback.clientHeight / 2;
+                                      }
+                                    } catch (e) {
+                                      // ignore
+                                    }
+                                  }, 50);
+                                }
+                              }}>
+                                <PopoverTrigger asChild>
+                                  <button className="absolute right-3 top-1/2 -translate-y-1/2">
+                                    <Clock className="w-4 h-4 text-gray-400 cursor-pointer" />
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-48 p-1">
+                                  <div ref={timeListRef} className="max-h-48 overflow-y-auto p-2 space-y-2">
+                                      {(() => {
+                                      const slots = generateTimeSlots(0, 24, 30, true);
+                                      const grouped: Record<string, string[]> = {};
+                                      slots.forEach(s => {
+                                        const hour = s.split(':')[0];
+                                        if (!grouped[hour]) grouped[hour] = [];
+                                        grouped[hour].push(s);
+                                      });
+                                      return Object.keys(grouped).map(hour => (
+                                        <div key={hour} className="space-y-1">
+                                          <div className="text-xs text-muted-foreground px-2">{`${hour}:00`}</div>
+                                          <div className="grid grid-cols-2 gap-2 px-1">
+                                            {grouped[hour].map(t => {
+                                              const selected = field.value === t;
+                                              return (
+                                                <button
+                                                  key={t}
+                                                  data-value={t}
+                                                  data-selected={selected}
+                                                  onClick={() => {
+                                                      // debug: log value being passed
+                                                      field.onChange(t);
+                                                      // debug logging removed
+                                                      try { form.setValue("preferredTime", t); } catch (e) {}
+                                                      setTimeOpen(false);
+                                                      preferredTimeRef.current?.focus();
+                                                      setTimeout(() => {
+                                                        try {
+                                                          // debug logging removed
+                                                        } catch (e) {}
+                                                      }, 50);
+                                                    }}
+                                                  className={`text-left p-2 rounded ${selected ? 'bg-primary text-primary-foreground' : 'hover:bg-gray-100'}`}
+                                                >
+                                                  {t}
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      ));
+                                    })()}
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            </div>
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -595,13 +1012,13 @@ export default function BookArtisan() {
                           </div>
                           <FormControl>
                             <Textarea
-                              placeholder="I'm a Product Designer based in Melbourne, Australia. I specialise in UX/UI design, brand strategy, and Webflow development."
+                                  placeholder="Add any special instructions for the artisan"
                               className="resize-none border-0 focus-visible:ring-0 min-h-[120px]"
                               {...field}
                             />
                           </FormControl>
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">275 characters left</p>
+                            <p className="text-xs text-gray-500 mt-1">Optional: share preferences or access details</p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -618,7 +1035,7 @@ export default function BookArtisan() {
                             Professional Servicing
                           </FormLabel>
                           <p className="text-xs text-gray-500 mt-1">
-                            I'm open and available for freelance work.
+                            Enable professional servicing for this request
                           </p>
                         </div>
                         <FormControl>
@@ -641,26 +1058,38 @@ export default function BookArtisan() {
                     >
                       Cancel
                     </Button>
+
+                    {/* CityBuddy Diagnosis (uses diagnosisType = "regular" under the hood) */}
                     <Button
-                      type="submit"
+                      type="button"
                       variant="outline"
                       className="flex-1 border-emerald-600 text-emerald-600 hover:bg-emerald-50"
-                      disabled={submitRequestMutation.isPending}
-                      onClick={() => form.setValue('diagnosisType', 'regular')}
+                      disabled={
+                        submitRequestMutation.isPending ||
+                        diagnoseMutation.isPending ||
+                        !canRequestDiagnosis
+                      }
+                      onClick={handleCityBuddyDiagnosis}
                     >
                       <div className="flex flex-col items-center">
-                        <span className="font-medium">Regular Diagnosis (Free)</span>
-                        <span className="text-xs opacity-75">⚡ 50% Certainty</span>
+                        <span className="font-medium">CityBuddy Diagnosis (Free)</span>
+                        <span className="text-xs opacity-75">
+                          ? AI-powered prediction & repair guidance
+                        </span>
                       </div>
                     </Button>
+
+                    {/* Professional Diagnosis (paid) */}
                     <Button
                       type="button"
                       className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
                       onClick={() => setLocation("/checkout-diagnosis")}
                     >
                       <div className="flex flex-col items-center">
-                        <span className="font-medium">Request Professional Diagnosis (₦6,000)</span>
-                        <span className="text-xs opacity-90">✓ 100% Certainty, Shorter repair duration</span>
+                        <span className="font-medium">Request Professional Diagnosis (?6,000)</span>
+                        <span className="text-xs opacity-90">
+                          ? 100% Certainty, Shorter repair duration
+                        </span>
                       </div>
                     </Button>
                   </div>
@@ -668,6 +1097,141 @@ export default function BookArtisan() {
               </Form>
             </CardContent>
           </Card>
+          {isAiPanelOpen && (
+            <>
+              <div
+                className="fixed inset-0 bg-black/30 z-40"
+                onClick={() => {
+                  if (!diagnoseMutation.isPending) {
+                    setIsAiPanelOpen(false);
+                  }
+                }}
+              />
+              <div
+                className={cn(
+                  "fixed inset-y-0 right-0 z-50 w-full max-w-md bg-white shadow-xl border-l border-gray-200 transform transition-transform duration-300",
+                  isAiPanelOpen ? "translate-x-0" : "translate-x-full"
+                )}
+              >
+                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-emerald-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">CityBuddy Diagnosis</p>
+                      <p className="text-xs text-gray-500">Early insight into what might be wrong and what to do next.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                      CityBuddy • AI
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => !diagnoseMutation.isPending && setIsAiPanelOpen(false)}
+                      className="rounded-full p-1 hover:bg-gray-100"
+                    >
+                      <X className="w-4 h-4 text-gray-500" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-col h-full">
+                  <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 text-sm">
+                    {aiMessages.map((message) => {
+                      const isAssistant = message.role === "assistant";
+                      const alignment = isAssistant ? "justify-start" : "justify-end";
+                      const bubbleClass = isAssistant
+                        ? message.variant === "warning"
+                          ? "bg-rose-50 border border-rose-100 text-rose-800"
+                          : "bg-emerald-50 border border-emerald-100 text-gray-800"
+                        : "bg-white border border-gray-200 text-gray-800";
+
+                      return (
+                        <div key={message.id} className={`flex ${alignment}`}>
+                          {isAssistant ? (
+                            <div className="flex items-start gap-2">
+                              <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
+                                <Bot className="w-4 h-4 text-emerald-700" />
+                              </div>
+                              <div className={`rounded-2xl px-4 py-3 text-xs whitespace-pre-line ${bubbleClass}`}>
+                                {message.variant === "warning" && (
+                                  <div className="flex items-center gap-1 mb-1 text-[11px] font-semibold">
+                                    <AlertTriangle className="w-3 h-3 text-rose-500" />
+                                    CityBuddy caution
+                                  </div>
+                                )}
+                                <p className="whitespace-pre-line">{message.content}</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-row-reverse items-start gap-2">
+                              <div className="w-8 h-8 rounded-full bg-gray-200" />
+                              <div className={`rounded-2xl px-4 py-3 text-xs whitespace-pre-line ${bubbleClass}`}>
+                                <p className="whitespace-pre-line">{message.content}</p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {diagnoseMutation.isPending && (
+                      <div className="flex items-start gap-2">
+                        <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
+                          <Bot className="w-4 h-4 text-emerald-700" />
+                        </div>
+                        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3">
+                          <div className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" />
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce delay-150" />
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce delay-300" />
+                          </div>
+                          <p className="text-xs text-emerald-800 mt-2">
+                            CityBuddy is analyzing your issue…
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border-t border-gray-200 px-5 py-3 space-y-2">
+                    {aiResult &&
+                    (aiResult.shouldAvoidDIY ||
+                      aiResult.severity === "high" ||
+                      aiResult.severity === "critical") ? (
+                      <div className="flex items-center gap-3 rounded-xl bg-rose-50 border border-rose-200 px-3 py-2">
+                        <div className="flex-1">
+                          <p className="text-xs font-semibold text-rose-700">This issue looks sensitive.</p>
+                          <p className="text-[11px] text-rose-600">
+                            CityBuddy recommends a professional diagnosis to avoid further damage or safety risk.
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap"
+                          onClick={() => setLocation("/checkout-diagnosis")}
+                        >
+                          Request Professional Diagnosis
+                        </Button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-[11px] text-emerald-700 hover:underline"
+                        onClick={() => setLocation("/checkout-diagnosis")}
+                      >
+                        Still not sure? Request professional diagnosis
+                      </button>
+                    )}
+                    <p className="text-[10px] text-gray-500">
+                      CityBuddy is an AI assistant for guidance only. For electrical, gas, structural, or major water leak issues,
+                      always use a verified professional and follow estate safety rules.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

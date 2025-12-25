@@ -1,8 +1,6 @@
 import {
   users,
   serviceRequests,
-  wallets,
-  transactions,
   companies,
   providerRequests,
   mongoIdMappings,
@@ -13,14 +11,13 @@ import {
   deviceAssignments,
   auditLogs,
   orders,
+  wallets,
+  memberships,
+  transactions,
   type User,
   type InsertUser,
   type ServiceRequest,
   type InsertServiceRequest,
-  type Wallet,
-  type InsertWallet,
-  type Transaction,
-  type InsertTransaction,
   type Company,
   type InsertCompany,
   type ProviderRequest,
@@ -37,14 +34,79 @@ import {
   type Order,
   type AuditLog,
   type InsertAuditLog,
+  type Wallet,
+  type Membership,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, count, sql, asc, or, inArray, sum } from "drizzle-orm";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
-import { pool } from "./db";
-
 const PostgresSessionStore = connectPg(session);
+import { pool } from "./db";
+import { prisma } from "./lib/prisma";
+import { Prisma } from "@prisma/client";
+import type {
+  Transaction as PrismaTransaction,
+  TransactionStatus,
+  TransactionType,
+  Wallet as PrismaWallet,
+  User as PrismaUser,
+} from "@prisma/client";
+import { randomUUID } from "crypto";
+
+const SHARED_USER_ROLES = [
+  "resident",
+  "provider",
+  "admin",
+  "super_admin",
+  "estate_admin",
+  "moderator",
+] as const;
+
+type SharedUserRole = (typeof SHARED_USER_ROLES)[number];
+const DEFAULT_USER_ROLE: SharedUserRole = "resident";
+
+function normalizeSharedRole(role?: string | null): SharedUserRole {
+  if (!role) return DEFAULT_USER_ROLE;
+  const lower = role.toLowerCase();
+  if (SHARED_USER_ROLES.includes(lower as SharedUserRole)) {
+    return lower as SharedUserRole;
+  }
+  return DEFAULT_USER_ROLE;
+}
+
+function mapPrismaUser(user: PrismaUser & { providerCompany?: { name?: string | null } | null }): User {
+  const sharedRole = normalizeSharedRole(user.globalRole);
+  return {
+    id: user.id,
+    firstName: null,
+    lastName: null,
+    name: user.name ?? user.email,
+    email: user.email,
+    phone: user.phone ?? "",
+    password: user.passwordHash,
+    accessCode: null,
+    role: sharedRole,
+    globalRole: sharedRole,
+    rating: "0",
+    isActive: user.isActive,
+    isApproved: user.isApproved,
+    categories: [],
+    serviceCategory: null,
+    experience: null,
+    company: user.providerCompany?.name ?? null,
+    documents: [],
+    location: null,
+    latitude: null,
+    longitude: null,
+    lastLoginAt: null,
+    metadata: null,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
+
+const includeProviderCompany = { providerCompany: true };
 
 type OrderUserSummary = Pick<User, "id" | "name" | "email" | "phone">;
 
@@ -91,6 +153,33 @@ export interface OrdersListResult {
   pagination: OrdersPagination;
 }
 
+type WalletCreationInput = {
+  userId: string;
+  balance?: string;
+  id?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+  currency?: string;
+};
+
+type CreateTransactionInput = {
+  walletId: string;
+  serviceRequestId?: string | null;
+  userId?: string;
+  amount: string;
+  type: TransactionType;
+  status: TransactionStatus;
+  description?: string | null;
+  reference: string;
+  meta?: Prisma.InputJsonValue | null;
+  currency?: string;
+  gateway?: string;
+  id?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+  gatewayReference?: string;
+};
+
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -98,11 +187,15 @@ export interface IStorage {
   getUserByAccessCode(accessCode: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
-  
+  getMembershipsForUser(userId: string): Promise<Membership[]>;
+  getMembershipByUserAndEstate(userId: string, estateId: string): Promise<Membership | undefined>;
   // Service Requests
   createServiceRequest(request: InsertServiceRequest): Promise<ServiceRequest>;
   getServiceRequest(id: string): Promise<ServiceRequest | undefined>;
-  getServiceRequestsByResident(residentId: string): Promise<ServiceRequest[]>;
+  getServiceRequestsByResident(
+    residentId: string,
+    options?: { estateId?: string },
+  ): Promise<ServiceRequest[]>;
   getServiceRequestsByProvider(providerId: string): Promise<ServiceRequest[]>;
   getAvailableServiceRequests(category?: string): Promise<ServiceRequest[]>;
   getAllServiceRequests(): Promise<ServiceRequest[]>;
@@ -110,18 +203,18 @@ export interface IStorage {
   assignServiceRequest(id: string, providerId: string): Promise<ServiceRequest | undefined>;
   
   // Wallets
-  getWalletByUserId(userId: string): Promise<Wallet | undefined>;
-  createWallet(wallet: InsertWallet): Promise<Wallet>;
-  updateWalletBalance(userId: string, amount: string): Promise<Wallet | undefined>;
-  
+  getWalletByUserId(userId: string): Promise<PrismaWallet | undefined>;
+  createWallet(wallet: WalletCreationInput): Promise<PrismaWallet>;
+  updateWalletBalance(userId: string, amount: string): Promise<PrismaWallet | undefined>;
+
   // Transactions
-  createTransaction(transaction: InsertTransaction): Promise<Transaction>;
-  getTransactionsByWallet(walletId: string): Promise<Transaction[]>;
-  getTransactionByReference(reference: string): Promise<Transaction | undefined>;
+  createTransaction(transaction: CreateTransactionInput): Promise<PrismaTransaction>;
+  getTransactionsByWallet(walletId: string): Promise<PrismaTransaction[]>;
+  getTransactionByReference(reference: string): Promise<PrismaTransaction | undefined>;
   updateTransactionByReference(
     reference: string,
-    updates: Partial<Transaction>,
-  ): Promise<Transaction | undefined>;
+    updates: Prisma.TransactionUpdateInput,
+  ): Promise<PrismaTransaction | undefined>;
   
   // Admin functions
   getUsers(role?: string): Promise<User[]>;
@@ -167,113 +260,46 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  private async mapUser(user: PrismaUser | null): Promise<User | undefined> {
+    if (!user) return undefined;
+    const mapped = mapPrismaUser(user);
+    return mapped;
+  }
+
   async getUser(id: string): Promise<User | undefined> {
-    const [user] = await db
-      .select({
-        id: users.id,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        name: users.name,
-        email: users.email,
-        phone: users.phone,
-        password: users.password,
-        role: users.role,
-        globalRole: users.globalRole,
-        company: users.company,
-        documents: users.documents,
-        metadata: users.metadata,
-        lastLoginAt: users.lastLoginAt,
-        isActive: users.isActive,
-        isApproved: users.isApproved,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      })
-      .from(users)
-      .where(eq(users.id, id));
-    return (user as unknown as User) || undefined;
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: includeProviderCompany,
+    });
+    return this.mapUser(user);
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db
-      .select({
-        id: users.id,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        name: users.name,
-        email: users.email,
-        phone: users.phone,
-        password: users.password,
-        role: users.role,
-        globalRole: users.globalRole,
-        company: users.company,
-        documents: users.documents,
-        metadata: users.metadata,
-        lastLoginAt: users.lastLoginAt,
-        isActive: users.isActive,
-        isApproved: users.isApproved,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      })
-      .from(users)
-      .where(eq(users.email, username));
-    return (user as unknown as User) || undefined;
+    const normalized = (username || "").trim();
+    let user = await prisma.user.findUnique({
+      where: { email: normalized },
+      include: includeProviderCompany,
+    });
+    if (!user) {
+      user = await prisma.user.findFirst({
+        where: { name: normalized },
+        include: includeProviderCompany,
+      });
+    }
+    return this.mapUser(user);
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    const [user] = await db
-      .select({
-        id: users.id,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        name: users.name,
-        email: users.email,
-        phone: users.phone,
-        password: users.password,
-        role: users.role,
-        globalRole: users.globalRole,
-        company: users.company,
-        documents: users.documents,
-        metadata: users.metadata,
-        lastLoginAt: users.lastLoginAt,
-        isActive: users.isActive,
-        isApproved: users.isApproved,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      })
-      .from(users)
-      .where(eq(users.email, email));
-    return (user as unknown as User) || undefined;
+    const user = await prisma.user.findUnique({
+      where: { email },
+      include: includeProviderCompany,
+    });
+    return this.mapUser(user);
   }
 
   async getUserByAccessCode(accessCode: string): Promise<User | undefined> {
-    const [user] = await db
-      .select({
-        id: users.id,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        name: users.name,
-        email: users.email,
-        phone: users.phone,
-        password: users.password,
-        role: users.role,
-        globalRole: users.globalRole,
-        company: users.company,
-        documents: users.documents,
-        metadata: users.metadata,
-        lastLoginAt: users.lastLoginAt,
-        isActive: users.isActive,
-        isApproved: users.isApproved,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      })
-      .from(users)
-      .where(
-        and(
-          eq(users.accessCode, accessCode),
-          eq(users.role, "resident")
-        )
-      );
-    return (user as unknown as User) || undefined;
+    // Prisma User model currently does not expose accessCode, so return undefined.
+    return undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
@@ -282,6 +308,32 @@ export class DatabaseStorage implements IStorage {
       .values(insertUser)
       .returning();
     
+    // Mirror the user in Prisma so wallet FK works
+    try {
+      await prisma.user.upsert({
+        where: { id: user.id },
+        update: {
+          email: user.email,
+          name: user.name,
+          passwordHash: user.password,
+          globalRole: (user.globalRole as string | undefined)?.toUpperCase() as any,
+          isApproved: user.isApproved,
+          isActive: user.isActive,
+        },
+        create: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          passwordHash: user.password,
+          globalRole: (user.globalRole as string | undefined)?.toUpperCase() as any,
+          isApproved: user.isApproved,
+          isActive: user.isActive,
+        },
+      });
+    } catch (error) {
+      console.warn("Failed to mirror user in Prisma:", (error as Error).message);
+    }
+
     // Create wallet for new user
     if (user.role === "resident") {
       await this.createWallet({ userId: user.id, balance: "25000" });
@@ -299,8 +351,26 @@ export class DatabaseStorage implements IStorage {
     return user || undefined;
   }
 
-  
+  async getMembershipsForUser(userId: string): Promise<Membership[]> {
+    const rows = await db
+      .select()
+      .from(memberships)
+      .where(eq(memberships.userId, userId))
+      .orderBy(asc(memberships.createdAt));
+    return rows;
+  }
 
+  async getMembershipByUserAndEstate(userId: string, estateId: string): Promise<Membership | undefined> {
+    const [row] = await db
+      .select()
+      .from(memberships)
+      .where(and(eq(memberships.userId, userId), eq(memberships.estateId, estateId)))
+      .limit(1);
+    return row || undefined;
+  }
+
+  
+  
   // Service Requests
   async createServiceRequest(request: InsertServiceRequest): Promise<ServiceRequest> {
     const [serviceRequest] = await db
@@ -315,11 +385,29 @@ export class DatabaseStorage implements IStorage {
     return request || undefined;
   }
 
-  async getServiceRequestsByResident(residentId: string): Promise<ServiceRequest[]> {
+  async getServiceRequestsByResident(
+    residentId: string,
+    options?: { estateId?: string },
+  ): Promise<ServiceRequest[]> {
+    const whereParts = [eq(serviceRequests.residentId, residentId)];
+    if (options?.estateId) {
+      whereParts.push(eq(serviceRequests.estateId, options.estateId));
+    }
+    const where = whereParts.length > 1 ? and(...whereParts) : whereParts[0];
     const requests = await db
-      .select()
+      .select({
+        id: serviceRequests.id,
+        category: serviceRequests.category,
+        description: serviceRequests.description,
+        status: serviceRequests.status,
+        urgency: serviceRequests.urgency,
+        budget: serviceRequests.budget,
+        paymentStatus: serviceRequests.paymentStatus,
+        createdAt: serviceRequests.createdAt,
+        estateId: serviceRequests.estateId,
+      })
       .from(serviceRequests)
-      .where(eq(serviceRequests.residentId, residentId))
+      .where(where)
       .orderBy(desc(serviceRequests.createdAt));
     return requests;
   }
@@ -580,65 +668,146 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Wallets
-  async getWalletByUserId(userId: string): Promise<Wallet | undefined> {
-    const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, userId));
-    return wallet || undefined;
+  async getWalletByUserId(userId: string): Promise<PrismaWallet | undefined> {
+    const [res] = await db.select().from(wallets).where(eq(wallets.userId, userId));
+    return (res as any as PrismaWallet) ?? undefined;
   }
 
-  async createWallet(wallet: InsertWallet): Promise<Wallet> {
-    const [newWallet] = await db
+  async createWallet(wallet: WalletCreationInput): Promise<PrismaWallet> {
+    const [w] = await db
       .insert(wallets)
-      .values(wallet)
+      .values({
+        id: wallet.id ?? randomUUID(),
+        userId: wallet.userId,
+        balance: wallet.balance ?? "0",
+        createdAt: wallet.createdAt ?? new Date(),
+        updatedAt: wallet.updatedAt ?? new Date(),
+      })
       .returning();
-    return newWallet;
+    return w as any as PrismaWallet;
   }
 
-  async updateWalletBalance(userId: string, amount: string): Promise<Wallet | undefined> {
-    const [wallet] = await db
+  async updateWalletBalance(userId: string, amount: string): Promise<PrismaWallet | undefined> {
+    const [w] = await db
       .update(wallets)
       .set({ balance: amount, updatedAt: new Date() })
       .where(eq(wallets.userId, userId))
       .returning();
-    return wallet || undefined;
+    return (w as any as PrismaWallet) ?? undefined;
   }
 
   // Transactions
-  async createTransaction(transaction: InsertTransaction): Promise<Transaction> {
-    const [newTransaction] = await db
+  async createTransaction(transaction: CreateTransactionInput): Promise<PrismaTransaction> {
+    const toDrizzleType = (t: TransactionType): any =>
+      t === ("CREDIT" as any) ? "credit" : "debit";
+    const toDrizzleStatus = (s: TransactionStatus): any => {
+      if (s === ("COMPLETED" as any)) return "completed";
+      if (s === ("FAILED" as any)) return "failed";
+      return "pending";
+    };
+
+    const [row] = await db
       .insert(transactions)
-      .values(transaction)
+      .values({
+        id: transaction.id ?? randomUUID(),
+        walletId: transaction.walletId,
+        serviceRequestId: transaction.serviceRequestId ?? null,
+        amount: transaction.amount,
+        type: toDrizzleType(transaction.type),
+        status: toDrizzleStatus(transaction.status),
+        description: transaction.description ?? null,
+        reference: transaction.reference,
+        meta: (transaction.meta as any) ?? {},
+        gateway: transaction.gateway ?? "paystack",
+        gatewayReference: transaction.gatewayReference ?? transaction.reference,
+        createdAt: transaction.createdAt ?? new Date(),
+        updatedAt: transaction.updatedAt ?? new Date(),
+      })
       .returning();
-    return newTransaction;
+
+    return this.#mapDrizzleTxToPrismaLike(row) as any as PrismaTransaction;
   }
 
-  async getTransactionsByWallet(walletId: string): Promise<Transaction[]> {
-    const transactionList = await db
+  async getTransactionsByWallet(walletId: string): Promise<PrismaTransaction[]> {
+    const rows = await db
       .select()
       .from(transactions)
       .where(eq(transactions.walletId, walletId))
       .orderBy(desc(transactions.createdAt));
-    return transactionList;
+    return rows.map((r: any) => this.#mapDrizzleTxToPrismaLike(r) as any as PrismaTransaction);
   }
 
-  async getTransactionByReference(reference: string): Promise<Transaction | undefined> {
-    const [tx] = await db
+  async getTransactionByReference(reference: string): Promise<PrismaTransaction | undefined> {
+    const [row] = await db
       .select()
       .from(transactions)
       .where(eq(transactions.reference, reference))
       .limit(1);
-    return tx || undefined;
+    return row ? (this.#mapDrizzleTxToPrismaLike(row) as any as PrismaTransaction) : undefined;
   }
 
   async updateTransactionByReference(
     reference: string,
-    updates: Partial<Transaction>,
-  ): Promise<Transaction | undefined> {
-    const [tx] = await db
+    updates: Prisma.TransactionUpdateInput,
+  ): Promise<PrismaTransaction | undefined> {
+    const toDrizzleStatus = (s: any): any => {
+      if (s === ("COMPLETED" as any)) return "completed";
+      if (s === ("FAILED" as any)) return "failed";
+      if (s === ("PENDING" as any)) return "pending";
+      return undefined;
+    };
+
+    const patch: any = {};
+    if (updates.status) {
+      const sVal = (updates.status as any);
+      patch.status = toDrizzleStatus(typeof sVal === "object" && "set" in sVal ? (sVal as any).set : sVal);
+    }
+    if (updates.description !== undefined) {
+      const dVal = updates.description as any;
+      patch.description = typeof dVal === "object" && dVal?.set !== undefined ? dVal.set : dVal;
+    }
+    if (updates.meta !== undefined) {
+      const mVal = updates.meta as any;
+      patch.meta = typeof mVal === "object" && mVal?.set !== undefined ? mVal.set : mVal;
+    }
+
+    const [row] = await db
       .update(transactions)
-      .set({ ...updates })
+      .set({ ...patch, ...(Object.keys(patch).length ? { } : {}) })
       .where(eq(transactions.reference, reference))
       .returning();
-    return tx || undefined;
+
+    return row ? (this.#mapDrizzleTxToPrismaLike(row) as any as PrismaTransaction) : undefined;
+  }
+
+  #mapDrizzleTxToPrismaLike(row: any) {
+    const toPrismaStatus = (s: string): any => {
+      switch (String(s).toLowerCase()) {
+        case "completed":
+          return "COMPLETED";
+        case "failed":
+          return "FAILED";
+        default:
+          return "PENDING";
+      }
+    };
+    const toPrismaType = (t: string): any => (String(t).toLowerCase() === "credit" ? "CREDIT" : "DEBIT");
+    return {
+      id: row.id,
+      walletId: row.walletId,
+      serviceRequestId: row.serviceRequestId,
+      amount: row.amount,
+      type: toPrismaType(row.type),
+      status: toPrismaStatus(row.status),
+      description: row.description,
+      meta: row.meta,
+      gateway: row.gateway,
+      gatewayReference: row.reference,
+      createdAt: row.createdAt,
+      // Prisma model has updatedAt; Drizzle doesn't. Omit or reuse createdAt.
+      updatedAt: row.createdAt,
+      currency: (row.currency ?? "NGN"),
+    };
   }
 
   // Admin functions

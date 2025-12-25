@@ -70,6 +70,18 @@ export const transactionStatusEnum = pgEnum("transaction_status", [
   "completed",
   "failed",
 ]);
+export const membershipStatusEnum = pgEnum("membership_status", [
+  "pending",
+  "active",
+  "suspended",
+  "rejected",
+  "left",
+]);
+export const roleScopeEnum = pgEnum("role_scope", [
+  "platform",
+  "estate",
+  "business",
+]);
 
 // ADD new enums
 export const billStatusEnum = pgEnum("bill_status", [
@@ -133,6 +145,13 @@ export const broadcastStatusEnum = pgEnum("broadcast_status", [
   "scheduled",
 ]);
 
+// Simple app settings (key/value) table for global configs
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull().default("{}"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Estates table (from MongoDB)
 export const estates = pgTable("estates", {
   id: varchar("id")
@@ -193,10 +212,57 @@ export const memberships = pgTable("memberships", {
     .notNull()
     .references(() => estates.id),
   role: userRoleEnum("role").notNull(),
+  isPrimary: boolean("is_primary").notNull().default(false),
+  status: membershipStatusEnum("status").notNull().default("active"),
   isActive: boolean("is_active").notNull().default(true),
   permissions: text("permissions").array(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const roles = pgTable("roles", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  key: text("key").notNull().unique(),
+  name: text("name").notNull(),
+  scope: roleScopeEnum("scope").notNull().default("platform"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const permissions = pgTable("permissions", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  key: text("key").notNull().unique(),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const rolePermissions = pgTable("role_permissions", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  roleId: varchar("role_id")
+    .notNull()
+    .references(() => roles.id, { onDelete: "cascade" }),
+  permissionId: varchar("permission_id")
+    .notNull()
+    .references(() => permissions.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const membershipRoles = pgTable("membership_roles", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  membershipId: varchar("membership_id")
+    .notNull()
+    .references(() => memberships.id, { onDelete: "cascade" }),
+  roleId: varchar("role_id")
+    .notNull()
+    .references(() => roles.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Categories table (from MongoDB)
@@ -495,14 +561,14 @@ export const wallets = pgTable("wallets", {
   id: varchar("id")
     .primaryKey()
     .default(sql`gen_random_uuid()`),
-  userId: varchar("user_id")
+  userId: varchar("userId")
     .notNull()
     .references(() => users.id),
   balance: decimal("balance", { precision: 10, scale: 2 })
     .notNull()
     .default("0"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+  createdAt: timestamp("createdAt").defaultNow(),
+  updatedAt: timestamp("updatedAt").defaultNow(),
 });
 
 // Transactions table
@@ -514,18 +580,19 @@ export const transactions = pgTable("transactions", {
     .notNull()
     .unique(),
   gateway: text("gateway").notNull().default("paystack"),
-  walletId: varchar("wallet_id")
+  walletId: varchar("walletId")
     .notNull()
     .references(() => wallets.id),
-  serviceRequestId: varchar("service_request_id").references(
-    () => serviceRequests.id,
-  ),
+  serviceRequestId: varchar("serviceRequestId").references(() => serviceRequests.id),
+  currency: text("currency").notNull().default("NGN"),
+  gatewayReference: text("gatewayReference").notNull(),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   type: transactionTypeEnum("type").notNull(),
   status: transactionStatusEnum("status").notNull().default("pending"),
   description: text("description"),
   meta: jsonb("meta").notNull().default("{}"),
-  createdAt: timestamp("created_at").defaultNow(),
+  createdAt: timestamp("createdAt").defaultNow(),
+  updatedAt: timestamp("updatedAt").defaultNow(),
 });
 
 //Inspection Analysis table

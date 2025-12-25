@@ -1,6 +1,8 @@
+import { useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
+import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,9 +28,12 @@ import {
   Area,
 } from "recharts";
 import { ResidentLayout } from "@/components/resident/ResidentLayout";
+import { residentFetch } from "@/lib/residentApi";
 
 export default function ResidentDashboard() {
   const { user } = useAuth();
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   const { data: serviceRequests = [] } = useQuery({
     queryKey: ["/api/service-requests"],
@@ -137,6 +142,64 @@ export default function ResidentDashboard() {
       </div>
     </div>
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const reference = params.get("reference");
+    if (!reference) return;
+
+    let cleaned = false;
+    const cleanupParams = () => {
+      if (cleaned) return;
+      cleaned = true;
+      const current = new URLSearchParams(window.location.search);
+      current.delete("reference");
+      current.delete("paid");
+      const search = current.toString();
+      const base = `${window.location.pathname}${search ? `?${search}` : ""}`;
+      window.history.replaceState(null, "", base);
+    };
+
+    (async () => {
+      try {
+        const res = await residentFetch<{
+          status: "success" | "failed";
+          serviceRequestId?: string | null;
+          message?: string;
+        }>("/api/payments/paystack/verify", {
+          method: "POST",
+          json: { reference },
+        });
+
+        if (res?.status === "success") {
+          toast({
+            title: "Payment received",
+            description: "Your booking has been confirmed.",
+          });
+          cleanupParams();
+          if (res.serviceRequestId) {
+            setLocation(`/track-orders?highlight=${encodeURIComponent(res.serviceRequestId)}`);
+            return;
+          }
+        } else {
+          toast({
+            title: "Payment could not be confirmed",
+            description: res?.message || "We could not confirm your payment at this time.",
+            variant: "destructive",
+          });
+        }
+      } catch (error: any) {
+        toast({
+          title: "Payment could not be confirmed",
+          description: error?.message || "We could not confirm your payment at this time.",
+          variant: "destructive",
+        });
+      } finally {
+        cleanupParams();
+      }
+    })();
+  }, [setLocation, toast]);
 
   return (
     <ResidentLayout title={pageTitle}>

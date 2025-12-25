@@ -8,6 +8,13 @@
       "when": 1758989512107,
       "tag": "0000_curvy_loki",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1766213435948,
+      "tag": "0001_rbac-memberships",
+      "breakpoints": true
     }
   ]
 }

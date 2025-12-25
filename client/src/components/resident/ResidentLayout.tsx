@@ -11,7 +11,8 @@ import {
   Search,
   LayoutGrid,
   LifeBuoy,
-  LogOut
+  LogOut,
+  ListChecks,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -98,6 +99,15 @@ export function ResidentLayout({ title, children }: ResidentLayoutProps) {
             }`}>
               <ClipboardList className="w-5 h-5" />
               <span className="font-medium">Orders</span>
+            </button>
+          </Link>
+
+          <Link href="/service-requests">
+            <button className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
+              isActive('/service-requests') ? 'bg-emerald-600' : 'hover:bg-emerald-700/50'
+            }`}>
+              <ListChecks className="w-5 h-5" />
+              <span className="font-medium">Service Requests</span>
             </button>
           </Link>
 

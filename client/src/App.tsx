@@ -20,6 +20,7 @@ import BookArtisan from "@/pages/book-artisan";
 import ServiceCategories from "@/pages/service-categories";
 import BookMarketRun from "@/pages/book-market-run";
 import TrackOrders from "@/pages/track-orders";
+import ServiceRequestsPage from "@/pages/service-requests";
 import CheckoutDiagnosis from "@/pages/checkout-diagnosis";
 import PaymentPolicy from "@/pages/payment-policy";
 import PaymentConfirmation from "@/pages/payment-confirmation";
@@ -58,6 +59,7 @@ function Router() {
       <ProtectedRoute path="/payment-confirmation" component={PaymentConfirmation} />
       <ProtectedRoute path="/book-market-run" component={BookMarketRun} />
       <ProtectedRoute path="/track-orders" component={TrackOrders} />
+      <ProtectedRoute path="/service-requests" component={ServiceRequestsPage} />
       <Route component={NotFound} />
     </Switch>
   );

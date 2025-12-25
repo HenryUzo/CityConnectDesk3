@@ -342,7 +342,7 @@ export default function ServiceCategories() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {filteredCategories.map((category: any) => (
+              {filteredCategories.map((category: { id: string; name: string; icon: string; avatars: string[]; providers: number }) => (
                 <Link key={category.id} href="/book-artisan">
                   <Card className="group hover:shadow-lg transition-all duration-200 cursor-pointer border border-gray-200 hover:border-emerald-500 bg-white">
                     <div className="p-6">
