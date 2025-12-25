@@ -35,7 +35,7 @@ export async function verifyOpenAI() {
           content: [{ type: "input_text", text: "ping" }],
         },
       ],
-      text: { format: { type: "plain_text" } },
+      text: { format: { type: "text" } },
     });
     const output = (resp as any)?.output_text;
     const ok = typeof output === "string";

@@ -1,5 +1,5 @@
 import { getOpenAI } from "../../openaiClient";
-import type { DiagnosisInput } from "../index";
+import type { DiagnosisInput } from "../types";
 import type { AiDiagnosis } from "../schema";
 
 export async function diagnose(input: DiagnosisInput & { model?: string }): Promise<AiDiagnosis> {

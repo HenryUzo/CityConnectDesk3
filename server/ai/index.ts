@@ -1,15 +1,11 @@
 import { z } from "zod";
 import { AIDiagnosisResponseSchema } from "./schema";
+import type { DiagnosisInput } from "./types";
 import { db } from "../db";
 import { appSettings } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 
-export type DiagnosisInput = {
-  category: string;
-  description: string;
-  urgency?: "low" | "medium" | "high" | "emergency";
-  specialInstructions?: string;
-};
+export type { DiagnosisInput } from "./types";
 
 export type AiDiagnosis = z.infer<typeof AIDiagnosisResponseSchema>;
 

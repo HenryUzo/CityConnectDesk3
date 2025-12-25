@@ -6,9 +6,25 @@ import { storage } from "./storage";
 declare global {
   namespace Express {
     interface Request {
-      auth?: JWTPayload & { id: string };
+      auth?: AuthContext;
     }
   }
+}
+
+interface AuthMembership {
+  id: string;
+  estateId: string;
+  userId: string;
+  status?: string | null;
+  isActive?: boolean | null;
+  isPrimary?: boolean | null;
+  role?: string | null;
+}
+
+interface AuthContext extends JWTPayload {
+  id: string;
+  activeEstateId?: string;
+  membership?: AuthMembership;
 }
 
 function ensureDevAuth(req: Request) {

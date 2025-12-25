@@ -45,9 +45,13 @@ import {
   handlePaystackWebhook,
 } from "./paystackHandlers";
 import { TransactionStatus, Prisma } from "@prisma/client";
+import type { Transaction as PrismaTransaction } from "@prisma/client";
 import { requireAuth, requireResident } from "./auth-middleware";
 import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
 import * as ai from "./ai";
+import { runDiagnosis, GEMINI_FALLBACK_DIAGNOSIS, GEMINI_SAFETY_FALLBACK } from "./ai/diagnose";
+import { generateGeminiContent } from "./ai/geminiClient";
+import { resolveActiveEstateContext, requireActiveEstateMembership } from "./middlewares/estate-context";
 
 const isAdminOrSuper = (req: Express["request"]) =>
   req.isAuthenticated() &&
@@ -167,6 +171,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use("/api/provider", providerRoutes);
   app.use("/api/marketplace", marketplaceRoutes);
 
+  const formatPaystackVerifySuccess = (tx?: PrismaTransaction | null) => ({
+    status: "success" as const,
+    serviceRequestId: tx?.serviceRequestId ?? null,
+    transactionStatus: tx?.status ?? null,
+  });
+
   // Password hashing helper (mirror of auth.ts)
   const scryptAsync = promisify(scrypt);
   async function hashPassword(password: string) {
@@ -176,8 +186,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // Service Requests Routes
-  app.post("/api/service-requests", async (req, res, next) => {
-    try {
+  app.post(
+    "/api/service-requests",
+    requireAuth,
+    resolveActiveEstateContext,
+    requireActiveEstateMembership,
+    async (req, res, next) => {
+      try {
       if (!req.isAuthenticated() || req.user?.role !== "resident") {
         return res.status(401).json({ message: "Unauthorized" });
       }
@@ -185,6 +200,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const parsed = CreateServiceRequest.parse({
         ...req.body,
         residentId: req.user.id,
+        estateId: req.auth?.activeEstateId,
       });
 
       const created = await storage.createServiceRequest(parsed);
@@ -250,6 +266,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(serviceRequest);
     } catch (error) {
       next(error);
+    }
+  });
+
+  app.get("/api/service-requests/my", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const estateId =
+        (req.header("x-estate-id") as string | undefined)?.trim() ||
+        (req.query.estateId as string | undefined);
+
+      const requests = await storage.getServiceRequestsByResident(userId, {
+        estateId: estateId ? estateId : undefined,
+      });
+
+      res.json({ data: requests });
+    } catch (error) {
+      console.error("Failed to fetch my service requests", error);
+      res.status(500).json({ message: "Unable to load service requests" });
     }
   });
 
@@ -326,15 +364,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { category, description, urgency, specialInstructions } = parsedBody.data;
-      const normalized = await ai.diagnose({ category, description, urgency, specialInstructions });
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      global.__aiCache.set(cacheKey, { expires: now + ttlMs, data: normalized });
+      const activeProvider = await ai.getActiveProvider();
+      const useGeminiDirect =
+        activeProvider.provider === "gemini" || process.env.AI_PROVIDER === "gemini";
+      const geminiModel =
+        activeProvider.model || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+      let normalized;
+      if (useGeminiDirect) {
+        try {
+          normalized = await runDiagnosis({
+            category,
+            description,
+            urgency,
+            specialInstructions,
+            model: geminiModel,
+          });
+        } catch (error) {
+          console.error("[AI][Gemini] Diagnosis failed. Returning fallback.", error);
+          return res.json(GEMINI_FALLBACK_DIAGNOSIS);
+        }
+      } else {
+        normalized = await ai.diagnose({ category, description, urgency, specialInstructions });
+      }
+
+      if (normalized !== GEMINI_SAFETY_FALLBACK) {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        global.__aiCache.set(cacheKey, { expires: now + ttlMs, data: normalized });
+      }
       return res.json(normalized);
     } catch (error) {
       // Optional fallback order: try other providers before failing
       try {
-        const { provider } = ai.getActiveProvider();
+        const { provider } = await ai.getActiveProvider();
         const fallbacks = ai.availableProviders().filter((p) => p !== provider);
         const { category, description, urgency, specialInstructions } = parsedBody.data as any;
         for (const p of fallbacks) {
@@ -352,6 +414,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         error: "Unable to generate AI diagnosis right now.",
       });
     }
+  });
+
+  app.get("/api/ai/health", async (req, res) => {
+    const provider = "gemini";
+    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    const configured = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY);
+    let ok = false;
+    if (configured) {
+      try {
+        const { text, blocked } = await generateGeminiContent(model, "CityConnect health check ping");
+        ok = Boolean(text?.trim()) && !blocked;
+      } catch {
+        ok = false;
+      }
+    }
+    res.json({ ok, provider, model, configured });
   });
 
   // Admin AI settings endpoints
@@ -624,14 +702,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // TODO: ensure this lookup uses the production payment table keyed by reference.
-      const tx = await storage.getTransactionByReference(reference);
-      if (!tx) {
-        return res.status(404).json({ status: "failed" });
-      }
+    const tx = await storage.getTransactionByReference(reference);
+    if (!tx) {
+      return res.status(404).json({ status: "failed", message: "Transaction not found" });
+    }
 
-      if (tx.status === TransactionStatus.COMPLETED) {
-        return res.json({ status: "success" });
-      }
+    if (tx.status === TransactionStatus.COMPLETED) {
+      return res.json(formatPaystackVerifySuccess(tx));
+    }
 
       const verification = await verifyPaystackTransaction(reference);
       // Security: make sure Paystack is telling us the charge actually succeeded.
@@ -654,16 +732,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ status: "failed" });
       }
 
-      await storage.updateTransactionByReference(reference, {
-        status: TransactionStatus.COMPLETED,
-        description: `Paystack ${charge.channel || "charge"}`,
-        meta: {
-          ...((tx.meta as Prisma.JsonObject) || {}),
-          paystack: charge as any,
-        } as Prisma.InputJsonObject,
-      });
+    const updatedTx = await storage.updateTransactionByReference(reference, {
+      status: TransactionStatus.COMPLETED,
+      description: `Paystack ${charge.channel || "charge"}`,
+      meta: {
+        ...((tx.meta as Prisma.JsonObject) || {}),
+        paystack: charge as any,
+      } as Prisma.InputJsonObject,
+    });
 
-      if (tx.serviceRequestId) {
+    if (tx.serviceRequestId) {
         // TODO: replace with real billing workflow (e.g., payment record table update) before marking service request paid.
         await storage.updateServiceRequest(tx.serviceRequestId, {
           paymentStatus: "paid",
@@ -671,8 +749,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      res.json({ status: "success" });
-    } catch (error: any) {
+    const finalTx = updatedTx ?? tx;
+    res.json(formatPaystackVerifySuccess(finalTx));
+  } catch (error: any) {
       console.error("Paystack verify GET error", { message: error?.message });
       res.status(500).json({ status: "failed" });
     }
@@ -708,9 +787,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         transaction: tx,
       });
 
+      const refreshed = await storage.getTransactionByReference(reference);
+      const responseTx = refreshed ?? tx;
+
       res.json({
         reference,
         ...result,
+        serviceRequestId: responseTx?.serviceRequestId ?? null,
+        transactionStatus: responseTx?.status ?? null,
       });
     } catch (error) {
       next(error);

@@ -12,6 +12,8 @@ import {
   auditLogs,
   orders,
   wallets,
+  memberships,
+  transactions,
   type User,
   type InsertUser,
   type ServiceRequest,
@@ -33,6 +35,7 @@ import {
   type AuditLog,
   type InsertAuditLog,
   type Wallet,
+  type Membership,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, count, sql, asc, or, inArray, sum } from "drizzle-orm";
@@ -49,6 +52,7 @@ import type {
   Wallet as PrismaWallet,
   User as PrismaUser,
 } from "@prisma/client";
+import { randomUUID } from "crypto";
 
 const SHARED_USER_ROLES = [
   "resident",
@@ -152,6 +156,9 @@ export interface OrdersListResult {
 type WalletCreationInput = {
   userId: string;
   balance?: string;
+  id?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
   currency?: string;
 };
 
@@ -167,6 +174,10 @@ type CreateTransactionInput = {
   meta?: Prisma.InputJsonValue | null;
   currency?: string;
   gateway?: string;
+  id?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+  gatewayReference?: string;
 };
 
 export interface IStorage {
@@ -176,11 +187,15 @@ export interface IStorage {
   getUserByAccessCode(accessCode: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
-  
+  getMembershipsForUser(userId: string): Promise<Membership[]>;
+  getMembershipByUserAndEstate(userId: string, estateId: string): Promise<Membership | undefined>;
   // Service Requests
   createServiceRequest(request: InsertServiceRequest): Promise<ServiceRequest>;
   getServiceRequest(id: string): Promise<ServiceRequest | undefined>;
-  getServiceRequestsByResident(residentId: string): Promise<ServiceRequest[]>;
+  getServiceRequestsByResident(
+    residentId: string,
+    options?: { estateId?: string },
+  ): Promise<ServiceRequest[]>;
   getServiceRequestsByProvider(providerId: string): Promise<ServiceRequest[]>;
   getAvailableServiceRequests(category?: string): Promise<ServiceRequest[]>;
   getAllServiceRequests(): Promise<ServiceRequest[]>;
@@ -293,6 +308,32 @@ export class DatabaseStorage implements IStorage {
       .values(insertUser)
       .returning();
     
+    // Mirror the user in Prisma so wallet FK works
+    try {
+      await prisma.user.upsert({
+        where: { id: user.id },
+        update: {
+          email: user.email,
+          name: user.name,
+          passwordHash: user.password,
+          globalRole: (user.globalRole as string | undefined)?.toUpperCase() as any,
+          isApproved: user.isApproved,
+          isActive: user.isActive,
+        },
+        create: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          passwordHash: user.password,
+          globalRole: (user.globalRole as string | undefined)?.toUpperCase() as any,
+          isApproved: user.isApproved,
+          isActive: user.isActive,
+        },
+      });
+    } catch (error) {
+      console.warn("Failed to mirror user in Prisma:", (error as Error).message);
+    }
+
     // Create wallet for new user
     if (user.role === "resident") {
       await this.createWallet({ userId: user.id, balance: "25000" });
@@ -310,8 +351,26 @@ export class DatabaseStorage implements IStorage {
     return user || undefined;
   }
 
-  
+  async getMembershipsForUser(userId: string): Promise<Membership[]> {
+    const rows = await db
+      .select()
+      .from(memberships)
+      .where(eq(memberships.userId, userId))
+      .orderBy(asc(memberships.createdAt));
+    return rows;
+  }
 
+  async getMembershipByUserAndEstate(userId: string, estateId: string): Promise<Membership | undefined> {
+    const [row] = await db
+      .select()
+      .from(memberships)
+      .where(and(eq(memberships.userId, userId), eq(memberships.estateId, estateId)))
+      .limit(1);
+    return row || undefined;
+  }
+
+  
+  
   // Service Requests
   async createServiceRequest(request: InsertServiceRequest): Promise<ServiceRequest> {
     const [serviceRequest] = await db
@@ -326,11 +385,29 @@ export class DatabaseStorage implements IStorage {
     return request || undefined;
   }
 
-  async getServiceRequestsByResident(residentId: string): Promise<ServiceRequest[]> {
+  async getServiceRequestsByResident(
+    residentId: string,
+    options?: { estateId?: string },
+  ): Promise<ServiceRequest[]> {
+    const whereParts = [eq(serviceRequests.residentId, residentId)];
+    if (options?.estateId) {
+      whereParts.push(eq(serviceRequests.estateId, options.estateId));
+    }
+    const where = whereParts.length > 1 ? and(...whereParts) : whereParts[0];
     const requests = await db
-      .select()
+      .select({
+        id: serviceRequests.id,
+        category: serviceRequests.category,
+        description: serviceRequests.description,
+        status: serviceRequests.status,
+        urgency: serviceRequests.urgency,
+        budget: serviceRequests.budget,
+        paymentStatus: serviceRequests.paymentStatus,
+        createdAt: serviceRequests.createdAt,
+        estateId: serviceRequests.estateId,
+      })
       .from(serviceRequests)
-      .where(eq(serviceRequests.residentId, residentId))
+      .where(where)
       .orderBy(desc(serviceRequests.createdAt));
     return requests;
   }
@@ -600,8 +677,11 @@ export class DatabaseStorage implements IStorage {
     const [w] = await db
       .insert(wallets)
       .values({
+        id: wallet.id ?? randomUUID(),
         userId: wallet.userId,
         balance: wallet.balance ?? "0",
+        createdAt: wallet.createdAt ?? new Date(),
+        updatedAt: wallet.updatedAt ?? new Date(),
       })
       .returning();
     return w as any as PrismaWallet;
@@ -629,6 +709,7 @@ export class DatabaseStorage implements IStorage {
     const [row] = await db
       .insert(transactions)
       .values({
+        id: transaction.id ?? randomUUID(),
         walletId: transaction.walletId,
         serviceRequestId: transaction.serviceRequestId ?? null,
         amount: transaction.amount,
@@ -638,6 +719,9 @@ export class DatabaseStorage implements IStorage {
         reference: transaction.reference,
         meta: (transaction.meta as any) ?? {},
         gateway: transaction.gateway ?? "paystack",
+        gatewayReference: transaction.gatewayReference ?? transaction.reference,
+        createdAt: transaction.createdAt ?? new Date(),
+        updatedAt: transaction.updatedAt ?? new Date(),
       })
       .returning();
 
@@ -650,7 +734,7 @@ export class DatabaseStorage implements IStorage {
       .from(transactions)
       .where(eq(transactions.walletId, walletId))
       .orderBy(desc(transactions.createdAt));
-    return rows.map((r) => this.#mapDrizzleTxToPrismaLike(r) as any as PrismaTransaction);
+    return rows.map((r: any) => this.#mapDrizzleTxToPrismaLike(r) as any as PrismaTransaction);
   }
 
   async getTransactionByReference(reference: string): Promise<PrismaTransaction | undefined> {

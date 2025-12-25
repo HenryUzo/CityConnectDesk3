@@ -102,9 +102,9 @@ export function ResidentLayout({ title, children }: ResidentLayoutProps) {
             </button>
           </Link>
 
-          <Link href="/requests">
+          <Link href="/service-requests">
             <button className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              isActive('/requests') ? 'bg-emerald-600' : 'hover:bg-emerald-700/50'
+              isActive('/service-requests') ? 'bg-emerald-600' : 'hover:bg-emerald-700/50'
             }`}>
               <ListChecks className="w-5 h-5" />
               <span className="font-medium">Service Requests</span>
