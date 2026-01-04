@@ -49,7 +49,7 @@ import type { Transaction as PrismaTransaction } from "@prisma/client";
 import { requireAuth, requireResident } from "./auth-middleware";
 import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
 import * as ai from "./ai";
-import { runDiagnosis, GEMINI_FALLBACK_DIAGNOSIS, GEMINI_SAFETY_FALLBACK } from "./ai/diagnose";
+import { runDiagnosis, GEMINI_FALLBACK_DIAGNOSIS, GEMINI_SAFETY_FALLBACK, getGeminiModel } from "./ai/diagnose";
 import { generateGeminiContent } from "./ai/geminiClient";
 import { resolveActiveEstateContext, requireActiveEstateMembership } from "./middlewares/estate-context";
 
@@ -367,8 +367,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const activeProvider = await ai.getActiveProvider();
       const useGeminiDirect =
         activeProvider.provider === "gemini" || process.env.AI_PROVIDER === "gemini";
-      const geminiModel =
-        activeProvider.model || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+      const geminiModel = getGeminiModel(activeProvider.model || process.env.GEMINI_MODEL);
       let normalized;
       if (useGeminiDirect) {
         try {
@@ -380,7 +379,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             model: geminiModel,
           });
         } catch (error) {
-          console.error("[AI][Gemini] Diagnosis failed. Returning fallback.", error);
+          console.error(`[AI][Gemini] model=${geminiModel} diagnosis failed. Returning fallback.`, error);
           return res.json(GEMINI_FALLBACK_DIAGNOSIS);
         }
       } else {
@@ -418,18 +417,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/ai/health", async (req, res) => {
     const provider = "gemini";
-    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
     const configured = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY);
+    let model = process.env.GEMINI_MODEL || "gemini-1.5-flash";
     let ok = false;
+    let error: string | undefined;
+    try {
+      model = getGeminiModel(model);
+    } catch (e: any) {
+      error = e?.message || "Invalid Gemini model configuration.";
+      return res.json({ ok: false, provider, model, configured, error });
+    }
     if (configured) {
       try {
-        const { text, blocked } = await generateGeminiContent(model, "CityConnect health check ping");
+        const { text, blocked } = await generateGeminiContent(model, "ping");
         ok = Boolean(text?.trim()) && !blocked;
-      } catch {
+        if (!ok) error = "Gemini returned no content.";
+      } catch (e: any) {
         ok = false;
+        error = e?.message || "Gemini health check failed.";
+        console.error("[AI][Gemini] health check failed model=%s: %s", model, error);
       }
+    } else {
+      error = "GEMINI_API_KEY is not configured.";
     }
-    res.json({ ok, provider, model, configured });
+    res.json({ ok, provider, model, configured, ...(error ? { error } : {}) });
   });
 
   // Admin AI settings endpoints

@@ -112,6 +112,13 @@ async function ensureServiceRequestsColumns() {
     ALTER TABLE service_requests
       ADD COLUMN IF NOT EXISTS estate_id varchar(255);
   `);
+  // Ensure location fields exist on service_requests (added in newer schema)
+  await db.execute(sql`
+    ALTER TABLE service_requests
+      ADD COLUMN IF NOT EXISTS location text,
+      ADD COLUMN IF NOT EXISTS latitude double precision,
+      ADD COLUMN IF NOT EXISTS longitude double precision;
+  `);
 }
 
 // Ensure admin-related columns exist on users table

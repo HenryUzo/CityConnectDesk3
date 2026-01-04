@@ -141,4 +141,79 @@ router.get("/service-requests/:id", requireAuth, async (req: Request, res: Respo
   }
 });
 
+// Wallet endpoints
+router.get("/wallet", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const wallet = await storage.getWalletByUserId(userId);
+    if (!wallet) {
+      // Create wallet with default 300 coins if not exists
+      const newWallet = await storage.createWallet({
+        userId,
+        balance: "300",
+        currency: "NGN"
+      });
+      return res.json({ coins: 300 });
+    }
+
+    res.json({ coins: Number(wallet.balance) });
+  } catch (error: any) {
+    console.error("GET /wallet error", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post("/wallet/spend", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { amount, reason } = req.body;
+    if (typeof amount !== "number" || amount !== 100) {
+      return res.status(400).json({ error: "Invalid amount. Must be 100 coins." });
+    }
+
+    const wallet = await storage.getWalletByUserId(userId);
+    if (!wallet) {
+      return res.status(404).json({ error: "Wallet not found" });
+    }
+
+    const currentBalance = Number(wallet.balance);
+    if (currentBalance < amount) {
+      return res.status(400).json({ error: "Insufficient coins", coins: currentBalance });
+    }
+
+    const newBalance = currentBalance - amount;
+    await storage.updateWalletBalance(userId, newBalance.toString());
+
+    res.json({ ok: true, coins: newBalance, reason });
+  } catch (error: any) {
+    console.error("POST /wallet/spend error", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get recent service requests for resident
+router.get("/service-requests/mine", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const limit = parseInt(req.query.limit as string) || 5;
+    const requests = await storage.getServiceRequestsByResident(userId);
+    res.json(requests.slice(0, limit));
+  } catch (error: any) {
+    console.error("GET /service-requests/mine error", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

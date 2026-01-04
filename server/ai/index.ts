@@ -11,8 +11,11 @@ export type AiDiagnosis = z.infer<typeof AIDiagnosisResponseSchema>;
 
 type Provider = "openai" | "ollama" | "gemini";
 
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+
 let activeProvider: Provider = (process.env.AI_PROVIDER as Provider) || "openai";
-let activeModel: string = process.env.OPENAI_DIAGNOSIS_MODEL || "gpt-4o-mini";
+let activeModel: string =
+  activeProvider === "gemini" ? DEFAULT_GEMINI_MODEL : process.env.OPENAI_DIAGNOSIS_MODEL || "gpt-4o-mini";
 let loadedFromDb = false;
 
 async function ensureLoaded() {
@@ -22,7 +25,11 @@ async function ensureLoaded() {
     if (rows && rows[0]) {
       const v: any = rows[0].value || {};
       if (v.provider) activeProvider = v.provider as Provider;
-      if (v.model) activeModel = String(v.model);
+      if (v.model) {
+        activeModel = String(v.model);
+      } else if (activeProvider === "gemini") {
+        activeModel = DEFAULT_GEMINI_MODEL;
+      }
     }
     loadedFromDb = true;
   } catch {
@@ -37,7 +44,11 @@ export async function getActiveProvider() {
 
 export async function setActiveProvider(provider: Provider, model?: string) {
   activeProvider = provider;
-  if (model) activeModel = model;
+  if (model) {
+    activeModel = model;
+  } else if (provider === "gemini") {
+    activeModel = DEFAULT_GEMINI_MODEL;
+  }
   try {
     // Ensure table exists (best-effort)
     await db.execute(sql`CREATE TABLE IF NOT EXISTS app_settings (

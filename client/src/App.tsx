@@ -24,6 +24,8 @@ import ServiceRequestsPage from "@/pages/service-requests";
 import CheckoutDiagnosis from "@/pages/checkout-diagnosis";
 import PaymentPolicy from "@/pages/payment-policy";
 import PaymentConfirmation from "@/pages/payment-confirmation";
+import SelectCategory from "@/pages/resident/SelectCategory";
+import RequestConversation from "@/pages/resident/RequestConversation";
 import NotFound from "@/pages/not-found";
 
 
@@ -60,6 +62,8 @@ function Router() {
       <ProtectedRoute path="/book-market-run" component={BookMarketRun} />
       <ProtectedRoute path="/track-orders" component={TrackOrders} />
       <ProtectedRoute path="/service-requests" component={ServiceRequestsPage} />
+      <ProtectedRoute path="/resident/requests/new" component={SelectCategory} />
+      <ProtectedRoute path="/resident/requests/new/:category" component={RequestConversation} />
       <Route component={NotFound} />
     </Switch>
   );
