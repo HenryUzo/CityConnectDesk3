@@ -75,9 +75,9 @@ export function ResidentLayout({ title, children }: ResidentLayoutProps) {
             </button>
           </Link>
 
-          <Link href="/book-artisan">
+          <Link href="/resident/requests/new">
             <button className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              isActive('/book-artisan') ? 'bg-emerald-600' : 'hover:bg-emerald-700/50'
+              isActive('/resident/requests/new') || isActive('/book-artisan') ? 'bg-emerald-600' : 'hover:bg-emerald-700/50'
             }`}>
               <Wrench className="w-5 h-5" />
               <span className="font-medium">Book a Service</span>
@@ -153,7 +153,7 @@ export function ResidentLayout({ title, children }: ResidentLayoutProps) {
           </div>
         </header>
 
-        <div className="p-8 space-y-6">
+        <div className="p-12 space-y-6 max-w-7xl mx-auto w-full">
           {children}
         </div>
       </main>

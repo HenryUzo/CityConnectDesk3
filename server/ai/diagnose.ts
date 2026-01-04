@@ -2,7 +2,8 @@ import { AIDiagnosisResponseSchema, AiDiagnosis } from "./schema";
 import type { DiagnosisInput } from "./types";
 import { generateGeminiContent } from "./geminiClient";
 
-const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+const LOG_PREFIX = "[AI][Gemini]";
 
 const BASE_FALLBACK: AiDiagnosis = {
   summary:
@@ -35,6 +36,19 @@ export const GEMINI_SAFETY_FALLBACK: AiDiagnosis = {
   ],
 };
 
+function getGeminiModel(model?: string): string {
+  const candidate = (model || DEFAULT_MODEL).trim();
+  if (!candidate) {
+    throw new Error(`${LOG_PREFIX} Gemini model is not configured.`);
+  }
+  if (/^gpt-/i.test(candidate) || /4o/i.test(candidate) || /openai/i.test(candidate)) {
+    throw new Error(
+      `${LOG_PREFIX} Misconfigured GEMINI_MODEL (${candidate}). Set GEMINI_MODEL to a Gemini model like 'gemini-1.5-flash' or 'gemini-2.5-flash'.`
+    );
+  }
+  return candidate;
+}
+
 function buildPrompt(input: DiagnosisInput): string {
   const urgency = input.urgency ?? "not specified";
   const specialInstructions = input.specialInstructions?.trim() || "None";
@@ -45,7 +59,7 @@ function buildPrompt(input: DiagnosisInput): string {
     `Description: ${input.description.trim()}`,
     `Special Instructions: ${specialInstructions}`,
     "",
-    "Respond with STRICT JSON matching this schema (no markdown, no explanations, no surrounding text):",
+    "Respond with STRICT JSON matching this schema. Return ONLY a JSON object. No markdown. No code fences. No commentary:",
     JSON.stringify({
       summary: "string",
       probableCauses: [
@@ -98,15 +112,21 @@ function parseDiagnosisText(raw: string): unknown {
 }
 
 export async function runDiagnosis(input: DiagnosisInput & { model?: string }): Promise<AiDiagnosis> {
-  const model = input.model || DEFAULT_MODEL;
+  const model = getGeminiModel(input.model);
   const prompt = buildPrompt(input);
   const { text, blocked } = await generateGeminiContent(model, prompt);
   if (blocked) {
     return GEMINI_SAFETY_FALLBACK;
   }
   if (!text) {
-    throw new Error("Gemini returned an empty response.");
+    throw new Error(`${LOG_PREFIX} model=${model} returned an empty response.`);
   }
   const parsed = parseDiagnosisText(text);
-  return AIDiagnosisResponseSchema.parse(parsed);
+  try {
+    return AIDiagnosisResponseSchema.parse(parsed);
+  } catch (schemaError) {
+    throw new Error(`${LOG_PREFIX} model=${model} returned invalid schema: ${schemaError}`);
+  }
 }
+
+export { getGeminiModel };
