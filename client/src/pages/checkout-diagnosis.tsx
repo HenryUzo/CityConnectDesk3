@@ -1,29 +1,9 @@
-// client/src/pages/checkout-diagnosis.tsx
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { 
-  ChevronLeft, 
-  Home, 
-  BarChart3, 
-  Layers, 
-  FileText, 
-  Flag,
-  Users,
-  Settings,
-  HelpCircle,
-  Upload,
-  Wrench,
-  Clock,
-  Shirt,
-  MapPin,
-  Lock,
-  Info,
-  ArrowRight
-} from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { ChevronLeft, Lock, Info, ArrowRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -36,11 +16,12 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { residentFetch } from "@/lib/residentApi";
-import { openPaystackCheckout } from "@/lib/paystack";
+import Nav from "@/components/layout/Nav";
+import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 
 export default function CheckoutDiagnosis() {
   const { user } = useAuth();
-  const [, setLocation] = useLocation();
+  const [, navigate] = useLocation();
   const { toast } = useToast();
   const [isPaying, setIsPaying] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
@@ -110,113 +91,38 @@ export default function CheckoutDiagnosis() {
 
   return (
     <>
-    <div className="flex h-screen bg-gray-50">
-      {/* Primary Left Sidebar - Collapsible */}
-      <div className="w-16 bg-emerald-700 flex flex-col items-center py-6 space-y-6">
-        <div className="w-10 h-10 bg-yellow-400 rounded-lg flex items-center justify-center">
-          <MapPin className="w-6 h-6 text-emerald-800" />
-        </div>
-        
-        <nav className="flex-1 flex flex-col items-center space-y-4">
-          <Link href="/resident">
-            <button className="w-10 h-10 rounded-lg bg-emerald-600 flex items-center justify-center transition-colors">
-              <Home className="w-5 h-5 text-white" />
-            </button>
-          </Link>
-          <button className="w-10 h-10 rounded-lg hover:bg-emerald-600 flex items-center justify-center transition-colors">
-            <BarChart3 className="w-5 h-5 text-white" />
-          </button>
-          <button className="w-10 h-10 rounded-lg hover:bg-emerald-600 flex items-center justify-center transition-colors">
-            <Layers className="w-5 h-5 text-white" />
-          </button>
-          <button className="w-10 h-10 rounded-lg hover:bg-emerald-600 flex items-center justify-center transition-colors">
-            <FileText className="w-5 h-5 text-white" />
-          </button>
-          <button className="w-10 h-10 rounded-lg hover:bg-emerald-600 flex items-center justify-center transition-colors">
-            <Flag className="w-5 h-5 text-white" />
-          </button>
-          <button className="w-10 h-10 rounded-lg hover:bg-emerald-600 flex items-center justify-center transition-colors">
-            <Users className="w-5 h-5 text-white" />
-          </button>
-        </nav>
+    <div className="flex h-screen overflow-hidden bg-[#054f31]" data-name="Payment summary">
+      <MobileNavDrawer
+        onNavigateToHomepage={() => navigate("/resident")}
+        onNavigateToMarketplace={() => navigate("/resident/citymart")}
+        onNavigateToSettings={() => navigate("/resident/settings")}
+        onBookServiceClick={() => navigate("/resident/requests/new")}
+        onNavigateToServiceRequests={() => navigate("/service-requests")}
+        currentPage="chat"
+      />
 
-        <div className="flex flex-col items-center space-y-4">
-          <button className="w-10 h-10 rounded-lg hover:bg-emerald-600 flex items-center justify-center transition-colors">
-            <Settings className="w-5 h-5 text-white" />
-          </button>
-          <button className="w-10 h-10 rounded-lg hover:bg-emerald-600 flex items-center justify-center transition-colors">
-            <HelpCircle className="w-5 h-5 text-white" />
-          </button>
-          <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center">
-            <span className="text-white text-sm font-semibold">OR</span>
-          </div>
-        </div>
+      <div className="hidden lg:block h-full">
+        <Nav
+          onNavigateToHomepage={() => navigate("/resident")}
+          onNavigateToMarketplace={() => navigate("/resident/citymart")}
+          onNavigateToSettings={() => navigate("/resident/settings")}
+          onBookServiceClick={() => navigate("/resident/requests/new")}
+          onNavigateToServiceRequests={() => navigate("/service-requests")}
+          currentPage="chat"
+        />
       </div>
 
-      {/* Secondary Left Navigation */}
-      <div className="w-60 bg-emerald-800 text-white flex flex-col">
-        <div className="p-4 border-b border-emerald-700">
-          <Link href="/book-artisan">
-            <button className="flex items-center text-white/80 hover:text-white transition-colors">
-              <ChevronLeft className="w-5 h-5 mr-1" />
-              <span className="text-sm">Book a Service</span>
-            </button>
-          </Link>
-        </div>
-
-        <nav className="flex-1 py-4">
-          <Link href="/book-artisan">
-            <button className="w-full px-4 py-3 flex items-center space-x-3 text-white hover:bg-emerald-700 transition-colors">
-              <Wrench className="w-5 h-5" />
-              <span>Service Categories</span>
-              <Badge className="ml-auto bg-white text-emerald-800 text-xs">40</Badge>
-            </button>
-          </Link>
-          
-          <Link href="/book-artisan">
-            <button className="w-full px-4 py-3 flex items-center space-x-3 bg-emerald-700 text-white">
-              <Wrench className="w-5 h-5" />
-              <span>Book Repairs</span>
-            </button>
-          </Link>
-
-          <button className="w-full px-4 py-3 flex items-center space-x-3 text-white hover:bg-emerald-700 transition-colors">
-            <Clock className="w-5 h-5" />
-            <span>Schedule Maintenance</span>
-          </button>
-
-          <button className="w-full px-4 py-3 flex items-center space-x-3 text-white hover:bg-emerald-700 transition-colors">
-            <Shirt className="w-5 h-5" />
-            <span>Do your Laundry</span>
-          </button>
-        </nav>
-
-        <div className="p-4 border-t border-emerald-700">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center">
-              <span className="text-white text-sm font-semibold">
-                {user?.name?.charAt(0) || 'O'}
-              </span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{user?.name || 'Olivia Rhye'}</p>
-              <p className="text-xs text-white/60 truncate">{user?.email || 'olivia@untitledui.com'}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 min-w-0 h-full bg-white rounded-bl-[40px] rounded-tl-[40px] lg:ml-[14px] lg:mt-[12px] overflow-y-auto">
         <div className="max-w-5xl mx-auto p-8">
-          {/* Back to Bookings Button */}
           <div className="mb-6">
-            <Link href="/book-artisan">
-              <Button variant="outline" className="border-emerald-600 text-emerald-600 hover:bg-emerald-50">
-                <ChevronLeft className="w-4 h-4 mr-2" />
-                Back to Bookings
-              </Button>
-            </Link>
+            <Button
+              variant="outline"
+              className="border-emerald-600 text-emerald-600 hover:bg-emerald-50"
+              onClick={() => navigate("/resident/requests/new")}
+            >
+              <ChevronLeft className="w-4 h-4 mr-2" />
+              Back to chat
+            </Button>
           </div>
 
           {/* Security Notice */}

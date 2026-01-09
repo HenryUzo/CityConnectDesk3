@@ -1,0 +1,10 @@
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'surveillance_monitoring';
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'alarm_system';
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'cleaning_janitorial';
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'catering_services';
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'it_support';
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'maintenance_repair';
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'packaging_solutions';
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'marketing_advertising';
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'home_tutors';
+ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'furniture_making';

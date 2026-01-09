@@ -30,10 +30,15 @@ export default function ProviderCompanyRegistration() {
   const {
     handleSubmit,
     watch,
+    getValues,
     formState: { isSubmitting },
   } = companyForm;
 
-  const watchAll = watch();
+  // Watch all form values to trigger re-render on changes
+  const watchAllValues = watch();
+  
+  // Calculate core fields completion based on current form state
+  const isCoreFieldsComplete = isCompanyCoreFieldsComplete(watchAllValues);
 
   const registerCompanyMutation = useMutation({
     mutationFn: (payload: CompanyForm) =>
@@ -66,9 +71,6 @@ export default function ProviderCompanyRegistration() {
     await registerCompanyMutation.mutateAsync(values);
   };
 
-  const { businessDetails, bankDetails, locationDetails } = watchAll;
-  const isCoreFieldsComplete = isCompanyCoreFieldsComplete(watchAll);
-
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 py-12">
       <div className="max-w-7xl mx-auto px-4 lg:px-6 space-y-10">
@@ -83,6 +85,9 @@ export default function ProviderCompanyRegistration() {
             Submit verified business, banking, and location details once to
             unlock prioritized estate requests, secure payouts, and
             compliance-ready workflows.
+          </p>
+          <p className="text-xs text-white/50 max-w-2xl mx-auto">
+            Complete the important fields (name, email, phone, and address) to submit for review. Additional business and banking details can be added later.
           </p>
         </div>
         <div className="grid gap-10 lg:grid-cols-[1.4fr,0.95fr]">
@@ -188,135 +193,142 @@ export default function ProviderCompanyRegistration() {
                 </p>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs text-white/60 uppercase tracking-[0.45em]">
-                        Business
-                      </p>
-                      <p className="text-lg font-semibold">
-                        {watchAll.name || "Not set"}
-                      </p>
-                      <p className="text-xs text-white/70">
-                        {watchAll.contactEmail || "No contact email yet"}
-                      </p>
+                {(() => {
+                  const { businessDetails, bankDetails, locationDetails } = watchAllValues;
+                  return (
+                    <>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs text-white/60 uppercase tracking-[0.45em]">
+                            Business
+                          </p>
+                          <p className="text-lg font-semibold">
+                            {watchAllValues.name || "Not set"}
+                          </p>
+                          <p className="text-xs text-white/70">
+                            {watchAllValues.contactEmail || "No contact email yet"}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handlePreviewEdit("business")}
+                        >
+                          <Eye className="mr-2 w-4 h-4" />
+                          Edit
+                        </Button>
+                      </div>
+                      <div className="grid gap-3 text-xs text-white/70 md:grid-cols-2">
+                        <p>
+                          <span className="font-semibold text-white/90">
+                            Registration:
+                          </span>{" "}
+                          {businessDetails?.registrationNumber || "Pending"}
+                        </p>
+                        <p>
+                          <span className="font-semibold text-white/90">
+                            Industry:
+                          </span>{" "}
+                          {businessDetails?.industry || "Pending"}
+                        </p>
+                        <p>
+                          <span className="font-semibold text-white/90">
+                            Year established:
+                          </span>{" "}
+                          {businessDetails?.yearEstablished || "Pending"}
+                        </p>
+                      </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handlePreviewEdit("business")}
-                    >
-                      <Eye className="mr-2 w-4 h-4" />
-                      Edit
-                    </Button>
-                  </div>
-                  <div className="grid gap-3 text-xs text-white/70 md:grid-cols-2">
-                    <p>
-                      <span className="font-semibold text-white/90">
-                        Registration:
-                      </span>{" "}
-                      {businessDetails?.registrationNumber || "Pending"}
-                    </p>
-                    <p>
-                      <span className="font-semibold text-white/90">
-                        Industry:
-                      </span>{" "}
-                      {businessDetails?.industry || "Pending"}
-                    </p>
-                    <p>
-                      <span className="font-semibold text-white/90">
-                        Year established:
-                      </span>{" "}
-                      {businessDetails?.yearEstablished || "Pending"}
-                    </p>
-                  </div>
-                </div>
 
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs text-white/60 uppercase tracking-[0.45em]">
-                        Banking
-                      </p>
-                      <p className="text-lg font-semibold">
-                        {bankDetails?.bankName || "Not provided"}
-                      </p>
-                      <p className="text-xs text-white/70">
-                        {bankDetails?.accountNumber
-                          ? `Acct: ${bankDetails.accountNumber}`
-                          : "Add account number"}
-                      </p>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs text-white/60 uppercase tracking-[0.45em]">
+                            Banking
+                          </p>
+                          <p className="text-lg font-semibold">
+                            {bankDetails?.bankName || "Not provided"}
+                          </p>
+                          <p className="text-xs text-white/70">
+                            {bankDetails?.accountNumber
+                              ? `Acct: ${bankDetails.accountNumber}`
+                              : "Add account number"}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handlePreviewEdit("bank")}
+                        >
+                          <Shield className="mr-2 w-4 h-4" />
+                          Secure
+                        </Button>
+                      </div>
+                      <div className="grid gap-3 text-xs text-white/70 md:grid-cols-2">
+                        <p>
+                          <span className="font-semibold text-white/90">
+                            Routing:
+                          </span>{" "}
+                          {bankDetails?.routingNumber || "Missing"}
+                        </p>
+                        <p>
+                          <span className="font-semibold text-white/90">
+                            SWIFT / IBAN:
+                          </span>{" "}
+                          {bankDetails?.swiftCode || "Optional"}
+                        </p>
+                      </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handlePreviewEdit("bank")}
-                    >
-                      <Shield className="mr-2 w-4 h-4" />
-                      Secure
-                    </Button>
-                  </div>
-                  <div className="grid gap-3 text-xs text-white/70 md:grid-cols-2">
-                    <p>
-                      <span className="font-semibold text-white/90">
-                        Routing:
-                      </span>{" "}
-                      {bankDetails?.routingNumber || "Missing"}
-                    </p>
-                    <p>
-                      <span className="font-semibold text-white/90">
-                        SWIFT / IBAN:
-                      </span>{" "}
-                      {bankDetails?.swiftCode || "Optional"}
-                    </p>
-                  </div>
-                </div>
 
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs text-white/60 uppercase tracking-[0.45em]">
-                        Location
-                      </p>
-                      <p className="text-lg font-semibold">
-                        {locationDetails?.city || "Not set"}
-                      </p>
-                      <p className="text-xs text-white/70">
-                        {locationDetails?.country || "Country"}
-                      </p>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs text-white/60 uppercase tracking-[0.45em]">
+                            Location
+                          </p>
+                          <p className="text-lg font-semibold">
+                            {locationDetails?.city || "Not set"}
+                          </p>
+                          <p className="text-xs text-white/70">
+                            {locationDetails?.country || "Country"}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handlePreviewEdit("location")}
+                        >
+                          <MapPin className="mr-2 w-4 h-4" />
+                          Refine
+                        </Button>
+                      </div>
+                      <div className="grid gap-3 text-xs text-white/70">
+                        <p>
+                          <span className="font-semibold text-white/90">
+                            Address:
+                          </span>{" "}
+                          {locationDetails?.addressLine1 || "Not provided"}
+                        </p>
+                        <p>
+                          <span className="font-semibold text-white/90">
+                            Coordinates:
+                          </span>{" "}
+                          {locationDetails?.coordinates?.latitude
+                            ? `${Number(locationDetails.coordinates.latitude).toFixed(4)}, ${
+                                locationDetails.coordinates.longitude
+                                  ? Number(
+                                      locationDetails.coordinates.longitude,
+                                    ).toFixed(4)
+                                  : "Not set"
+                              }`
+                            : "Not provided"}
+                        </p>
+                      </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handlePreviewEdit("location")}
-                    >
-                      <MapPin className="mr-2 w-4 h-4" />
-                      Refine
-                    </Button>
-                  </div>
-                  <div className="grid gap-3 text-xs text-white/70">
-                    <p>
-                      <span className="font-semibold text-white/90">
-                        Address:
-                      </span>{" "}
-                      {locationDetails?.addressLine1 || "Not provided"}
-                    </p>
-                    <p>
-                      <span className="font-semibold text-white/90">
-                        Coordinates:
-                      </span>{" "}
-                      {locationDetails?.coordinates?.latitude
-                        ? `${Number(locationDetails.coordinates.latitude).toFixed(4)}, ${
-                            locationDetails.coordinates.longitude
-                              ? Number(
-                                  locationDetails.coordinates.longitude,
-                                ).toFixed(4)
-                              : "Not set"
-                          }`
-                        : "Not provided"}
-                    </p>
-                  </div>
-                </div>
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
           </div>

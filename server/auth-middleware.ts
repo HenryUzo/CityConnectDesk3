@@ -92,6 +92,11 @@ export function requireRole(...allowedRoles: string[]) {
     const userRole = auth.role;
     const userGlobalRole = auth.globalRole;
 
+    // Allow super_admin (either in role or globalRole) to bypass specific role checks
+    if (userGlobalRole === "super_admin" || userRole === "super_admin") {
+      return next();
+    }
+
     // Check if user has any of the allowed roles
     const hasRole = allowedRoles.some(
       role => userRole === role || userGlobalRole === role
@@ -113,6 +118,11 @@ export function requireRole(...allowedRoles: string[]) {
  * Middleware to require admin or super_admin role
  */
 export const requireAdmin = requireRole("admin", "super_admin");
+
+/**
+ * Middleware to require super_admin role only
+ */
+export const requireSuperAdmin = requireRole("super_admin");
 
 /**
  * Middleware to require provider role

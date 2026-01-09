@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -97,6 +97,19 @@ const hasValue = (value: unknown) => {
   return String(value).trim().length > 0;
 };
 
+export const isCompanyCoreFieldsComplete = (values: Partial<CompanyForm>) => {
+  // Core required fields for initial submission (submit for review)
+  const coreRequired = [
+    values.name,
+    values.contactEmail,
+    values.phone,
+    values.locationDetails?.addressLine1,
+    values.locationDetails?.city,
+    values.locationDetails?.country,
+  ];
+  return coreRequired.every(hasValue);
+};
+
 export const isBusinessSectionComplete = (values: Partial<CompanyForm>) => {
   const required = [
     values.name,
@@ -123,19 +136,16 @@ export const isLocationSectionComplete = (values: Partial<CompanyForm>) => {
   return required.every(hasValue);
 };
 
-export const isCompanyCoreFieldsComplete = (values: Partial<CompanyForm>) =>
-  isBusinessSectionComplete(values) && isLocationSectionComplete(values);
-
 export const companySchema = z.object({
   name: z.string().min(2, "Business name is required"),
   description: z.string().max(1000).optional(),
   contactEmail: z.string().email("Provide a valid contact email"),
   phone: z.string().min(6, "Business phone is required").max(20),
   businessDetails: z.object({
-    registrationNumber: z.string().min(1, "Registration number is required"),
-    taxId: z.string().min(1, "Tax/TIN is required"),
-    businessType: z.string().min(1, "Select a business type"),
-    industry: z.string().min(1, "Select an industry"),
+    registrationNumber: z.string().optional(),
+    taxId: z.string().optional(),
+    businessType: z.string().optional(),
+    industry: z.string().optional(),
     yearEstablished: z
       .preprocess((value) => {
         if (value === "" || value === null || value === undefined) return undefined;
@@ -146,12 +156,15 @@ export const companySchema = z.object({
         return value;
       }, z.number().int().min(1900).max(new Date().getFullYear()))
       .optional(),
-    website: z.string().url().optional(),
+    website: z.preprocess((value) => {
+      if (value === "" || value === null || value === undefined) return undefined;
+      return value;
+    }, z.string().url().optional()),
   }),
   bankDetails: z.object({
-    bankName: z.string().min(1, "Select a bank"),
-    accountName: z.string().min(1, "Account name is required"),
-    accountNumber: z.string().min(1, "Account number is required"),
+    bankName: z.string().optional(),
+    accountName: z.string().optional(),
+    accountNumber: z.string().optional(),
     routingNumber: z.string().optional(),
     swiftCode: z.string().optional(),
     notes: z.string().optional(),
@@ -160,8 +173,8 @@ export const companySchema = z.object({
     addressLine1: z.string().min(1, "Address line 1 is required"),
     addressLine2: z.string().optional(),
     city: z.string().min(1, "City is required"),
-    state: z.string().min(1, "State is required"),
-    lga: z.string().min(1, "LGA is required"),
+    state: z.string().optional(),
+    lga: z.string().optional(),
     country: z.string().min(1, "Country is required"),
     coordinates: z
       .object({
@@ -172,6 +185,7 @@ export const companySchema = z.object({
               const parsed = Number(value);
               return Number.isNaN(parsed) ? undefined : parsed;
             }
+            if (typeof value === "number" && Number.isNaN(value)) return undefined;
             return value;
           }, z.number())
           .optional(),
@@ -182,6 +196,7 @@ export const companySchema = z.object({
               const parsed = Number(value);
               return Number.isNaN(parsed) ? undefined : parsed;
             }
+            if (typeof value === "number" && Number.isNaN(value)) return undefined;
             return value;
           }, z.number())
           .optional(),
@@ -263,39 +278,27 @@ const CompanyRegistrationFormFields = ({
   }, [activeTab, internalTab]);
 
   const currentTab = isControlled ? (activeTab as TabId) : internalTab;
-  const values = form.getValues();
-  const selectedCountry = values.locationDetails?.country || "";
-  const selectedState = (values.locationDetails?.state || "") as keyof typeof nigeriaStates;
-  const stateOptions = countryStateMap[selectedCountry] ?? [];
-  const lgaOptions = selectedCountry === "Nigeria" ? nigeriaStates[selectedState] ?? [] : [];
-  const isBusinessReady = isBusinessSectionComplete(values);
-  const isLocationReady = isLocationSectionComplete(values);
+  
+  const memoizedValues = useMemo(() => form.getValues(), [form]);
+  const selectedCountry = memoizedValues.locationDetails?.country || "";
+  const selectedState = (memoizedValues.locationDetails?.state || "") as keyof typeof nigeriaStates;
+  const stateOptions = useMemo(() => countryStateMap[selectedCountry] ?? [], [selectedCountry]);
+  const lgaOptions = useMemo(() => selectedCountry === "Nigeria" ? nigeriaStates[selectedState] ?? [] : [], [selectedCountry, selectedState]);
+  const isBusinessReady = useMemo(() => isCompanyCoreFieldsComplete(memoizedValues), [memoizedValues]);
+  const isLocationReady = useMemo(() => {
+    const required = [
+      memoizedValues.locationDetails?.addressLine1,
+      memoizedValues.locationDetails?.city,
+      memoizedValues.locationDetails?.country,
+    ];
+    return required.every(hasValue);
+  }, [memoizedValues]);
 
   const lastFocusedFieldRef = useRef<HTMLElement | null>(null);
-  const handleFieldFocus = (event: React.FocusEvent<HTMLElement>) => {
-    lastFocusedFieldRef.current = event.currentTarget;
-  };
-  useEffect(() => {
-    if (
-      lastFocusedFieldRef.current &&
-      document.activeElement === document.body &&
-      lastFocusedFieldRef.current !== document.activeElement
-    ) {
-      requestAnimationFrame(() => {
-        lastFocusedFieldRef.current?.focus();
-      });
-    }
-  });
+  
   const attachFocusHandlers = <T extends { onBlur?: (...args: any[]) => void; onFocus?: (...args: any[]) => void }>(
     field: T,
-  ) => ({
-    ...field,
-    onFocus: (event: React.FocusEvent<any>) => {
-      handleFieldFocus(event as React.FocusEvent<HTMLElement>);
-      field.onFocus?.(event);
-    },
-    onBlur: field.onBlur,
-  });
+  ) => field;
 
   const handleTabChange = (value: string) => {
     const nextTab = value as TabId;
@@ -415,9 +418,7 @@ const CompanyRegistrationFormFields = ({
               )}
             </div>
             <div>
-              <Label htmlFor="description">
-                <RequiredLabel>Describe your services</RequiredLabel>
-              </Label>
+              <Label htmlFor="description">Describe your services</Label>
               <Textarea
                 id="description"
                 {...attachFocusHandlers(register("description"))}
@@ -428,9 +429,7 @@ const CompanyRegistrationFormFields = ({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="registrationNumber">
-                <RequiredLabel>Business registration number</RequiredLabel>
-              </Label>
+              <Label htmlFor="registrationNumber">Business registration number (optional)</Label>
               <Input
                 id="registrationNumber"
                 {...attachFocusHandlers(register("businessDetails.registrationNumber"))}
@@ -442,9 +441,7 @@ const CompanyRegistrationFormFields = ({
               )}
             </div>
             <div>
-              <Label htmlFor="taxId">
-                <RequiredLabel>Tax / TIN</RequiredLabel>
-              </Label>
+              <Label htmlFor="taxId">Tax / TIN (optional)</Label>
               <Input id="taxId" {...attachFocusHandlers(register("businessDetails.taxId"))} />
               {errors.businessDetails?.taxId && (
                 <p className="text-xs text-destructive mt-1">
@@ -455,9 +452,7 @@ const CompanyRegistrationFormFields = ({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="businessType">
-                <RequiredLabel>Business Type</RequiredLabel>
-              </Label>
+              <Label htmlFor="businessType">Business Type (optional)</Label>
               <select
                 id="businessType"
                 {...attachFocusHandlers(register("businessDetails.businessType"))}
@@ -477,9 +472,7 @@ const CompanyRegistrationFormFields = ({
               )}
             </div>
             <div>
-              <Label htmlFor="industry">
-                <RequiredLabel>Industry</RequiredLabel>
-              </Label>
+              <Label htmlFor="industry">Industry (optional)</Label>
               <select
                 id="industry"
                 {...attachFocusHandlers(register("businessDetails.industry"))}
@@ -501,9 +494,7 @@ const CompanyRegistrationFormFields = ({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="yearEstablished">
-                <RequiredLabel>Year established</RequiredLabel>
-              </Label>
+              <Label htmlFor="yearEstablished">Year established (optional)</Label>
               <Input
                 id="yearEstablished"
                 type="number"
@@ -631,7 +622,7 @@ const CompanyRegistrationFormFields = ({
               )}
             </div>
             <div>
-              <Label htmlFor="addressLine2">Address Line 2</Label>
+              <Label htmlFor="addressLine2">Address Line 2 (optional)</Label>
               <Input
                 id="addressLine2"
                 {...attachFocusHandlers(register("locationDetails.addressLine2"))}
@@ -674,9 +665,7 @@ const CompanyRegistrationFormFields = ({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label htmlFor="state">
-                <RequiredLabel>State</RequiredLabel>
-              </Label>
+              <Label htmlFor="state">State (optional)</Label>
               {stateOptions.length > 0 ? (
                 <select
                   id="state"
@@ -704,9 +693,7 @@ const CompanyRegistrationFormFields = ({
               )}
             </div>
             <div>
-              <Label htmlFor="lga">
-                <RequiredLabel>LGA</RequiredLabel>
-              </Label>
+              <Label htmlFor="lga">LGA (optional)</Label>
               {lgaOptions.length > 0 ? (
                 <select
                   id="lga"
@@ -768,4 +755,4 @@ const CompanyRegistrationFormFields = ({
   );
 };
 
-export default CompanyRegistrationFormFields;
+export default React.memo(CompanyRegistrationFormFields);

@@ -27,6 +27,7 @@ export const userRoleEnum = pgEnum("user_role", [
 ]);
 export const serviceStatusEnum = pgEnum("service_status", [
   "pending",
+  "pending_inspection",
   "assigned",
   "in_progress",
   "completed",
@@ -58,6 +59,17 @@ export const serviceCategoryEnum = pgEnum("service_category", [
   "phone_repair",
   "appliance_repair",
   "tailor",
+  // CityBuddy (resident chat) categories
+  "surveillance_monitoring",
+  "alarm_system",
+  "cleaning_janitorial",
+  "catering_services",
+  "it_support",
+  "maintenance_repair",
+  "packaging_solutions",
+  "marketing_advertising",
+  "home_tutors",
+  "furniture_making",
   "market_runner",
   "item_vendor",
 ]);
@@ -626,6 +638,58 @@ export const deviceAssignments = pgTable("device_assignments", {
   lastKnownLng: doublePrecision("last_known_lng"),
   micEnabled: boolean("mic_enabled").default(true),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// --- Super Admin observability/config tables ---
+
+export const aiPreparedRequests = pgTable("ai_prepared_requests", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  sessionId: text("session_id").notNull().unique(),
+  residentHash: text("resident_hash").notNull(),
+  estateId: varchar("estate_id").references(() => estates.id),
+  category: serviceCategoryEnum("category").notNull(),
+  urgency: urgencyEnum("urgency").notNull(),
+  recommendedApproach: text("recommended_approach").notNull(),
+  confidenceScore: integer("confidence_score").notNull().default(0),
+  requiresConsultancy: boolean("requires_consultancy").notNull().default(false),
+  readyToBook: boolean("ready_to_book").notNull().default(false),
+  snapshot: jsonb("snapshot").notNull().default("{}"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const pricingRules = pgTable("pricing_rules", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  category: serviceCategoryEnum("category"),
+  scope: text("scope"),
+  urgency: urgencyEnum("urgency"),
+  minPrice: decimal("min_price", { precision: 10, scale: 2 }).notNull().default(
+    "0",
+  ),
+  maxPrice: decimal("max_price", { precision: 10, scale: 2 }).notNull().default(
+    "0",
+  ),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const providerMatchingSettings = pgTable("provider_matching_settings", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  providerId: varchar("provider_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  settings: jsonb("settings").notNull().default("{}"),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 

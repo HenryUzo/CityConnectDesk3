@@ -14,6 +14,7 @@ import {
   wallets,
   memberships,
   transactions,
+  estates,
   type User,
   type InsertUser,
   type ServiceRequest,
@@ -223,6 +224,8 @@ export interface IStorage {
   getUserStats(): Promise<any>;
   getCompanies(): Promise<Company[]>;
   createCompany(company: InsertCompany): Promise<Company>;
+  updateCompany(id: string, company: Partial<InsertCompany>): Promise<Company | undefined>;
+  deleteCompany(id: string): Promise<boolean>;
   createProviderRequest(request: InsertProviderRequest): Promise<ProviderRequest>;
   getProviderRequests(): Promise<ProviderRequest[]>;
   deleteUser(userId: string): Promise<boolean>;
@@ -461,7 +464,7 @@ export class DatabaseStorage implements IStorage {
   // --- UPDATE request status ---
   async updateRequestStatus(
     requestId: string,
-    status: "pending" | "assigned" | "in_progress" | "completed" | "cancelled",
+    status: "pending" | "pending_inspection" | "assigned" | "in_progress" | "completed" | "cancelled",
     closeReason?: string
   ) {
     const patch: any = { status, updatedAt: new Date() };
@@ -880,10 +883,22 @@ export class DatabaseStorage implements IStorage {
     const [totalResidents] = await db.select({ count: count() }).from(users).where(eq(users.role, "resident"));
     const [totalProviders] = await db.select({ count: count() }).from(users).where(eq(users.role, "provider"));
     const [totalRequests] = await db.select({ count: count() }).from(serviceRequests);
-    const [activeRequests] = await db.select({ count: count() }).from(serviceRequests).where(eq(serviceRequests.status, "pending"));
+    // Active requests = any request not completed/cancelled
+    const [activeRequests] = await db
+      .select({ count: count() })
+      .from(serviceRequests)
+      .where(sql`${serviceRequests.status} not in ('completed','cancelled')`);
     const [pendingApprovals] = await db.select({ count: count() }).from(users).where(
       and(eq(users.role, "provider"), eq(users.isApproved, false))
     );
+
+    const [totalEstates] = await db.select({ count: count() }).from(estates);
+    const [revenueRow] = await db
+      .select({ total: sum(transactions.amount) })
+      .from(transactions)
+      .where(eq(transactions.status, "completed"));
+
+    const totalRevenue = Number(revenueRow?.total ?? 0);
 
     return {
       totalUsers: totalUsers.count,
@@ -891,7 +906,9 @@ export class DatabaseStorage implements IStorage {
       totalProviders: totalProviders.count,
       totalRequests: totalRequests.count,
       activeRequests: activeRequests.count,
-      pendingApprovals: pendingApprovals.count
+      pendingApprovals: pendingApprovals.count,
+      totalEstates: totalEstates.count,
+      totalRevenue,
     };
   }
 
@@ -903,6 +920,22 @@ export class DatabaseStorage implements IStorage {
   async createCompany(company: InsertCompany): Promise<Company> {
     const [row] = await db.insert(companies).values(company).returning();
     return row;
+  }
+
+  async updateCompany(id: string, company: Partial<InsertCompany>): Promise<Company | undefined> {
+    const [row] = await db
+      .update(companies)
+      .set(company)
+      .where(eq(companies.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteCompany(id: string): Promise<boolean> {
+    const result = await db
+      .delete(companies)
+      .where(eq(companies.id, id));
+    return true;
   }
 
   async createProviderRequest(

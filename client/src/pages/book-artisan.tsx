@@ -73,27 +73,26 @@ const artisanRequestSchema = z.object({
   diagnosisType: z.enum(["regular", "professional"]).default("regular"),
 });
 
+const ACTIVE_SERVICE_CATEGORY_KEYS = [
+  "surveillance_monitoring",
+  "cleaning_janitorial",
+  "catering_services",
+  "it_support",
+  "maintenance_repair",
+  "marketing_advertising",
+  "home_tutors",
+  "furniture_making",
+] as const;
+
 const FALLBACK_SERVICE_CATEGORIES = [
-  { value: "electrician", label: "Electrician", emoji: "🔌" },
-  { value: "plumber", label: "Plumber", emoji: "🔧" },
-  { value: "carpenter", label: "Carpenter", emoji: "🪚" },
-  { value: "hvac_technician", label: "HVAC Technician", emoji: "❄️" },
-  { value: "painter", label: "Painter", emoji: "🎨" },
-  { value: "tiler", label: "Tiler", emoji: "🧱" },
-  { value: "mason", label: "Mason", emoji: "🧱" },
-  { value: "roofer", label: "Roofer", emoji: "🏠" },
-  { value: "gardener", label: "Gardener", emoji: "🌿" },
-  { value: "cleaner", label: "Cleaner", emoji: "🧼" },
-  { value: "security_guard", label: "Security Guard", emoji: "🛡️" },
-  { value: "cook", label: "Cook", emoji: "🍳" },
-  { value: "laundry_service", label: "Laundry Service", emoji: "🧺" },
-  { value: "pest_control", label: "Pest Control", emoji: "🐜" },
-  { value: "welder", label: "Welder", emoji: "⚙️" },
-  { value: "mechanic", label: "Mechanic", emoji: "🔩" },
-  { value: "phone_repair", label: "Phone Repair", emoji: "📱" },
-  { value: "appliance_repair", label: "Appliance Repair", emoji: "🔌" },
-  { value: "tailor", label: "Tailor", emoji: "🧵" },
-  { value: "market_runner", label: "Market Runner", emoji: "🛒" },
+  { value: "surveillance_monitoring", label: "Surveillance monitoring", emoji: "🎥" },
+  { value: "cleaning_janitorial", label: "Cleaning & janitorial", emoji: "🧹" },
+  { value: "catering_services", label: "Catering Services", emoji: "🍽️" },
+  { value: "it_support", label: "IT Support", emoji: "💻" },
+  { value: "maintenance_repair", label: "Maintenance & Repair", emoji: "🔧" },
+  { value: "marketing_advertising", label: "Marketing & Advertising", emoji: "📊" },
+  { value: "home_tutors", label: "Home tutors", emoji: "📚" },
+  { value: "furniture_making", label: "Furniture making", emoji: "🪑" },
 ];
 
 type ArtisanRequestFormData = z.infer<typeof artisanRequestSchema>;
@@ -116,10 +115,41 @@ type AiMessage = {
   variant?: "normal" | "warning";
 };
 
+const CITYBUDDY_BOOKING_EVENTS_KEY = "citybuddy_booking_events_v1";
+
+function pushCityBuddyBookingEvent(evt: {
+  citybuddySessionId?: string | null;
+  serviceRequestId: string;
+  title?: string | null;
+  status?: string | null;
+}) {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = window.localStorage.getItem(CITYBUDDY_BOOKING_EVENTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    const list = Array.isArray(parsed) ? parsed : [];
+    list.push({
+      eventId: `${Date.now()}:${evt.serviceRequestId}`,
+      createdAtIso: new Date().toISOString(),
+      citybuddySessionId: evt.citybuddySessionId ?? null,
+      serviceRequestId: evt.serviceRequestId,
+      title: evt.title ?? null,
+      status: evt.status ?? null,
+    });
+    window.localStorage.setItem(CITYBUDDY_BOOKING_EVENTS_KEY, JSON.stringify(list.slice(-30)));
+  } catch {
+    // ignore
+  }
+}
+
 export default function BookArtisan() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const citybuddySessionId = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("citybuddySessionId");
+  }, []);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const preferredDateRef = useRef<HTMLInputElement | null>(null);
@@ -228,29 +258,23 @@ export default function BookArtisan() {
     console.log("Processing categories:", categories);
     // small emoji lookup for known keys
     const EMOJI_MAP: Record<string, string> = {
-      electrician: "🔌",
-      plumber: "🔧",
-      carpenter: "🪚",
-      hvac_technician: "❄️",
-      painter: "🎨",
-      tiler: "🧱",
-      mason: "🧱",
-      roofer: "🏠",
-      gardener: "🌿",
-      cleaner: "🧼",
-      security_guard: "🛡️",
-      cook: "🍳",
-      laundry_service: "🧺",
-      pest_control: "🐜",
-      welder: "⚙️",
-      mechanic: "🔩",
-      phone_repair: "📱",
-      appliance_repair: "🔌",
-      tailor: "🧵",
-      market_runner: "🛒",
+      surveillance_monitoring: "🎥",
+      cleaning_janitorial: "🧹",
+      catering_services: "🍽️",
+      it_support: "💻",
+      maintenance_repair: "🔧",
+      marketing_advertising: "📊",
+      home_tutors: "📚",
+      furniture_making: "🪑",
     };
 
-    return categories.map((category: any) => {
+    return categories
+      .filter((category: any) => category?.isActive !== false)
+      .filter((category: any) => {
+        const rawKey = String(category.key ?? category.name ?? category.id ?? category);
+        return (ACTIVE_SERVICE_CATEGORY_KEYS as readonly string[]).includes(rawKey);
+      })
+      .map((category: any) => {
       const label =
         category.name ??
         String(category.key ?? category.id ?? category).replace(/_/g, " ");
@@ -417,12 +441,21 @@ export default function BookArtisan() {
         headers,
       });
     },
-    onSuccess: async () => {
+    onSuccess: async (created: any) => {
       // refresh the resident's list view
       queryClient.invalidateQueries({ queryKey: ["my-requests"] });
       queryClient.invalidateQueries({
         queryKey: ["/api/app/service-requests/mine"],
       });
+
+      if (created?.id) {
+        pushCityBuddyBookingEvent({
+          citybuddySessionId,
+          serviceRequestId: String(created.id),
+          title: created?.title ?? null,
+          status: String(created?.status ?? "pending"),
+        });
+      }
 
       toast({
         title: "Request submitted",

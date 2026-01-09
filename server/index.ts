@@ -388,7 +388,8 @@ async function ensureMongoIdMappingTable() {
 
   // Replit/Render/Heroku style port
   const port = parseInt(process.env.PORT || "5000", 10);
-  server.listen({ port, host: "0.0.0.0", reusePort: true }, () =>
+  // Listen on IPv6 unspecified address so both IPv6 (::1) and IPv4 (127.0.0.1) work locally.
+  server.listen({ port, host: "::", reusePort: true }, () =>
     log(`serving on port ${port}`)
   );
 })();

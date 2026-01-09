@@ -371,10 +371,14 @@ export default function AdminDashboard() {
                   <div className="flex space-x-2">
                     <select className="px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring bg-background">
                       <option>All Categories</option>
-                      <option>Electrician</option>
-                      <option>Plumber</option>
-                      <option>Carpenter</option>
-                      <option>Market Runner</option>
+                      <option>Surveillance monitoring</option>
+                      <option>Cleaning & janitorial</option>
+                      <option>Catering Services</option>
+                      <option>IT Support</option>
+                      <option>Maintenance & Repair</option>
+                      <option>Marketing & Advertising</option>
+                      <option>Home tutors</option>
+                      <option>Furniture making</option>
                     </select>
                     <select className="px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring bg-background">
                       <option>All Status</option>

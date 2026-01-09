@@ -21,19 +21,25 @@ import {
   transactions,
   companies,
   providerRequests,
+  aiPreparedRequests,
+  pricingRules,
+  providerMatchingSettings,
 } from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
 import marketplaceRoutes from "./marketplace-routes";
-import { randomBytes, scrypt } from "crypto";
+import { createHash, randomBytes, scrypt } from "crypto";
 import { promisify } from "util";
-import { and, count, desc, eq, ilike, or, sum, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, or, sum, sql } from "drizzle-orm";
 import {
   createMarketplaceItemSchema,
   createProviderSchema,
   providerRequestSchema,
   updateMarketplaceItemSchema,
 } from "@shared/admin-schema";
+import { TransactionStatus } from "@prisma/client";
+import type { Transaction as PrismaTransaction } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import {
   createPendingPaystackTransaction,
   verifyAndFinalizePaystackCharge,
@@ -44,18 +50,33 @@ import {
   handlePaystackVerify,
   handlePaystackWebhook,
 } from "./paystackHandlers";
-import { TransactionStatus, Prisma } from "@prisma/client";
-import type { Transaction as PrismaTransaction } from "@prisma/client";
-import { requireAuth, requireResident } from "./auth-middleware";
+import { requireAuth, requireResident, requireSuperAdmin } from "./auth-middleware";
 import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
 import * as ai from "./ai";
 import { runDiagnosis, GEMINI_FALLBACK_DIAGNOSIS, GEMINI_SAFETY_FALLBACK, getGeminiModel } from "./ai/diagnose";
 import { generateGeminiContent } from "./ai/geminiClient";
-import { resolveActiveEstateContext, requireActiveEstateMembership } from "./middlewares/estate-context";
 
-const isAdminOrSuper = (req: Express["request"]) =>
-  req.isAuthenticated() &&
-  (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+function membershipIsActive(membership: { isActive?: boolean | null; status?: string | null } | undefined) {
+  if (!membership) return false;
+  const isActiveFlag = membership.isActive ?? true;
+  if (!isActiveFlag) return false;
+  const status = (membership.status ?? "").toLowerCase();
+  if (status && status !== "active") return false;
+  return status === "active" || status === "";
+}
+
+const isAdminOrSuper = (req: Express["request"]) => {
+  // Support both session auth (req.user + req.isAuthenticated) and JWT auth (req.auth)
+  const sessionOk =
+    req.isAuthenticated() &&
+    (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+
+  const jwtOk =
+    Boolean(req.auth) &&
+    ((req.auth as any)?.role === "admin" || (req.auth as any)?.globalRole === "super_admin");
+
+  return sessionOk || jwtOk;
+};
 
 // Accept flexible inputs, normalize output types
 const CreateServiceRequest = insertServiceRequestSchema.extend({
@@ -85,6 +106,18 @@ const AIDiagnosisRequestSchema = z.object({
   description: z.string().min(10, "Description must be at least 10 characters"),
   urgency: z.enum(["low", "medium", "high", "emergency"]).optional(),
   specialInstructions: z.string().optional(),
+});
+
+const AIDescriptionValidationRequestSchema = z.object({
+  category: z.string().optional(),
+  description: z.string().min(5, "Description is required").max(2000),
+});
+
+const AIDescriptionValidationResponseSchema = z.object({
+  valid: z.boolean(),
+  reason: z.string().default(""),
+  improvedPrompt: z.string().default(""),
+  suggestedRewriteExamples: z.array(z.string()).default([]),
 });
 
 export const AIDiagnosisResponseSchema = z.object({
@@ -186,21 +219,157 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // Service Requests Routes
+
+  // Provider matching preview (resident-safe): a short preview list only — no assignment/booking.
+  app.get("/api/providers/preview", requireAuth, requireResident, async (req, res, next) => {
+    try {
+      const schema = z.object({
+        category: z.string().min(1),
+        urgency: z.string().optional(),
+        limit: z
+          .union([z.string(), z.number()])
+          .optional()
+          .transform((v) => {
+            if (v == null || v === "") return 4;
+            const n = typeof v === "number" ? v : Number(v);
+            return Number.isFinite(n) ? Math.max(2, Math.min(4, Math.floor(n))) : 4;
+          }),
+        estateId: z.string().optional(),
+      });
+
+      const parsed = schema.parse(req.query);
+
+      const requestedEstateId = typeof parsed.estateId === "string" && parsed.estateId.trim() ? parsed.estateId.trim() : undefined;
+      let activeEstateId = requestedEstateId;
+      if (!activeEstateId) {
+        const membershipsForUser = await storage.getMembershipsForUser(req.auth!.userId);
+        const primary = membershipsForUser.find((m) => m.isPrimary && m.isActive && m.status === "active");
+        activeEstateId = primary?.estateId;
+      }
+
+      const providers = await storage.getProviders({
+        approved: true,
+        category: parsed.category,
+      });
+
+      const verifiedProviders = (providers || []).filter((p: any) => p?.isActive !== false && p?.isApproved === true);
+      const providerIds = verifiedProviders.map((p: any) => p.id).filter(Boolean);
+
+      if (providerIds.length === 0) {
+        return res.json({
+          providers: [],
+          usedEstateId: activeEstateId ?? null,
+          estateSpecificCount: 0,
+        });
+      }
+
+      const completedJobRows = await db
+        .select({ providerId: serviceRequests.providerId, completedJobs: count() })
+        .from(serviceRequests)
+        .where(and(inArray(serviceRequests.providerId, providerIds as any), eq(serviceRequests.status, "completed")))
+        .groupBy(serviceRequests.providerId);
+
+      const completedJobsByProvider = new Map<string, number>();
+      for (const r of completedJobRows) {
+        const pid = (r as any).providerId as string | null;
+        if (!pid) continue;
+        completedJobsByProvider.set(pid, Number((r as any).completedJobs ?? 0));
+      }
+
+      let estateMatchedIds = new Set<string>();
+      if (activeEstateId) {
+        const membershipRows = await db
+          .select({ userId: memberships.userId })
+          .from(memberships)
+          .where(
+            and(
+              eq(memberships.estateId, activeEstateId),
+              eq(memberships.isActive, true),
+              eq(memberships.status, "active"),
+              inArray(memberships.userId, providerIds as any),
+            ),
+          );
+        estateMatchedIds = new Set(membershipRows.map((m: { userId: string }) => m.userId));
+      }
+
+      const preview = verifiedProviders
+        .map((p: any) => {
+          const ratingNum = Number(p.rating ?? 0);
+          const completedJobs = completedJobsByProvider.get(p.id) ?? 0;
+          const isEstateMatch = activeEstateId ? estateMatchedIds.has(p.id) : false;
+
+          const badges: string[] = [];
+          if (isEstateMatch) badges.push("Estate recommended");
+          if (ratingNum >= 4.5) badges.push("Top rated");
+          if (completedJobs >= 25) badges.push("Experienced");
+
+          const fastResponder = Boolean((p.metadata as any)?.fastResponder);
+          if (fastResponder) badges.push("Fast responder");
+
+          return {
+            id: String(p.id),
+            name: String(p.name ?? ""),
+            serviceCategory: String(p.serviceCategory ?? parsed.category),
+            rating: Number.isFinite(ratingNum) ? ratingNum : 0,
+            completedJobs,
+            responseTime: "Response time not available",
+            location: String(p.location ?? "City-wide"),
+            badges,
+            verificationStatus: "Verified" as const,
+            image: (p.metadata as any)?.avatarUrl ? String((p.metadata as any).avatarUrl) : undefined,
+            __estateMatch: isEstateMatch,
+          };
+        })
+        .sort((a: any, b: any) => {
+          // 1) Estate proximity
+          if (a.__estateMatch !== b.__estateMatch) return a.__estateMatch ? -1 : 1;
+          // 2) Rating
+          if (b.rating !== a.rating) return b.rating - a.rating;
+          // 3) Completed jobs
+          return (b.completedJobs ?? 0) - (a.completedJobs ?? 0);
+        });
+
+      const limited = preview.slice(0, parsed.limit ?? 4).map(({ __estateMatch, ...rest }: any) => rest);
+      const estateSpecificCount = activeEstateId ? preview.filter((p: any) => p.__estateMatch).length : 0;
+
+      res.json({
+        providers: limited,
+        usedEstateId: activeEstateId ?? null,
+        estateSpecificCount,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post(
     "/api/service-requests",
     requireAuth,
-    resolveActiveEstateContext,
-    requireActiveEstateMembership,
     async (req, res, next) => {
       try {
       if (!req.isAuthenticated() || req.user?.role !== "resident") {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
+      const headerEstate = typeof req.headers["x-estate-id"] === "string" ? req.headers["x-estate-id"].trim() : undefined;
+      const queryEstate = typeof req.query.estateId === "string" ? req.query.estateId.trim() : undefined;
+      const bodyEstate = typeof (req.body as any)?.estateId === "string" ? String((req.body as any).estateId).trim() : undefined;
+      const requestedEstateId = headerEstate || queryEstate || bodyEstate || undefined;
+
+      // estateId is optional in schema; only attach it when it is valid AND the user is an active member.
+      let estateId: string | undefined;
+      if (requestedEstateId) {
+        const membership = await storage.getMembershipByUserAndEstate(req.user.id, requestedEstateId);
+        if (!membershipIsActive(membership)) {
+          return res.status(403).json({ message: "Your estate membership is not active." });
+        }
+        estateId = requestedEstateId;
+      }
+
       const parsed = CreateServiceRequest.parse({
         ...req.body,
         residentId: req.user.id,
-        estateId: req.auth?.activeEstateId,
+        estateId,
       });
 
       const created = await storage.createServiceRequest(parsed);
@@ -263,6 +432,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Service request not found" });
       }
 
+      // Broadcast update to SSE clients
+      try {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        if (global.__serviceRequestSseClients && Array.isArray(global.__serviceRequestSseClients)) {
+          const payload = { type: "updated", request: serviceRequest };
+          const data = JSON.stringify(payload);
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          for (const c of global.__serviceRequestSseClients) {
+            try {
+              c.res.write(`event: service-request\n`);
+              c.res.write(`data: ${data}\n\n`);
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Failed to broadcast service-request updated event", e);
+      }
+
       res.json(serviceRequest);
     } catch (error) {
       next(error);
@@ -291,6 +482,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Server-Sent Events endpoint for streaming service-request events (created/updated/assigned)
+  app.get("/api/service-requests/stream", requireAuth, (req, res) => {
+    try {
+      // set SSE headers
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders?.();
+
+      // ensure global client list
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__serviceRequestSseClients ||= [];
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const id = Date.now() + Math.random();
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__serviceRequestSseClients.push({ id, res });
+
+      req.on("close", () => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          global.__serviceRequestSseClients = (global.__serviceRequestSseClients || []).filter((c: any) => c.id !== id);
+        } catch (e) {
+          // ignore
+        }
+      });
+    } catch (e) {
+      console.error("SSE setup failed", e);
+      try { res.status(500).end(); } catch {}
+    }
+  });
+
   app.post("/api/service-requests/:id/accept", async (req, res, next) => {
     try {
       if (!req.isAuthenticated() || req.user?.role !== "provider") {
@@ -304,7 +530,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Service request not found" });
       }
 
+      // Broadcast assignment to SSE clients
+      try {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        if (global.__serviceRequestSseClients && Array.isArray(global.__serviceRequestSseClients)) {
+          const payload = { type: "assigned", request: serviceRequest };
+          const data = JSON.stringify(payload);
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          for (const c of global.__serviceRequestSseClients) {
+            try {
+              c.res.write(`event: service-request\n`);
+              c.res.write(`data: ${data}\n\n`);
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Failed to broadcast service-request assigned event", e);
+      }
+
       res.json(serviceRequest);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Get estates the current user is a member of
+  app.get("/api/my-estates", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const rows = await db
+        .select({
+          id: estates.id,
+          name: estates.name,
+          slug: estates.slug,
+        })
+        .from(memberships)
+        .leftJoin(estates, eq(estates.id, memberships.estateId))
+        .where(eq(memberships.userId, userId));
+
+      // Filter out null joins
+      const out = (rows || [])
+        .map((r: any) => ({ id: r.id, name: r.name, slug: r.slug }))
+        .filter((e: any) => e && e.id);
+
+      res.json(out);
     } catch (error) {
       next(error);
     }
@@ -415,6 +690,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post(
+    "/api/ai/validate-description",
+    requireAuth,
+    requireResident,
+    async (req, res) => {
+      const parsedBody = AIDescriptionValidationRequestSchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        return res.status(400).json({
+          error: "Invalid request body",
+          details: parsedBody.error.flatten(),
+        });
+      }
+
+      try {
+        const { category, description } = parsedBody.data;
+
+        const ip =
+          (req.headers["x-forwarded-for"] as string)?.split(",")[0] ||
+          req.socket.remoteAddress ||
+          "unknown";
+        const userKey = `${req.user?.id ?? "anon"}:${ip}`;
+        const now = Date.now();
+        const windowMs = 60_000;
+        const maxRequests = 10;
+        const rateMap: Map<string, { count: number; windowStart: number }> =
+          ((global as any).__aiValidateRate ||= new Map<
+            string,
+            { count: number; windowStart: number }
+          >());
+
+        const rate =
+          rateMap.get(userKey) ||
+          ({ count: 0, windowStart: now } as {
+            count: number;
+            windowStart: number;
+          });
+        if (now - rate.windowStart > windowMs) {
+          rate.count = 0;
+          rate.windowStart = now;
+        }
+        rate.count += 1;
+        rateMap.set(userKey, rate);
+        if (rate.count > maxRequests) {
+          return res
+            .status(429)
+            .json({ error: "Rate limit exceeded. Try again shortly." });
+        }
+
+        const model = getGeminiModel(
+          process.env.GEMINI_MODEL || "gemini-1.5-flash"
+        );
+
+        const prompt = [
+          "Return ONLY a single JSON object. No markdown, no code fences, no extra text.",
+          "You validate whether a resident's service request description is sufficiently detailed to proceed to the next step (uploading an optional supporting image).",
+          "Consider it VALID if it includes at least: (1) what is wrong, (2) location/area, and (3) timing or context. Otherwise INVALID.",
+          "If INVALID, provide an improved prompt the user can paste, and 2-3 short example rewrites.",
+          "Output must match this exact JSON shape:",
+          '{"valid":true,"reason":"","improvedPrompt":"","suggestedRewriteExamples":[""]}',
+          "",
+          `Category: ${category || "(unknown)"}`,
+          "Description:",
+          description,
+        ].join("\n");
+
+        const { text, blocked } = await generateGeminiContent(model, prompt);
+        if (blocked) {
+          return res
+            .status(503)
+            .json({ error: "AI response was blocked." });
+        }
+
+        const raw = (text || "").trim();
+        const tryParseJson = (s: string) => {
+          try {
+            return JSON.parse(s);
+          } catch {
+            return null;
+          }
+        };
+
+        let obj = tryParseJson(raw);
+        if (!obj) {
+          const match = raw.match(/\{[\s\S]*\}/);
+          if (match) obj = tryParseJson(match[0]);
+        }
+
+        if (!obj) {
+          return res
+            .status(502)
+            .json({ error: "AI returned non-JSON output." });
+        }
+
+        const normalized = AIDescriptionValidationResponseSchema.parse(obj);
+        return res.json(normalized);
+      } catch (error) {
+        console.error("[AI] validate-description failed:", error);
+        return res
+          .status(500)
+          .json({ error: "Unable to validate description right now." });
+      }
+    }
+  );
+
   app.get("/api/ai/health", async (req, res) => {
     const provider = "gemini";
     const configured = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY);
@@ -466,6 +845,386 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await ai.setActiveProvider(provider, model);
     res.json({ success: true, active: await ai.getActiveProvider() });
   });
+
+  // --- AI prepared request snapshots (resident writes, super admin reads) ---
+  // IMPORTANT: Store no raw chat messages and mask resident identity.
+  app.post(
+    "/api/ai/prepared-requests/snapshot",
+    requireAuth,
+    requireResident,
+    async (req, res, next) => {
+      try {
+        const userId = req.auth?.userId ?? req.user?.id;
+        if (!userId) return res.status(401).json({ message: "Authentication required" });
+
+        const body = (req.body ?? {}) as any;
+        const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+        const category = typeof body.category === "string" ? body.category : null;
+        const urgency = typeof body.urgency === "string" ? body.urgency : null;
+        const recommendedApproach = typeof body.recommendedApproach === "string" ? body.recommendedApproach : "";
+        const confidenceScore = Number.isFinite(Number(body.confidenceScore)) ? Number(body.confidenceScore) : 0;
+        const requiresConsultancy = Boolean(body.requiresConsultancy);
+        const readyToBook = Boolean(body.readyToBook);
+        const estateId = typeof body.estateId === "string" ? body.estateId : undefined;
+
+        if (!sessionId || !category || !urgency || !recommendedApproach) {
+          return res.status(400).json({ message: "Invalid snapshot payload" });
+        }
+
+        const salt = process.env.APP_SECRET || process.env.SESSION_SECRET || "dev";
+        const residentHash = createHash("sha256")
+          .update(`${salt}:${userId}`)
+          .digest("hex");
+
+        const snapshot = typeof body.snapshot === "object" && body.snapshot ? body.snapshot : {};
+
+        // Upsert by sessionId
+        const existing = await db
+          .select({ id: aiPreparedRequests.id })
+          .from(aiPreparedRequests)
+          .where(eq(aiPreparedRequests.sessionId, sessionId))
+          .limit(1);
+
+        if (existing.length) {
+          await db
+            .update(aiPreparedRequests)
+            .set({
+              residentHash,
+              estateId: estateId ?? null,
+              category: category as any,
+              urgency: urgency as any,
+              recommendedApproach,
+              confidenceScore,
+              requiresConsultancy,
+              readyToBook,
+              snapshot,
+              updatedAt: new Date(),
+            })
+            .where(eq(aiPreparedRequests.sessionId, sessionId));
+        } else {
+          await db.insert(aiPreparedRequests).values({
+            sessionId,
+            residentHash,
+            estateId: estateId ?? null,
+            category: category as any,
+            urgency: urgency as any,
+            recommendedApproach,
+            confidenceScore,
+            requiresConsultancy,
+            readyToBook,
+            snapshot,
+          });
+        }
+
+        return res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  const computePriceEstimate = async (params: {
+    category: string;
+    urgency: string;
+    scope?: string | null;
+  }): Promise<{ min: number; max: number; ruleId?: string } | null> => {
+    const scope = (params.scope || "").trim() || null;
+
+    const candidates = await db
+      .select({
+        id: pricingRules.id,
+        category: pricingRules.category,
+        urgency: pricingRules.urgency,
+        scope: pricingRules.scope,
+        minPrice: pricingRules.minPrice,
+        maxPrice: pricingRules.maxPrice,
+      })
+      .from(pricingRules)
+      .where(eq(pricingRules.isActive, true));
+
+    const scoreRule = (r: any) => {
+      let score = 0;
+      if (r.category && r.category === params.category) score += 10;
+      if (r.urgency && r.urgency === params.urgency) score += 5;
+      if (r.scope && scope && String(r.scope).toLowerCase() === scope.toLowerCase()) score += 3;
+      if (!r.category) score += 1;
+      return score;
+    };
+
+    const best = (candidates || [])
+      .filter((r: any) => !r.category || r.category === params.category)
+      .filter((r: any) => !r.urgency || r.urgency === params.urgency)
+      .filter((r: any) => !r.scope || (scope && String(r.scope).toLowerCase() === scope.toLowerCase()))
+      .sort((a: any, b: any) => scoreRule(b) - scoreRule(a))[0];
+
+    if (!best) return null;
+
+    const min = Number(best.minPrice);
+    const max = Number(best.maxPrice);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    return { min, max, ruleId: best.id };
+  };
+
+  // --- SUPER_ADMIN-only AI observability ---
+  app.get(
+    "/api/admin/ai/conversations",
+    requireAuth,
+    requireSuperAdmin,
+    async (req, res, next) => {
+      try {
+        const rows = await db
+          .select({
+            sessionId: aiPreparedRequests.sessionId,
+            category: aiPreparedRequests.category,
+            urgency: aiPreparedRequests.urgency,
+            recommendedApproach: aiPreparedRequests.recommendedApproach,
+            confidenceScore: aiPreparedRequests.confidenceScore,
+            requiresConsultancy: aiPreparedRequests.requiresConsultancy,
+            readyToBook: aiPreparedRequests.readyToBook,
+            createdAt: aiPreparedRequests.createdAt,
+            updatedAt: aiPreparedRequests.updatedAt,
+          })
+          .from(aiPreparedRequests)
+          .orderBy(desc(aiPreparedRequests.updatedAt))
+          .limit(200);
+
+        return res.json(
+          (rows || []).map((r: any) => ({
+            conversationId: r.sessionId,
+            category: r.category,
+            urgency: r.urgency,
+            recommendedApproach: r.recommendedApproach,
+            confidenceScore: r.confidenceScore,
+            requiresConsultancy: r.requiresConsultancy,
+            status: r.readyToBook ? "ready_to_book" : "in_progress",
+            createdAt: r.createdAt,
+            updatedAt: r.updatedAt,
+          }))
+        );
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/ai/prepared-requests",
+    requireAuth,
+    requireSuperAdmin,
+    async (req, res, next) => {
+      try {
+        const rows = await db
+          .select({
+            id: aiPreparedRequests.id,
+            sessionId: aiPreparedRequests.sessionId,
+            residentHash: aiPreparedRequests.residentHash,
+            estateId: aiPreparedRequests.estateId,
+            category: aiPreparedRequests.category,
+            urgency: aiPreparedRequests.urgency,
+            recommendedApproach: aiPreparedRequests.recommendedApproach,
+            confidenceScore: aiPreparedRequests.confidenceScore,
+            requiresConsultancy: aiPreparedRequests.requiresConsultancy,
+            readyToBook: aiPreparedRequests.readyToBook,
+            snapshot: aiPreparedRequests.snapshot,
+            createdAt: aiPreparedRequests.createdAt,
+            updatedAt: aiPreparedRequests.updatedAt,
+          })
+          .from(aiPreparedRequests)
+          .orderBy(desc(aiPreparedRequests.updatedAt))
+          .limit(200);
+
+        const results = await Promise.all(
+          (rows || []).map(async (r: any) => {
+            const scope = r.snapshot?.scope ?? null;
+            const estimate = await computePriceEstimate({
+              category: r.category,
+              urgency: r.urgency,
+              scope,
+            });
+
+            return {
+              id: r.id,
+              conversationId: r.sessionId,
+              resident: `resident_${String(r.residentHash || "").slice(0, 8)}`,
+              estateId: r.estateId,
+              category: r.category,
+              urgency: r.urgency,
+              recommendedApproach: r.recommendedApproach,
+              confidenceScore: r.confidenceScore,
+              requiresConsultancy: r.requiresConsultancy,
+              readyToBook: r.readyToBook,
+              headline: r.snapshot?.headline ?? null,
+              imageCount: Number.isFinite(Number(r.snapshot?.imageCount)) ? Number(r.snapshot?.imageCount) : 0,
+              scope: scope,
+              priceEstimate: estimate,
+              createdAt: r.createdAt,
+              updatedAt: r.updatedAt,
+            };
+          })
+        );
+
+        return res.json(results);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  // --- SUPER_ADMIN-only Pricing Rules ---
+  app.get("/api/admin/pricing-rules", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const rows = await db.select().from(pricingRules).orderBy(desc(pricingRules.updatedAt));
+      return res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/pricing-rules", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const body = (req.body ?? {}) as any;
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!name) return res.status(400).json({ message: "Name is required" });
+
+      const category = typeof body.category === "string" ? body.category : null;
+      const urgency = typeof body.urgency === "string" ? body.urgency : null;
+      const scope = typeof body.scope === "string" ? body.scope.trim() : null;
+      const minPrice = Number.isFinite(Number(body.minPrice)) ? String(body.minPrice) : "0";
+      const maxPrice = Number.isFinite(Number(body.maxPrice)) ? String(body.maxPrice) : "0";
+      const isActive = body.isActive === undefined ? true : Boolean(body.isActive);
+
+      const [created] = await db
+        .insert(pricingRules)
+        .values({
+          name,
+          category: (category as any) ?? null,
+          urgency: (urgency as any) ?? null,
+          scope,
+          minPrice,
+          maxPrice,
+          isActive,
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      return res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/pricing-rules/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const id = String(req.params.id || "");
+      const body = (req.body ?? {}) as any;
+
+      const patch: any = { updatedAt: new Date() };
+      if (typeof body.name === "string") patch.name = body.name.trim();
+      if (typeof body.category === "string" || body.category === null) patch.category = body.category as any;
+      if (typeof body.urgency === "string" || body.urgency === null) patch.urgency = body.urgency as any;
+      if (typeof body.scope === "string" || body.scope === null) patch.scope = body.scope;
+      if (body.minPrice !== undefined && Number.isFinite(Number(body.minPrice))) patch.minPrice = String(body.minPrice);
+      if (body.maxPrice !== undefined && Number.isFinite(Number(body.maxPrice))) patch.maxPrice = String(body.maxPrice);
+      if (body.isActive !== undefined) patch.isActive = Boolean(body.isActive);
+
+      const updated = await db
+        .update(pricingRules)
+        .set(patch)
+        .where(eq(pricingRules.id, id))
+        .returning();
+
+      if (!updated.length) return res.status(404).json({ message: "Not found" });
+      return res.json(updated[0]);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // --- SUPER_ADMIN-only Provider Matching ---
+  app.get("/api/admin/providers/matching", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const providers = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          phone: users.phone,
+          categories: users.categories,
+          serviceCategory: users.serviceCategory,
+          isActive: users.isActive,
+          isApproved: users.isApproved,
+        })
+        .from(users)
+        .where(eq(users.role, "provider" as any));
+
+      const settingsRows = await db
+        .select({
+          providerId: providerMatchingSettings.providerId,
+          isEnabled: providerMatchingSettings.isEnabled,
+          settings: providerMatchingSettings.settings,
+          updatedAt: providerMatchingSettings.updatedAt,
+        })
+        .from(providerMatchingSettings);
+
+      const settingsByProvider = new Map<string, any>();
+      for (const row of settingsRows || []) settingsByProvider.set(row.providerId, row);
+
+      return res.json(
+        (providers || []).map((p: any) => ({
+          ...p,
+          matching: settingsByProvider.get(p.id) ?? { isEnabled: true, settings: {}, updatedAt: null },
+        }))
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch(
+    "/api/admin/providers/:id/matching-settings",
+    requireAuth,
+    requireSuperAdmin,
+    async (req, res, next) => {
+      try {
+        const providerId = String(req.params.id || "");
+        const body = (req.body ?? {}) as any;
+        const isEnabled = body.isEnabled === undefined ? undefined : Boolean(body.isEnabled);
+        const settings = typeof body.settings === "object" && body.settings ? body.settings : undefined;
+
+        const existing = await db
+          .select({ id: providerMatchingSettings.id })
+          .from(providerMatchingSettings)
+          .where(eq(providerMatchingSettings.providerId, providerId))
+          .limit(1);
+
+        if (existing.length) {
+          const patch: any = { updatedAt: new Date() };
+          if (isEnabled !== undefined) patch.isEnabled = isEnabled;
+          if (settings !== undefined) patch.settings = settings;
+          const updated = await db
+            .update(providerMatchingSettings)
+            .set(patch)
+            .where(eq(providerMatchingSettings.providerId, providerId))
+            .returning();
+          return res.json(updated[0]);
+        }
+
+        const [created] = await db
+          .insert(providerMatchingSettings)
+          .values({
+            providerId,
+            isEnabled: isEnabled ?? true,
+            settings: settings ?? {},
+            updatedAt: new Date(),
+          })
+          .returning();
+
+        return res.status(201).json(created);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
 
   // Admin: Send advice with inspection dates/times to resident
   app.post("/api/admin/service-requests/:id/advice", async (req, res, next) => {
@@ -843,7 +1602,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin Routes
   app.get("/api/admin/users", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -858,7 +1617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Unified list with search + role filter (used by admin dashboard)
   app.get("/api/admin/users/all", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -884,7 +1643,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create user
   app.post("/api/admin/users", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -921,7 +1680,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update user
   app.patch("/api/admin/users/:id", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -944,7 +1703,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: reset a user's password (admin-only)
   app.post("/api/admin/users/:id/reset-password", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -1004,6 +1763,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get memberships for a specific user
+  app.get("/api/admin/users/:id/memberships", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id: userId } = req.params;
+      const userMemberships = await db
+        .select({
+          id: memberships.id,
+          userId: memberships.userId,
+          estateId: memberships.estateId,
+          role: memberships.role,
+          status: memberships.status,
+          isActive: memberships.isActive,
+          permissions: memberships.permissions,
+          createdAt: memberships.createdAt,
+          updatedAt: memberships.updatedAt,
+          estateName: estates.name,
+        })
+        .from(memberships)
+        .where(eq(memberships.userId, userId))
+        .leftJoin(estates, eq(estates.id, memberships.estateId))
+        .orderBy(desc(memberships.createdAt));
+
+      res.json(userMemberships);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/admin/providers", async (req, res, next) => {
     try {
       const isAdmin = req.isAuthenticated() && (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
@@ -1019,7 +1810,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         category: category as string,
       });
 
-      res.json(providers);
+      // Enrich providers with company details if they have a company association
+      const enrichedProviders = await Promise.all(
+        providers.map(async (p: typeof providers[0]) => {
+          if (!p.company) return p;
+          // p.company currently holds just the company name/ID string
+          // In a full implementation, fetch the company record to get more details
+          return { ...p, companyAssociation: p.company };
+        })
+      );
+
+      res.json(enrichedProviders);
     } catch (error) {
       next(error);
     }
@@ -1108,6 +1909,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // POST /api/admin/providers/:providerId/assign-company - Link provider to a company
+  app.post("/api/admin/providers/:providerId/assign-company", async (req, res, next) => {
+    try {
+      const isAdmin = req.isAuthenticated() && (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+      if (!isAdmin) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { providerId } = req.params;
+      const { companyId } = req.body as { companyId: string };
+
+      if (!companyId) {
+        return res.status(400).json({ error: "companyId is required" });
+      }
+
+      // Verify provider exists
+      const provider = await storage.getUser(providerId);
+      if (!provider) {
+        return res.status(404).json({ error: "Provider not found" });
+      }
+
+      // Update the provider's company association
+      const updatedProvider = await storage.updateUser(providerId, { company: companyId });
+
+      await storage.createAuditLog({
+        actorId: req.user?.id ?? "system",
+        action: "assign_provider_to_company",
+        target: "provider",
+        targetId: providerId,
+        meta: {
+          providerEmail: provider.email,
+          companyId,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent") ?? "",
+      });
+
+      res.json({ success: true, provider: updatedProvider });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/admin/providers", async (req, res, next) => {
     try {
       const isAdmin = req.isAuthenticated() && (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
@@ -1170,10 +2014,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: bridge stats (users + service requests from canonical Postgres tables)
   app.get("/api/admin/bridge/stats", async (req, res, next) => {
     try {
-      const isAdmin =
-        req.isAuthenticated() &&
-        (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
-      if (!isAdmin) {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -1186,13 +2027,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(and(eq(users.role, "provider"), eq(users.isApproved, false))),
       ]);
 
-      const [[srTotal], [srPending], [srInProgress], [srCompleted], [srCancelled]] =
+      const [[srTotal], [srPending], [srPendingInspection], [srAssigned], [srInProgress], [srCompleted], [srCancelled]] =
         await Promise.all([
           db.select({ c: count() }).from(serviceRequests),
           db
             .select({ c: count() })
             .from(serviceRequests)
             .where(eq(serviceRequests.status, "pending")),
+          db
+            .select({ c: count() })
+            .from(serviceRequests)
+            .where(eq(serviceRequests.status, "pending_inspection")),
+          db
+            .select({ c: count() })
+            .from(serviceRequests)
+            .where(eq(serviceRequests.status, "assigned")),
           db
             .select({ c: count() })
             .from(serviceRequests)
@@ -1208,6 +2057,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ]);
 
       res.json({
+        source: "postgresql",
+        timestamp: new Date().toISOString(),
         users: {
           totalResidents: Number(residents?.c ?? 0),
           totalProviders: Number(providers?.c ?? 0),
@@ -1216,6 +2067,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         serviceRequests: {
           total: Number(srTotal?.c ?? 0),
           pending: Number(srPending?.c ?? 0),
+          pendingInspection: Number(srPendingInspection?.c ?? 0),
+          assigned: Number(srAssigned?.c ?? 0),
           inProgress: Number(srInProgress?.c ?? 0),
           completed: Number(srCompleted?.c ?? 0),
           cancelled: Number(srCancelled?.c ?? 0),
@@ -1223,6 +2076,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       next(error);
+    }
+  });
+
+  // Database health check
+  app.get("/api/admin/health/database", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
+
+      // Test Postgres connection and get table sizes
+      const [userCount] = await db.select({ count: count() }).from(users);
+      const [srCount] = await db.select({ count: count() }).from(serviceRequests);
+      const [estateCount] = await db.select({ count: count() }).from(estates);
+
+      return res.json({
+        status: "healthy",
+        database: "postgresql",
+        timestamp: new Date().toISOString(),
+        tables: {
+          users: { count: Number(userCount?.count ?? 0) },
+          serviceRequests: { count: Number(srCount?.count ?? 0) },
+          estates: { count: Number(estateCount?.count ?? 0) },
+        },
+      });
+    } catch (error: any) {
+      return res.status(503).json({
+        status: "unhealthy",
+        database: "postgresql",
+        error: error?.message || "Database connection failed",
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
+  // Diagnostic endpoint to show if migrations were applied
+  app.get("/api/admin/diagnostics/migrations", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
+
+      // Check if critical tables exist and have data
+      const [userStats] = await db.select({ count: count(), minDate: sql`min(created_at)` }).from(users);
+      const [srStats] = await db.select({ count: count(), minDate: sql`min(created_at)` }).from(serviceRequests);
+      const [estateStats] = await db.select({ count: count(), minDate: sql`min(created_at)` }).from(estates);
+
+      // Count by role
+      const [roleBreakdown] = await db
+        .select({
+          role: users.role,
+          count: count(),
+        })
+        .from(users)
+        .groupBy(users.role);
+
+      // Count by request status
+      const [statusBreakdown] = await db
+        .select({
+          status: serviceRequests.status,
+          count: count(),
+        })
+        .from(serviceRequests)
+        .groupBy(serviceRequests.status);
+
+      return res.json({
+        timestamp: new Date().toISOString(),
+        tables: {
+          users: {
+            total: Number(userStats?.count ?? 0),
+            oldestRecord: userStats?.minDate ? new Date(userStats.minDate).toISOString() : null,
+          },
+          serviceRequests: {
+            total: Number(srStats?.count ?? 0),
+            oldestRecord: srStats?.minDate ? new Date(srStats.minDate).toISOString() : null,
+          },
+          estates: {
+            total: Number(estateStats?.count ?? 0),
+            oldestRecord: estateStats?.minDate ? new Date(estateStats.minDate).toISOString() : null,
+          },
+        },
+        breakdowns: {
+          usersByRole: roleBreakdown || [],
+          requestsByStatus: statusBreakdown || [],
+        },
+        recommendation:
+          Number(userStats?.count ?? 0) === 0
+            ? "No users found in database. Run migrations with: npm run db:migrate"
+            : "Database appears healthy with data.",
+      });
+    } catch (error: any) {
+      return res.status(503).json({
+        status: "error",
+        error: error?.message || "Diagnostics query failed",
+        timestamp: new Date().toISOString(),
+        recommendation: "Check database connection and ensure migrations are applied.",
+      });
     }
   });
 
@@ -1299,11 +2245,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin dashboard stats (front-end expects /api/admin/dashboard/stats)
   app.get("/api/admin/dashboard/stats", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
       const stats = await storage.getUserStats();
       res.json(stats);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Estate performance for admin dashboard card
+  app.get("/api/admin/dashboard/estate-performance", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
+
+      const rows = await db
+        .select({
+          estateId: estates.id,
+          name: estates.name,
+          totalRequests: count(serviceRequests.id),
+          completedRequests: sql<number>`coalesce(sum(case when ${serviceRequests.status} = 'completed' then 1 else 0 end), 0)`,
+        })
+        .from(estates)
+        .leftJoin(serviceRequests, eq(serviceRequests.estateId, estates.id))
+        .groupBy(estates.id)
+        .orderBy(desc(count(serviceRequests.id)))
+        .limit(5);
+
+      const out = (rows || []).map((r: any) => {
+        const total = Number(r.totalRequests ?? 0);
+        const completed = Number(r.completedRequests ?? 0);
+        const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+        return {
+          estateId: r.estateId,
+          name: r.name,
+          totalRequests: total,
+          completedRequests: completed,
+          completionRate: pct,
+        };
+      });
+
+      return res.json(out);
     } catch (error) {
       next(error);
     }
@@ -1485,22 +2466,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Audit log listing (limit optional)
+  // Audit log listing (limit/search/date filters)
   app.get("/api/admin/audit-logs", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      const limit =
-        Math.min(Math.max(Number(req.query.limit ?? 10), 1), 100) || 10;
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
 
-      const logs = await db
-        .select()
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 10), 1), 100) || 10;
+      const search = (req.query.search ?? "").toString().trim();
+      const dateFrom = (req.query.dateFrom ?? "").toString().trim();
+      const dateTo = (req.query.dateTo ?? "").toString().trim();
+
+      const whereParts: any[] = [];
+
+      if (dateFrom) {
+        const from = new Date(`${dateFrom}T00:00:00.000Z`);
+        if (!Number.isNaN(from.getTime())) whereParts.push(sql`${auditLogs.createdAt} >= ${from}`);
+      }
+      if (dateTo) {
+        const to = new Date(`${dateTo}T23:59:59.999Z`);
+        if (!Number.isNaN(to.getTime())) whereParts.push(sql`${auditLogs.createdAt} <= ${to}`);
+      }
+
+      if (search) {
+        const pattern = `%${search.toLowerCase()}%`;
+        whereParts.push(
+          sql`(
+            lower(${auditLogs.action}) like ${pattern}
+            or lower(${auditLogs.target}) like ${pattern}
+            or lower(${auditLogs.targetId}) like ${pattern}
+            or lower(coalesce(${users.name}, '')) like ${pattern}
+            or lower(coalesce(${users.email}, '')) like ${pattern}
+            or lower(cast(${auditLogs.meta} as text)) like ${pattern}
+          )`
+        );
+      }
+
+      const q = db
+        .select({
+          id: auditLogs.id,
+          action: auditLogs.action,
+          target: auditLogs.target,
+          targetId: auditLogs.targetId,
+          meta: auditLogs.meta,
+          createdAt: auditLogs.createdAt,
+          actorId: auditLogs.actorId,
+          actorName: users.name,
+          actorEmail: users.email,
+        })
         .from(auditLogs)
+        .leftJoin(users, eq(users.id, auditLogs.actorId))
+        .where(whereParts.length ? and(...whereParts) : undefined)
         .orderBy(desc(auditLogs.createdAt))
         .limit(limit);
 
-      res.json(logs);
+      const rows = await q;
+
+      const normalized = (rows || []).map((r: any) => {
+        const meta = (typeof r.meta === "object" && r.meta) ? r.meta : {};
+        const details =
+          typeof meta.details === "string" ? meta.details :
+          typeof meta.message === "string" ? meta.message :
+          typeof meta.reason === "string" ? meta.reason :
+          Object.keys(meta).length ? JSON.stringify(meta) : null;
+
+        return {
+          id: r.id,
+          action: r.action,
+          target: r.target,
+          targetId: r.targetId,
+          createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+          details,
+          user: {
+            id: r.actorId,
+            name: r.actorName ?? null,
+            email: r.actorEmail ?? null,
+          },
+        };
+      });
+
+      return res.json(normalized);
     } catch (error) {
       next(error);
     }
@@ -2033,7 +3077,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: Companies (for providers)
   app.get("/api/admin/companies", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       const companies = await storage.getCompanies();
@@ -2045,7 +3089,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/companies", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -2060,6 +3104,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } as any);
 
       res.status(201).json(company);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.put("/api/admin/companies/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const { name, description, contactEmail, phone } = req.body || {};
+      if (!name) return res.status(400).json({ message: "Name is required" });
+
+      const company = await storage.updateCompany(id, {
+        name,
+        description,
+        contactEmail,
+        phone,
+      } as any);
+
+      if (!company) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+
+      res.json(company);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/admin/companies/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const deleted = await storage.deleteCompany(id);
+
+      if (!deleted) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+
+      res.json({ message: "Company deleted successfully" });
     } catch (error) {
       next(error);
     }

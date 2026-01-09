@@ -1,10 +1,10 @@
 import * as React from "react"
 import { ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react"
 
-import { cn } from "@/lib/utils"
-import { ButtonProps, buttonVariants } from "@/components/ui/button"
+import { cn } from "../../lib/utils"
+import { ButtonProps, buttonVariants } from "./button"
 
-const Pagination = ({ className, ...props }: React.ComponentProps<"nav">) => (
+const PaginationRoot = ({ className, ...props }: React.ComponentProps<"nav">) => (
   <nav
     role="navigation"
     aria-label="pagination"
@@ -12,7 +12,7 @@ const Pagination = ({ className, ...props }: React.ComponentProps<"nav">) => (
     {...props}
   />
 )
-Pagination.displayName = "Pagination"
+PaginationRoot.displayName = "PaginationRoot"
 
 const PaginationContent = React.forwardRef<
   HTMLUListElement,
@@ -106,8 +106,125 @@ const PaginationEllipsis = ({
 )
 PaginationEllipsis.displayName = "PaginationEllipsis"
 
+type PaginationProps = {
+  currentPage: number
+  totalPages: number
+  onPageChange: (page: number) => void
+  siblingCount?: number
+  showPrevNext?: boolean
+  className?: string
+}
+
+const DOTS = "..."
+
+function range(start: number, end: number) {
+  const length = end - start + 1
+  return Array.from({ length }, (_, idx) => idx + start)
+}
+
+export const Pagination = ({
+  currentPage,
+  totalPages,
+  onPageChange,
+  siblingCount = 1,
+  showPrevNext = true,
+  className,
+}: PaginationProps) => {
+  if (totalPages <= 1) return null
+
+  const totalPageNumbers = siblingCount * 2 + 5 // first, last, current, two dots
+
+  let paginationRange: (number | string)[] = []
+
+  if (totalPages <= totalPageNumbers) {
+    paginationRange = range(1, totalPages)
+  } else {
+    const leftSiblingIndex = Math.max(currentPage - siblingCount, 1)
+    const rightSiblingIndex = Math.min(currentPage + siblingCount, totalPages)
+
+    const showLeftDots = leftSiblingIndex > 2
+    const showRightDots = rightSiblingIndex < totalPages - 1
+
+    if (!showLeftDots && showRightDots) {
+      const leftItemCount = 3 + 2 * siblingCount
+      const leftRange = range(1, leftItemCount)
+      paginationRange = [...leftRange, DOTS, totalPages]
+    } else if (showLeftDots && !showRightDots) {
+      const rightItemCount = 3 + 2 * siblingCount
+      const rightRange = range(totalPages - rightItemCount + 1, totalPages)
+      paginationRange = [1, DOTS, ...rightRange]
+    } else if (showLeftDots && showRightDots) {
+      const middleRange = range(leftSiblingIndex, rightSiblingIndex)
+      paginationRange = [1, DOTS, ...middleRange, DOTS, totalPages]
+    }
+  }
+
+  return (
+    <PaginationRoot className={className}>
+      <PaginationContent>
+        {showPrevNext && (
+          <PaginationItem>
+            <PaginationPrevious
+              href="#"
+              onClick={(e) => {
+                e.preventDefault()
+                if (currentPage > 1) onPageChange(currentPage - 1)
+              }}
+            />
+          </PaginationItem>
+        )}
+
+        {paginationRange.map((page, idx) => {
+          if (page === DOTS) {
+            return (
+              <PaginationItem key={`dots-${idx}`}>
+                <PaginationEllipsis />
+              </PaginationItem>
+            )
+          }
+
+          const pageNumber = Number(page)
+          return (
+            <PaginationItem key={pageNumber}>
+              <PaginationLink
+                href="#"
+                isActive={pageNumber === currentPage}
+                onClick={(e) => {
+                  e.preventDefault()
+                  if (pageNumber !== currentPage) onPageChange(pageNumber)
+                }}
+              >
+                {pageNumber}
+              </PaginationLink>
+            </PaginationItem>
+          )
+        })}
+
+        {showPrevNext && (
+          <PaginationItem>
+            <PaginationNext
+              href="#"
+              onClick={(e) => {
+                e.preventDefault()
+                if (currentPage < totalPages) onPageChange(currentPage + 1)
+              }}
+            />
+          </PaginationItem>
+        )}
+      </PaginationContent>
+    </PaginationRoot>
+  )
+}
+
+export const SimplePagination = (props: PaginationProps) => (
+  <Pagination {...props} showPrevNext={false} />
+)
+
+export const CompactPagination = (props: PaginationProps) => (
+  <Pagination {...props} siblingCount={0} />
+)
+
 export {
-  Pagination,
   PaginationContent,
   PaginationEllipsis,
   PaginationItem,
@@ -115,3 +232,5 @@ export {
   PaginationNext,
   PaginationPrevious,
 }
+
+export default Pagination

@@ -112,6 +112,7 @@ import {
   MessageSquare,
   Package,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Shield,
@@ -609,8 +610,8 @@ const AdminSidebar = ({
   setIsMobileOpen: (open: boolean) => void;
 }) => {
   const { user, logout } = useAdminAuth();
-const [location, setLocation] = useLocation();
-  const menuItems = [
+  const [location, setLocation] = useLocation();
+  const menuItems: Array<{ id: string; label: string; icon: any }> = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "estates", label: "Estates", icon: Building2 },
     { id: "users", label: "Users", icon: Users },
@@ -631,6 +632,15 @@ const [location, setLocation] = useLocation();
   ];
 
   const isSuperAdmin = user?.globalRole === "super_admin";
+
+  if (isSuperAdmin) {
+    menuItems.push(
+      { id: "ai-conversations", label: "AI Conversations", icon: MessageSquare },
+      { id: "ai-prepared-requests", label: "AI Prepared Requests", icon: MessageSquare },
+      { id: "pricing-rules", label: "Pricing Rules", icon: Tags },
+      { id: "provider-matching", label: "Provider Matching", icon: UserCheck },
+    );
+  }
 
   return (
     <>
@@ -755,6 +765,306 @@ const [location, setLocation] = useLocation();
         </div>
       </div>
     </>
+  );
+};
+
+const AiConversationsPanel = () => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  const {
+    data: rows = [],
+    isLoading,
+    error,
+  } = useQuery<any[]>({
+    queryKey: ["admin-ai-conversations"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/ai/conversations"),
+    enabled: isSuperAdmin,
+  });
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>AI Conversations</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>AI Conversations</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : error ? (
+          <p className="text-sm text-destructive">Failed to load AI conversations.</p>
+        ) : (
+          <div className="w-full overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Conversation</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Urgency</TableHead>
+                  <TableHead>Approach</TableHead>
+                  <TableHead>Confidence</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(rows || []).map((r: any) => (
+                  <TableRow key={r.conversationId}>
+                    <TableCell className="font-mono text-xs">{r.conversationId}</TableCell>
+                    <TableCell>{r.category}</TableCell>
+                    <TableCell>{r.urgency}</TableCell>
+                    <TableCell>{r.recommendedApproach}</TableCell>
+                    <TableCell>{Number.isFinite(Number(r.confidenceScore)) ? Number(r.confidenceScore) : "—"}</TableCell>
+                    <TableCell>{r.status}</TableCell>
+                    <TableCell>
+                      {r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+const AiPreparedRequestsPanel = () => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  const {
+    data: rows = [],
+    isLoading,
+    error,
+  } = useQuery<any[]>({
+    queryKey: ["admin-ai-prepared-requests"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/ai/prepared-requests"),
+    enabled: isSuperAdmin,
+  });
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>AI Prepared Requests</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>AI Prepared Requests</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : error ? (
+          <p className="text-sm text-destructive">Failed to load prepared requests.</p>
+        ) : (
+          <div className="w-full overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Resident</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Urgency</TableHead>
+                  <TableHead>Headline</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>Images</TableHead>
+                  <TableHead>Estimate</TableHead>
+                  <TableHead>Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(rows || []).map((r: any) => {
+                  const est = r.priceEstimate;
+                  const estimateText =
+                    est && Number.isFinite(Number(est.min)) && Number.isFinite(Number(est.max))
+                      ? `${Number(est.min)} - ${Number(est.max)}`
+                      : "—";
+
+                  return (
+                    <TableRow key={r.id}>
+                      <TableCell className="font-mono text-xs">{r.resident}</TableCell>
+                      <TableCell>{r.category}</TableCell>
+                      <TableCell>{r.urgency}</TableCell>
+                      <TableCell className="max-w-[420px] truncate">{r.headline ?? "—"}</TableCell>
+                      <TableCell className="max-w-[220px] truncate">{r.scope ?? "—"}</TableCell>
+                      <TableCell>{Number.isFinite(Number(r.imageCount)) ? Number(r.imageCount) : 0}</TableCell>
+                      <TableCell>{estimateText}</TableCell>
+                      <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "—"}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+const PricingRulesPanel = () => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  const {
+    data: rows = [],
+    isLoading,
+    error,
+  } = useQuery<any[]>({
+    queryKey: ["admin-pricing-rules"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/pricing-rules"),
+    enabled: isSuperAdmin,
+  });
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Pricing Rules</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Pricing Rules</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : error ? (
+          <p className="text-sm text-destructive">Failed to load pricing rules.</p>
+        ) : (
+          <div className="w-full overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Urgency</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>Min</TableHead>
+                  <TableHead>Max</TableHead>
+                  <TableHead>Active</TableHead>
+                  <TableHead>Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(rows || []).map((r: any) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="font-medium">{r.name}</TableCell>
+                    <TableCell>{r.category ?? "—"}</TableCell>
+                    <TableCell>{r.urgency ?? "—"}</TableCell>
+                    <TableCell className="max-w-[240px] truncate">{r.scope ?? "—"}</TableCell>
+                    <TableCell>{r.minPrice}</TableCell>
+                    <TableCell>{r.maxPrice}</TableCell>
+                    <TableCell>{r.isActive ? "Yes" : "No"}</TableCell>
+                    <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+const ProviderMatchingPanel = () => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  const {
+    data: rows = [],
+    isLoading,
+    error,
+  } = useQuery<any[]>({
+    queryKey: ["admin-provider-matching"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/providers/matching"),
+    enabled: isSuperAdmin,
+  });
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Provider Matching</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Provider Matching</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : error ? (
+          <p className="text-sm text-destructive">Failed to load provider matching settings.</p>
+        ) : (
+          <div className="w-full overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Approved</TableHead>
+                  <TableHead>Enabled</TableHead>
+                  <TableHead>Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(rows || []).map((p: any) => (
+                  <TableRow key={p.id}>
+                    <TableCell className="font-medium">{p.name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{p.email}</TableCell>
+                    <TableCell>{p.isApproved ? "Yes" : "No"}</TableCell>
+                    <TableCell>{p.matching?.isEnabled === false ? "No" : "Yes"}</TableCell>
+                    <TableCell>
+                      {p.matching?.updatedAt ? new Date(p.matching.updatedAt).toLocaleString() : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 };
 
@@ -1996,15 +2306,32 @@ const ProvidersManagement = () => {
     Array.isArray(categoriesList) && categoriesList.length > 0
       ? categoriesList
           .filter((c: any) => c?.key || c?.name)
+          .filter((c: any) => {
+            const key = String(c.key || c.name);
+            return [
+              "surveillance_monitoring",
+              "cleaning_janitorial",
+              "catering_services",
+              "it_support",
+              "maintenance_repair",
+              "marketing_advertising",
+              "home_tutors",
+              "furniture_making",
+            ].includes(key);
+          })
           .map((c: any) => ({
             value: c.key || c.name,
             label: c.name || c.key,
           }))
       : [
-      { value: "electrician", label: "Electrician" },
-      { value: "plumber", label: "Plumber" },
-      { value: "carpenter", label: "Carpenter" },
-      { value: "market_runner", label: "Market Runner" },
+      { value: "surveillance_monitoring", label: "Surveillance monitoring" },
+      { value: "cleaning_janitorial", label: "Cleaning & janitorial" },
+      { value: "catering_services", label: "Catering Services" },
+      { value: "it_support", label: "IT Support" },
+      { value: "maintenance_repair", label: "Maintenance & Repair" },
+      { value: "marketing_advertising", label: "Marketing & Advertising" },
+      { value: "home_tutors", label: "Home tutors" },
+      { value: "furniture_making", label: "Furniture making" },
     ];
   useEffect(() => {
     if (!providerRequestInitializedRef.current) {
@@ -4791,9 +5118,15 @@ const RecentActivity = () => {
 
 // PostgreSQL Bridge Stats Component - Shows data from resident/provider system
 const PostgreSQLBridgeStats = () => {
-  const { data: bridgeStats, isLoading } = useQuery({
+  const { data: bridgeStats, isLoading, refetch } = useQuery({
     queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/bridge/stats"],
     queryFn: () => adminApiRequest("GET", "/api/admin/bridge/stats"),
+    refetchInterval: 30_000, // Refresh every 30 seconds to ensure fresh data
+  });
+  const { data: dbHealth } = useQuery({
+    queryKey: ["/api/admin/health/database"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/health/database"),
+    enabled: false, // Only fetch on demand
   });
 
   if (isLoading) {
@@ -4861,6 +5194,16 @@ const PostgreSQLBridgeStats = () => {
           color: "bg-yellow-500",
         },
         {
+          label: "Pending Inspection",
+          value: bridgeStats.serviceRequests.pendingInspection ?? 0,
+          color: "bg-orange-500",
+        },
+        {
+          label: "Assigned",
+          value: bridgeStats.serviceRequests.assigned ?? 0,
+          color: "bg-indigo-500",
+        },
+        {
           label: "In Progress",
           value: bridgeStats.serviceRequests.inProgress,
           color: "bg-blue-500",
@@ -4887,6 +5230,19 @@ const PostgreSQLBridgeStats = () => {
         <div className="flex items-center gap-2">
           <Badge variant="secondary">PostgreSQL</Badge>
           <Badge variant="outline">Live Data</Badge>
+          {bridgeStats?.source && (
+            <Badge variant="outline" className="text-xs">
+              {bridgeStats.source.toUpperCase()} • {new Date(bridgeStats.timestamp).toLocaleTimeString()}
+            </Badge>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isLoading}
+          >
+            Refresh
+          </Button>
         </div>
       </div>
 
@@ -4931,7 +5287,7 @@ const PostgreSQLBridgeStats = () => {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               {requestStatusData.map((status, index) => (
                 <div key={index} className="text-center">
                   <div
@@ -4946,6 +5302,45 @@ const PostgreSQLBridgeStats = () => {
         </Card>
       )}
     </div>
+  );
+};
+
+const EstatePerformanceCard = () => {
+  const { data: rows = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/dashboard/estate-performance"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/dashboard/estate-performance"),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Estate Performance</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : !rows || rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No estate data available.</p>
+        ) : (
+          <div className="space-y-4">
+            {rows.map((row: any) => (
+              <div key={row.estateId} className="flex justify-between items-center">
+                <span className="text-sm font-medium">{row.name}</span>
+                <div className="flex items-center space-x-2">
+                  <div className="w-20 h-2 bg-gray-200 rounded-full">
+                    <div
+                      className="h-2 bg-green-500 rounded-full"
+                      style={{ width: `${Math.max(0, Math.min(100, Number(row.completionRate ?? 0)))}%` }}
+                    ></div>
+                  </div>
+                  <span className="text-xs text-muted-foreground">{Number(row.completionRate ?? 0)}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 };
 
@@ -5492,54 +5887,7 @@ export default function AdminSuperDashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <RecentActivity />
 
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Estate Performance</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">
-                            Lekki Estate
-                          </span>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-20 h-2 bg-gray-200 rounded-full">
-                              <div className="w-16 h-2 bg-green-500 rounded-full"></div>
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              85%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">
-                            Victoria Island
-                          </span>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-20 h-2 bg-gray-200 rounded-full">
-                              <div className="w-14 h-2 bg-blue-500 rounded-full"></div>
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              72%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">
-                            Ikoyi Estate
-                          </span>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-20 h-2 bg-gray-200 rounded-full">
-                              <div className="w-12 h-2 bg-yellow-500 rounded-full"></div>
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              68%
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <EstatePerformanceCard />
                 </div>
               </div>
             )}
@@ -5552,6 +5900,10 @@ export default function AdminSuperDashboard() {
             {activeTab === "stores" && <StoresManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "orders" && <OrdersManagement />}
+            {activeTab === "ai-conversations" && <AiConversationsPanel />}
+            {activeTab === "ai-prepared-requests" && <AiPreparedRequestsPanel />}
+            {activeTab === "pricing-rules" && <PricingRulesPanel />}
+            {activeTab === "provider-matching" && <ProviderMatchingPanel />}
             {["requests", "artisanRequests"].includes(activeTab) && (
               <ArtisanRequestsPanel
                 selectedEstateId={selectedEstateId}
@@ -6943,16 +7295,24 @@ const OrdersManagement = () => {
 const CompaniesManagement = () => {
   const { toast } = useToast();
   const [showAddCompany, setShowAddCompany] = useState(false);
+  const [showViewCompany, setShowViewCompany] = useState(false);
+  const [showEditCompany, setShowEditCompany] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [selectedCompany, setSelectedCompany] = useState<any>(null);
   const [form, setForm] = useState({
     name: "",
     description: "",
     contactEmail: "",
     phone: "",
+    isActive: true,
+    details: [] as Array<{ key: string; value: string }>,
   });
 
-  const { data: companies = [], isLoading } = useQuery({
+  const { data: companies = [], isLoading, refetch } = useQuery({
     queryKey: ["admin-companies"],
     queryFn: () => adminApiRequest("GET", "/api/admin/companies"),
+    staleTime: 30_000, // 30 seconds
+    refetchInterval: 60_000, // Refetch every 60 seconds
   });
 
   const createCompanyMutation = useMutation({
@@ -6960,7 +7320,7 @@ const CompaniesManagement = () => {
       adminApiRequest("POST", "/api/admin/companies", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
-      setForm({ name: "", description: "", contactEmail: "", phone: "" });
+      setForm({ name: "", description: "", contactEmail: "", phone: "", isActive: true, details: [] });
       setShowAddCompany(false);
       toast({ title: "Company created successfully" });
     },
@@ -6973,12 +7333,135 @@ const CompaniesManagement = () => {
     },
   });
 
+  const updateCompanyMutation = useMutation({
+    mutationFn: (payload: any) =>
+      adminApiRequest("PUT", `/api/admin/companies/${selectedCompany.id}`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
+      setForm({ name: "", description: "", contactEmail: "", phone: "", isActive: true, details: [] });
+      setSelectedCompany(null);
+      setShowEditCompany(false);
+      toast({ title: "Company updated successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error updating company",
+        description: error.response?.data?.error || "Failed to update company",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteCompanyMutation = useMutation({
+    mutationFn: () =>
+      adminApiRequest("DELETE", `/api/admin/companies/${selectedCompany.id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
+      setSelectedCompany(null);
+      setShowDeleteConfirm(false);
+      toast({ title: "Company deleted successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error deleting company",
+        description: error.response?.data?.error || "Failed to delete company",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleSubmit = () => {
     if (!form.name.trim()) {
       toast({ title: "Name is required", variant: "destructive" });
       return;
     }
-    createCompanyMutation.mutate(form);
+    const payload: any = {
+      name: form.name,
+      description: form.description,
+      contactEmail: form.contactEmail,
+      phone: form.phone,
+      isActive: !!form.isActive,
+    };
+    if (Array.isArray(form.details) && form.details.length > 0) {
+      const obj: any = {};
+      form.details.forEach((entry: any) => {
+        if (entry.key) {
+          try {
+            obj[entry.key] = JSON.parse(entry.value);
+          } catch {
+            obj[entry.key] = entry.value;
+          }
+        }
+      });
+      payload.details = obj;
+    }
+    createCompanyMutation.mutate(payload);
+  };
+
+  const handleUpdate = () => {
+    if (!form.name.trim()) {
+      toast({ title: "Name is required", variant: "destructive" });
+      return;
+    }
+    // Prepare payload: parse details JSON if present
+    const payload: any = {
+      name: form.name,
+      description: form.description,
+      contactEmail: form.contactEmail,
+      phone: form.phone,
+      isActive: !!form.isActive,
+    };
+    if (Array.isArray(form.details) && form.details.length > 0) {
+      const obj: any = {};
+      form.details.forEach((entry: any) => {
+        if (entry.key) {
+          try {
+            obj[entry.key] = JSON.parse(entry.value);
+          } catch {
+            obj[entry.key] = entry.value;
+          }
+        }
+      });
+      payload.details = obj;
+    }
+
+    updateCompanyMutation.mutate(payload);
+  };
+
+  const handleViewCompany = (company: any) => {
+    setSelectedCompany(company);
+    setShowViewCompany(true);
+  };
+
+  const handleEditCompany = (company: any) => {
+    setSelectedCompany(company);
+    setForm({
+      name: company.name || "",
+      description: company.description || "",
+      contactEmail: company.contactEmail || "",
+      phone: company.phone || "",
+      isActive: company.isActive ?? true,
+      details: company.details
+        ? Object.entries(company.details).map(([k, v]) => ({ key: k, value: typeof v === "object" ? JSON.stringify(v) : String(v) }))
+        : [],
+    });
+    setShowEditCompany(true);
+  };
+
+  const handleDeleteCompany = (company: any) => {
+    setSelectedCompany(company);
+    setShowDeleteConfirm(true);
+  };
+
+  const resetAddForm = () => {
+    setForm({ name: "", description: "", contactEmail: "", phone: "", isActive: true, details: [] });
+    setShowAddCompany(false);
+  };
+
+  const resetEditForm = () => {
+    setForm({ name: "", description: "", contactEmail: "", phone: "", isActive: true, details: [] });
+    setSelectedCompany(null);
+    setShowEditCompany(false);
   };
 
   return (
@@ -6992,13 +7475,22 @@ const CompaniesManagement = () => {
             Manage provider companies and assign them to users.
           </p>
         </div>
-        <Button onClick={() => setShowAddCompany(true)} data-testid="button-open-add-company">
-          <Plus className="w-4 h-4 mr-2" />
-          Add Company
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => refetch()} disabled={isLoading} data-testid="button-refresh-companies">
+            <RefreshCw className="w-4 h-4" />
+          </Button>
+          <Button onClick={() => setShowAddCompany(true)} data-testid="button-open-add-company">
+            <Plus className="w-4 h-4 mr-2" />
+            Add Company
+          </Button>
+        </div>
       </div>
 
-      <Dialog open={showAddCompany} onOpenChange={setShowAddCompany}>
+      {/* Add Company Dialog */}
+      <Dialog open={showAddCompany} onOpenChange={(open) => {
+        if (!open) resetAddForm();
+        else setShowAddCompany(true);
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Company</DialogTitle>
@@ -7030,19 +7522,273 @@ const CompaniesManagement = () => {
               rows={3}
               data-testid="textarea-company-description"
             />
+            <div className="flex items-center gap-3">
+              <Checkbox
+                id="company-active-add"
+                checked={!!form.isActive}
+                onCheckedChange={(checked: any) => setForm({ ...form, isActive: !!checked })}
+              />
+              <Label htmlFor="company-active-add" className="text-sm">Active</Label>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Details</Label>
+              <div className="space-y-2">
+                {Array.isArray(form.details) && form.details.length > 0 ? (
+                  form.details.map((entry: any, idx: number) => (
+                    <div key={idx} className="flex gap-2">
+                      <Input
+                        placeholder="Key"
+                        value={entry.key}
+                        onChange={(e) => {
+                          const next = [...form.details];
+                          next[idx] = { ...next[idx], key: e.target.value };
+                          setForm({ ...form, details: next });
+                        }}
+                      />
+                      <Input
+                        placeholder="Value"
+                        value={entry.value}
+                        onChange={(e) => {
+                          const next = [...form.details];
+                          next[idx] = { ...next[idx], value: e.target.value };
+                          setForm({ ...form, details: next });
+                        }}
+                      />
+                      <Button
+                        variant="ghost"
+                        onClick={() => {
+                          const next = [...form.details];
+                          next.splice(idx, 1);
+                          setForm({ ...form, details: next });
+                        }}
+                        title="Remove"
+                      >
+                        <Trash2 className="w-4 h-4 text-red-500" />
+                      </Button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No details</div>
+                )}
+                <div>
+                  <Button
+                    variant="outline"
+                    onClick={() => setForm({ ...form, details: [ ...(form.details || []), { key: "", value: "" } ] })}
+                  >
+                    Add detail
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
           <DialogFooter className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setShowAddCompany(false)}>
+            <Button variant="outline" onClick={resetAddForm}>
               Cancel
             </Button>
             <Button
-              onClick={() => {
-                handleSubmit();
-              }}
+              onClick={handleSubmit}
               disabled={createCompanyMutation.isPending}
               data-testid="button-create-company"
             >
               {createCompanyMutation.isPending ? "Saving..." : "Save Company"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Company Dialog */}
+      <Dialog open={showViewCompany} onOpenChange={setShowViewCompany}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Company Details</DialogTitle>
+          </DialogHeader>
+          {selectedCompany && (
+            <div className="space-y-4">
+              <div>
+                <Label className="text-xs text-muted-foreground">Name</Label>
+                <p className="font-semibold text-sm">{selectedCompany.name}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Contact Email</Label>
+                <p className="text-sm">{selectedCompany.contactEmail || ""}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Phone</Label>
+                <p className="text-sm">{selectedCompany.phone || ""}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Description</Label>
+                <p className="text-sm">{selectedCompany.description || ""}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Provider</Label>
+                <p className="text-sm">{selectedCompany.providerName || selectedCompany.provider_id || ""}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Active</Label>
+                <p className="text-sm">{typeof selectedCompany.isActive !== "undefined" ? (selectedCompany.isActive ? "Yes" : "No") : ""}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Details</Label>
+                <pre className="text-sm whitespace-pre-wrap">{selectedCompany.details ? (typeof selectedCompany.details === "string" ? selectedCompany.details : JSON.stringify(selectedCompany.details, null, 2)) : ""}</pre>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Created</Label>
+                  <p className="text-sm">{selectedCompany.createdAt ? new Date(selectedCompany.createdAt).toLocaleString() : ""}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Updated</Label>
+                  <p className="text-sm">{selectedCompany.updatedAt ? new Date(selectedCompany.updatedAt).toLocaleString() : ""}</p>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowViewCompany(false)}>
+              Close
+            </Button>
+            <Button onClick={() => {
+              setShowViewCompany(false);
+              handleEditCompany(selectedCompany);
+            }}>
+              <Edit className="w-4 h-4 mr-2" />
+              Edit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Company Dialog */}
+      <Dialog open={showEditCompany} onOpenChange={(open) => {
+        if (!open) resetEditForm();
+        else setShowEditCompany(true);
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Company</DialogTitle>
+            <DialogDescription>Update company information.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Company Name *"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              data-testid="input-edit-company-name"
+            />
+            <Input
+              placeholder="Contact Email"
+              value={form.contactEmail}
+              onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
+              data-testid="input-edit-company-email"
+            />
+            <Input
+              placeholder="Phone"
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              data-testid="input-edit-company-phone"
+            />
+            <Textarea
+              placeholder="Description"
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              rows={3}
+              data-testid="textarea-edit-company-description"
+            />
+            <div className="flex items-center gap-3">
+              <Checkbox
+                id="company-active"
+                checked={!!form.isActive}
+                onCheckedChange={(checked: any) => setForm({ ...form, isActive: !!checked })}
+              />
+              <Label htmlFor="company-active" className="text-sm">Active</Label>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Details</Label>
+              <div className="space-y-2">
+                {Array.isArray(form.details) && form.details.length > 0 ? (
+                  form.details.map((entry: any, idx: number) => (
+                    <div key={idx} className="flex gap-2">
+                      <Input
+                        placeholder="Key"
+                        value={entry.key}
+                        onChange={(e) => {
+                          const next = [...form.details];
+                          next[idx] = { ...next[idx], key: e.target.value };
+                          setForm({ ...form, details: next });
+                        }}
+                      />
+                      <Input
+                        placeholder="Value"
+                        value={entry.value}
+                        onChange={(e) => {
+                          const next = [...form.details];
+                          next[idx] = { ...next[idx], value: e.target.value };
+                          setForm({ ...form, details: next });
+                        }}
+                      />
+                      <Button
+                        variant="ghost"
+                        onClick={() => {
+                          const next = [...form.details];
+                          next.splice(idx, 1);
+                          setForm({ ...form, details: next });
+                        }}
+                        title="Remove"
+                      >
+                        <Trash2 className="w-4 h-4 text-red-500" />
+                      </Button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No details</div>
+                )}
+                <div>
+                  <Button
+                    variant="outline"
+                    onClick={() => setForm({ ...form, details: [ ...(form.details || []), { key: "", value: "" } ] })}
+                  >
+                    Add detail
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="flex justify-end gap-2">
+            <Button variant="outline" onClick={resetEditForm}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleUpdate}
+              disabled={updateCompanyMutation.isPending}
+              data-testid="button-update-company"
+            >
+              {updateCompanyMutation.isPending ? "Saving..." : "Update Company"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Company</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <strong>{selectedCompany?.name}</strong>? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteCompanyMutation.mutate()}
+              disabled={deleteCompanyMutation.isPending}
+              data-testid="button-confirm-delete-company"
+            >
+              {deleteCompanyMutation.isPending ? "Deleting..." : "Delete Company"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -7073,14 +7819,47 @@ const CompaniesManagement = () => {
                       <th className="px-4 py-2">Name</th>
                       <th className="px-4 py-2">Contact</th>
                       <th className="px-4 py-2">Phone</th>
+                      <th className="px-4 py-2 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {companies.map((company: any) => (
-                      <tr key={company.id} className="border-t border-border">
+                      <tr key={company.id} className="border-t border-border hover:bg-gray-50 dark:hover:bg-gray-900/50">
                         <td className="px-4 py-3 font-medium">{company.name}</td>
                         <td className="px-4 py-3">{company.contactEmail || "—"}</td>
                         <td className="px-4 py-3">{company.phone || "—"}</td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex gap-2 justify-end">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleViewCompany(company)}
+                              data-testid={`button-view-company-${company.id}`}
+                              title="View details"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditCompany(company)}
+                              data-testid={`button-edit-company-${company.id}`}
+                              title="Edit company"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteCompany(company)}
+                              data-testid={`button-delete-company-${company.id}`}
+                              title="Delete company"
+                              className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

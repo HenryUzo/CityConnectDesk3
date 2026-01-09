@@ -23,10 +23,16 @@ router.use(requireProvider);
 const verifyStoreAccess = async (req: any, res: any, next: any) => {
   try {
     const storeId = req.params.id || req.params.storeId;
-    const providerId = req.auth?.userId;
+    let providerId = req.auth?.userId;
 
     if (!providerId) {
       return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Ensure providerId exists in users table; if not, omit providerId to avoid FK violation
+    const providerUser = await storage.getUser(providerId).catch(() => undefined);
+    if (!providerUser) {
+      providerId = null as any;
     }
 
     const [membership] = await db.select()
@@ -452,7 +458,6 @@ router.post("/company-registration", async (req: any, res) => {
       description: validated.description,
       contactEmail: validated.contactEmail,
       phone: validated.phone,
-      providerId,
       details: detailsPayload,
     });
 
