@@ -11,6 +11,8 @@ import imgFrame1261153572 from "@/assets/illustrations/630a3214d20e175564b7a3c37
 import imgImage5 from "@/assets/illustrations/d59fbc735d007a7cd4f9a1f5213a75e964a3267f.png";
 import imgFrame1261153583 from "@/assets/illustrations/e8ff5d9eeecdd876bb66bad7e2c0a06d80d02639.png";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import useCategories from "@/hooks/useCategories";
+import CategorySkeleton from "@/components/ui/CategorySkeleton";
 
 export default function CityMart() {
   const [, navigate] = useLocation();
@@ -26,6 +28,8 @@ export default function CityMart() {
   const [showStickyNav, setShowStickyNav] = useState(false);
   const [activeStoreTab, setActiveStoreTab] = useState("the-city-corner");
   const [currentPage, setCurrentPage] = useState(1);
+
+  const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global" });
 
   const tabs = [
     { label: "All Markets", id: "all-markets" },
@@ -218,46 +222,27 @@ export default function CityMart() {
                   className="flex gap-[18px] items-center overflow-x-scroll scrollbar-hide"
                   ref={categoryScrollRef}
                 >
-                  <CategoryCard
-                    icon="🥦"
-                    label="Groceries & Fresh Produce"
-                    onClick={() => console.log("Groceries clicked")}
-                  />
-                  <CategoryCard
-                    icon="🥩"
-                    label="Meat, Fish & Poultry"
-                    onClick={() => console.log("Meat clicked")}
-                  />
-                  <CategoryCard
-                    icon="🍞"
-                    label="Bakery & Pastries"
-                    onClick={() => console.log("Bakery clicked")}
-                  />
-                  <CategoryCard
-                    icon="🪣"
-                    label="Household Essentials"
-                    onClick={() => console.log("Household clicked")}
-                  />
-                  <CategoryCard
-                    icon="🍼"
-                    label="Baby Care & Diapers"
-                    onClick={() => console.log("Baby Care clicked")}
-                  />
-                  <CategoryCard
-                    icon="🧴"
-                    label="Personal Care"
-                    onClick={() => console.log("Personal Care clicked")}
-                  />
-                  <CategoryCard
-                    icon="🍎"
-                    label="Snacks & Beverages"
-                    onClick={() => console.log("Snacks clicked")}
-                  />
-                  <CategoryCard
-                    icon="🧊"
-                    label="Frozen Foods"
-                    onClick={() => console.log("Frozen clicked")}
-                  />
+                  {(catsLoading)
+                    ? Array.from({ length: 8 }).map((_, i) => (
+                        <div key={i} className="shrink-0">
+                          <CategorySkeleton />
+                        </div>
+                      ))
+                    : (() => {
+                        const cats = Array.isArray(fetchedCategories) && fetchedCategories.length > 0 ? fetchedCategories : [];
+                        if (cats.length === 0) {
+                          return (
+                            <>
+                              <CategoryCard icon="🥦" label="Groceries & Fresh Produce" onClick={() => console.log("Groceries clicked")} />
+                              <CategoryCard icon="🥩" label="Meat, Fish & Poultry" onClick={() => console.log("Meat clicked")} />
+                              <CategoryCard icon="🍞" label="Bakery & Pastries" onClick={() => console.log("Bakery clicked")} />
+                            </>
+                          );
+                        }
+                        return cats.map((c: any) => (
+                          <CategoryCard key={c.id || c.name} icon={c.emoji || "🛍️"} label={c.name} onClick={() => console.log("Category clicked", c.name)} />
+                        ));
+                      })()}
                 </div>
 
                 {/* Right Arrow Button */}

@@ -37,8 +37,11 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import EmojiCombobox from "@/components/admin/EmojiCombobox";
 import { Label } from "@/components/ui/label";
+import DetailsView from "@/components/admin/DetailsView";
 import { Textarea } from "@/components/ui/textarea";
+import formatDate from "@/utils/formatDate";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
@@ -253,6 +256,56 @@ const EMOJI_GROUPS = [
   { value: "🎲", names: ["Board Game", "Dice Set", "Card Game", "Puzzle", "Game Bundle", "Game Pack", "Strategy Game", "Family Game", "Party Game", "Game Gift"] },
   { value: "📦", names: ["Storage Box", "Gift Box", "Shipping Box", "Moving Box", "Organizer Box", "Folding Box", "Clear Box", "Decor Box", "Box Bundle", "Box Set"] },
   { value: "🛒", names: ["Shopping Cart Token", "Shopping Basket Tag", "Reusable Tote", "Market Bag", "Grocery Tote", "Foldable Tote", "Insulated Bag", "Eco Bag", "Canvas Bag", "Cart Clip"] },
+  { value: "🦊", names: ["Fox"] },
+  { value: "🦁", names: ["Lion"] },
+  { value: "🐯", names: ["Tiger"] },
+  { value: "🐻", names: ["Bear"] },
+  { value: "🐼", names: ["Panda"] },
+  { value: "🐨", names: ["Koala"] },
+  { value: "🐵", names: ["Monkey Face"] },
+  { value: "🐒", names: ["Monkey"] },
+  { value: "🦉", names: ["Owl"] },
+  { value: "🐧", names: ["Penguin"] },
+  { value: "🐦", names: ["Bird"] },
+  { value: "🐤", names: ["Baby Chick"] },
+  { value: "🐣", names: ["Hatching Chick"] },
+  { value: "🐥", names: ["Front-Facing Baby Chick"] },
+  { value: "🐺", names: ["Wolf"] },
+  { value: "🐗", names: ["Boar"] },
+  { value: "🐴", names: ["Horse"] },
+  { value: "🦄", names: ["Unicorn"] },
+  { value: "🐝", names: ["Honeybee"] },
+  { value: "🐛", names: ["Bug"] },
+  { value: "🦋", names: ["Butterfly"] },
+  { value: "🐌", names: ["Snail"] },
+  { value: "🐢", names: ["Turtle"] },
+  { value: "🐍", names: ["Snake"] },
+  { value: "🦖", names: ["T-Rex"] },
+  { value: "🦕", names: ["Sauropod"] },
+  { value: "🐙", names: ["Octopus"] },
+  { value: "🦑", names: ["Squid"] },
+  { value: "🐠", names: ["Tropical Fish"] },
+  { value: "🐳", names: ["Spouting Whale"] },
+  { value: "🐬", names: ["Dolphin"] },
+  { value: "🐋", names: ["Whale"] },
+  { value: "🐊", names: ["Crocodile"] },
+  { value: "🦈", names: ["Shark"] },
+  { value: "🐅", names: ["Tiger (Alt)"] },
+  { value: "🦓", names: ["Zebra"] },
+  { value: "🐘", names: ["Elephant"] },
+  { value: "🦏", names: ["Rhinoceros"] },
+  { value: "🦛", names: ["Hippopotamus"] },
+  { value: "🐫", names: ["Two-Hump Camel"] },
+  { value: "🐪", names: ["Single-Hump Camel"] },
+  { value: "🦒", names: ["Giraffe"] },
+  { value: "🐃", names: ["Water Buffalo"] },
+  { value: "🐂", names: ["Ox"] },
+  { value: "🐄", names: ["Cow"] },
+  { value: "🐐", names: ["Goat"] },
+  { value: "🐑", names: ["Sheep"] },
+  { value: "🐎", names: ["Racehorse"] },
+  { value: "🐖", names: ["Pig"] },
+  { value: "🐓", names: ["Rooster"] },
 ];
 
 const CATEGORY_TAG_OPTIONS = [
@@ -1092,11 +1145,29 @@ const UsersManagement = () => {
     estateId: "",
     role: "",
   });
+  const [editingMembershipId, setEditingMembershipId] = useState<string | null>(null);
+  const [editingMembershipValues, setEditingMembershipValues] = useState({ estateId: "", role: "" });
   const [previewUser, setPreviewUser] = useState<any>(null);
 
   const { toast } = useToast();
   const { user } = useAdminAuth();
   const isSuperAdmin = user?.globalRole === "super_admin";
+
+  const updateMembershipMutation = useMutation({
+    mutationFn: ({ id, updates }: { id: string; updates: any }) =>
+      adminApiRequest("PATCH", `/api/admin/memberships/${id}`, updates),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-memberships"] });
+      // invalidate user-specific memberships if dialog open
+      if (membershipUser) {
+        const userId = membershipUser._id || membershipUser.id;
+        queryClient.invalidateQueries({ queryKey: ["admin-user-memberships", userId] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      toast({ title: "Membership updated" });
+      setEditingMembershipId(null);
+    },
+  });
 
   // Initialize view mode from localStorage estate context
   useEffect(() => {
@@ -1782,7 +1853,7 @@ const UsersManagement = () => {
             }
           }}
         >
-          <DialogContent className="max-w-md">
+          <DialogContent className="w-[60vw] max-w-[95vw]">
             <DialogHeader>
               <DialogTitle>
                 {editingUser ? "Edit User" : "Add New User"}
@@ -1909,7 +1980,7 @@ const UsersManagement = () => {
 
         {/* Estate Membership Management Dialog */}
         <Dialog open={showMemberships} onOpenChange={setShowMemberships}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="w-[60vw] max-w-[95vw]">
             <DialogHeader>
               <DialogTitle>
                 Manage Estate Memberships - {membershipUser?.name}
@@ -1924,35 +1995,111 @@ const UsersManagement = () => {
                 <h4 className="font-medium mb-3">Current Estate Memberships</h4>
                 <div className="space-y-2 max-h-40 overflow-y-auto">
                   {userMemberships?.map((membership: any) => (
-                    <div
-                      key={`${membership.userId}-${membership.estateId}`}
-                      className="flex items-center justify-between p-3 border rounded-lg"
-                      data-testid={`membership-${membership.estateId}`}
-                    >
-                      <div>
-                        <span className="font-medium">
-                          Estate {membership.estateId}
-                        </span>
-                        <Badge variant="secondary" className="ml-2">
-                          {membership.role}
-                        </Badge>
-                      </div>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() =>
-                          deleteMembershipMutation.mutate({
-                            userId: membership.userId,
-                            estateId: membership.estateId,
-                          })
-                        }
-                        disabled={deleteMembershipMutation.isPending}
-                        data-testid={`button-remove-membership-${membership.estateId}`}
-                      >
-                        {deleteMembershipMutation.isPending
-                          ? "Removing..."
-                          : "Remove"}
-                      </Button>
+                    <div key={`${membership.userId}-${membership.estateId}`}>
+                      {editingMembershipId === membership.id ? (
+                        <div className="flex items-center justify-between p-3 border rounded-lg">
+                          <div className="flex space-x-2 items-center">
+                            <Select
+                              value={editingMembershipValues.estateId}
+                              onValueChange={(value) =>
+                                setEditingMembershipValues({ ...editingMembershipValues, estateId: value })
+                              }
+                            >
+                              <SelectTrigger className="min-w-[200px]">
+                                <SelectValue placeholder="Select Estate" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {estates?.map((estate: any, idx: number) => {
+                                  const estateId = estate._id || estate.id || String(idx);
+                                  return (
+                                    <SelectItem key={estateId} value={estateId}>
+                                      {estate.name}
+                                    </SelectItem>
+                                  );
+                                })}
+                              </SelectContent>
+                            </Select>
+
+                            <Select
+                              value={editingMembershipValues.role}
+                              onValueChange={(value) =>
+                                setEditingMembershipValues({ ...editingMembershipValues, role: value })
+                              }
+                            >
+                              <SelectTrigger className="w-40">
+                                <SelectValue placeholder="Select Role" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="resident">Resident</SelectItem>
+                                <SelectItem value="provider">Provider</SelectItem>
+                                <SelectItem value="estate_admin">Estate Admin</SelectItem>
+                                <SelectItem value="moderator">Moderator</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="flex space-x-2">
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                updateMembershipMutation.mutate({
+                                  id: membership.id,
+                                  updates: editingMembershipValues,
+                                })
+                              }
+                              disabled={updateMembershipMutation.isPending}
+                            >
+                              {updateMembershipMutation.isPending ? "Saving..." : "Save"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setEditingMembershipId(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className="flex items-center justify-between p-3 border rounded-lg"
+                          data-testid={`membership-${membership.estateId}`}
+                        >
+                          <div>
+                            <span className="font-medium">{membership.estateName || `Estate ${membership.estateId}`}</span>
+                            <Badge variant="secondary" className="ml-2">
+                              {membership.role}
+                            </Badge>
+                          </div>
+
+                          <div className="flex space-x-2">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                setEditingMembershipId(membership.id);
+                                setEditingMembershipValues({ estateId: membership.estateId, role: membership.role });
+                              }}
+                            >
+                              Edit
+                            </Button>
+
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() =>
+                                deleteMembershipMutation.mutate({
+                                  userId: membership.userId,
+                                  estateId: membership.estateId,
+                                })
+                              }
+                              disabled={deleteMembershipMutation.isPending}
+                              data-testid={`button-remove-membership-${membership.estateId}`}
+                            >
+                              {deleteMembershipMutation.isPending ? "Removing..." : "Remove"}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                   {(!userMemberships || userMemberships.length === 0) && (
@@ -2116,7 +2263,7 @@ const UsersManagement = () => {
         </Dialog>
         {/* Confirmation dialog before performing reset */}
         <Dialog open={resetConfirmOpen} onOpenChange={(open) => setResetConfirmOpen(open)}>
-          <DialogContent className="max-w-sm">
+          <DialogContent className="w-[60vw] max-w-[95vw]">
             <DialogHeader>
               <DialogTitle>Confirm password reset</DialogTitle>
               <DialogDescription>
@@ -2249,7 +2396,8 @@ const ProvidersManagement = () => {
   const providerForm = useForm<CreateProviderInput>({
     resolver: zodResolver(createProviderSchema),
     defaultValues: {
-      name: "",
+      firstName: "",
+      lastName: "",
       email: "",
       phone: "",
       password: "",
@@ -2394,18 +2542,11 @@ const ProvidersManagement = () => {
     : [];
 
   const approveMutation = useMutation({
-    mutationFn: ({
-      providerId,
-      approved,
-    }: {
-      providerId: string;
-      approved: boolean;
-    }) =>
-      adminApiRequest(
-        "PATCH",
-        `/api/admin/providers/${providerId}/approval`,
-        { approved },
-      ),
+    // Use the unified users endpoint to toggle approval to avoid depending on
+    // an unstable providers-specific approval route. This updates the user's
+    // `isApproved` flag directly.
+    mutationFn: ({ providerId, approved }: { providerId: string; approved: boolean }) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, { isApproved: approved }),
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/providers"] });
@@ -2550,7 +2691,8 @@ const ProvidersManagement = () => {
     setPreviewProvider(provider);
     setPreviewImage(provider.avatar || "");
     setPreviewData({
-      name: provider.name || "",
+      firstName: provider.firstName || (provider.name ? provider.name.split(" ")[0] : "") ,
+      lastName: provider.lastName || (provider.name ? provider.name.split(" ").slice(1).join(" ") : ""),
       email: provider.email || "",
       phone: provider.phone || "",
       company: provider.company || "",
@@ -2564,7 +2706,8 @@ const ProvidersManagement = () => {
     setEditingProvider(provider);
     setShowAddProvider(true);
     providerForm.reset({
-      name: provider.name || "",
+      firstName: provider.firstName || (provider.name ? provider.name.split(" ")[0] : ""),
+      lastName: provider.lastName || (provider.name ? provider.name.split(" ").slice(1).join(" ") : ""),
       email: provider.email || "",
       phone: provider.phone || "",
       password: "",
@@ -2807,7 +2950,7 @@ const ProvidersManagement = () => {
 
       {/* Providers Table */}
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="pt-4 px-4 pb-4">
           <Table>
             <TableHeader>
               <TableRow>
@@ -3122,15 +3265,34 @@ const ProvidersManagement = () => {
                 <div>
                   <FormField
                     control={providerForm.control}
-                    name="name"
+                    name="firstName"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Full Name *</FormLabel>
+                        <FormLabel>First Name *</FormLabel>
                         <FormControl>
                           <Input
-                            placeholder="Enter provider name"
+                            placeholder="First name"
                             {...field}
-                            data-testid="input-provider-name"
+                            data-testid="input-provider-firstname"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <div>
+                  <FormField
+                    control={providerForm.control}
+                    name="lastName"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Last Name *</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="Last name"
+                            {...field}
+                            data-testid="input-provider-lastname"
                           />
                         </FormControl>
                         <FormMessage />
@@ -3403,6 +3565,7 @@ const CategoriesManagement = () => {
     tag: DEFAULT_CATEGORY_TAG,
   });
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const [iconSearch, setIconSearch] = useState("");
   const BASE_EMOJI_OPTIONS = [
     "🔧",
     "🧹",
@@ -3521,7 +3684,15 @@ const CategoriesManagement = () => {
     "✅",
   ];
 
-  const emojiOptions = Array.from(new Set([...BASE_EMOJI_OPTIONS, ...SERVICE_CATEGORY_EMOJI]));
+  const emojiOptions = Array.from(
+    new Set([
+      ...BASE_EMOJI_OPTIONS,
+      ...SERVICE_CATEGORY_EMOJI,
+      ...EMOJI_OPTIONS.map((o) => o.value),
+    ]),
+  );
+
+  const emojiLabelMap = new Map(EMOJI_OPTIONS.map((o) => [o.value, o.label]));
 
   const { user } = useAdminAuth();
   const { toast } = useToast();
@@ -3542,8 +3713,10 @@ const CategoriesManagement = () => {
   const createCategoryMutation = useMutation({
     mutationFn: (categoryData: any) =>
       adminApiRequest("POST", "/api/admin/categories", categoryData),
-    onSuccess: () => {
+      onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
+      // Also invalidate public category lists so resident views refresh
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
       setIsCreateDialogOpen(false);
       resetForm();
       toast({ title: "Category created successfully" });
@@ -3562,6 +3735,8 @@ const CategoriesManagement = () => {
       adminApiRequest("PATCH", `/api/admin/categories/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
+      // Ensure resident/public lists refresh for updates
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
       setEditingCategory(null);
       resetForm();
       toast({ title: "Category updated successfully" });
@@ -3580,6 +3755,8 @@ const CategoriesManagement = () => {
       adminApiRequest("DELETE", `/api/admin/categories/${categoryId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
+      // Delete should also refresh public category lists
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
       toast({ title: "Category deleted successfully" });
     },
     onError: (error: any) => {
@@ -3880,7 +4057,7 @@ const CategoriesManagement = () => {
 
       {/* Create Category Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Create New Category</DialogTitle>
             <DialogDescription>
@@ -3890,7 +4067,7 @@ const CategoriesManagement = () => {
                 : "your estate"}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleCreateSubmit} className="space-y-4">
+          <form onSubmit={handleCreateSubmit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium">Name</label>
               <Input
@@ -3944,20 +4121,38 @@ const CategoriesManagement = () => {
                   sideOffset={6}
                   className="w-[min(360px,calc(100vw-3rem))]"
                 >
-                  <div className="grid grid-cols-6 gap-2 text-left">
-                    {emojiOptions.map((emoji, idx) => (
-                      <button
-                        key={`${emoji}-${idx}`}
-                        type="button"
-                        className="text-xl p-2 rounded hover:bg-muted"
-                        onClick={() => {
-                          setFormData({ ...formData, icon: emoji });
-                          setIconPickerOpen(false);
-                        }}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
+                  <div className="mb-2">
+                    <Input
+                      placeholder="Search icons"
+                      value={iconSearch}
+                      onChange={(e) => setIconSearch(e.target.value)}
+                      data-testid="input-icon-search"
+                    />
+                  </div>
+                  <div className="h-[200px] overflow-auto">
+                    <div className="grid grid-cols-6 gap-2 text-left p-1">
+                      {(emojiOptions
+                        .filter((val) => {
+                          const label = (emojiLabelMap.get(val) || "").toLowerCase();
+                          const q = iconSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          return label.includes(q) || val.includes(q);
+                        })
+                        .map((emoji, idx) => (
+                          <button
+                            key={`${emoji}-${idx}`}
+                            type="button"
+                            className="text-xl p-2 rounded hover:bg-muted"
+                            onClick={() => {
+                              setFormData({ ...formData, icon: emoji });
+                              setIconPickerOpen(false);
+                              setIconSearch("");
+                            }}
+                          >
+                            {emoji}
+                          </button>
+                        )))}
+                    </div>
                   </div>
                 </PopoverContent>
               </Popover>
@@ -4001,28 +4196,8 @@ const CategoriesManagement = () => {
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <label className="text-sm font-medium">Tag</label>
-              <Select
-                value={formData.tag}
-                onValueChange={(value) =>
-                  setFormData({ ...formData, tag: value })
-                }
-                data-testid="select-edit-category-tag"
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a tag" />
-                </SelectTrigger>
-                <SelectContent className="max-h-60" sideOffset={5} align="start">
-                  {CATEGORY_TAG_OPTIONS.map((tag) => (
-                    <SelectItem key={tag} value={tag}>
-                      {tag}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <DialogFooter>
+            <div className="col-span-1 sm:col-span-2">
+              <DialogFooter>
               <Button
                 type="button"
                 variant="outline"
@@ -4042,7 +4217,8 @@ const CategoriesManagement = () => {
                   ? "Creating..."
                   : "Create Category"}
               </Button>
-            </DialogFooter>
+              </DialogFooter>
+            </div>
           </form>
         </DialogContent>
       </Dialog>
@@ -4057,12 +4233,12 @@ const CategoriesManagement = () => {
           }
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Edit Category</DialogTitle>
             <DialogDescription>Update the category details</DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleEditSubmit} className="space-y-4">
+          <form onSubmit={handleEditSubmit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium">Name</label>
               <Input
@@ -4105,25 +4281,44 @@ const CategoriesManagement = () => {
                   sideOffset={6}
                   className="w-[min(360px,calc(100vw-3rem))]"
                 >
-                  <div className="grid grid-cols-6 gap-2 text-left">
-                    {emojiOptions.map((emoji, idx) => (
-                      <button
-                        key={`${emoji}-${idx}`}
-                        type="button"
-                        className="text-xl p-2 rounded hover:bg-muted"
-                        onClick={() => {
-                          setFormData({ ...formData, icon: emoji });
-                          setIconPickerOpen(false);
-                        }}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
+                  <div className="mb-2">
+                    <Input
+                      placeholder="Search icons"
+                      value={iconSearch}
+                      onChange={(e) => setIconSearch(e.target.value)}
+                      data-testid="input-icon-search-edit"
+                    />
+                  </div>
+                  <div className="h-[250px] overflow-auto">
+                    <div className="grid grid-cols-6 gap-2 text-left p-1">
+                      {(emojiOptions
+                        .filter((val) => {
+                          const label = (emojiLabelMap.get(val) || "").toLowerCase();
+                          const q = iconSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          return label.includes(q) || val.includes(q);
+                        })
+                        .map((emoji, idx) => (
+                          <button
+                            key={`${emoji}-${idx}`}
+                            type="button"
+                            className="text-xl p-2 rounded hover:bg-muted"
+                            onClick={() => {
+                              setFormData({ ...formData, icon: emoji });
+                              setIconPickerOpen(false);
+                              setIconSearch("");
+                            }}
+                          >
+                            {emoji}
+                          </button>
+                        )))}
+                    </div>
                   </div>
                 </PopoverContent>
               </Popover>
             </div>
-            <DialogFooter>
+            <div className="col-span-1 sm:col-span-2">
+              <DialogFooter>
               <Button
                 type="button"
                 variant="outline"
@@ -4143,7 +4338,8 @@ const CategoriesManagement = () => {
                   ? "Updating..."
                   : "Update Category"}
               </Button>
-            </DialogFooter>
+              </DialogFooter>
+            </div>
           </form>
         </DialogContent>
       </Dialog>
@@ -4528,7 +4724,7 @@ const MarketplaceManagement = () => {
 
       {/* Create Item Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Create New Marketplace Item</DialogTitle>
             <DialogDescription>
@@ -4706,7 +4902,7 @@ const MarketplaceManagement = () => {
           }
         }}
       >
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Edit Marketplace Item</DialogTitle>
             <DialogDescription>Update the item details</DialogDescription>
@@ -5791,7 +5987,7 @@ export default function AdminSuperDashboard() {
                 setDeclineReason("");
               }
             }}>
-              <DialogContent className="max-w-md">
+              <DialogContent className="w-[60vw] max-w-[95vw]">
                 <DialogHeader>
                   <DialogTitle>Decline provider request</DialogTitle>
                   <DialogDescription>
@@ -5830,7 +6026,7 @@ export default function AdminSuperDashboard() {
                 setDeclineReason("");
               }
             }}>
-              <DialogContent className="max-w-md">
+              <DialogContent className="w-[60vw] max-w-[95vw]">
                 <DialogHeader>
                   <DialogTitle>Decline provider request</DialogTitle>
                   <DialogDescription>
@@ -6328,7 +6524,7 @@ const EstatesManagement = () => {
           resetForm();
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>
               {editingEstate ? "Edit Estate" : "Create New Estate"}
@@ -7307,6 +7503,32 @@ const CompaniesManagement = () => {
     isActive: true,
     details: [] as Array<{ key: string; value: string }>,
   });
+  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
+
+  const FIELD_LABELS: Record<string, string> = {
+    bankName: "Bank name",
+    accountNumber: "Account number",
+    routingNumber: "Routing number",
+    swiftCode: "SWIFT code",
+    accountName: "Account name",
+    notes: "Notes",
+    taxId: "Tax ID",
+    industry: "Industry",
+    businessType: "Business type",
+    yearEstablished: "Year established",
+    registrationNumber: "Registration number",
+    lga: "LGA",
+    city: "City",
+    state: "State",
+    country: "Country",
+    coordinates: "Coordinates",
+    latitude: "Latitude",
+    longitude: "Longitude",
+  };
+
+  function friendlyLabel(k: string) {
+    return FIELD_LABELS[k] || k.replace(/([A-Z])/g, " $1").replace(/[_-]/g, " ").replace(/^./, (s) => s.toUpperCase());
+  }
 
   const { data: companies = [], isLoading, refetch } = useQuery({
     queryKey: ["admin-companies"],
@@ -7491,37 +7713,45 @@ const CompaniesManagement = () => {
         if (!open) resetAddForm();
         else setShowAddCompany(true);
       }}>
-        <DialogContent>
+        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Add Company</DialogTitle>
             <DialogDescription>Create a new provider company.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <Input
-              placeholder="Company Name *"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              data-testid="input-company-name"
-            />
-            <Input
-              placeholder="Contact Email"
-              value={form.contactEmail}
-              onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
-              data-testid="input-company-email"
-            />
-            <Input
-              placeholder="Phone"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              data-testid="input-company-phone"
-            />
-            <Textarea
-              placeholder="Description"
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={3}
-              data-testid="textarea-company-description"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Input
+                placeholder="Company Name *"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                data-testid="input-company-name"
+              />
+            </div>
+            <div>
+              <Input
+                placeholder="Contact Email"
+                value={form.contactEmail}
+                onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
+                data-testid="input-company-email"
+              />
+            </div>
+            <div>
+              <Input
+                placeholder="Phone"
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                data-testid="input-company-phone"
+              />
+            </div>
+            <div className="col-span-1 sm:col-span-2 lg:col-span-3">
+              <Textarea
+                placeholder="Description"
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                rows={3}
+                data-testid="textarea-company-description"
+              />
+            </div>
             <div className="flex items-center gap-3">
               <Checkbox
                 id="company-active-add"
@@ -7530,7 +7760,7 @@ const CompaniesManagement = () => {
               />
               <Label htmlFor="company-active-add" className="text-sm">Active</Label>
             </div>
-            <div>
+            <div className="col-span-1 sm:col-span-2 lg:col-span-3">
               <Label className="text-xs text-muted-foreground">Details</Label>
               <div className="space-y-2">
                 {Array.isArray(form.details) && form.details.length > 0 ? (
@@ -7598,48 +7828,57 @@ const CompaniesManagement = () => {
 
       {/* View Company Dialog */}
       <Dialog open={showViewCompany} onOpenChange={setShowViewCompany}>
-        <DialogContent>
+        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Company Details</DialogTitle>
           </DialogHeader>
           {selectedCompany && (
             <div className="space-y-4">
-              <div>
-                <Label className="text-xs text-muted-foreground">Name</Label>
-                <p className="font-semibold text-sm">{selectedCompany.name}</p>
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Contact Email</Label>
-                <p className="text-sm">{selectedCompany.contactEmail || ""}</p>
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Phone</Label>
-                <p className="text-sm">{selectedCompany.phone || ""}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-start">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Name</Label>
+                  <p className="font-semibold text-sm">{selectedCompany.name}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Contact Email</Label>
+                  <p className="text-sm">{selectedCompany.contactEmail || "—"}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Phone</Label>
+                  <p className="text-sm">{selectedCompany.phone || "—"}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Submitted At</Label>
+                  <p className="text-sm">{formatDate(selectedCompany.submittedAt || selectedCompany.details?.submittedAt)}</p>
+                </div>
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Description</Label>
-                <p className="text-sm">{selectedCompany.description || ""}</p>
+                <p className="text-sm">{selectedCompany.description || "—"}</p>
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Provider</Label>
-                <p className="text-sm">{selectedCompany.providerName || selectedCompany.provider_id || ""}</p>
+                <p className="text-sm">{selectedCompany.providerName || selectedCompany.provider_id || "—"}</p>
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Active</Label>
-                <p className="text-sm">{typeof selectedCompany.isActive !== "undefined" ? (selectedCompany.isActive ? "Yes" : "No") : ""}</p>
+                <div>
+                  <Badge variant={selectedCompany.isActive ? "default" : "outline"} className="text-sm">
+                    {typeof selectedCompany.isActive !== "undefined" ? (selectedCompany.isActive ? "Active" : "Inactive") : "—"}
+                  </Badge>
+                </div>
               </div>
               <div>
-                <Label className="text-xs text-muted-foreground">Details</Label>
-                <pre className="text-sm whitespace-pre-wrap">{selectedCompany.details ? (typeof selectedCompany.details === "string" ? selectedCompany.details : JSON.stringify(selectedCompany.details, null, 2)) : ""}</pre>
+                <DetailsView data={selectedCompany.details} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
                 <div>
                   <Label className="text-xs text-muted-foreground">Created</Label>
-                  <p className="text-sm">{selectedCompany.createdAt ? new Date(selectedCompany.createdAt).toLocaleString() : ""}</p>
+                  <p className="text-sm">{formatDate(selectedCompany.createdAt)}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Updated</Label>
-                  <p className="text-sm">{selectedCompany.updatedAt ? new Date(selectedCompany.updatedAt).toLocaleString() : ""}</p>
+                  <p className="text-sm">{formatDate(selectedCompany.updatedAt)}</p>
                 </div>
               </div>
             </div>
@@ -7664,37 +7903,49 @@ const CompaniesManagement = () => {
         if (!open) resetEditForm();
         else setShowEditCompany(true);
       }}>
-        <DialogContent>
+        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Edit Company</DialogTitle>
             <DialogDescription>Update company information.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <Input
-              placeholder="Company Name *"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              data-testid="input-edit-company-name"
-            />
-            <Input
-              placeholder="Contact Email"
-              value={form.contactEmail}
-              onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
-              data-testid="input-edit-company-email"
-            />
-            <Input
-              placeholder="Phone"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              data-testid="input-edit-company-phone"
-            />
-            <Textarea
-              placeholder="Description"
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={3}
-              data-testid="textarea-edit-company-description"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label className="text-xs">Company Name</Label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                data-testid="input-edit-company-name"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Enter the legal or commonly used company name.</p>
+            </div>
+            <div>
+              <Label className="text-xs">Contact Email</Label>
+              <Input
+                value={form.contactEmail}
+                onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
+                data-testid="input-edit-company-email"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Public email used for enquiries (e.g., info@company.com).</p>
+            </div>
+            <div>
+              <Label className="text-xs">Phone</Label>
+              <Input
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                data-testid="input-edit-company-phone"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Primary contact number including country code if applicable.</p>
+            </div>
+            <div className="col-span-1 sm:col-span-2 lg:col-span-3">
+              <Label className="text-xs">Description</Label>
+              <Textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                rows={3}
+                data-testid="textarea-edit-company-description"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Short description about the company and services offered.</p>
+            </div>
             <div className="flex items-center gap-3">
               <Checkbox
                 id="company-active"
@@ -7703,43 +7954,136 @@ const CompaniesManagement = () => {
               />
               <Label htmlFor="company-active" className="text-sm">Active</Label>
             </div>
-            <div>
+            <div className="col-span-1 sm:col-span-2 lg:col-span-3">
               <Label className="text-xs text-muted-foreground">Details</Label>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {Array.isArray(form.details) && form.details.length > 0 ? (
-                  form.details.map((entry: any, idx: number) => (
-                    <div key={idx} className="flex gap-2">
-                      <Input
-                        placeholder="Key"
-                        value={entry.key}
-                        onChange={(e) => {
-                          const next = [...form.details];
-                          next[idx] = { ...next[idx], key: e.target.value };
-                          setForm({ ...form, details: next });
-                        }}
-                      />
-                      <Input
-                        placeholder="Value"
-                        value={entry.value}
-                        onChange={(e) => {
-                          const next = [...form.details];
-                          next[idx] = { ...next[idx], value: e.target.value };
-                          setForm({ ...form, details: next });
-                        }}
-                      />
-                      <Button
-                        variant="ghost"
-                        onClick={() => {
-                          const next = [...form.details];
-                          next.splice(idx, 1);
-                          setForm({ ...form, details: next });
-                        }}
-                        title="Remove"
-                      >
-                        <Trash2 className="w-4 h-4 text-red-500" />
-                      </Button>
-                    </div>
-                  ))
+                  form.details.map((entry: any, idx: number) => {
+                    let parsed: any = null;
+                    try {
+                      parsed = typeof entry.value === "string" ? JSON.parse(entry.value) : entry.value;
+                    } catch (e) {
+                      parsed = null;
+                    }
+                    const isStructured = parsed && typeof parsed === "object" && ["bankDetails", "businessDetails", "locationDetails"].includes(entry.key);
+                    return (
+                      <div key={idx}>
+                        {isStructured ? (
+                          <details className="group bg-white/50 dark:bg-slate-900 p-3 rounded">
+                            <summary className="cursor-pointer list-none outline-none py-1 flex justify-between items-center">
+                              <div className="text-sm font-medium">{entry.key}</div>
+                              <div className="text-xs text-muted-foreground">{Object.keys(parsed).length} fields</div>
+                            </summary>
+                            <div className="mt-3 space-y-3">
+                              {Object.entries(parsed).map(([sk, sv]) => (
+                                <div key={sk} className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-start">
+                                  <div className="sm:col-span-1">
+                                    <Label className="text-xs">{sk}</Label>
+                                  </div>
+                                  <div className="sm:col-span-2">
+                                    {sv && typeof sv === "object" && ("latitude" in sv) && ("longitude" in sv) ? (
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        <div>
+                                          <Label className="text-xs">{friendlyLabel("latitude")}</Label>
+                                          <Input
+                                            value={String((sv as any).latitude ?? "")}
+                                            onChange={(e) => {
+                                              const v = e.target.value;
+                                              const next = [...form.details];
+                                              const obj = { ...parsed };
+                                              obj[sk] = { ...(obj[sk] || {}), latitude: v };
+                                              next[idx] = { ...next[idx], value: JSON.stringify(obj) };
+                                              setForm({ ...form, details: next });
+                                              const n = Number(v);
+                                              setDetailErrors((prev) => ({ ...prev, [`${idx}.latitude`]: isNaN(n) || n < -90 || n > 90 ? "Latitude must be between -90 and 90" : "" }));
+                                            }}
+                                          />
+                                          {detailErrors[`${idx}.latitude`] ? (
+                                            <div className="text-sm text-red-600">{detailErrors[`${idx}.latitude`]}</div>
+                                          ) : null}
+                                        </div>
+                                        <div>
+                                          <Label className="text-xs">{friendlyLabel("longitude")}</Label>
+                                          <Input
+                                            value={String((sv as any).longitude ?? "")}
+                                            onChange={(e) => {
+                                              const v = e.target.value;
+                                              const next = [...form.details];
+                                              const obj = { ...parsed };
+                                              obj[sk] = { ...(obj[sk] || {}), longitude: v };
+                                              next[idx] = { ...next[idx], value: JSON.stringify(obj) };
+                                              setForm({ ...form, details: next });
+                                              const n = Number(v);
+                                              setDetailErrors((prev) => ({ ...prev, [`${idx}.longitude`]: isNaN(n) || n < -180 || n > 180 ? "Longitude must be between -180 and 180" : "" }));
+                                            }}
+                                          />
+                                          {detailErrors[`${idx}.longitude`] ? (
+                                            <div className="text-sm text-red-600">{detailErrors[`${idx}.longitude`]}</div>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <Input
+                                        value={String(sv ?? "")}
+                                        onChange={(e) => {
+                                          const next = [...form.details];
+                                          const obj = { ...parsed };
+                                          obj[sk] = e.target.value;
+                                          next[idx] = { ...next[idx], value: JSON.stringify(obj) };
+                                          setForm({ ...form, details: next });
+                                        }}
+                                      />
+                                    )}
+                                    <p className="text-xs text-muted-foreground mt-1">Edit {sk} for {entry.key}.</p>
+                                  </div>
+                                </div>
+                              ))}
+                              <div className="flex justify-end mt-2">
+                                <Button
+                                  variant="ghost"
+                                  onClick={() => {
+                                    const next = [...form.details];
+                                    next.splice(idx, 1);
+                                    setForm({ ...form, details: next });
+                                  }}
+                                  title="Remove"
+                                >
+                                  <Trash2 className="w-4 h-4 text-red-500" />
+                                </Button>
+                              </div>
+                            </div>
+                          </details>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-start">
+                            <div className="sm:col-span-1">
+                              <Label className="text-xs">Key</Label>
+                              <Input
+                                value={entry.key}
+                                onChange={(e) => {
+                                  const next = [...form.details];
+                                  next[idx] = { ...next[idx], key: e.target.value };
+                                  setForm({ ...form, details: next });
+                                }}
+                              />
+                              <p className="text-xs text-muted-foreground mt-1">Short identifier (e.g., taxId).</p>
+                            </div>
+                            <div className="sm:col-span-2">
+                              <Label className="text-xs">Value</Label>
+                              <Input
+                                value={entry.value}
+                                onChange={(e) => {
+                                  const next = [...form.details];
+                                  next[idx] = { ...next[idx], value: e.target.value };
+                                  setForm({ ...form, details: next });
+                                }}
+                              />
+                              <p className="text-xs text-muted-foreground mt-1">Use plain text or JSON where appropriate.</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 ) : (
                   <div className="text-sm text-muted-foreground">No details</div>
                 )}
@@ -7771,7 +8115,7 @@ const CompaniesManagement = () => {
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-        <DialogContent>
+        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Delete Company</DialogTitle>
             <DialogDescription>
@@ -7888,6 +8232,17 @@ const StoresManagement = () => {
     phone: "",
     email: "",
   });
+    // When creating/editing store: assignment can be 'global' or an estate id
+    const [selectedStoreAssignment, setSelectedStoreAssignment] = useState<string | null>("global");
+    // UI: tab to toggle between global stores and estate-specific stores
+    const [storeTab, setStoreTab] = useState<"global" | "estate">("global");
+    const [selectedEstateFilter, setSelectedEstateFilter] = useState<string | null>(null);
+
+    // Fetch estates to populate estate selector when in 'estate' tab
+    const { data: estatesForFilter = [] } = useQuery({
+      queryKey: ["/api/admin/estates/list-for-stores"],
+      queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
+    });
 
   const { user } = useAdminAuth();
   const { toast } = useToast();
@@ -7904,6 +8259,19 @@ const StoresManagement = () => {
         );
       },
     });
+
+    // derive filtered stores according to selected tab
+    const filteredStores = Array.isArray(stores)
+      ? stores.filter((s: any) => {
+          if (storeTab === "global") return !s.estateId && !s.estate_id;
+          // estate tab: filter by selectedEstateFilter (if set), else show none
+          if (storeTab === "estate") {
+            if (!selectedEstateFilter) return false;
+            return String(s.estateId || s.estate_id || "") === String(selectedEstateFilter);
+          }
+          return true;
+        })
+      : [];
     const inventoryStoreId = (() => {
       const segments = location.split("/").filter(Boolean);
       if (
@@ -7981,6 +8349,7 @@ const StoresManagement = () => {
       setIsCreateDialogOpen(false);
       setFormData({ name: "", description: "", location: "", phone: "", email: "" });
       setSelectedOwnerId("");
+      setSelectedStoreAssignment("global");
       toast({ title: variables.id ? "Store updated successfully" : "Store created successfully" });
     },
     onError: (error: any) => {
@@ -8182,7 +8551,14 @@ const StoresManagement = () => {
       toast({ title: "Invalid store owner", description: "Provider must have the store_owner category.", variant: "destructive" });
       return;
     }
-    const payload = { ...formData, ownerId: selectedOwnerId };
+    const payload: any = { ...formData, ownerId: selectedOwnerId };
+    // include estate assignment when set; for edits, explicitly clear with null when switching to global
+    if (selectedStoreAssignment && selectedStoreAssignment !== "global") {
+      payload.estateId = selectedStoreAssignment;
+    } else if (storeId) {
+      // editing an existing store and user chose global: clear estate assignment
+      payload.estateId = null;
+    }
     const storeId = selectedStore?._id || selectedStore?.id;
     createStoreMutation.mutate({ payload, id: storeId });
   };
@@ -8256,7 +8632,7 @@ const StoresManagement = () => {
           </CardHeader>
           <CardContent>
             <TooltipProvider>
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="lg:col-span-2 space-y-4">
                 {hasInventoryItems ? (
                   inventoryView === "table" ? (
@@ -8597,7 +8973,7 @@ const StoresManagement = () => {
             }
           }}
         >
-          <DialogContent className="max-w-lg">
+          <DialogContent className="w-[60vw] max-w-[95vw]">
             <DialogHeader>
               <DialogTitle>Edit Inventory Item</DialogTitle>
               <DialogDescription>Update the product details shown to residents.</DialogDescription>
@@ -8789,12 +9165,40 @@ const StoresManagement = () => {
           <div className="flex items-center justify-between">
             <CardTitle>Stores Management</CardTitle>
             <Button
-              onClick={() => setIsCreateDialogOpen(true)}
+              onClick={() => {
+                // prepare new store form
+                setSelectedStore(null);
+                setFormData({ name: "", description: "", location: "", phone: "", email: "" });
+                setSelectedOwnerId("");
+                setSelectedStoreAssignment(storeTab === "estate" && selectedEstateFilter ? selectedEstateFilter : "global");
+                setIsCreateDialogOpen(true);
+              }}
               data-testid="button-create-store"
             >
               <Plus className="w-4 h-4 mr-2" />
               Create Store
             </Button>
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <Button size="sm" variant={storeTab === "global" ? "default" : "outline"} onClick={() => setStoreTab("global")}>Global Stores</Button>
+            <div className="flex items-center">
+              <Button size="sm" variant={storeTab === "estate" ? "default" : "outline"} onClick={() => setStoreTab("estate")}>Estate Stores</Button>
+              {storeTab === "estate" && (
+                <div className="ml-3">
+                  <Select value={selectedEstateFilter || "all"} onValueChange={(v) => setSelectedEstateFilter(v === "all" ? null : v)}>
+                    <SelectTrigger className="min-w-[180px]">
+                      <SelectValue placeholder="Select estate" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Estates</SelectItem>
+                      {Array.isArray(estatesForFilter) && estatesForFilter.map((e: any) => (
+                        <SelectItem key={e.id || e._id} value={e.id || e._id}>{e.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -8813,15 +9217,15 @@ const StoresManagement = () => {
           </div>
 
           {/* Stores Table */}
-          {isLoading ? (
+                {isLoading ? (
             <div className="text-center py-8">
               <p className="text-gray-600 dark:text-gray-400">Loading stores...</p>
             </div>
-          ) : !stores || stores.length === 0 ? (
+          ) : !filteredStores || filteredStores.length === 0 ? (
             <div className="text-center py-8">
               <Store className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600 dark:text-gray-400">
-                No stores found. Create your first store to get started.
+                    <p className="text-gray-600 dark:text-gray-400">
+                No stores found for the selected view. Create your first store to get started.
               </p>
             </div>
           ) : (
@@ -8847,7 +9251,7 @@ const StoresManagement = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
-                  {stores.map((store: any) => (
+                  {filteredStores.map((store: any) => (
                     <tr key={store._id || store.id}>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
@@ -8920,6 +9324,9 @@ const StoresManagement = () => {
                               email: store.email || "",
                             });
                             setSelectedOwnerId(store.ownerId || "");
+                            setSelectedStoreAssignment(
+                              (store.estateId || store.estate_id) ? (store.estateId || store.estate_id) : "global"
+                            );
                           }}
                           data-testid={`button-edit-store-${store._id || store.id}`}
                         >
@@ -9052,6 +9459,23 @@ const StoresManagement = () => {
                 data-testid="input-store-email"
               />
             </div>
+            <div>
+              <Label htmlFor="store-assignment">Assign To</Label>
+              <Select
+                value={selectedStoreAssignment || "global"}
+                onValueChange={(v) => setSelectedStoreAssignment(v)}
+              >
+                <SelectTrigger id="store-assignment" className="min-w-[220px]">
+                  <SelectValue placeholder="Assign store" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Global (no estate)</SelectItem>
+                  {Array.isArray(estatesForFilter) && estatesForFilter.map((e: any) => (
+                    <SelectItem key={e.id || e._id} value={e.id || e._id}>{e.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <DialogFooter>
             <Button
@@ -9161,29 +9585,36 @@ const ItemCategoriesPage = () => {
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div className="w-full mb-4 sm:mb-0">
+        <CardHeader className="p-0">
+          <div className="relative w-full">
             <img
               src="https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1600&q=80"
               alt="Service categories illustration"
-              className="w-full h-44 object-cover rounded-lg shadow-sm"
+              className="w-full h-44 sm:h-56 object-cover rounded-lg shadow-sm"
             />
+
+            <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-transparent to-transparent rounded-lg"></div>
+
+            <div className="absolute inset-0 flex items-center justify-between px-6">
+              <div className="text-white">
+                <CardTitle className="text-white">Item Categories</CardTitle>
+                <CardDescription className="text-white/90">Manage marketplace item categories.</CardDescription>
+              </div>
+              <div>
+                <Button
+                  onClick={() => {
+                    setEditing(null);
+                    categoryForm.reset({ name: "", description: "", emoji: "", isActive: true });
+                    setShowModal(true);
+                  }}
+                >
+                  + New Category
+                </Button>
+              </div>
+            </div>
           </div>
-          <div>
-            <CardTitle>Item Categories</CardTitle>
-            <CardDescription>Manage marketplace item categories.</CardDescription>
-          </div>
-          <Button
-            onClick={() => {
-              setEditing(null);
-              categoryForm.reset({ name: "", description: "", emoji: "", isActive: true });
-              setShowModal(true);
-            }}
-          >
-            + New Category
-          </Button>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="pt-4 px-4 pb-4">
           <Table>
             <TableHeader>
               <TableRow>
@@ -9252,7 +9683,7 @@ const ItemCategoriesPage = () => {
       </Card>
 
       <Dialog open={showModal} onOpenChange={setShowModal}>
-        <DialogContent>
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit Category" : "Create Category"}</DialogTitle>
             <DialogDescription>
@@ -9262,7 +9693,13 @@ const ItemCategoriesPage = () => {
           <Form {...categoryForm}>
             <form
               className="space-y-4"
-              onSubmit={categoryForm.handleSubmit((values) => upsertCategoryMutation.mutate(values))}
+              onSubmit={categoryForm.handleSubmit((values) => {
+                if (!values.name || !String(values.name).trim()) {
+                  toast({ title: "Name is required", variant: "destructive" });
+                  return;
+                }
+                upsertCategoryMutation.mutate(values);
+              })}
             >
               <FormField
                 control={categoryForm.control}
@@ -9283,19 +9720,11 @@ const ItemCategoriesPage = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Emoji Icon</FormLabel>
-                    <Select value={field.value} onValueChange={(val) => field.onChange(val)}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select an emoji" />
-                      </SelectTrigger>
-                      <SelectContent className="max-h-64">
-                        {EMOJI_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            <span className="mr-2">{opt.value}</span>
-                            <span>{opt.label}</span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <EmojiCombobox
+                      value={field.value}
+                      onChange={(v) => field.onChange(v)}
+                      placeholder="Type to search or pick an emoji"
+                    />
                     <FormMessage />
                   </FormItem>
                 )}
@@ -9319,7 +9748,12 @@ const ItemCategoriesPage = () => {
                 render={({ field }) => (
                   <FormItem className="flex items-center space-x-2">
                     <FormControl>
-                      <Checkbox checked={field.value} onCheckedChange={(v) => field.onChange(Boolean(v))} />
+                      <Checkbox
+                        className="h-6 w-6"
+                        indicatorClassName="h-5 w-5"
+                        checked={field.value}
+                        onCheckedChange={(v) => field.onChange(Boolean(v))}
+                      />
                     </FormControl>
                     <FormLabel className="mb-0">Active</FormLabel>
                   </FormItem>

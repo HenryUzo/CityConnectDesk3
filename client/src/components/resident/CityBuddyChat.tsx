@@ -7,9 +7,12 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { svgPaths, AIAskBotIcon, UploadItem } from "@/components/ui/icon";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
+import useCategories from "@/hooks/useCategories";
+import CategorySkeleton from "@/components/ui/CategorySkeleton";
 import { CategoryStatus, AIMessage, AIThinking, UserResponse, TicketMessage, formatTicketStatusLabel, buildProgressSteps } from "./CityBuddyMessage";
 import {
   sendMessageToGemini,
@@ -2105,6 +2108,134 @@ function Container1({
   );
 }
 
+// Extended Container that supports an estate selector. Kept separate
+// to minimize disruption to existing layout for other callers.
+function ContainerWithEstate({
+  searchQuery,
+  setSearchQuery,
+  myEstates,
+  selectedEstateName,
+  setSelectedEstateName,
+  isOutsideCityConnectEstate,
+  setIsOutsideCityConnectEstate,
+}: {
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  myEstates?: any[];
+  selectedEstateName: string | null;
+  setSelectedEstateName: (s: string | null) => void;
+  isOutsideCityConnectEstate: boolean;
+  setIsOutsideCityConnectEstate: (b: boolean) => void;
+}) {
+  const { user } = useAuth();
+  const [adminEstates, setAdminEstates] = useState<any[] | null>(null);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let canceled = false;
+    // Prefer the caller-provided `myEstates` for resident users.
+    if (myEstates && myEstates.length) {
+      setAdminEstates(myEstates);
+      setAdminError(null);
+      setAdminLoading(false);
+      return;
+    }
+
+    // Only call the admin endpoint when the current user is an admin/estate admin.
+    const isAdminUser = Boolean(
+      user && (user.role === "admin" || user.role === "estate_admin" || user.globalRole === "super_admin"),
+    );
+    if (!isAdminUser) {
+      // Do not attempt admin fetch for non-admin users to avoid 401s.
+      setAdminEstates(null);
+      setAdminError(null);
+      setAdminLoading(false);
+      return;
+    }
+
+    setAdminLoading(true);
+    fetch("/api/admin/estates")
+      .then((res) => {
+        if (!res.ok) throw new Error(`status:${res.status}`);
+        return res.json();
+      })
+      .then((rows: any[]) => {
+        if (!canceled) {
+          setAdminEstates(rows || []);
+          setAdminError(null);
+        }
+      })
+      .catch((err: any) => {
+        if (!canceled) {
+          setAdminEstates(null);
+          setAdminError(err?.message || String(err));
+        }
+      })
+      .finally(() => {
+        if (!canceled) setAdminLoading(false);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [myEstates, user]);
+
+  const estatesToShow = (adminEstates && adminEstates.length > 0) ? adminEstates : (myEstates || []);
+  return (
+    <div
+      className="relative shrink-0 w-full"
+      data-name="Container"
+    >
+      <div className="flex flex-col items-center size-full">
+        <div className="content-stretch flex flex-col gap-[12px] items-center px-[32px] py-0 relative w-full">
+          <Content7 />
+
+          <div className="w-full flex justify-center">
+            <div className="w-full lg:max-w-[720px] lg:min-w-[500px]">
+              <div className="flex items-center gap-3">
+                <div className="w-44">
+                  <label className="sr-only">Estate</label>
+                  <select
+                    value={selectedEstateName ?? "__none__"}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "__none__") {
+                        setSelectedEstateName(null);
+                        setIsOutsideCityConnectEstate(false);
+                      } else {
+                        setSelectedEstateName(v);
+                        setIsOutsideCityConnectEstate(false);
+                      }
+                    }}
+                    className="w-full rounded border border-gray-200 p-2 bg-white"
+                    aria-label="Select estate"
+                  >
+                    <option value="__none__">Not Estate specific</option>
+                    {estatesToShow.map((es: any) => (
+                      <option key={es.id || es._id || es.name} value={es.name || es.id}>
+                        {es.name || es.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex-1">
+                  <InputDropdown
+                    searchQuery={searchQuery}
+                    setSearchQuery={setSearchQuery}
+                  />
+                </div>
+              </div>
+
+              {/* Debug panel removed */}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function HeaderSection({
   searchQuery,
   setSearchQuery,
@@ -2120,6 +2251,41 @@ function HeaderSection({
       <Container1
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
+      />
+    </div>
+  );
+}
+
+function HeaderSectionWithEstate({
+  searchQuery,
+  setSearchQuery,
+  myEstates,
+  selectedEstateName,
+  setSelectedEstateName,
+  isOutsideCityConnectEstate,
+  setIsOutsideCityConnectEstate,
+}: {
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  myEstates?: any[];
+  selectedEstateName: string | null;
+  setSelectedEstateName: (s: string | null) => void;
+  isOutsideCityConnectEstate: boolean;
+  setIsOutsideCityConnectEstate: (b: boolean) => void;
+}) {
+  return (
+    <div
+      className="content-stretch flex flex-col items-start relative shrink-0 w-full"
+      data-name="Header section"
+    >
+      <ContainerWithEstate
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        myEstates={myEstates}
+        selectedEstateName={selectedEstateName}
+        setSelectedEstateName={setSelectedEstateName}
+        isOutsideCityConnectEstate={isOutsideCityConnectEstate}
+        setIsOutsideCityConnectEstate={setIsOutsideCityConnectEstate}
       />
     </div>
   );
@@ -2259,49 +2425,27 @@ function MetricItem({
   );
 }
 
-const categories = [
-  {
-    icon: "🎥",
-    title: "Surveillance monitoring",
-    count: "+16 Providers",
-  },
-  {
-    icon: "🧹",
-    title: "Cleaning & janitorial",
-    count: "+19 Providers",
-  },
-  {
-    icon: "🍽️",
-    title: "Catering Services",
-    count: "+8 Providers",
-  },
-  { icon: "💻", title: "IT Support", count: "+12 Providers" },
-  {
-    icon: "🔧",
-    title: "Maintenance & Repair",
-    count: "+15 Providers",
-  },
-  {
-    icon: "📊",
-    title: "Marketing & Advertising",
-    count: "+9 Providers",
-  },
-  { icon: "📚", title: "Home tutors", count: "+11 Providers" },
-  {
-    icon: "🪑",
-    title: "Furniture making",
-    count: "+11 Providers",
-  },
-];
+// `useCategories` must be called inside a React component. The hook is
+// invoked in `ChatInterface` and the resulting data is passed down to
+// the select-category components as props.
 
 function Content11({
   searchQuery,
   onCategorySelect,
+  categoriesData,
+  catsLoading,
 }: {
   searchQuery: string;
   onCategorySelect?: (categoryName: string) => void;
+  categoriesData?: any[];
+  catsLoading?: boolean;
 }) {
-  const filteredCategories = categories.filter((cat) =>
+  const mapped = (categoriesData || []).map((c: any) => ({
+    icon: (c.emoji as string) || "🛠️",
+    title: c.name || c.key || String(c.id || c),
+    count: c.providerCount ? `+${c.providerCount} Providers` : "",
+  }));
+  const filteredCategories = mapped.filter((cat) =>
     cat.title.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
@@ -2312,18 +2456,26 @@ function Content11({
     >
       <div className="size-full">
         <div className="content-stretch flex flex-col gap-[24px] items-start p-[24px] relative w-full">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-[16px] w-full auto-rows-fr">
-            {filteredCategories.map((category, index) => (
-              <MetricItem
-                key={index}
-                icon={category.icon}
-                title={category.title}
-                count={category.count}
-                onClick={() => onCategorySelect?.(category.title)}
-              />
-            ))}
-          </div>
-          {filteredCategories.length === 0 && (
+          {(catsLoading) ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-[16px] w-full auto-rows-fr">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="animate-pulse bg-gray-100 dark:bg-gray-800 rounded p-6 h-28" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-[16px] w-full auto-rows-fr">
+              {filteredCategories.map((category, index) => (
+                <MetricItem
+                  key={index}
+                  icon={category.icon}
+                  title={category.title}
+                  count={category.count}
+                  onClick={() => onCategorySelect?.(category.title)}
+                />
+              ))}
+            </div>
+          )}
+          {(!catsLoading && filteredCategories.length === 0) && (
             <div className="w-full text-center py-8">
               <p className="font-['General_Sans:Regular',sans-serif] text-[#667085] text-[16px]">
                 No categories found matching "{searchQuery}"
@@ -2339,9 +2491,13 @@ function Content11({
 function Form({
   searchQuery,
   onCategorySelect,
+  categoriesData,
+  catsLoading,
 }: {
   searchQuery: string;
   onCategorySelect?: (categoryName: string) => void;
+  categoriesData?: any[];
+  catsLoading?: boolean;
 }) {
   return (
     <div
@@ -2351,6 +2507,8 @@ function Form({
       <Content11
         searchQuery={searchQuery}
         onCategorySelect={onCategorySelect}
+        categoriesData={categoriesData}
+        catsLoading={catsLoading}
       />
     </div>
   );
@@ -2359,15 +2517,19 @@ function Form({
 function Content12({
   searchQuery,
   onCategorySelect,
+  categoriesData,
+  catsLoading,
 }: {
   searchQuery: string;
   onCategorySelect?: (categoryName: string) => void;
+  categoriesData?: any[];
+  catsLoading?: boolean;
 }) {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto w-full" data-name="Content">
       <div className="flex flex-row justify-center w-full">
         <div className="w-full max-w-6xl px-[32px] pb-[32px]">
-          <Form searchQuery={searchQuery} onCategorySelect={onCategorySelect} />
+          <Form searchQuery={searchQuery} onCategorySelect={onCategorySelect} categoriesData={categoriesData} catsLoading={catsLoading} />
         </div>
       </div>
     </div>
@@ -2378,23 +2540,51 @@ function MainSelectCategory({
   searchQuery,
   setSearchQuery,
   onCategorySelect,
+  categoriesData,
+  catsLoading,
+  myEstates,
+  selectedEstateName,
+  setSelectedEstateName,
+  isOutsideCityConnectEstate,
+  setIsOutsideCityConnectEstate,
 }: {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   onCategorySelect?: (categoryName: string) => void;
+  categoriesData?: any[];
+  catsLoading?: boolean;
+  myEstates?: any[];
+  selectedEstateName?: string | null;
+  setSelectedEstateName?: (s: string | null) => void;
+  isOutsideCityConnectEstate?: boolean;
+  setIsOutsideCityConnectEstate?: (b: boolean) => void;
 }) {
   return (
     <div
       className="bg-white content-stretch flex flex-col gap-[32px] items-start h-full min-h-0 w-full pb-[0px] pt-[16px] px-0 relative rounded-bl-[40px] rounded-tl-[40px]"
       data-name="Main"
     >
-      <HeaderSection
-        searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
-      />
+      {setSelectedEstateName ? (
+        <HeaderSectionWithEstate
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          myEstates={myEstates}
+          selectedEstateName={selectedEstateName ?? null}
+          setSelectedEstateName={setSelectedEstateName!}
+          isOutsideCityConnectEstate={!!isOutsideCityConnectEstate}
+          setIsOutsideCityConnectEstate={setIsOutsideCityConnectEstate!}
+        />
+      ) : (
+        <HeaderSection
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+        />
+      )}
       <Content12
         searchQuery={searchQuery}
         onCategorySelect={onCategorySelect}
+        categoriesData={categoriesData}
+        catsLoading={catsLoading}
       />
     </div>
   );
@@ -2404,10 +2594,24 @@ function MainWrapSelectCategory({
   searchQuery,
   setSearchQuery,
   onCategorySelect,
+  categoriesData,
+  catsLoading,
+  myEstates,
+  selectedEstateName,
+  setSelectedEstateName,
+  isOutsideCityConnectEstate,
+  setIsOutsideCityConnectEstate,
 }: {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   onCategorySelect?: (categoryName: string) => void;
+  categoriesData?: any[];
+  catsLoading?: boolean;
+  myEstates?: any[];
+  selectedEstateName?: string | null;
+  setSelectedEstateName?: (s: string | null) => void;
+  isOutsideCityConnectEstate?: boolean;
+  setIsOutsideCityConnectEstate?: (b: boolean) => void;
 }) {
   return (
     <div
@@ -2420,6 +2624,13 @@ function MainWrapSelectCategory({
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             onCategorySelect={onCategorySelect}
+            categoriesData={categoriesData}
+            catsLoading={catsLoading}
+            myEstates={myEstates}
+            selectedEstateName={selectedEstateName}
+            setSelectedEstateName={setSelectedEstateName}
+            isOutsideCityConnectEstate={isOutsideCityConnectEstate}
+            setIsOutsideCityConnectEstate={setIsOutsideCityConnectEstate}
           />
         </div>
       </div>
@@ -4043,6 +4254,7 @@ export default function ChatInterface({
   const [issueText, setIssueText] = useState<string>("");
   const { data: myEstates } = useMyEstates();
   const { toast } = useToast();
+  const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global" });
   const [useManualEstate, setUseManualEstate] = useState(false);
   const [selectedEstateName, setSelectedEstateName] = useState<string | null>(null);
   const [isOutsideCityConnectEstate, setIsOutsideCityConnectEstate] = useState(false);
@@ -4854,19 +5066,7 @@ export default function ChatInterface({
 
     const thresholdReached = hasSufficientConfidence(categoryKey, activeConversationSession.confidenceScore || 0);
     const approach = activeConversationSession.summary?.recommendedApproach;
-    // Debug: surface key session values to the browser console during dev
-    try {
-      // eslint-disable-next-line no-console
-      console.debug("[CITYBUDDY DEBUG] provider-preview eligibility check", {
-        sessionId: activeConversationSessionId,
-        category: activeConversationSession.category,
-        categoryKey,
-        confidenceScore: activeConversationSession.confidenceScore,
-        recommendedApproach: activeConversationSession.summary?.recommendedApproach,
-        hasBookingCard: Boolean(activeConversationSession.bookingCard),
-        thresholdReached,
-      });
-    } catch (e) {}
+    // Debug logging removed
 
     const eligible =
       thresholdReached &&
@@ -6284,10 +6484,17 @@ export default function ChatInterface({
       {/* Main content */}
       <div className="flex-1 min-w-0 h-full">
         <MainWrapSelectCategory
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          onCategorySelect={handleCategorySelect}
-        />
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            onCategorySelect={handleCategorySelect}
+            categoriesData={fetchedCategories}
+            catsLoading={catsLoading}
+            myEstates={myEstates}
+            selectedEstateName={selectedEstateName}
+            setSelectedEstateName={setSelectedEstateName}
+            isOutsideCityConnectEstate={isOutsideCityConnectEstate}
+            setIsOutsideCityConnectEstate={setIsOutsideCityConnectEstate}
+          />
       </div>
     </div>
   );

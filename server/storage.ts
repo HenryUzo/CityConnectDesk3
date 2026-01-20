@@ -80,9 +80,9 @@ function mapPrismaUser(user: PrismaUser & { providerCompany?: { name?: string | 
   const sharedRole = normalizeSharedRole(user.globalRole);
   return {
     id: user.id,
-    firstName: null,
-    lastName: null,
-    name: user.name ?? user.email,
+    firstName: (user as any).firstName ?? null,
+    lastName: (user as any).lastName ?? null,
+    name: (user.name || [ (user as any).firstName, (user as any).lastName ].filter(Boolean).join(" ")) || user.email,
     email: user.email,
     phone: user.phone ?? "",
     password: user.passwordHash,
@@ -913,13 +913,42 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCompanies(): Promise<Company[]> {
-    const list = await db.select().from(companies).orderBy(desc(companies.createdAt));
-    return list;
+    const list = await db
+      .select({
+        id: companies.id,
+        name: companies.name,
+        description: companies.description,
+        contactEmail: companies.contactEmail,
+        phone: companies.phone,
+        providerId: companies.providerId,
+        details: companies.details,
+        isActive: companies.isActive,
+        createdAt: companies.createdAt,
+        updatedAt: companies.updatedAt,
+      })
+      .from(companies)
+      .orderBy(desc(companies.createdAt));
+
+    return list as any;
   }
 
   async createCompany(company: InsertCompany): Promise<Company> {
-    const [row] = await db.insert(companies).values(company).returning();
-    return row;
+    const [row] = await db
+      .insert(companies)
+      .values(company)
+      .returning({
+        id: companies.id,
+        name: companies.name,
+        description: companies.description,
+        contactEmail: companies.contactEmail,
+        phone: companies.phone,
+        providerId: companies.providerId,
+        details: companies.details,
+        isActive: companies.isActive,
+        createdAt: companies.createdAt,
+        updatedAt: companies.updatedAt,
+      });
+    return row as any;
   }
 
   async updateCompany(id: string, company: Partial<InsertCompany>): Promise<Company | undefined> {
@@ -927,8 +956,19 @@ export class DatabaseStorage implements IStorage {
       .update(companies)
       .set(company)
       .where(eq(companies.id, id))
-      .returning();
-    return row;
+      .returning({
+        id: companies.id,
+        name: companies.name,
+        description: companies.description,
+        contactEmail: companies.contactEmail,
+        phone: companies.phone,
+        providerId: companies.providerId,
+        details: companies.details,
+        isActive: companies.isActive,
+        createdAt: companies.createdAt,
+        updatedAt: companies.updatedAt,
+      });
+    return row as any;
   }
 
   async deleteCompany(id: string): Promise<boolean> {

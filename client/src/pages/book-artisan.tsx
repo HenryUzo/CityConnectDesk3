@@ -632,25 +632,31 @@ export default function BookArtisan() {
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel className="text-sm font-medium text-gray-700">Service Categories</FormLabel>
-                          <Select
-                            onValueChange={field.onChange}
-                            value={field.value}
-                            disabled={isCategoriesLoading}
-                          >
-                            <FormControl>
-                              <SelectTrigger className="bg-gray-50 border-gray-200">
-                                <SelectValue placeholder="Select a service category" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {categoryOptions.map((category: any) => (
-                                <SelectItem key={category.value} value={category.value}>
-                                  <span className="mr-2">{category.emoji}</span>
-                                  {category.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          {isCategoriesLoading ? (
+                            <div className="w-full p-2 bg-gray-50 border border-gray-200 rounded">
+                              <div className="animate-pulse h-8 bg-gray-200 rounded w-3/4 mb-2" />
+                              <div className="text-xs text-muted-foreground">Loading categories…</div>
+                            </div>
+                          ) : (
+                            <Select
+                              onValueChange={field.onChange}
+                              value={field.value}
+                            >
+                              <FormControl>
+                                <SelectTrigger className="bg-gray-50 border-gray-200">
+                                  <SelectValue placeholder="Select a service category" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {categoryOptions.map((category: any) => (
+                                  <SelectItem key={category.value} value={category.value}>
+                                    <span className="mr-2">{category.emoji}</span>
+                                    {category.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )}
                           <FormMessage />
                         </FormItem>
                       )}

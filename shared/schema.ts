@@ -395,7 +395,14 @@ export const companies = pgTable("companies", {
   contactEmail: text("contact_email"),
   phone: text("phone"),
   providerId: varchar("provider_id").references(() => users.id),
+  // Backwards-compatible blob retained until migration completes
   details: jsonb("details").notNull().default("{}"),
+
+  // New structured fields (JSON/nullable for smooth migration)
+  businessDetails: jsonb("business_details"),
+  bankDetails: jsonb("bank_details"),
+  locationDetails: jsonb("location_details"),
+  submittedAt: timestamp("submitted_at"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

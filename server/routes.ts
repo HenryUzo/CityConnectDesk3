@@ -918,6 +918,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         return res.json({ ok: true });
       } catch (error) {
+        // If the observability table does not exist yet, don't fail the resident flow.
+        const msg = (error as any)?.message || "";
+        if (typeof msg === "string" && msg.includes("ai_prepared_requests")) {
+          console.warn("AI snapshot storage not available (ai_prepared_requests missing). Skipping snapshot.", msg);
+          return res.json({ ok: false, warning: "ai_prepared_requests table not present" });
+        }
         next(error);
       }
     }
@@ -1970,8 +1976,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const hashedPassword = await hashPassword(parsed.password);
+      const combinedName = (parsed.name || `${parsed.firstName} ${parsed.lastName}`).trim();
       const provider = await storage.createUser({
-        name: parsed.name,
+        firstName: parsed.firstName,
+        lastName: parsed.lastName,
+        name: combinedName,
         email: parsed.email,
         phone: parsed.phone || "",
         password: hashedPassword,
@@ -2450,6 +2459,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Simple Server-Sent Events endpoint for lightweight broadcasts (categories updates)
+  // Clients can open an EventSource to receive category change notifications.
+  const sseClients: Array<{
+    id: number;
+    res: any;
+  }> = [];
+  let sseId = 1;
+
+  function sendSseEvent(name: string, data: any) {
+    const payload = `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (let i = sseClients.length - 1; i >= 0; i--) {
+      const c = sseClients[i];
+      try {
+        c.res.write(payload);
+      } catch (err) {
+        // remove dead client
+        sseClients.splice(i, 1);
+      }
+    }
+  }
+
+  app.get('/api/events', (req, res) => {
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.flushHeaders?.();
+    const id = sseId++;
+    sseClients.push({ id, res });
+    // send a greeting so clients know the stream is alive
+    res.write(`event: ready\ndata: ${JSON.stringify({ time: Date.now() })}\n\n`);
+
+    req.on('close', () => {
+      for (let i = sseClients.length - 1; i >= 0; i--) {
+        if (sseClients[i].id === id) sseClients.splice(i, 1);
+      }
+    });
+  });
+
   app.get("/api/companies", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) {
@@ -2689,6 +2738,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update a membership (allow changing estate, role, status, etc.)
+  app.patch("/api/admin/memberships/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const updates: any = {};
+      const allowed = ["estateId", "role", "status", "isActive", "isPrimary", "permissions"];
+      for (const k of allowed) {
+        if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+          // map client keys to DB column names if necessary
+          if (k === "estateId") updates.estateId = req.body[k];
+          else updates[k] = req.body[k];
+        }
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "No valid fields provided for update" });
+      }
+
+      const [updated] = await db
+        .update(memberships)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(eq(memberships.id, id))
+        .returning();
+
+      if (!updated) return res.status(404).json({ message: "Membership not found" });
+
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Admin: categories management
   app.get("/api/admin/categories", async (req, res, next) => {
     try {
@@ -2720,6 +2805,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const parsed = insertCategorySchema.parse(req.body);
       const [created] = await db.insert(categories).values(parsed).returning();
+      // Broadcast category creation to SSE listeners
+      try {
+        // sendSseEvent is defined earlier in this file
+        // @ts-ignore
+        sendSseEvent('categories', { action: 'created', category: created });
+      } catch (err) {
+        // ignore
+      }
       res.status(201).json(created);
     } catch (error) {
       next(error);
@@ -2748,6 +2841,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Category not found" });
       }
 
+      try {
+        // notify clients of update
+        // @ts-ignore
+        sendSseEvent('categories', { action: 'updated', category: updated });
+      } catch (err) {
+        // ignore
+      }
       res.json(updated);
     } catch (error) {
       next(error);
@@ -2768,6 +2868,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!deleted || deleted.length === 0) {
         return res.status(404).json({ message: "Category not found" });
+      }
+
+      try {
+        // notify clients of deletion
+        // @ts-ignore
+        sendSseEvent('categories', { action: 'deleted', categoryId: id });
+      } catch (err) {
+        // ignore
       }
 
       res.json({ success: true, category: deleted[0] });
@@ -3116,21 +3224,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
-      const { name, description, contactEmail, phone } = req.body || {};
-      if (!name) return res.status(400).json({ message: "Name is required" });
+      // Accept structured fields for companies (partial updates allowed)
+      const patchSchema = z.object({
+        name: z.string().optional(),
+        description: z.string().optional(),
+        contactEmail: z.string().email().optional(),
+        phone: z.string().optional(),
+        providerId: z.string().optional().nullable(),
+        businessDetails: z.any().optional(),
+        bankDetails: z.any().optional(),
+        locationDetails: z.any().optional(),
+        submittedAt: z.preprocess((v) => {
+          if (!v) return undefined; if (typeof v === 'string') return new Date(v); return v;
+        }, z.date().optional()),
+        isActive: z.boolean().optional(),
+      }).partial();
 
-      const company = await storage.updateCompany(id, {
-        name,
-        description,
-        contactEmail,
-        phone,
-      } as any);
+      const payload = patchSchema.parse(req.body || {});
 
-      if (!company) {
-        return res.status(404).json({ message: "Company not found" });
+      // Build update object for existing columns only; merge structured fields into `details` blob for now
+      const updates: any = {};
+      if (payload.name !== undefined) updates.name = payload.name;
+      if (payload.description !== undefined) updates.description = payload.description;
+      if (payload.contactEmail !== undefined) updates.contactEmail = payload.contactEmail;
+      if (payload.phone !== undefined) updates.phone = payload.phone;
+      if (payload.providerId !== undefined) updates.providerId = payload.providerId;
+      if (payload.isActive !== undefined) updates.isActive = payload.isActive;
+
+      // Merge into existing details JSON
+      const [existingRow] = await db
+        .select({ details: companies.details })
+        .from(companies)
+        .where(eq(companies.id, id))
+        .limit(1 as any);
+      const currentDetails = (existingRow?.details as any) ?? {};
+      const mergedDetails = { ...currentDetails };
+      if (payload.businessDetails !== undefined) mergedDetails.businessDetails = payload.businessDetails;
+      if (payload.bankDetails !== undefined) mergedDetails.bankDetails = payload.bankDetails;
+      if (payload.locationDetails !== undefined) mergedDetails.locationDetails = payload.locationDetails;
+      if (payload.submittedAt !== undefined) mergedDetails.submittedAt = payload.submittedAt instanceof Date ? payload.submittedAt.toISOString() : String(payload.submittedAt);
+
+      // Only set details if something changed
+      if (Object.keys(mergedDetails).length) updates.details = mergedDetails;
+
+      const company = await storage.updateCompany(id, updates as any);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // GET single company with structured fields
+  app.get("/api/admin/companies/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
       }
 
-      res.json(company);
+      const { id } = req.params;
+      const [row] = await db
+        .select({
+          id: companies.id,
+          name: companies.name,
+          description: companies.description,
+          contactEmail: companies.contactEmail,
+          phone: companies.phone,
+          providerId: companies.providerId,
+          details: companies.details,
+          isActive: companies.isActive,
+          createdAt: companies.createdAt,
+          updatedAt: companies.updatedAt,
+        })
+        .from(companies)
+        .where(eq(companies.id, id))
+        .limit(1 as any);
+
+      if (!row) return res.status(404).json({ message: "Company not found" });
+      res.json(row);
     } catch (error) {
       next(error);
     }
@@ -3168,8 +3339,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const tempPassword = randomBytes(8).toString("hex");
       const hashedPassword = await hashPassword(tempPassword);
 
+      const combinedName = (parsed.name || `${parsed.firstName} ${parsed.lastName}`).trim();
       const user = await storage.createUser({
-        name: parsed.name,
+        firstName: parsed.firstName,
+        lastName: parsed.lastName,
+        name: combinedName,
         email: parsed.email,
         phone: parsed.phone || "",
         password: hashedPassword,
@@ -3180,7 +3354,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isApproved: false,
         metadata: parsed.description ? { description: parsed.description } : undefined,
       } as any);
-      const created = await storage.createProviderRequest({ ...parsed, providerId: user.id });
+      const created = await storage.createProviderRequest({ ...parsed, name: combinedName, providerId: user.id });
       await storage.createAuditLog({
         actorId: user.id,
         action: "create_provider_request",

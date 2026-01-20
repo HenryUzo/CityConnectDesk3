@@ -38,6 +38,33 @@ app.use((req, res, next) => {
 });
 app.use(cookieParser());
 
+// DEV: accept `x-user-email` header to populate `req.user`/`req.auth` for local testing
+app.use(async (req, _res, next) => {
+  try {
+    if (process.env.NODE_ENV === 'development' && !req.auth && !req.user) {
+      const hdr = (req.header('x-user-email') || '').toString().trim().toLowerCase();
+      if (hdr) {
+        // defer import to avoid cycles
+        const { storage } = await import('./storage');
+        const u = await storage.getUserByEmail(hdr).catch(() => undefined);
+        if (u) {
+          // attach for downstream handlers and ensureDevAuth will pick this up
+          (req as any).user = u;
+          req.auth = {
+            id: u.id,
+            userId: u.id,
+            role: (u as any).role,
+            globalRole: (u as any).global_role,
+          } as any;
+        }
+      }
+    }
+  } catch (e) {
+    // ignore errors in dev bypass
+  }
+  next();
+});
+
 // CORS (safe defaults for dev; keep credentials if you use cookies)
 app.use(cors({
   origin: (origin, cb) => {

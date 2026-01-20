@@ -9,7 +9,10 @@ const toNumber = (value: unknown) => {
 };
 
 export const createProviderSchema = z.object({
-  name: z.string().min(1, "Name is required"),
+  firstName: z.string().min(1, "First name is required"),
+  lastName: z.string().min(1, "Last name is required"),
+  // keep full name optional for back-compat
+  name: z.string().optional(),
   email: z.string().email(),
   phone: z.string().optional().default(""),
   password: z.preprocess(
@@ -25,7 +28,9 @@ export const createProviderSchema = z.object({
 
 
 export const providerRequestSchema = z.object({
-  name: z.string().min(1, "Name is required"),
+  firstName: z.string().min(1, "First name is required"),
+  lastName: z.string().min(1, "Last name is required"),
+  name: z.string().optional(),
   email: z.string().email(),
   phone: z.string().optional().default(""),
   company: z.string().optional().default(""),
