@@ -913,61 +913,45 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCompanies(): Promise<Company[]> {
-    const list = await db
-      .select({
-        id: companies.id,
-        name: companies.name,
-        description: companies.description,
-        contactEmail: companies.contactEmail,
-        phone: companies.phone,
-        providerId: companies.providerId,
-        details: companies.details,
-        isActive: companies.isActive,
-        createdAt: companies.createdAt,
-        updatedAt: companies.updatedAt,
-      })
-      .from(companies)
-      .orderBy(desc(companies.createdAt));
+    try {
+      console.log("Storage: Getting companies from database...");
+      const list = await db
+        .select()
+        .from(companies)
+        .orderBy(desc(companies.createdAt));
 
-    return list as any;
+      console.log("Storage: Retrieved", list.length, "companies");
+      return list as any;
+    } catch (error) {
+      console.error("Storage: Error in getCompanies:", error);
+      console.error("Storage: Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        code: (error as any)?.code,
+        detail: (error as any)?.detail,
+      });
+      throw error;
+    }
   }
 
   async createCompany(company: InsertCompany): Promise<Company> {
     const [row] = await db
       .insert(companies)
       .values(company)
-      .returning({
-        id: companies.id,
-        name: companies.name,
-        description: companies.description,
-        contactEmail: companies.contactEmail,
-        phone: companies.phone,
-        providerId: companies.providerId,
-        details: companies.details,
-        isActive: companies.isActive,
-        createdAt: companies.createdAt,
-        updatedAt: companies.updatedAt,
-      });
+      .returning();
     return row as any;
   }
 
   async updateCompany(id: string, company: Partial<InsertCompany>): Promise<Company | undefined> {
+    console.log("Storage: Updating company", id);
+    console.log("Storage: Update payload:", JSON.stringify(company, null, 2));
+    
     const [row] = await db
       .update(companies)
       .set(company)
       .where(eq(companies.id, id))
-      .returning({
-        id: companies.id,
-        name: companies.name,
-        description: companies.description,
-        contactEmail: companies.contactEmail,
-        phone: companies.phone,
-        providerId: companies.providerId,
-        details: companies.details,
-        isActive: companies.isActive,
-        createdAt: companies.createdAt,
-        updatedAt: companies.updatedAt,
-      });
+      .returning();
+    
+    console.log("Storage: Updated company result:", JSON.stringify(row, null, 2));
     return row as any;
   }
 

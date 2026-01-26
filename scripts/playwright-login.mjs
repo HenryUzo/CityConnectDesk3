@@ -30,14 +30,11 @@ import fs from 'fs';
     await page.fill(passSelector, 'PgAdmin123!');
 
     console.log('Submitting login form...');
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle', timeout: 10000 }),
-      page.click(buttonSelector),
-    ]);
+    await page.click(buttonSelector);
 
-    // Wait for a navigation to dashboard or a success indicator
+    // Wait for a success indicator (dashboard nav) instead of full navigation
     console.log('Login submitted, waiting for dashboard content...');
-    await page.waitForSelector('[data-testid="nav-dashboard"]', { timeout: 10000 }).catch(() => {});
+    await page.waitForSelector('[data-testid="nav-dashboard"]', { timeout: 20000 });
 
     console.log('Finished. HAR saved to scripts/playwright-login.har');
   } catch (err) {

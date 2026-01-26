@@ -24,13 +24,15 @@ import {
   aiPreparedRequests,
   pricingRules,
   providerMatchingSettings,
+  orders,
+  storeMembers,
 } from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
 import marketplaceRoutes from "./marketplace-routes";
 import { createHash, randomBytes, scrypt } from "crypto";
 import { promisify } from "util";
-import { and, count, desc, eq, ilike, inArray, or, sum, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, or, sum, sql, gte, lte, isNotNull, isNull, asc } from "drizzle-orm";
 import {
   createMarketplaceItemSchema,
   createProviderSchema,
@@ -3076,6 +3078,136 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const StoreMemberSchema = z.object({
+    userId: z.string().min(1, "User ID is required"),
+    role: z.string().optional(),
+    canManageItems: z.boolean().optional(),
+    canManageOrders: z.boolean().optional(),
+    isActive: z.boolean().optional(),
+  });
+
+  app.get("/api/admin/stores/:storeId/members", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { storeId } = req.params;
+      const rows = await db
+        .select({
+          member: storeMembers,
+          user: users,
+        })
+        .from(storeMembers)
+        .innerJoin(users, eq(storeMembers.userId, users.id))
+        .where(eq(storeMembers.storeId, storeId))
+        .orderBy(desc(storeMembers.createdAt));
+
+      res.json(
+        rows.map(({ member, user }: { member: typeof storeMembers; user: typeof users }) => ({
+          ...member,
+          user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role,
+            isActive: user.isActive,
+          },
+        })),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/stores/:storeId/members", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { storeId } = req.params;
+      const parsed = StoreMemberSchema.parse(req.body);
+
+      const existing = await db
+        .select()
+        .from(storeMembers)
+        .where(
+          and(
+            eq(storeMembers.storeId, storeId),
+            eq(storeMembers.userId, parsed.userId),
+          ),
+        );
+      if (existing.length > 0) {
+        return res.status(409).json({ message: "Member already assigned to this store" });
+      }
+
+      const [created] = await db
+        .insert(storeMembers)
+        .values({
+          storeId,
+          userId: parsed.userId,
+          role: parsed.role ?? "member",
+          canManageItems: parsed.canManageItems ?? true,
+          canManageOrders: parsed.canManageOrders ?? true,
+          isActive: parsed.isActive ?? true,
+        })
+        .returning();
+
+      res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/stores/:storeId/members/:memberId", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { storeId, memberId } = req.params;
+      const updates = StoreMemberSchema.partial().parse(req.body);
+
+      const [updated] = await db
+        .update(storeMembers)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(and(eq(storeMembers.id, memberId), eq(storeMembers.storeId, storeId)))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Store member not found" });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/admin/stores/:storeId/members/:memberId", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { storeId, memberId } = req.params;
+      const [deleted] = await db
+        .delete(storeMembers)
+        .where(and(eq(storeMembers.id, memberId), eq(storeMembers.storeId, storeId)))
+        .returning();
+
+      if (!deleted) {
+        return res.status(404).json({ message: "Store member not found" });
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   const MarketplaceItemAdminSchema = createMarketplaceItemSchema.extend({
     storeId: z.string().min(1, "Store ID is required"),
     estateId: z.string().optional(),
@@ -3097,6 +3229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const rows = await query.orderBy(desc(marketplaceItems.createdAt));
       res.json(rows);
     } catch (error) {
+      console.error("/api/admin/marketplace GET error:", error);
       next(error);
     }
   });
@@ -3128,6 +3261,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.status(201).json(created);
     } catch (error) {
+      console.error("/api/admin/marketplace POST error:", error);
       next(error);
     }
   });
@@ -3188,10 +3322,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
+      console.log("Fetching companies...");
       const companies = await storage.getCompanies();
+      console.log("Companies fetched successfully:", companies.length);
       res.json(companies);
     } catch (error) {
-      next(error);
+      console.error("Error in GET /api/admin/companies:", error);
+      console.error("Error message:", error instanceof Error ? error.message : String(error));
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack");
+      res.status(500).json({ 
+        error: "Failed to fetch companies",
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 
@@ -3201,18 +3343,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const { name, description, contactEmail, phone } = req.body || {};
+      const {
+        name,
+        description,
+        contactEmail,
+        phone,
+        isActive,
+        // Business Details
+        businessAddress,
+        businessCity,
+        businessState,
+        businessZipCode,
+        businessCountry,
+        businessType,
+        // Registration & Compliance
+        businessRegNumber,
+        businessTaxId,
+        // Bank Details
+        bankAccountName,
+        bankName,
+        bankAccountNumber,
+        bankRoutingNumber,
+      } = req.body || {};
+
       if (!name) return res.status(400).json({ message: "Name is required" });
+
+      // Structure the business details - filter out empty values
+      const businessDetailsObj: any = {};
+      if (businessAddress) businessDetailsObj.address = businessAddress;
+      if (businessCity) businessDetailsObj.city = businessCity;
+      if (businessState) businessDetailsObj.state = businessState;
+      if (businessZipCode) businessDetailsObj.zipCode = businessZipCode;
+      if (businessCountry) businessDetailsObj.country = businessCountry;
+      if (businessType) businessDetailsObj.type = businessType;
+      if (businessRegNumber) businessDetailsObj.registrationNumber = businessRegNumber;
+      if (businessTaxId) businessDetailsObj.taxId = businessTaxId;
+
+      const bankDetailsObj: any = {};
+      if (bankAccountName) bankDetailsObj.accountName = bankAccountName;
+      if (bankName) bankDetailsObj.bankName = bankName;
+      if (bankAccountNumber) bankDetailsObj.accountNumber = bankAccountNumber;
+      if (bankRoutingNumber) bankDetailsObj.routingNumber = bankRoutingNumber;
 
       const company = await storage.createCompany({
         name,
         description,
         contactEmail,
         phone,
+        isActive: isActive !== false,
+        businessDetails: businessDetailsObj,
+        bankDetails: bankDetailsObj,
+        details: {}, // Ensure details is initialized
       } as any);
 
       res.status(201).json(company);
     } catch (error) {
+      console.error("POST /api/admin/companies error:", error);
+      console.error("Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
       next(error);
     }
   });
@@ -3224,6 +3414,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
+      console.log("PUT /api/admin/companies/:id - ID:", id);
+      console.log("Request body:", JSON.stringify(req.body, null, 2));
+      
       // Accept structured fields for companies (partial updates allowed)
       const patchSchema = z.object({
         name: z.string().optional(),
@@ -3241,8 +3434,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }).partial();
 
       const payload = patchSchema.parse(req.body || {});
+      console.log("Parsed payload:", JSON.stringify(payload, null, 2));
 
-      // Build update object for existing columns only; merge structured fields into `details` blob for now
+      // Build update object for flat structured fields
       const updates: any = {};
       if (payload.name !== undefined) updates.name = payload.name;
       if (payload.description !== undefined) updates.description = payload.description;
@@ -3250,27 +3444,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (payload.phone !== undefined) updates.phone = payload.phone;
       if (payload.providerId !== undefined) updates.providerId = payload.providerId;
       if (payload.isActive !== undefined) updates.isActive = payload.isActive;
+      if (payload.businessDetails !== undefined) updates.businessDetails = payload.businessDetails;
+      if (payload.bankDetails !== undefined) updates.bankDetails = payload.bankDetails;
+      if (payload.locationDetails !== undefined) updates.locationDetails = payload.locationDetails;
+      if (payload.submittedAt !== undefined) updates.submittedAt = payload.submittedAt;
 
-      // Merge into existing details JSON
-      const [existingRow] = await db
-        .select({ details: companies.details })
-        .from(companies)
-        .where(eq(companies.id, id))
-        .limit(1 as any);
-      const currentDetails = (existingRow?.details as any) ?? {};
-      const mergedDetails = { ...currentDetails };
-      if (payload.businessDetails !== undefined) mergedDetails.businessDetails = payload.businessDetails;
-      if (payload.bankDetails !== undefined) mergedDetails.bankDetails = payload.bankDetails;
-      if (payload.locationDetails !== undefined) mergedDetails.locationDetails = payload.locationDetails;
-      if (payload.submittedAt !== undefined) mergedDetails.submittedAt = payload.submittedAt instanceof Date ? payload.submittedAt.toISOString() : String(payload.submittedAt);
-
-      // Only set details if something changed
-      if (Object.keys(mergedDetails).length) updates.details = mergedDetails;
+      console.log("Updates to apply:", JSON.stringify(updates, null, 2));
 
       const company = await storage.updateCompany(id, updates as any);
       if (!company) return res.status(404).json({ message: "Company not found" });
+      
+      console.log("Company updated successfully:", JSON.stringify(company, null, 2));
       res.json(company);
     } catch (error) {
+      console.error("Error in PUT /api/admin/companies/:id:", error);
       next(error);
     }
   });
@@ -3284,18 +3471,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { id } = req.params;
       const [row] = await db
-        .select({
-          id: companies.id,
-          name: companies.name,
-          description: companies.description,
-          contactEmail: companies.contactEmail,
-          phone: companies.phone,
-          providerId: companies.providerId,
-          details: companies.details,
-          isActive: companies.isActive,
-          createdAt: companies.createdAt,
-          updatedAt: companies.updatedAt,
-        })
+        .select()
         .from(companies)
         .where(eq(companies.id, id))
         .limit(1 as any);
@@ -3470,6 +3646,302 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ========== ORDERS MANAGEMENT ENDPOINTS ==========
+
+  // Admin: Get all orders with pagination and filtering
+  app.get("/api/admin/orders", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const {
+        page = "1",
+        limit = "20",
+        sortBy = "createdAt",
+        sortOrder = "desc",
+        status,
+        search,
+        minTotal,
+        maxTotal,
+        startDate,
+        endDate,
+        hasDispute,
+      } = req.query;
+
+      const pageNum = Math.max(1, parseInt(page as string) || 1);
+      const limitNum = Math.max(1, Math.min(100, parseInt(limit as string) || 20));
+      const offset = (pageNum - 1) * limitNum;
+
+      let query = db.select().from(orders);
+
+      // Filter by status
+      if (status && status !== "all") {
+        query = query.where(eq(orders.status, status as any));
+      }
+
+      // Filter by total price range - using sql to compare decimal
+      if (minTotal) {
+        query = query.where(
+          sql`CAST(total AS NUMERIC) >= ${parseFloat(minTotal as string)}`
+        );
+      }
+      if (maxTotal) {
+        query = query.where(
+          sql`CAST(total AS NUMERIC) <= ${parseFloat(maxTotal as string)}`
+        );
+      }
+
+      // Filter by date range
+      if (startDate) {
+        query = query.where(
+          sql`created_at >= ${new Date(startDate as string)}`
+        );
+      }
+      if (endDate) {
+        query = query.where(
+          sql`created_at <= ${new Date(endDate as string)}`
+        );
+      }
+
+      // Filter by dispute status
+      if (hasDispute === "true") {
+        query = query.where(sql`dispute IS NOT NULL`);
+      } else if (hasDispute === "false") {
+        query = query.where(sql`dispute IS NULL`);
+      }
+
+      // Sort
+      const orderFn = sortOrder === "desc" ? desc(orders.createdAt) : asc(orders.createdAt);
+      query = query.orderBy(orderFn);
+
+      // Pagination
+      const totalResult = await db
+        .select({ count: sql`count(*)` })
+        .from(orders);
+
+      const total = parseInt((totalResult[0]?.count as number)?.toString() || "0");
+      const rows = await query.limit(limitNum).offset(offset);
+
+      res.json({
+        data: rows,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching orders:", error);
+      next(error);
+    }
+  });
+
+  // Admin: Get orders analytics/statistics
+  app.get("/api/admin/orders/analytics/stats", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      // Get statistics using SQL
+      const statsResult = await db.execute(sql`
+        SELECT 
+          COUNT(*) as total_orders,
+          COUNT(CASE WHEN status = 'DELIVERED' THEN 1 END) as delivered,
+          COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending,
+          COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END) as cancelled,
+          COUNT(CASE WHEN status = 'PROCESSING' THEN 1 END) as processing,
+          COALESCE(SUM(CAST(total AS NUMERIC)), 0) as total_revenue,
+          COALESCE(AVG(CAST(total AS NUMERIC)), 0) as average_order_value
+        FROM "Order"
+      `);
+
+      // Get recent orders
+      const recentOrdersResult = await db.execute(sql`
+        SELECT 
+          id,
+          status,
+          total,
+          "createdAt",
+          "buyerId"
+        FROM "Order"
+        ORDER BY "createdAt" DESC
+        LIMIT 5
+      `);
+
+      const stats = statsResult.rows[0] || {
+        total_orders: 0,
+        delivered: 0,
+        pending: 0,
+        cancelled: 0,
+        processing: 0,
+        total_revenue: 0,
+        average_order_value: 0,
+      };
+
+      const totalOrders = parseInt(stats.total_orders.toString());
+      const completedOrders = parseInt(stats.delivered.toString());
+      const pendingOrders = parseInt(stats.pending.toString());
+      const cancelledOrders = parseInt(stats.cancelled.toString());
+      const processingOrders = parseInt(stats.processing.toString());
+
+      res.json({
+        totalOrders,
+        completedOrders,
+        pendingOrders,
+        cancelledOrders,
+        processingOrders,
+        disputedOrders: 0,
+        totalRevenue: parseFloat(stats.total_revenue.toString()),
+        averageOrderValue: parseFloat(stats.average_order_value.toString()),
+        byStatus: {
+          delivered: completedOrders,
+          pending: pendingOrders,
+          cancelled: cancelledOrders,
+          processing: processingOrders,
+          confirmed: 0,
+        },
+        recentOrders: (recentOrdersResult.rows || []).map((order: any) => ({
+          id: order.id,
+          resident: order.buyerId,
+          category: "Service",
+          status: order.status,
+          totalAmount: parseFloat(order.total?.toString() || "0"),
+          createdAt: order.createdAt,
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching order stats:", error);
+      next(error);
+    }
+  });
+
+  // Admin: Update order status
+  app.patch("/api/admin/orders/:orderId/status", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { orderId } = req.params;
+      const { status } = req.body;
+
+      if (!status || !["pending", "confirmed", "processing", "dispatched", "delivered", "cancelled", "disputed"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status" });
+      }
+
+      const [updated] = await db
+        .update(orders)
+        .set({
+          status: status as any,
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, orderId))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating order status:", error);
+      next(error);
+    }
+  });
+
+  // Admin: Create dispute for order
+  app.post("/api/admin/orders/:orderId/dispute", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { orderId } = req.params;
+      const { reason, description } = req.body;
+
+      if (!reason) {
+        return res.status(400).json({ message: "Dispute reason is required" });
+      }
+
+      const [updated] = await db
+        .update(orders)
+        .set({
+          dispute: {
+            reason,
+            description: description || "",
+            status: "open",
+            createdAt: new Date().toISOString(),
+          } as any,
+          status: "disputed",
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, orderId))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error creating dispute:", error);
+      next(error);
+    }
+  });
+
+  // Admin: Resolve dispute for order
+  app.patch("/api/admin/orders/:orderId/dispute", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { orderId } = req.params;
+      const { status, resolution, refundAmount } = req.body;
+
+      if (!status || !["resolved", "rejected", "escalated"].includes(status)) {
+        return res.status(400).json({ message: "Invalid dispute status" });
+      }
+
+      if (!resolution) {
+        return res.status(400).json({ message: "Resolution is required" });
+      }
+
+      const [current] = await db
+        .select()
+        .from(orders)
+        .where(eq(orders.id, orderId));
+
+      if (!current) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      const updatedDispute = {
+        ...(current.dispute as Record<string, any> || {}),
+        status,
+        resolution,
+        refundAmount: refundAmount || 0,
+        resolvedAt: new Date().toISOString(),
+      };
+
+      const [updated] = await db
+        .update(orders)
+        .set({
+          dispute: updatedDispute as any,
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, orderId))
+        .returning();
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error resolving dispute:", error);
+      next(error);
+    }
+  });
+
   const httpServer = createServer(app);
-  return httpServer;
-}
+  return httpServer;}

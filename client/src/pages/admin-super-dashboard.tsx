@@ -28,6 +28,7 @@ import {
   type CreateProviderInput,
   type IMarketplaceItem,
 } from "@shared/admin-schema";
+import { businessTypes } from "@/components/company/CompanyRegistrationFormFields";
 import {
   Card,
   CardContent,
@@ -90,6 +91,12 @@ import {
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
   AlertTriangle,
@@ -356,7 +363,19 @@ const normalizeAdminUser = (rawUser: any): AdminUser | null => {
   return {
     ...rawUser,
     memberships: Array.isArray(rawUser.memberships) ? rawUser.memberships : [],
-    globalRole: rawUser.globalRole ?? rawUser.global_role ?? rawUser.role ?? null,
+        details: [],
+        businessAddress: "",
+        businessCity: "",
+        businessState: "",
+        businessZipCode: "",
+        businessCountry: "",
+        businessType: "",
+        businessRegNumber: "",
+        businessTaxId: "",
+        bankAccountName: "",
+        bankName: "",
+        bankAccountNumber: "",
+        bankRoutingNumber: "",
   };
 };
 
@@ -980,6 +999,15 @@ const AiPreparedRequestsPanel = () => {
 const PricingRulesPanel = () => {
   const { user } = useAdminAuth();
   const isSuperAdmin = user?.globalRole === "super_admin";
+  const { toast } = useToast();
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    name: "",
+    category: "",
+    urgency: "",
+    minPrice: "0",
+    maxPrice: "0",
+  });
 
   const {
     data: rows = [],
@@ -990,6 +1018,47 @@ const PricingRulesPanel = () => {
     queryFn: () => adminApiRequest("GET", "/api/admin/pricing-rules"),
     enabled: isSuperAdmin,
   });
+
+  const createMutation = useMutation({
+    mutationFn: (ruleData: any) =>
+      adminApiRequest("POST", "/api/admin/pricing-rules", ruleData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-pricing-rules"] });
+      setIsCreateDialogOpen(false);
+      resetForm();
+      toast({ title: "Pricing rule created successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error creating pricing rule",
+        description: error.response?.data?.error || "Failed to create pricing rule",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const resetForm = () => {
+    setFormData({
+      name: "",
+      category: "",
+      urgency: "",
+      minPrice: "0",
+      maxPrice: "0",
+    });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name.trim()) {
+      toast({
+        title: "Validation Error",
+        description: "Pricing rule name is required",
+        variant: "destructive",
+      });
+      return;
+    }
+    createMutation.mutate(formData);
+  };
 
   if (!isSuperAdmin) {
     return (
@@ -1005,15 +1074,35 @@ const PricingRulesPanel = () => {
   }
 
   return (
-    <Card>
+    <>
+      <Card>
       <CardHeader>
-        <CardTitle>Pricing Rules</CardTitle>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle>Pricing Rules</CardTitle>
+          <Button onClick={() => setIsCreateDialogOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Pricing Rule
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : error ? (
           <p className="text-sm text-destructive">Failed to load pricing rules.</p>
+        ) : (rows || []).length === 0 ? (
+          <div className="py-10 text-center">
+            <p className="text-sm text-muted-foreground">
+              No pricing rules yet. Create one to get started.
+            </p>
+            <Button
+              className="mt-4"
+              onClick={() => setIsCreateDialogOpen(true)}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Create First Rule
+            </Button>
+          </div>
         ) : (
           <div className="w-full overflow-auto">
             <Table>
@@ -1048,6 +1137,129 @@ const PricingRulesPanel = () => {
         )}
       </CardContent>
     </Card>
+
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="w-[95vw] max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Create New Pricing Rule</DialogTitle>
+            <DialogDescription>
+              Add a pricing rule for a service category with a specific urgency level.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <Label className="text-sm font-medium">Rule Name *</Label>
+              <Input
+                value={formData.name}
+                onChange={(e) =>
+                  setFormData({ ...formData, name: e.target.value })
+                }
+                placeholder="e.g., Plumbing - Standard"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Category</Label>
+                <Select
+                  value={formData.category}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, category: value })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="electrician">Electrician</SelectItem>
+                    <SelectItem value="plumber">Plumber</SelectItem>
+                    <SelectItem value="carpenter">Carpenter</SelectItem>
+                    <SelectItem value="hvac_technician">HVAC Technician</SelectItem>
+                    <SelectItem value="painter">Painter</SelectItem>
+                    <SelectItem value="tiler">Tiler</SelectItem>
+                    <SelectItem value="mason">Mason</SelectItem>
+                    <SelectItem value="roofer">Roofer</SelectItem>
+                    <SelectItem value="gardener">Gardener</SelectItem>
+                    <SelectItem value="cleaner">Cleaner</SelectItem>
+                    <SelectItem value="welder">Welder</SelectItem>
+                    <SelectItem value="appliance_repair">Appliance Repair</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Urgency</Label>
+                <Select
+                  value={formData.urgency}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, urgency: value })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select urgency" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="emergency">Emergency</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Min Price</Label>
+                <Input
+                  type="number"
+                  value={formData.minPrice}
+                  onChange={(e) =>
+                    setFormData({ ...formData, minPrice: e.target.value })
+                  }
+                  placeholder="0"
+                  min="0"
+                />
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Max Price</Label>
+                <Input
+                  type="number"
+                  value={formData.maxPrice}
+                  onChange={(e) =>
+                    setFormData({ ...formData, maxPrice: e.target.value })
+                  }
+                  placeholder="0"
+                  min="0"
+                />
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsCreateDialogOpen(false);
+                  resetForm();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={createMutation.isPending}>
+                {createMutation.isPending && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                {createMutation.isPending ? "Creating..." : "Create Rule"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+    </>
   );
 };
 
@@ -1118,6 +1330,142 @@ const ProviderMatchingPanel = () => {
         )}
       </CardContent>
     </Card>
+  );
+};
+
+const AnalyticsPanel = ({ orderStats }: { orderStats: any }) => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Analytics</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+          Analytics & Insights
+        </h1>
+        <p className="text-gray-600 dark:text-gray-400">
+          Monitor orders, revenue, and platform performance metrics.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Total Orders</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{orderStats?.totalOrders || 0}</p>
+            <p className="text-xs text-muted-foreground mt-1">All orders</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">
+              ₦{(orderStats?.totalRevenue || 0).toLocaleString()}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">Across all orders</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Completed Orders</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{orderStats?.completedOrders || 0}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {orderStats?.totalOrders
+                ? ((((orderStats?.completedOrders || 0) / (orderStats?.totalOrders || 1)) * 100).toFixed(1))
+                : 0}
+              % completion rate
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Pending Orders</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{orderStats?.pendingOrders || 0}</p>
+            <p className="text-xs text-muted-foreground mt-1">Awaiting completion</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Order Status Distribution</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {orderStats?.byStatus ? (
+              Object.entries(orderStats.byStatus).map(([status, count]: [string, any]) => (
+                <div key={status} className="flex items-center justify-between">
+                  <p className="text-sm font-medium capitalize">{status}</p>
+                  <div className="flex items-center gap-2">
+                    <div className="w-32 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary"
+                        style={{
+                          width: `${((count / (orderStats?.totalOrders || 1)) * 100).toFixed(0)}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="text-sm text-muted-foreground">{count}</span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">No order data available</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Orders</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {orderStats?.recentOrders && orderStats.recentOrders.length > 0 ? (
+            <div className="space-y-2 text-sm">
+              {orderStats.recentOrders.map((order: any) => (
+                <div key={order.id} className="flex justify-between items-center py-2 border-b last:border-0">
+                  <div>
+                    <p className="font-medium">{order.resident || "Unknown"}</p>
+                    <p className="text-xs text-muted-foreground">{order.service || order.category}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-medium">₦{(order.totalAmount || 0).toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{order.status}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No recent orders</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 };
 
@@ -1853,7 +2201,7 @@ const UsersManagement = () => {
             }
           }}
         >
-          <DialogContent className="w-[60vw] max-w-[95vw]">
+          <DialogContent className="w-[70vw] max-w-5xl">
             <DialogHeader>
               <DialogTitle>
                 {editingUser ? "Edit User" : "Add New User"}
@@ -1980,7 +2328,7 @@ const UsersManagement = () => {
 
         {/* Estate Membership Management Dialog */}
         <Dialog open={showMemberships} onOpenChange={setShowMemberships}>
-          <DialogContent className="w-[60vw] max-w-[95vw]">
+          <DialogContent className="w-[70vw] max-w-5xl">
             <DialogHeader>
               <DialogTitle>
                 Manage Estate Memberships - {membershipUser?.name}
@@ -2263,7 +2611,7 @@ const UsersManagement = () => {
         </Dialog>
         {/* Confirmation dialog before performing reset */}
         <Dialog open={resetConfirmOpen} onOpenChange={(open) => setResetConfirmOpen(open)}>
-          <DialogContent className="w-[60vw] max-w-[95vw]">
+          <DialogContent className="w-[70vw] max-w-5xl">
             <DialogHeader>
               <DialogTitle>Confirm password reset</DialogTitle>
               <DialogDescription>
@@ -2347,6 +2695,8 @@ const ProvidersManagement = () => {
   const [previewProvider, setPreviewProvider] = useState<any>(null);
   const [previewImage, setPreviewImage] = useState<string>("");
   const [previewData, setPreviewData] = useState({
+    firstName: "",
+    lastName: "",
     name: "",
     email: "",
     phone: "",
@@ -2452,25 +2802,16 @@ const ProvidersManagement = () => {
   });
   const categoryOptions =
     Array.isArray(categoriesList) && categoriesList.length > 0
-      ? categoriesList
-          .filter((c: any) => c?.key || c?.name)
-          .filter((c: any) => {
-            const key = String(c.key || c.name);
-            return [
-              "surveillance_monitoring",
-              "cleaning_janitorial",
-              "catering_services",
-              "it_support",
-              "maintenance_repair",
-              "marketing_advertising",
-              "home_tutors",
-              "furniture_making",
-            ].includes(key);
-          })
-          .map((c: any) => ({
-            value: c.key || c.name,
-            label: c.name || c.key,
-          }))
+      ? Array.from(
+          new Map(
+            categoriesList
+              .filter((c: any) => c?.key || c?.name)
+              .map((c: any) => {
+                const value = c.key || c.name;
+                return [value, { value, label: c.name || c.key }];
+              }),
+          ).values(),
+        )
       : [
       { value: "surveillance_monitoring", label: "Surveillance monitoring" },
       { value: "cleaning_janitorial", label: "Cleaning & janitorial" },
@@ -2691,14 +3032,15 @@ const ProvidersManagement = () => {
     setPreviewProvider(provider);
     setPreviewImage(provider.avatar || "");
     setPreviewData({
-      firstName: provider.firstName || (provider.name ? provider.name.split(" ")[0] : "") ,
-      lastName: provider.lastName || (provider.name ? provider.name.split(" ").slice(1).join(" ") : ""),
-      email: provider.email || "",
-      phone: provider.phone || "",
-      company: provider.company || "",
-      categories: Array.isArray(provider.categories) ? provider.categories : [],
-      experience: provider.experience || 0,
-      description: provider.description || "",
+        firstName: provider.firstName || (provider.name ? provider.name.split(" ")[0] : ""),
+        lastName: provider.lastName || (provider.name ? provider.name.split(" ").slice(1).join(" ") : ""),
+        email: provider.email || "",
+        phone: provider.phone || "",
+        company: provider.company || "",
+        categories: Array.isArray(provider.categories) ? provider.categories : [],
+        experience: provider.experience || 0,
+        description: provider.description || "",
+        name: ""
     });
   };
 
@@ -3464,7 +3806,7 @@ const ProvidersManagement = () => {
                           <PopoverContent
                             align="start"
                             sideOffset={0}
-                            className="w-full p-0"
+                            className="w-[var(--radix-popover-trigger-width)] p-0"
                           >
                             <ScrollArea className="max-h-64 sm:max-h-80 overflow-y-auto p-3">
                               <div className="space-y-2">
@@ -5684,6 +6026,11 @@ export default function AdminSuperDashboard() {
     queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
     enabled: Boolean(user),
   });
+  const { data: orderStats } = useQuery({
+    queryKey: ["admin-orders-analytics"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/orders/analytics/stats"),
+    enabled: isSuperAdmin,
+  });
   useEffect(() => {
     if (!sessionChecked || !user || selectedEstateId) return;
     if (!Array.isArray(estateList) || estateList.length === 0) return;
@@ -6100,6 +6447,7 @@ export default function AdminSuperDashboard() {
             {activeTab === "ai-prepared-requests" && <AiPreparedRequestsPanel />}
             {activeTab === "pricing-rules" && <PricingRulesPanel />}
             {activeTab === "provider-matching" && <ProviderMatchingPanel />}
+            {activeTab === "analytics" && <AnalyticsPanel orderStats={orderStats} />}
             {["requests", "artisanRequests"].includes(activeTab) && (
               <ArtisanRequestsPanel
                 selectedEstateId={selectedEstateId}
@@ -7501,6 +7849,21 @@ const CompaniesManagement = () => {
     contactEmail: "",
     phone: "",
     isActive: true,
+    // Business Details
+    businessAddress: "",
+    businessCity: "",
+    businessState: "",
+    businessZipCode: "",
+    businessCountry: "",
+    businessType: "",
+    // Registration & Compliance
+    businessRegNumber: "",
+    businessTaxId: "",
+    // Bank Details
+    bankAccountName: "",
+    bankName: "",
+    bankAccountNumber: "",
+    bankRoutingNumber: "",
     details: [] as Array<{ key: string; value: string }>,
   });
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
@@ -7542,7 +7905,26 @@ const CompaniesManagement = () => {
       adminApiRequest("POST", "/api/admin/companies", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
-      setForm({ name: "", description: "", contactEmail: "", phone: "", isActive: true, details: [] });
+      setForm({
+        name: "",
+        description: "",
+        contactEmail: "",
+        phone: "",
+        isActive: true,
+        businessAddress: "",
+        businessCity: "",
+        businessState: "",
+        businessZipCode: "",
+        businessCountry: "",
+        businessType: "",
+        businessRegNumber: "",
+        businessTaxId: "",
+        bankAccountName: "",
+        bankName: "",
+        bankAccountNumber: "",
+        bankRoutingNumber: "",
+        details: [],
+      });
       setShowAddCompany(false);
       toast({ title: "Company created successfully" });
     },
@@ -7560,7 +7942,26 @@ const CompaniesManagement = () => {
       adminApiRequest("PUT", `/api/admin/companies/${selectedCompany.id}`, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
-      setForm({ name: "", description: "", contactEmail: "", phone: "", isActive: true, details: [] });
+      setForm({
+        name: "",
+        description: "",
+        contactEmail: "",
+        phone: "",
+        isActive: true,
+        businessAddress: "",
+        businessCity: "",
+        businessState: "",
+        businessZipCode: "",
+        businessCountry: "",
+        businessType: "",
+        businessRegNumber: "",
+        businessTaxId: "",
+        bankAccountName: "",
+        bankName: "",
+        bankAccountNumber: "",
+        bankRoutingNumber: "",
+        details: [],
+      });
       setSelectedCompany(null);
       setShowEditCompany(false);
       toast({ title: "Company updated successfully" });
@@ -7603,20 +8004,22 @@ const CompaniesManagement = () => {
       contactEmail: form.contactEmail,
       phone: form.phone,
       isActive: !!form.isActive,
+      // Business Details
+      businessAddress: form.businessAddress,
+      businessCity: form.businessCity,
+      businessState: form.businessState,
+      businessZipCode: form.businessZipCode,
+      businessCountry: form.businessCountry,
+      businessType: form.businessType,
+      // Registration & Compliance
+      businessRegNumber: form.businessRegNumber,
+      businessTaxId: form.businessTaxId,
+      // Bank Details
+      bankAccountName: form.bankAccountName,
+      bankName: form.bankName,
+      bankAccountNumber: form.bankAccountNumber,
+      bankRoutingNumber: form.bankRoutingNumber,
     };
-    if (Array.isArray(form.details) && form.details.length > 0) {
-      const obj: any = {};
-      form.details.forEach((entry: any) => {
-        if (entry.key) {
-          try {
-            obj[entry.key] = JSON.parse(entry.value);
-          } catch {
-            obj[entry.key] = entry.value;
-          }
-        }
-      });
-      payload.details = obj;
-    }
     createCompanyMutation.mutate(payload);
   };
 
@@ -7625,14 +8028,37 @@ const CompaniesManagement = () => {
       toast({ title: "Name is required", variant: "destructive" });
       return;
     }
-    // Prepare payload: parse details JSON if present
+    
+    // Build businessDetails object with all values
+    const businessDetailsObj: any = {};
+    if (form.businessAddress) businessDetailsObj.address = form.businessAddress;
+    if (form.businessCity) businessDetailsObj.city = form.businessCity;
+    if (form.businessState) businessDetailsObj.state = form.businessState;
+    if (form.businessZipCode) businessDetailsObj.zipCode = form.businessZipCode;
+    if (form.businessCountry) businessDetailsObj.country = form.businessCountry;
+    if (form.businessType) businessDetailsObj.type = form.businessType;
+    if (form.businessRegNumber) businessDetailsObj.registrationNumber = form.businessRegNumber;
+    if (form.businessTaxId) businessDetailsObj.taxId = form.businessTaxId;
+
+    // Build bankDetails object with all values
+    const bankDetailsObj: any = {};
+    if (form.bankAccountName) bankDetailsObj.accountName = form.bankAccountName;
+    if (form.bankName) bankDetailsObj.bankName = form.bankName;
+    if (form.bankAccountNumber) bankDetailsObj.accountNumber = form.bankAccountNumber;
+    if (form.bankRoutingNumber) bankDetailsObj.routingNumber = form.bankRoutingNumber;
+
     const payload: any = {
       name: form.name,
       description: form.description,
       contactEmail: form.contactEmail,
       phone: form.phone,
       isActive: !!form.isActive,
+      // Always include businessDetails and bankDetails to replace old data
+      businessDetails: businessDetailsObj,
+      bankDetails: bankDetailsObj,
     };
+
+    // Handle old-style details array if present
     if (Array.isArray(form.details) && form.details.length > 0) {
       const obj: any = {};
       form.details.forEach((entry: any) => {
@@ -7647,6 +8073,7 @@ const CompaniesManagement = () => {
       payload.details = obj;
     }
 
+    console.log("handleUpdate payload:", JSON.stringify(payload, null, 2));
     updateCompanyMutation.mutate(payload);
   };
 
@@ -7657,12 +8084,29 @@ const CompaniesManagement = () => {
 
   const handleEditCompany = (company: any) => {
     setSelectedCompany(company);
+    
+    // Extract business details from nested object
+    const businessDetails = company.businessDetails || {};
+    const bankDetails = company.bankDetails || {};
+    
     setForm({
       name: company.name || "",
       description: company.description || "",
       contactEmail: company.contactEmail || "",
       phone: company.phone || "",
       isActive: company.isActive ?? true,
+      businessAddress: businessDetails.address || "",
+      businessCity: businessDetails.city || "",
+      businessState: businessDetails.state || "",
+      businessZipCode: businessDetails.zipCode || "",
+      businessCountry: businessDetails.country || "",
+      businessType: businessDetails.type || "",
+      businessRegNumber: businessDetails.registrationNumber || "",
+      businessTaxId: businessDetails.taxId || "",
+      bankAccountName: bankDetails.accountName || "",
+      bankName: bankDetails.bankName || "",
+      bankAccountNumber: bankDetails.accountNumber || "",
+      bankRoutingNumber: bankDetails.routingNumber || "",
       details: company.details
         ? Object.entries(company.details).map(([k, v]) => ({ key: k, value: typeof v === "object" ? JSON.stringify(v) : String(v) }))
         : [],
@@ -7676,12 +8120,50 @@ const CompaniesManagement = () => {
   };
 
   const resetAddForm = () => {
-    setForm({ name: "", description: "", contactEmail: "", phone: "", isActive: true, details: [] });
+    setForm({
+      name: "",
+      description: "",
+      contactEmail: "",
+      phone: "",
+      isActive: true,
+      businessAddress: "",
+      businessCity: "",
+      businessState: "",
+      businessZipCode: "",
+      businessCountry: "",
+      businessType: "",
+      businessRegNumber: "",
+      businessTaxId: "",
+      bankAccountName: "",
+      bankName: "",
+      bankAccountNumber: "",
+      bankRoutingNumber: "",
+      details: [],
+    });
     setShowAddCompany(false);
   };
 
   const resetEditForm = () => {
-    setForm({ name: "", description: "", contactEmail: "", phone: "", isActive: true, details: [] });
+    setForm({
+      name: "",
+      description: "",
+      contactEmail: "",
+      phone: "",
+      isActive: true,
+      businessAddress: "",
+      businessCity: "",
+      businessState: "",
+      businessZipCode: "",
+      businessCountry: "",
+      businessType: "",
+      businessRegNumber: "",
+      businessTaxId: "",
+      bankAccountName: "",
+      bankName: "",
+      bankAccountNumber: "",
+      bankRoutingNumber: "",
+      details: [],
+    });
     setSelectedCompany(null);
     setShowEditCompany(false);
   };
@@ -7760,55 +8242,166 @@ const CompaniesManagement = () => {
               />
               <Label htmlFor="company-active-add" className="text-sm">Active</Label>
             </div>
+
+            {/* Business Registration Accordions */}
             <div className="col-span-1 sm:col-span-2 lg:col-span-3">
-              <Label className="text-xs text-muted-foreground">Details</Label>
-              <div className="space-y-2">
-                {Array.isArray(form.details) && form.details.length > 0 ? (
-                  form.details.map((entry: any, idx: number) => (
-                    <div key={idx} className="flex gap-2">
+              <Accordion type="single" collapsible className="w-full">
+                {/* Business Details Section */}
+                <AccordionItem value="business-details">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Business Details</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Business Address</Label>
                       <Input
-                        placeholder="Key"
-                        value={entry.key}
-                        onChange={(e) => {
-                          const next = [...form.details];
-                          next[idx] = { ...next[idx], key: e.target.value };
-                          setForm({ ...form, details: next });
-                        }}
+                        placeholder="Street address"
+                        value={form.businessAddress || ""}
+                        onChange={(e) => setForm({ ...form, businessAddress: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-business-address"
                       />
-                      <Input
-                        placeholder="Value"
-                        value={entry.value}
-                        onChange={(e) => {
-                          const next = [...form.details];
-                          next[idx] = { ...next[idx], value: e.target.value };
-                          setForm({ ...form, details: next });
-                        }}
-                      />
-                      <Button
-                        variant="ghost"
-                        onClick={() => {
-                          const next = [...form.details];
-                          next.splice(idx, 1);
-                          setForm({ ...form, details: next });
-                        }}
-                        title="Remove"
-                      >
-                        <Trash2 className="w-4 h-4 text-red-500" />
-                      </Button>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-sm text-muted-foreground">No details</div>
-                )}
-                <div>
-                  <Button
-                    variant="outline"
-                    onClick={() => setForm({ ...form, details: [ ...(form.details || []), { key: "", value: "" } ] })}
-                  >
-                    Add detail
-                  </Button>
-                </div>
-              </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">City</Label>
+                        <Input
+                          placeholder="City"
+                          value={form.businessCity || ""}
+                          onChange={(e) => setForm({ ...form, businessCity: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-business-city"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium">State/Province</Label>
+                        <Input
+                          placeholder="State/Province"
+                          value={form.businessState || ""}
+                          onChange={(e) => setForm({ ...form, businessState: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-business-state"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">ZIP Code</Label>
+                        <Input
+                          placeholder="ZIP/Postal code"
+                          value={form.businessZipCode || ""}
+                          onChange={(e) => setForm({ ...form, businessZipCode: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-business-zipcode"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium">Country</Label>
+                        <Input
+                          placeholder="Country"
+                          value={form.businessCountry || ""}
+                          onChange={(e) => setForm({ ...form, businessCountry: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-business-country"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Business Type</Label>
+                      <Select value={form.businessType || ""} onValueChange={(value) => setForm({ ...form, businessType: value })}>
+                        <SelectTrigger className="w-full mt-1" data-testid="select-business-type">
+                          <SelectValue placeholder="Select a business type" />
+                        </SelectTrigger>
+                        <SelectContent className="w-full">
+                          {businessTypes.map((type) => (
+                            <SelectItem key={type} value={type}>
+                              {type}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* Registration & Compliance Section */}
+                <AccordionItem value="registration-compliance">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Registration & Compliance</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Business Registration Number</Label>
+                      <Input
+                        placeholder="CAC/Registration number"
+                        value={form.businessRegNumber || ""}
+                        onChange={(e) => setForm({ ...form, businessRegNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-business-reg-number"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Tax ID / NIN</Label>
+                      <Input
+                        placeholder="Tax ID / NIN"
+                        value={form.businessTaxId || ""}
+                        onChange={(e) => setForm({ ...form, businessTaxId: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-business-tax-id"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* Bank Details Section */}
+                <AccordionItem value="bank-details">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Bank Details</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Account Holder Name</Label>
+                      <Input
+                        placeholder="Account holder name"
+                        value={form.bankAccountName || ""}
+                        onChange={(e) => setForm({ ...form, bankAccountName: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-bank-account-name"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Bank Name</Label>
+                      <Input
+                        placeholder="Bank name"
+                        value={form.bankName || ""}
+                        onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-bank-name"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Account Number</Label>
+                      <Input
+                        placeholder="Account number"
+                        value={form.bankAccountNumber || ""}
+                        onChange={(e) => setForm({ ...form, bankAccountNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-bank-account-number"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Routing Number / Code</Label>
+                      <Input
+                        placeholder="Routing/Sort code"
+                        value={form.bankRoutingNumber || ""}
+                        onChange={(e) => setForm({ ...form, bankRoutingNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-bank-routing"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
             </div>
           </div>
           <DialogFooter className="flex justify-end gap-2">
@@ -7954,148 +8547,166 @@ const CompaniesManagement = () => {
               />
               <Label htmlFor="company-active" className="text-sm">Active</Label>
             </div>
+
+            {/* Business Registration Accordions */}
             <div className="col-span-1 sm:col-span-2 lg:col-span-3">
-              <Label className="text-xs text-muted-foreground">Details</Label>
-              <div className="space-y-3">
-                {Array.isArray(form.details) && form.details.length > 0 ? (
-                  form.details.map((entry: any, idx: number) => {
-                    let parsed: any = null;
-                    try {
-                      parsed = typeof entry.value === "string" ? JSON.parse(entry.value) : entry.value;
-                    } catch (e) {
-                      parsed = null;
-                    }
-                    const isStructured = parsed && typeof parsed === "object" && ["bankDetails", "businessDetails", "locationDetails"].includes(entry.key);
-                    return (
-                      <div key={idx}>
-                        {isStructured ? (
-                          <details className="group bg-white/50 dark:bg-slate-900 p-3 rounded">
-                            <summary className="cursor-pointer list-none outline-none py-1 flex justify-between items-center">
-                              <div className="text-sm font-medium">{entry.key}</div>
-                              <div className="text-xs text-muted-foreground">{Object.keys(parsed).length} fields</div>
-                            </summary>
-                            <div className="mt-3 space-y-3">
-                              {Object.entries(parsed).map(([sk, sv]) => (
-                                <div key={sk} className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-start">
-                                  <div className="sm:col-span-1">
-                                    <Label className="text-xs">{sk}</Label>
-                                  </div>
-                                  <div className="sm:col-span-2">
-                                    {sv && typeof sv === "object" && ("latitude" in sv) && ("longitude" in sv) ? (
-                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                        <div>
-                                          <Label className="text-xs">{friendlyLabel("latitude")}</Label>
-                                          <Input
-                                            value={String((sv as any).latitude ?? "")}
-                                            onChange={(e) => {
-                                              const v = e.target.value;
-                                              const next = [...form.details];
-                                              const obj = { ...parsed };
-                                              obj[sk] = { ...(obj[sk] || {}), latitude: v };
-                                              next[idx] = { ...next[idx], value: JSON.stringify(obj) };
-                                              setForm({ ...form, details: next });
-                                              const n = Number(v);
-                                              setDetailErrors((prev) => ({ ...prev, [`${idx}.latitude`]: isNaN(n) || n < -90 || n > 90 ? "Latitude must be between -90 and 90" : "" }));
-                                            }}
-                                          />
-                                          {detailErrors[`${idx}.latitude`] ? (
-                                            <div className="text-sm text-red-600">{detailErrors[`${idx}.latitude`]}</div>
-                                          ) : null}
-                                        </div>
-                                        <div>
-                                          <Label className="text-xs">{friendlyLabel("longitude")}</Label>
-                                          <Input
-                                            value={String((sv as any).longitude ?? "")}
-                                            onChange={(e) => {
-                                              const v = e.target.value;
-                                              const next = [...form.details];
-                                              const obj = { ...parsed };
-                                              obj[sk] = { ...(obj[sk] || {}), longitude: v };
-                                              next[idx] = { ...next[idx], value: JSON.stringify(obj) };
-                                              setForm({ ...form, details: next });
-                                              const n = Number(v);
-                                              setDetailErrors((prev) => ({ ...prev, [`${idx}.longitude`]: isNaN(n) || n < -180 || n > 180 ? "Longitude must be between -180 and 180" : "" }));
-                                            }}
-                                          />
-                                          {detailErrors[`${idx}.longitude`] ? (
-                                            <div className="text-sm text-red-600">{detailErrors[`${idx}.longitude`]}</div>
-                                          ) : null}
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <Input
-                                        value={String(sv ?? "")}
-                                        onChange={(e) => {
-                                          const next = [...form.details];
-                                          const obj = { ...parsed };
-                                          obj[sk] = e.target.value;
-                                          next[idx] = { ...next[idx], value: JSON.stringify(obj) };
-                                          setForm({ ...form, details: next });
-                                        }}
-                                      />
-                                    )}
-                                    <p className="text-xs text-muted-foreground mt-1">Edit {sk} for {entry.key}.</p>
-                                  </div>
-                                </div>
-                              ))}
-                              <div className="flex justify-end mt-2">
-                                <Button
-                                  variant="ghost"
-                                  onClick={() => {
-                                    const next = [...form.details];
-                                    next.splice(idx, 1);
-                                    setForm({ ...form, details: next });
-                                  }}
-                                  title="Remove"
-                                >
-                                  <Trash2 className="w-4 h-4 text-red-500" />
-                                </Button>
-                              </div>
-                            </div>
-                          </details>
-                        ) : (
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-start">
-                            <div className="sm:col-span-1">
-                              <Label className="text-xs">Key</Label>
-                              <Input
-                                value={entry.key}
-                                onChange={(e) => {
-                                  const next = [...form.details];
-                                  next[idx] = { ...next[idx], key: e.target.value };
-                                  setForm({ ...form, details: next });
-                                }}
-                              />
-                              <p className="text-xs text-muted-foreground mt-1">Short identifier (e.g., taxId).</p>
-                            </div>
-                            <div className="sm:col-span-2">
-                              <Label className="text-xs">Value</Label>
-                              <Input
-                                value={entry.value}
-                                onChange={(e) => {
-                                  const next = [...form.details];
-                                  next[idx] = { ...next[idx], value: e.target.value };
-                                  setForm({ ...form, details: next });
-                                }}
-                              />
-                              <p className="text-xs text-muted-foreground mt-1">Use plain text or JSON where appropriate.</p>
-                            </div>
-                          </div>
-                        )}
+              <Accordion type="single" collapsible className="w-full">
+                {/* Business Details Section */}
+                <AccordionItem value="business-details">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Business Details</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Business Address</Label>
+                      <Input
+                        placeholder="Street address"
+                        value={form.businessAddress || ""}
+                        onChange={(e) => setForm({ ...form, businessAddress: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-business-address"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">City</Label>
+                        <Input
+                          placeholder="City"
+                          value={form.businessCity || ""}
+                          onChange={(e) => setForm({ ...form, businessCity: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-edit-business-city"
+                        />
                       </div>
-                    );
-                  })
-                ) : (
-                  <div className="text-sm text-muted-foreground">No details</div>
-                )}
-                <div>
-                  <Button
-                    variant="outline"
-                    onClick={() => setForm({ ...form, details: [ ...(form.details || []), { key: "", value: "" } ] })}
-                  >
-                    Add detail
-                  </Button>
-                </div>
-              </div>
+                      <div>
+                        <Label className="text-sm font-medium">State/Province</Label>
+                        <Input
+                          placeholder="State/Province"
+                          value={form.businessState || ""}
+                          onChange={(e) => setForm({ ...form, businessState: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-edit-business-state"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">ZIP Code</Label>
+                        <Input
+                          placeholder="ZIP/Postal code"
+                          value={form.businessZipCode || ""}
+                          onChange={(e) => setForm({ ...form, businessZipCode: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-edit-business-zipcode"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium">Country</Label>
+                        <Input
+                          placeholder="Country"
+                          value={form.businessCountry || ""}
+                          onChange={(e) => setForm({ ...form, businessCountry: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-edit-business-country"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Business Type</Label>
+                      <Select value={form.businessType || ""} onValueChange={(value) => setForm({ ...form, businessType: value })}>
+                        <SelectTrigger className="w-full mt-1" data-testid="select-edit-business-type">
+                          <SelectValue placeholder="Select a business type" />
+                        </SelectTrigger>
+                        <SelectContent className="w-full">
+                          {businessTypes.map((type) => (
+                            <SelectItem key={type} value={type}>
+                              {type}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* Registration & Compliance Section */}
+                <AccordionItem value="registration-compliance">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Registration & Compliance</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Business Registration Number</Label>
+                      <Input
+                        placeholder="CAC/Registration number"
+                        value={form.businessRegNumber || ""}
+                        onChange={(e) => setForm({ ...form, businessRegNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-business-reg-number"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Tax ID / NIN</Label>
+                      <Input
+                        placeholder="Tax ID / NIN"
+                        value={form.businessTaxId || ""}
+                        onChange={(e) => setForm({ ...form, businessTaxId: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-business-tax-id"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* Bank Details Section */}
+                <AccordionItem value="bank-details">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Bank Details</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Account Holder Name</Label>
+                      <Input
+                        placeholder="Account holder name"
+                        value={form.bankAccountName || ""}
+                        onChange={(e) => setForm({ ...form, bankAccountName: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-bank-account-name"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Bank Name</Label>
+                      <Input
+                        placeholder="Bank name"
+                        value={form.bankName || ""}
+                        onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-bank-name"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Account Number</Label>
+                      <Input
+                        placeholder="Account number"
+                        value={form.bankAccountNumber || ""}
+                        onChange={(e) => setForm({ ...form, bankAccountNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-bank-account-number"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Routing Number / Code</Label>
+                      <Input
+                        placeholder="Routing/Sort code"
+                        value={form.bankRoutingNumber || ""}
+                        onChange={(e) => setForm({ ...form, bankRoutingNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-bank-routing"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
             </div>
           </div>
           <DialogFooter className="flex justify-end gap-2">
@@ -8223,7 +8834,6 @@ const StoresManagement = () => {
     const [search, setSearch] = useState("");
     const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
     const [selectedStore, setSelectedStore] = useState<any>(null);
-    const [showMembersDialog, setShowMembersDialog] = useState(false);
     const [selectedOwnerId, setSelectedOwnerId] = useState("");
     const [formData, setFormData] = useState({
       name: "",
@@ -8283,13 +8893,30 @@ const StoresManagement = () => {
       }
       return null;
     })();
+    const storeMembersStoreId = (() => {
+      const segments = location.split("/").filter(Boolean);
+      if (
+        segments[0] === "admin-dashboard" &&
+        segments[1] === "stores" &&
+        segments[2] === "members"
+      ) {
+        return segments[3] || null;
+      }
+      return null;
+    })();
+    const storeMembersStore =
+      storeMembersStoreId && Array.isArray(stores)
+        ? stores.find((store: any) => (store._id || store.id) === storeMembersStoreId)
+        : null;
     const inventoryStore =
       inventoryStoreId && Array.isArray(stores)
         ? stores.find((store: any) => (store._id || store.id) === inventoryStoreId)
         : null;
     const isInventoryPage = Boolean(inventoryStoreId);
+    const isStoreMembersPage = Boolean(storeMembersStoreId);
     const [inventoryView, setInventoryView] = useState<"card" | "table">("table");
     const goToStores = () => setLocation("/admin-dashboard/stores");
+    const goToStoreMembers = (storeId: string) => setLocation(`/admin-dashboard/stores/members/${storeId}`);
 
   const { data: storeProviders } = useQuery({
     queryKey: ["/api/admin/store-owner-providers"],
@@ -8372,19 +8999,138 @@ const StoresManagement = () => {
           : [],
       enabled: !!inventoryStoreId,
     });
+    const { data: storeMembers = [], isLoading: isStoreMembersLoading } = useQuery({
+      queryKey: ["/api/admin/stores", storeMembersStoreId, "members"],
+      queryFn: () =>
+        storeMembersStoreId
+          ? adminApiRequest("GET", `/api/admin/stores/${storeMembersStoreId}/members`)
+          : [],
+      enabled: !!storeMembersStoreId,
+    });
+    const { data: storeMemberInventory = [] } = useQuery({
+      queryKey: ["/api/admin/marketplace", { storeId: storeMembersStoreId, view: "members" }],
+      queryFn: () =>
+        storeMembersStoreId
+          ? adminApiRequest("GET", "/api/admin/marketplace", {
+              storeId: storeMembersStoreId,
+            })
+          : [],
+      enabled: !!storeMembersStoreId,
+    });
+    const { data: storeOrdersResponse } = useQuery({
+      queryKey: ["/api/admin/orders", { storeId: storeMembersStoreId }],
+      queryFn: () =>
+        adminApiRequest("GET", "/api/admin/orders", {
+          limit: 50,
+        }),
+      enabled: !!storeMembersStoreId,
+    });
+    const [newStoreMember, setNewStoreMember] = useState({
+      userId: "",
+      role: "member",
+      canManageItems: true,
+      canManageOrders: true,
+      isActive: true,
+    });
+    const addStoreMemberMutation = useMutation({
+      mutationFn: (payload: typeof newStoreMember) =>
+        adminApiRequest("POST", `/api/admin/stores/${storeMembersStoreId}/members`, payload),
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["/api/admin/stores", storeMembersStoreId, "members"],
+        });
+        setNewStoreMember({
+          userId: "",
+          role: "member",
+          canManageItems: true,
+          canManageOrders: true,
+          isActive: true,
+        });
+        toast({ title: "Store member added" });
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Failed to add member",
+          description: error.response?.data?.message || "Unable to add member.",
+          variant: "destructive",
+        });
+      },
+    });
+    const updateStoreMemberMutation = useMutation({
+      mutationFn: ({ id, updates }: { id: string; updates: any }) =>
+        adminApiRequest(
+          "PATCH",
+          `/api/admin/stores/${storeMembersStoreId}/members/${id}`,
+          updates,
+        ),
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["/api/admin/stores", storeMembersStoreId, "members"],
+        });
+        toast({ title: "Member updated" });
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Failed to update member",
+          description: error.response?.data?.message || "Unable to update member.",
+          variant: "destructive",
+        });
+      },
+    });
+    const removeStoreMemberMutation = useMutation({
+      mutationFn: (memberId: string) =>
+        adminApiRequest(
+          "DELETE",
+          `/api/admin/stores/${storeMembersStoreId}/members/${memberId}`,
+        ),
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["/api/admin/stores", storeMembersStoreId, "members"],
+        });
+        toast({ title: "Member removed" });
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Failed to remove member",
+          description: error.response?.data?.message || "Unable to remove member.",
+          variant: "destructive",
+        });
+      },
+    });
+    const [memberTasks, setMemberTasks] = useState<any[]>([]);
+    const [memberTaskForm, setMemberTaskForm] = useState({
+      title: "",
+      description: "",
+      assigneeId: "",
+      priority: "medium",
+      status: "open",
+      dueDate: "",
+    });
+    useEffect(() => {
+      if (!storeMembersStoreId) return;
+      const key = `store-members:${storeMembersStoreId}:tasks`;
+      const saved = window.localStorage.getItem(key);
+      setMemberTasks(saved ? JSON.parse(saved) : []);
+    }, [storeMembersStoreId]);
+    useEffect(() => {
+      if (!storeMembersStoreId) return;
+      const key = `store-members:${storeMembersStoreId}:tasks`;
+      window.localStorage.setItem(key, JSON.stringify(memberTasks));
+    }, [memberTasks, storeMembersStoreId]);
 
     const inventoryForm = useForm({
       defaultValues: {
         name: "",
-        price: 0,
-        stock: 0,
+        price: "",
+        stock: "",
         category: "",
         description: "",
         vendorId: "",
-        image: "",
+        images: [] as string[],
       },
     });
-    const [inventoryImagePreview, setInventoryImagePreview] = useState<string>("");
+    const inventoryImageInputRef = useRef<HTMLInputElement | null>(null);
+    const [inventoryImagePreview, setInventoryImagePreview] = useState<string[]>([]);
     const inventoryEditForm = useForm({
       defaultValues: {
         name: "",
@@ -8396,8 +9142,13 @@ const StoresManagement = () => {
       },
     });
     const [inventoryEditPreview, setInventoryEditPreview] = useState<string>("");
+    const [inventoryEditImages, setInventoryEditImages] = useState<string[]>([]);
+    const [editImageIndex, setEditImageIndex] = useState<number>(0);
     const [inventoryEditingItem, setInventoryEditingItem] = useState<any | null>(null);
     const [deletingInventoryId, setDeletingInventoryId] = useState<string | null>(null);
+    const [isAddInventoryModalOpen, setIsAddInventoryModalOpen] = useState<boolean>(false);
+    const [viewInventoryItem, setViewInventoryItem] = useState<any | null>(null);
+    const [viewImageIndex, setViewImageIndex] = useState<number>(0);
 
     const getPrimaryImage = useCallback((item?: any) => {
       if (!item) return "";
@@ -8408,6 +9159,14 @@ const StoresManagement = () => {
         return item.image;
       }
       return "";
+    }, []);
+    const getGalleryImages = useCallback((item?: any) => {
+      if (!item) return [];
+      if (Array.isArray(item.images) && item.images.length > 0) {
+        return item.images.filter(Boolean);
+      }
+      if (item.image) return [item.image];
+      return [];
     }, []);
 
     const { data: itemCategories = [] } = useQuery({
@@ -8433,6 +9192,8 @@ const StoresManagement = () => {
           image: "",
         });
         setInventoryEditPreview("");
+        setInventoryEditImages([]);
+        setEditImageIndex(0);
         return;
       }
       const primaryImage = getPrimaryImage(inventoryEditingItem);
@@ -8445,7 +9206,9 @@ const StoresManagement = () => {
         image: primaryImage,
       });
       setInventoryEditPreview(primaryImage);
-    }, [inventoryEditingItem, itemCategories, getPrimaryImage, isInventoryPage]);
+      setInventoryEditImages(getGalleryImages(inventoryEditingItem));
+      setEditImageIndex(0);
+    }, [inventoryEditingItem, itemCategories, getPrimaryImage, getGalleryImages, isInventoryPage]);
 
     const createInventoryMutation = useMutation({
       mutationFn: (payload: any) =>
@@ -8453,7 +9216,7 @@ const StoresManagement = () => {
       onSuccess: () => {
         refetchInventory();
         inventoryForm.reset();
-        setInventoryImagePreview("");
+        setInventoryImagePreview([]);
         toast({ title: "Inventory item added" });
       },
       onError: (error: any) => {
@@ -8467,6 +9230,8 @@ const StoresManagement = () => {
     const closeInventoryEditDialog = useCallback(() => {
       setInventoryEditingItem(null);
       setInventoryEditPreview("");
+      setInventoryEditImages([]);
+      setEditImageIndex(0);
       inventoryEditForm.reset({
         name: "",
         price: 0,
@@ -8543,14 +9308,15 @@ const StoresManagement = () => {
       ? storeProviders.filter((p: any) => isStoreOwnerProvider(p))
       : [];
     if (!selectedOwnerId) {
-      toast({ title: "Select a store owner", description: "Assign a provider with the store_owner category.", variant: "destructive" });
+      toast({ title: "Select a store owner", description: "Assign a provider with the store owner category.", variant: "destructive" });
       return;
     }
     const owner = eligible.find((p: any) => (p.id || p._id) === selectedOwnerId);
     if (!owner) {
-      toast({ title: "Invalid store owner", description: "Provider must have the store_owner category.", variant: "destructive" });
+      toast({ title: "Invalid store owner", description: "Provider must have the store owner category.", variant: "destructive" });
       return;
     }
+    const storeId = selectedStore?._id || selectedStore?.id;
     const payload: any = { ...formData, ownerId: selectedOwnerId };
     // include estate assignment when set; for edits, explicitly clear with null when switching to global
     if (selectedStoreAssignment && selectedStoreAssignment !== "global") {
@@ -8559,10 +9325,542 @@ const StoresManagement = () => {
       // editing an existing store and user chose global: clear estate assignment
       payload.estateId = null;
     }
-    const storeId = selectedStore?._id || selectedStore?.id;
     createStoreMutation.mutate({ payload, id: storeId });
   };
 
+
+  if (isStoreMembersPage) {
+    const memberRows = Array.isArray(storeMembers) ? storeMembers : [];
+    const providerList = Array.isArray(storeProviders) ? storeProviders : [];
+    const storeOwnerId = storeMembersStore?.ownerId || storeMembersStore?.owner_id || "";
+    const storeOwnerUser = providerList.find(
+      (provider: any) => String(provider.id || provider._id) === String(storeOwnerId),
+    );
+    const membersWithOwner = storeOwnerId && !memberRows.some(
+      (member: any) => String(member.userId || member.user?.id || "") === String(storeOwnerId),
+    )
+      ? [
+          {
+            id: `owner-${storeOwnerId}`,
+            userId: storeOwnerId,
+            role: "owner",
+            canManageItems: true,
+            canManageOrders: true,
+            isActive: true,
+            user: storeOwnerUser
+              ? {
+                  id: storeOwnerUser.id || storeOwnerUser._id,
+                  name: storeOwnerUser.name,
+                  email: storeOwnerUser.email,
+                  phone: storeOwnerUser.phone,
+                  role: storeOwnerUser.role,
+                  isActive: storeOwnerUser.isActive,
+                }
+              : undefined,
+            isStoreOwner: true,
+          },
+          ...memberRows,
+        ]
+      : memberRows.map((member: any) => ({
+          ...member,
+          isStoreOwner: String(member.userId || member.user?.id || "") === String(storeOwnerId),
+        }));
+    const availableProviders = providerList.filter((provider: any) => {
+      const providerId = provider.id || provider._id;
+      return !memberRows.some((member: any) => (member.userId || member.user?.id) === providerId);
+    });
+    const orders = Array.isArray(storeOrdersResponse?.data) ? storeOrdersResponse.data : [];
+    const storeOrders = orders.filter(
+      (order: any) =>
+        String(order.storeId || order.store_id || "") === String(storeMembersStoreId),
+    );
+    const inventoryActivityItems = Array.isArray(storeMemberInventory) ? storeMemberInventory : [];
+    const activityEvents = [
+      ...storeOrders.map((order: any) => ({
+        id: `order-${order.id}`,
+        type: "order",
+        title: `Order ${String(order.id || "").slice(-6)}`,
+        meta: `${order.status || "Pending"}`,
+        amount: `${order.currency || "NGN"} ${Number(order.total || 0).toLocaleString()}`,
+        createdAt: order.createdAt || order.created_at,
+      })),
+      ...inventoryActivityItems.map((item: any) => ({
+        id: `inventory-${item.id}`,
+        type: "inventory",
+        title: item.name || "Inventory update",
+        meta: item.updatedAt ? "Updated" : "Added",
+        amount: `${item.currency || "NGN"} ${Number(item.price || 0).toLocaleString()}`,
+        createdAt: item.updatedAt || item.createdAt,
+      })),
+    ].sort((a, b) => {
+      const left = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const right = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return right - left;
+    });
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Button variant="ghost" size="sm" className="px-0" onClick={goToStores}>
+              <ChevronLeft className="w-4 h-4 mr-1" />
+              Back to Stores
+            </Button>
+            <span>/ Stores</span>
+            {storeMembersStore?.name ? <span>/ {storeMembersStore.name}</span> : null}
+            <span>/ Members</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {storeMembersStoreId && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setLocation(`/admin-dashboard/stores/inventory/${storeMembersStoreId}`)}
+              >
+                View Inventory
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Total Members</p>
+              <p className="text-2xl font-semibold">{memberRows.length}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Active Members</p>
+              <p className="text-2xl font-semibold">
+                {memberRows.filter((m: any) => m.isActive !== false).length}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Open Tasks</p>
+              <p className="text-2xl font-semibold">
+                {memberTasks.filter((t) => t.status !== "done").length}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Recent Orders</p>
+              <p className="text-2xl font-semibold">{storeOrders.length}</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle>Store Members</CardTitle>
+                  <CardDescription>Manage access, roles, and permissions for this store.</CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-3 md:grid-cols-[2fr_1fr_1fr_1fr_auto]">
+                <div>
+                  <Label className="text-xs font-medium">Member</Label>
+                  <Select
+                    value={newStoreMember.userId}
+                    onValueChange={(value) => setNewStoreMember((prev) => ({ ...prev, userId: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select provider" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableProviders.length > 0 ? (
+                        availableProviders.map((provider: any) => (
+                          <SelectItem key={provider.id || provider._id} value={provider.id || provider._id}>
+                            {provider.name} ({provider.email})
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <SelectItem value="none" disabled>
+                          All providers already assigned
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-medium">Role</Label>
+                  <Select
+                    value={newStoreMember.role}
+                    onValueChange={(value) => setNewStoreMember((prev) => ({ ...prev, role: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="owner">Owner</SelectItem>
+                      <SelectItem value="manager">Manager</SelectItem>
+                      <SelectItem value="member">Member</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={newStoreMember.canManageItems}
+                    onCheckedChange={(checked) =>
+                      setNewStoreMember((prev) => ({
+                        ...prev,
+                        canManageItems: checked === true,
+                      }))
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">Items</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={newStoreMember.canManageOrders}
+                    onCheckedChange={(checked) =>
+                      setNewStoreMember((prev) => ({
+                        ...prev,
+                        canManageOrders: checked === true,
+                      }))
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">Orders</span>
+                </div>
+                <div className="flex items-center">
+                  <Button
+                    disabled={!newStoreMember.userId || addStoreMemberMutation.isPending}
+                    onClick={() => addStoreMemberMutation.mutate(newStoreMember)}
+                  >
+                    {addStoreMemberMutation.isPending ? "Adding..." : "Add"}
+                  </Button>
+                </div>
+              </div>
+
+              {isStoreMembersLoading ? (
+                <div className="text-sm text-muted-foreground">Loading members...</div>
+              ) : memberRows.length === 0 ? (
+                <div className="rounded border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  No members assigned to this store yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50">
+                      <tr className="text-left">
+                        <th className="px-4 py-2 font-medium">Member</th>
+                        <th className="px-4 py-2 font-medium">Role</th>
+                        <th className="px-4 py-2 font-medium">Permissions</th>
+                        <th className="px-4 py-2 font-medium">Status</th>
+                        <th className="px-4 py-2 font-medium text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {membersWithOwner.map((member: any) => {
+                        const memberId = member.id;
+                        const userInfo = member.user || {};
+                        const isStoreOwner = member.isStoreOwner;
+                        return (
+                          <tr key={memberId} className="border-t border-border">
+                            <td className="px-4 py-3">
+                              <div className="font-medium">{userInfo.name || "Unknown"}</div>
+                              <div className="text-xs text-muted-foreground">{userInfo.email}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              {isStoreOwner ? (
+                                <Badge variant="default">Store owner</Badge>
+                              ) : (
+                                <Select
+                                  value={member.role}
+                                  onValueChange={(value) =>
+                                    updateStoreMemberMutation.mutate({
+                                      id: memberId,
+                                      updates: { role: value },
+                                    })
+                                  }
+                                >
+                                  <SelectTrigger className="h-8">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="owner">Owner</SelectItem>
+                                    <SelectItem value="manager">Manager</SelectItem>
+                                    <SelectItem value="member">Member</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-2">
+                                  <Checkbox
+                                    checked={member.canManageItems}
+                                    onCheckedChange={(checked) =>
+                                      updateStoreMemberMutation.mutate({
+                                        id: memberId,
+                                        updates: { canManageItems: checked === true },
+                                      })
+                                    }
+                                    disabled={isStoreOwner}
+                                  />
+                                  <span className="text-xs text-muted-foreground">Items</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Checkbox
+                                    checked={member.canManageOrders}
+                                    onCheckedChange={(checked) =>
+                                      updateStoreMemberMutation.mutate({
+                                        id: memberId,
+                                        updates: { canManageOrders: checked === true },
+                                      })
+                                    }
+                                    disabled={isStoreOwner}
+                                  />
+                                  <span className="text-xs text-muted-foreground">Orders</span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <Badge variant={member.isActive ? "default" : "secondary"}>
+                                {member.isActive ? "Active" : "Inactive"}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() =>
+                                    updateStoreMemberMutation.mutate({
+                                      id: memberId,
+                                      updates: { isActive: !member.isActive },
+                                    })
+                                  }
+                                  disabled={isStoreOwner}
+                                >
+                                  {member.isActive ? "Disable" : "Enable"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => removeStoreMemberMutation.mutate(memberId)}
+                                  disabled={isStoreOwner}
+                                >
+                                  Remove
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Activity Feed</CardTitle>
+                <CardDescription>Recent activity tied to this store.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {activityEvents.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No recent activity found.</p>
+                ) : (
+                  activityEvents.slice(0, 8).map((event) => (
+                    <div key={event.id} className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">{event.title}</p>
+                        <p className="text-xs text-muted-foreground">{event.meta}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-medium">{event.amount}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {event.createdAt ? new Date(event.createdAt).toLocaleString() : "—"}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Task Allocation</CardTitle>
+                <CardDescription>Assign tasks and track their progress.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Task title</Label>
+                  <Input
+                    value={memberTaskForm.title}
+                    onChange={(e) => setMemberTaskForm((prev) => ({ ...prev, title: e.target.value }))}
+                    placeholder="e.g. Update item listings"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Description</Label>
+                  <Textarea
+                    rows={3}
+                    value={memberTaskForm.description}
+                    onChange={(e) => setMemberTaskForm((prev) => ({ ...prev, description: e.target.value }))}
+                    placeholder="Describe the task details"
+                  />
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <Label className="text-xs font-medium">Assign to</Label>
+                    <Select
+                      value={memberTaskForm.assigneeId}
+                      onValueChange={(value) => setMemberTaskForm((prev) => ({ ...prev, assigneeId: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select member" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {memberRows.map((member: any) => (
+                          <SelectItem key={member.id} value={member.id}>
+                            {member.user?.name || "Member"}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium">Priority</Label>
+                    <Select
+                      value={memberTaskForm.priority}
+                      onValueChange={(value) => setMemberTaskForm((prev) => ({ ...prev, priority: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Priority" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="low">Low</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="high">High</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <Label className="text-xs font-medium">Due date</Label>
+                    <Input
+                      type="date"
+                      value={memberTaskForm.dueDate}
+                      onChange={(e) => setMemberTaskForm((prev) => ({ ...prev, dueDate: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium">Status</Label>
+                    <Select
+                      value={memberTaskForm.status}
+                      onValueChange={(value) => setMemberTaskForm((prev) => ({ ...prev, status: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="open">Open</SelectItem>
+                        <SelectItem value="in_progress">In Progress</SelectItem>
+                        <SelectItem value="done">Done</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <Button
+                  className="w-full"
+                  onClick={() => {
+                    if (!memberTaskForm.title || !memberTaskForm.assigneeId) {
+                      toast({
+                        title: "Missing task details",
+                        description: "Provide a title and assignee before creating a task.",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+                    const newTask = {
+                      id: `${Date.now()}`,
+                      ...memberTaskForm,
+                      createdAt: new Date().toISOString(),
+                    };
+                    setMemberTasks((prev) => [newTask, ...prev]);
+                    setMemberTaskForm({
+                      title: "",
+                      description: "",
+                      assigneeId: "",
+                      priority: "medium",
+                      status: "open",
+                      dueDate: "",
+                    });
+                  }}
+                >
+                  Assign Task
+                </Button>
+
+                <div className="space-y-3 pt-2">
+                  {memberTasks.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No tasks assigned yet.</p>
+                  ) : (
+                    memberTasks.map((task) => {
+                      const assignee = memberRows.find((m: any) => m.id === task.assigneeId);
+                      return (
+                        <div key={task.id} className="rounded border p-3 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-medium">{task.title}</p>
+                            <Badge variant={task.status === "done" ? "default" : "secondary"}>
+                              {task.status.replace("_", " ")}
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{task.description}</p>
+                          <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>{assignee?.user?.name || "Unassigned"}</span>
+                            <span>{task.dueDate || "No due date"}</span>
+                          </div>
+                          <div className="flex justify-end gap-2 pt-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setMemberTasks((prev) =>
+                                  prev.map((item) =>
+                                    item.id === task.id
+                                      ? { ...item, status: item.status === "done" ? "open" : "done" }
+                                      : item,
+                                  ),
+                                );
+                              }}
+                            >
+                              {task.status === "done" ? "Reopen" : "Mark done"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => setMemberTasks((prev) => prev.filter((item) => item.id !== task.id))}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isInventoryPage) {
     const hasInventoryItems = Array.isArray(inventoryItems) && inventoryItems.length > 0;
@@ -8682,6 +9980,21 @@ const StoresManagement = () => {
                                         <Button
                                           size="icon"
                                           variant="ghost"
+                                          onClick={() => {
+                                            setViewInventoryItem(item);
+                                            setViewImageIndex(0);
+                                          }}
+                                        >
+                                          <Eye className="w-4 h-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>View item</TooltipContent>
+                                    </Tooltip>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
                                           onClick={() => setInventoryEditingItem(item)}
                                         >
                                           <Edit className="w-4 h-4" />
@@ -8746,6 +10059,21 @@ const StoresManagement = () => {
                                       <Button
                                         size="icon"
                                         variant="ghost"
+                                        onClick={() => {
+                                          setViewInventoryItem(item);
+                                          setViewImageIndex(0);
+                                        }}
+                                      >
+                                        <Eye className="w-4 h-4" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>View item</TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
                                         onClick={() => setInventoryEditingItem(item)}
                                       >
                                         <Edit className="w-4 h-4" />
@@ -8785,182 +10113,19 @@ const StoresManagement = () => {
                 )}
               </div>
 
-              <Card className="lg:col-span-1 w-full">
-                <CardHeader>
-                  <CardTitle className="text-base">Add Item</CardTitle>
-                  <CardDescription>Add a product to this store.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Form {...inventoryForm}>
-                    <form
-                      className="flex flex-col space-y-3"
-                      onSubmit={inventoryForm.handleSubmit((values) => {
-                        if (!inventoryStoreId) {
-                          toast({
-                            title: "Select a store",
-                            description: "Return to store management and pick a store first.",
-                            variant: "destructive",
-                          });
-                          return;
-                        }
-                        const payloadImage = values.image ? values.image : "";
-                        createInventoryMutation.mutate({
-                          name: values.name,
-                          description: values.description,
-                          category: values.category,
-                          price: Number(values.price) || 0,
-                          stock: Number(values.stock) || 0,
-                          vendorId: inventoryStore?.ownerId || undefined,
-                          storeId: inventoryStoreId,
-                          estateId: inventoryStore?.estateId || undefined,
-                          currency: "NGN",
-                          images: payloadImage ? [payloadImage] : [],
-                        });
-                      })}
-                    >
-                      <FormItem>
-                        <FormLabel>Item Image</FormLabel>
-                        <FormControl>
-                          <div className="space-y-2">
-                            {inventoryImagePreview && (
-                              <img
-                                src={inventoryImagePreview}
-                                alt="Preview"
-                                className="w-full h-32 object-cover rounded border"
-                              />
-                            )}
-                            <Input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (!file) return;
-                                const reader = new FileReader();
-                                reader.onload = () => {
-                                  const result = reader.result as string;
-                                  setInventoryImagePreview(result);
-                                  inventoryForm.setValue("image", result);
-                                };
-                                reader.readAsDataURL(file);
-                              }}
-                            />
-                          </div>
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                      <FormField
-                        control={inventoryForm.control}
-                        name="name"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Name</FormLabel>
-                            <FormControl>
-                              <Input placeholder="Item name" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={inventoryForm.control}
-                        name="description"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Description</FormLabel>
-                            <FormControl>
-                              <Textarea rows={3} placeholder="What is this item?" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <div className="grid grid-cols-2 gap-3">
-                        <FormField
-                          control={inventoryForm.control}
-                          name="price"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Price (NGN)</FormLabel>
-                              <FormControl>
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  {...field}
-                                  onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={inventoryForm.control}
-                          name="stock"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Stock</FormLabel>
-                              <FormControl>
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  {...field}
-                                  onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-                        <FormField
-                          control={inventoryForm.control}
-                          name="category"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Category</FormLabel>
-                              <Select
-                                value={field.value}
-                                onValueChange={(val) => field.onChange(val)}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue placeholder="Select category" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
-                                    itemCategories
-                                      .filter((c: any) => c.isActive !== false)
-                                      .map((cat: any) => (
-                                        <SelectItem key={cat.id} value={cat.name}>
-                                          {cat.emoji ? `${cat.emoji} ` : ""}
-                                          {cat.name}
-                                        </SelectItem>
-                                      ))
-                                  ) : (
-                                    <SelectItem value="__none" disabled>
-                                      No categories. Create one first.
-                                    </SelectItem>
-                                  )}
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      <div className="pt-2">
-                        <Button
-                          type="submit"
-                          className="w-full"
-                          disabled={createInventoryMutation.isPending}
-                          data-testid="btn-add-inventory-item"
-                        >
-                          {createInventoryMutation.isPending ? "Saving..." : "Add Item"}
-                        </Button>
-                      </div>
-                    </form>
-                  </Form>
-                </CardContent>
-              </Card>
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-muted-foreground">
+                  {inventoryStoreId ? "Add products to manage your store inventory" : "Select a store to add items"}
+                </div>
+                <Button
+                  onClick={() => setIsAddInventoryModalOpen(true)}
+                  disabled={!inventoryStoreId}
+                  data-testid="button-create-marketplace-item"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Item
+                </Button>
+              </div>
               </div>
             </TooltipProvider>
           </CardContent>
@@ -8973,14 +10138,14 @@ const StoresManagement = () => {
             }
           }}
         >
-          <DialogContent className="w-[60vw] max-w-[95vw]">
+          <DialogContent className="w-[70vw] max-w-5xl">
             <DialogHeader>
               <DialogTitle>Edit Inventory Item</DialogTitle>
               <DialogDescription>Update the product details shown to residents.</DialogDescription>
             </DialogHeader>
             <Form {...inventoryEditForm}>
               <form
-                className="space-y-4"
+                className="grid gap-6 md:grid-cols-[1.2fr_1fr]"
                 onSubmit={inventoryEditForm.handleSubmit((values) => {
                   const itemId = inventoryEditingItem?._id || inventoryEditingItem?.id;
                   if (!itemId) {
@@ -8998,25 +10163,128 @@ const StoresManagement = () => {
                     category: values.category,
                     price: Number(values.price) || 0,
                     stock: Number(values.stock) || 0,
-                    images: values.image ? [values.image] : [],
+                    images:
+                      inventoryEditImages.length > 0
+                        ? inventoryEditImages
+                        : values.image
+                          ? [values.image]
+                          : [],
                   });
                 })}
               >
-                <FormField
-                  control={inventoryEditForm.control}
-                  name="image"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Item Image</FormLabel>
-                      <FormControl>
-                        <div className="space-y-2">
-                          {inventoryEditPreview ? (
-                            <img
-                              src={inventoryEditPreview}
-                              alt="Preview"
-                              className="w-full h-32 rounded border object-cover"
-                            />
-                          ) : null}
+                <div className="space-y-3">
+                  <div className="relative overflow-hidden rounded-lg border bg-muted/20">
+                    {(() => {
+                      const gallery =
+                        inventoryEditImages.length > 0
+                          ? inventoryEditImages
+                          : inventoryEditPreview
+                            ? [inventoryEditPreview]
+                            : [];
+                      if (gallery.length === 0) {
+                        return (
+                          <div className="flex h-72 items-center justify-center text-sm text-muted-foreground">
+                            No image
+                          </div>
+                        );
+                      }
+                      const current = gallery[Math.min(editImageIndex, gallery.length - 1)];
+                      return (
+                        <div className="relative">
+                          <img
+                            src={current}
+                            alt="Preview"
+                            className="w-full h-72 object-cover"
+                          />
+                          {gallery.length > 1 && (
+                            <div className="absolute inset-0 flex items-center justify-between px-3">
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="bg-white/70 backdrop-blur"
+                                type="button"
+                                onClick={() =>
+                                  setEditImageIndex((prev) =>
+                                    prev === 0 ? gallery.length - 1 : prev - 1,
+                                  )
+                                }
+                              >
+                                <ChevronLeft className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="bg-white/70 backdrop-blur"
+                                type="button"
+                                onClick={() =>
+                                  setEditImageIndex((prev) =>
+                                    prev === gallery.length - 1 ? 0 : prev + 1,
+                                  )
+                                }
+                              >
+                                <ChevronRight className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  {(inventoryEditImages.length > 1 ||
+                    (inventoryEditPreview && inventoryEditImages.length === 0)) && (
+                    <div className="flex gap-2 overflow-auto">
+                      {(inventoryEditImages.length > 0
+                        ? inventoryEditImages
+                        : inventoryEditPreview
+                          ? [inventoryEditPreview]
+                          : []
+                      ).map((img, idx) => (
+                        <div key={`${img}-${idx}`} className="relative group">
+                          <button
+                            type="button"
+                            className={`h-16 w-20 rounded border ${
+                              editImageIndex === idx ? "ring-2 ring-primary" : "border-muted"
+                            } overflow-hidden`}
+                            onClick={() => setEditImageIndex(idx)}
+                          >
+                            <img src={img} alt="" className="h-full w-full object-cover" />
+                          </button>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="destructive"
+                            className="absolute -right-2 -top-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={() => {
+                              const next = (inventoryEditImages.length > 0
+                                ? inventoryEditImages
+                                : inventoryEditPreview
+                                  ? [inventoryEditPreview]
+                                  : []
+                              ).filter((_, i) => i !== idx);
+                              setInventoryEditImages(next);
+                              setInventoryEditPreview(next[0] || "");
+                              setEditImageIndex((current) =>
+                                Math.max(0, Math.min(current, next.length - 1)),
+                              );
+                              inventoryEditForm.setValue(
+                                "image",
+                                next[0] ? next[0] : "",
+                              );
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="image"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Item Image</FormLabel>
+                        <FormControl>
                           <Input
                             type="file"
                             accept="image/*"
@@ -9024,134 +10292,530 @@ const StoresManagement = () => {
                               const file = e.target.files?.[0];
                               if (!file) return;
                               const reader = new FileReader();
-                              reader.onload = () => {
-                                const result = reader.result as string;
-                                setInventoryEditPreview(result);
-                                field.onChange(result);
-                              };
-                              reader.readAsDataURL(file);
-                            }}
-                          />
-                        </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={inventoryEditForm.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Name</FormLabel>
-                      <FormControl>
-                        <Input placeholder="Item name" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={inventoryEditForm.control}
-                  name="description"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Description</FormLabel>
-                      <FormControl>
-                        <Textarea rows={3} placeholder="Describe this item" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <div className="grid grid-cols-2 gap-3">
-                  <FormField
-                    control={inventoryEditForm.control}
-                    name="price"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Price (NGN)</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            {...field}
-                            onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={inventoryEditForm.control}
-                    name="stock"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Stock</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            min="0"
-                            {...field}
-                            onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
-                          />
+                            reader.onload = () => {
+                              const result = reader.result as string;
+                              const nextImages = [
+                                result,
+                                ...inventoryEditImages.filter((img) => img !== result),
+                              ];
+                              setInventoryEditPreview(result);
+                              setInventoryEditImages(nextImages);
+                              setEditImageIndex(0);
+                              field.onChange(result);
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
                 </div>
-                <FormField
-                  control={inventoryEditForm.control}
-                  name="category"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Category</FormLabel>
-                      <Select value={field.value} onValueChange={(val) => field.onChange(val)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
-                            itemCategories
-                              .filter((c: any) => c.isActive !== false)
-                              .map((cat: any) => (
-                                <SelectItem key={cat.id} value={cat.name}>
-                                  {cat.emoji ? `${cat.emoji} ` : ""}
-                                  {cat.name}
-                                </SelectItem>
-                              ))
-                          ) : (
-                            <SelectItem value="__none" disabled>
-                              No categories. Create one first.
-                            </SelectItem>
-                          )}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <div className="flex justify-end gap-2 pt-2">
+                <div className="space-y-4">
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Item name" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Description</FormLabel>
+                        <FormControl>
+                          <Textarea rows={4} placeholder="Describe this item" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField
+                      control={inventoryEditForm.control}
+                      name="price"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Price (NGN)</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              {...field}
+                              onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={inventoryEditForm.control}
+                      name="stock"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Stock</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="0"
+                              {...field}
+                              onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="category"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Category</FormLabel>
+                        <Select value={field.value} onValueChange={(val) => field.onChange(val)}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select category" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
+                              itemCategories
+                                .filter((c: any) => c.isActive !== false)
+                                .map((cat: any) => (
+                                  <SelectItem key={cat.id} value={cat.name}>
+                                    {cat.emoji ? `${cat.emoji} ` : ""}
+                                    {cat.name}
+                                  </SelectItem>
+                                ))
+                            ) : (
+                              <SelectItem value="__none" disabled>
+                                No categories. Create one first.
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={closeInventoryEditDialog}
+                      disabled={updateInventoryMutation.isPending}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={updateInventoryMutation.isPending}>
+                      {updateInventoryMutation.isPending && (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      )}
+                      Save changes
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            </Form>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={isAddInventoryModalOpen} onOpenChange={setIsAddInventoryModalOpen}>
+          <DialogContent className="w-[60vw] max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Add Inventory Item</DialogTitle>
+              <DialogDescription>Add a new product to this store.</DialogDescription>
+            </DialogHeader>
+            <Form {...inventoryForm}>
+              <form
+                className="grid gap-6 md:grid-cols-[1.1fr_1.4fr]"
+                onSubmit={inventoryForm.handleSubmit((values) => {
+                  const images = Array.isArray(values.images) ? values.images : [];
+                  if (images.length === 0) {
+                    toast({
+                      title: "Add at least one image",
+                      description: "Upload 1–6 images before adding the item.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  if (images.length > 6) {
+                    toast({
+                      title: "Too many images",
+                      description: "Maximum is 6 images per item.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  if (!inventoryStoreId) {
+                    toast({
+                      title: "Select a store",
+                      description: "Return to store management and pick a store first.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  createInventoryMutation.mutate({
+                    name: values.name,
+                    description: values.description,
+                    category: values.category,
+                    price: Number(values.price) || 0,
+                    stock: Number(values.stock) || 0,
+                    vendorId: inventoryStore?.ownerId || undefined,
+                    storeId: inventoryStoreId,
+                    estateId: inventoryStore?.estateId || undefined,
+                    currency: "NGN",
+                    images,
+                  });
+                  setIsAddInventoryModalOpen(false);
+                  inventoryForm.reset();
+                  setInventoryImagePreview([]);
+                })}
+              >
+                <div className="space-y-4">
+                  <FormItem>
+                    <FormLabel>Item Image</FormLabel>
+                    <FormControl>
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted-foreground">
+                          Upload 1–6 images. {Math.max(0, 6 - inventoryImagePreview.length)} remaining.
+                        </p>
+                        {inventoryImagePreview.length > 0 && (
+                          <div className="grid grid-cols-2 gap-2">
+                            {inventoryImagePreview.map((src, index) => (
+                              <div key={`${src}-${index}`} className="relative group">
+                                <img
+                                  src={src}
+                                  alt={`Preview ${index + 1}`}
+                                  className="h-28 w-full rounded border object-cover"
+                                />
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="destructive"
+                                  className="absolute right-1 top-1 h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  onClick={() => {
+                                    const next = inventoryImagePreview.filter((_, i) => i !== index);
+                                    setInventoryImagePreview(next);
+                                    inventoryForm.setValue("images", next);
+                                  }}
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <Input
+                          ref={inventoryImageInputRef}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(e) => {
+                            const files = Array.from(e.target.files || []);
+                            if (files.length === 0) return;
+                            Promise.all(
+                              files.map(
+                                (file) =>
+                                  new Promise<string>((resolve) => {
+                                    const reader = new FileReader();
+                                    reader.onload = () => resolve(reader.result as string);
+                                    reader.readAsDataURL(file);
+                                  }),
+                              ),
+                            ).then((results) => {
+                              const maxImages = 6;
+                              const combined = [...inventoryImagePreview, ...results];
+                              const trimmed = combined.slice(0, maxImages);
+                              if (combined.length > maxImages) {
+                                toast({
+                                  title: "Image limit reached",
+                                  description: "Only the first 6 images were kept.",
+                                  variant: "destructive",
+                                });
+                              }
+                              const next = trimmed;
+                              setInventoryImagePreview(next);
+                              inventoryForm.setValue("images", next);
+                              if (inventoryImageInputRef.current) {
+                                inventoryImageInputRef.current.value = "";
+                              }
+                            });
+                          }}
+                        />
+                        {inventoryImagePreview.length > 0 && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => inventoryImageInputRef.current?.click()}
+                          >
+                            Upload more images
+                          </Button>
+                        )}
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                </div>
+                <div className="space-y-4">
+                  <FormField
+                    control={inventoryForm.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Item name" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={inventoryForm.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Description</FormLabel>
+                        <FormControl>
+                          <Textarea rows={4} placeholder="What is this item?" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField
+                      control={inventoryForm.control}
+                      name="price"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Price (NGN)</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              {...field}
+                              onChange={(e) => field.onChange(e.target.value)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={inventoryForm.control}
+                      name="stock"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Stock</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="0"
+                              {...field}
+                              onChange={(e) => field.onChange(e.target.value)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                  <FormField
+                    control={inventoryForm.control}
+                    name="category"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Category</FormLabel>
+                        <Select
+                          value={field.value}
+                          onValueChange={(val) => field.onChange(val)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select category" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
+                              itemCategories
+                                .filter((c: any) => c.isActive !== false)
+                                .map((cat: any) => (
+                                  <SelectItem key={cat.id} value={cat.name}>
+                                    {cat.emoji ? `${cat.emoji} ` : ""}
+                                    {cat.name}
+                                  </SelectItem>
+                                ))
+                            ) : (
+                              <SelectItem value="__none" disabled>
+                                No categories. Create one first.
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <div className="md:col-span-2 flex gap-2 pt-2">
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={closeInventoryEditDialog}
-                    disabled={updateInventoryMutation.isPending}
+                    className="flex-1"
+                    onClick={() => {
+                      setIsAddInventoryModalOpen(false);
+                      inventoryForm.reset();
+                      setInventoryImagePreview([]);
+                    }}
                   >
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={updateInventoryMutation.isPending}>
-                    {updateInventoryMutation.isPending && (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    )}
-                    Save changes
+                  <Button
+                    type="submit"
+                    className="flex-1"
+                    disabled={createInventoryMutation.isPending}
+                    data-testid="btn-add-inventory-item"
+                  >
+                    {createInventoryMutation.isPending ? "Saving..." : "Add Item"}
                   </Button>
                 </div>
               </form>
             </Form>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={!!viewInventoryItem}
+          onOpenChange={(open) => {
+            if (!open) {
+              setViewInventoryItem(null);
+              setViewImageIndex(0);
+            }
+          }}
+        >
+          <DialogContent className="w-[70vw] max-w-5xl">
+            <DialogHeader>
+              <DialogTitle>{viewInventoryItem?.name || "Inventory Item"}</DialogTitle>
+              <DialogDescription>
+                Quick view of this inventory item with images and key details.
+              </DialogDescription>
+            </DialogHeader>
+            {viewInventoryItem && (
+              <div className="grid gap-6 md:grid-cols-[1.2fr_1fr]">
+                <div className="space-y-3">
+                  <div className="relative overflow-hidden rounded-lg border bg-muted/20">
+                    {getGalleryImages(viewInventoryItem).length > 0 ? (
+                      <div className="relative">
+                        <img
+                          src={getGalleryImages(viewInventoryItem)[viewImageIndex] || ""}
+                          alt={viewInventoryItem.name || "Inventory image"}
+                          className="w-full h-72 object-cover"
+                        />
+                        {getGalleryImages(viewInventoryItem).length > 1 && (
+                          <div className="absolute inset-0 flex items-center justify-between px-3">
+                            <Button
+                              size="icon"
+                              variant="outline"
+                              className="bg-white/70 backdrop-blur"
+                              onClick={() =>
+                                setViewImageIndex((prev) =>
+                                  prev === 0
+                                    ? getGalleryImages(viewInventoryItem).length - 1
+                                    : prev - 1,
+                                )
+                              }
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="outline"
+                              className="bg-white/70 backdrop-blur"
+                              onClick={() =>
+                                setViewImageIndex((prev) =>
+                                  prev === getGalleryImages(viewInventoryItem).length - 1
+                                    ? 0
+                                    : prev + 1,
+                                )
+                              }
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex h-72 items-center justify-center text-sm text-muted-foreground">
+                        No images
+                      </div>
+                    )}
+                  </div>
+                  {getGalleryImages(viewInventoryItem).length > 1 && (
+                    <div className="flex gap-2 overflow-auto">
+                      {getGalleryImages(viewInventoryItem).map((img: string, idx: number) => (
+                        <button
+                          key={`${img}-${idx}`}
+                          type="button"
+                          className={`h-16 w-20 rounded border ${
+                            viewImageIndex === idx ? "ring-2 ring-primary" : "border-muted"
+                          } overflow-hidden`}
+                          onClick={() => setViewImageIndex(idx)}
+                        >
+                          <img src={img} alt="" className="h-full w-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">{viewInventoryItem.name}</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {viewInventoryItem.description || "No description provided."}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded border p-3">
+                      <p className="text-xs text-muted-foreground">Price</p>
+                      <p className="text-lg font-semibold">{formatPrice(viewInventoryItem)}</p>
+                    </div>
+                    <div className="rounded border p-3">
+                      <p className="text-xs text-muted-foreground">Stock</p>
+                      <p className="text-lg font-semibold">{viewInventoryItem.stock ?? 0}</p>
+                    </div>
+                    <div className="rounded border p-3">
+                      <p className="text-xs text-muted-foreground">Category</p>
+                      <p className="text-sm font-medium">{viewInventoryItem.category || "—"}</p>
+                    </div>
+                    <div className="rounded border p-3">
+                      <p className="text-xs text-muted-foreground">Status</p>
+                      <Badge variant={viewInventoryItem.isActive ? "default" : "secondary"}>
+                        {viewInventoryItem.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div className="rounded border p-3">
+                    <p className="text-xs text-muted-foreground mb-1">ID</p>
+                    <p className="text-sm font-mono break-all">
+                      {viewInventoryItem._id || viewInventoryItem.id || "—"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       </div>
@@ -9287,10 +10951,7 @@ const StoresManagement = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => {
-                            setSelectedStore(store);
-                            setShowMembersDialog(true);
-                          }}
+                          onClick={() => goToStoreMembers(String(store._id || store.id))}
                           data-testid={`button-view-store-${store._id || store.id}`}
                         >
                           <Users className="w-4 h-4 mr-1" />
@@ -9356,38 +11017,43 @@ const StoresManagement = () => {
 
       {/* Create Store Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent>
+        <DialogContent className="w-[60vw] max-w-[60vw]">
           <DialogHeader>
             <DialogTitle>{selectedStore ? "Edit Store" : "Create New Store"}</DialogTitle>
             <DialogDescription className="sr-only">
               {selectedStore ? "Update store details" : "Add a new store to the platform"}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="store-name">Store Name *</Label>
-              <Input
-                id="store-name"
-                value={formData.name}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, name: e.target.value }))
-                }
-                placeholder="Enter store name"
-                data-testid="input-store-name"
-              />
+          <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+            {/* First Row: Store Name and Location */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="store-name">Store Name *</Label>
+                <Input
+                  id="store-name"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, name: e.target.value }))
+                  }
+                  placeholder="Enter store name"
+                  data-testid="input-store-name"
+                />
+              </div>
+              <div>
+                <Label htmlFor="store-location">Location *</Label>
+                <Input
+                  id="store-location"
+                  value={formData.location}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, location: e.target.value }))
+                  }
+                  placeholder="Enter store location"
+                  data-testid="input-store-location"
+                />
+              </div>
             </div>
-            <div>
-              <Label htmlFor="store-location">Location *</Label>
-              <Input
-                id="store-location"
-                value={formData.location}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, location: e.target.value }))
-                }
-                placeholder="Enter store location"
-                data-testid="input-store-location"
-              />
-            </div>
+
+            {/* Full Width: Description */}
             <div>
               <Label htmlFor="store-description">Description</Label>
               <Textarea
@@ -9401,8 +11067,10 @@ const StoresManagement = () => {
                 data-testid="textarea-store-description"
               />
             </div>
+
+            {/* Full Width: Store Owner */}
             <div>
-              <Label htmlFor="store-owner">Store Owner (provider with store_owner category)</Label>
+              <Label htmlFor="store-owner">Store Owner (provider with store owner category)</Label>
               <Select
                 value={selectedOwnerId}
                 onValueChange={setSelectedOwnerId}
@@ -9424,48 +11092,54 @@ const StoresManagement = () => {
                       })
                   ) : (
                     <SelectItem value="none" disabled>
-                      No eligible store owners (need category "store_owner")
+                      No eligible store owners (need category "store owner")
                     </SelectItem>
                   )}
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label htmlFor="store-phone">Phone</Label>
-              <Input
-                id="store-phone"
-                value={formData.phone}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, phone: e.target.value }))
-                }
-                readOnly
-                className="bg-muted/50 cursor-not-allowed"
-                placeholder="+234..."
-                data-testid="input-store-phone"
-              />
+
+            {/* Second Row: Phone and Email */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="store-phone">Phone</Label>
+                <Input
+                  id="store-phone"
+                  value={formData.phone}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, phone: e.target.value }))
+                  }
+                  readOnly
+                  className="bg-muted/50 cursor-not-allowed"
+                  placeholder="+234..."
+                  data-testid="input-store-phone"
+                />
+              </div>
+              <div>
+                <Label htmlFor="store-email">Email</Label>
+                <Input
+                  id="store-email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, email: e.target.value }))
+                  }
+                  readOnly
+                  className="bg-muted/50 cursor-not-allowed"
+                  placeholder="store@example.com"
+                  data-testid="input-store-email"
+                />
+              </div>
             </div>
-            <div>
-              <Label htmlFor="store-email">Email</Label>
-              <Input
-                id="store-email"
-                type="email"
-                value={formData.email}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, email: e.target.value }))
-                }
-                readOnly
-                className="bg-muted/50 cursor-not-allowed"
-                placeholder="store@example.com"
-                data-testid="input-store-email"
-              />
-            </div>
+
+            {/* Full Width: Assign To */}
             <div>
               <Label htmlFor="store-assignment">Assign To</Label>
               <Select
                 value={selectedStoreAssignment || "global"}
                 onValueChange={(v) => setSelectedStoreAssignment(v)}
               >
-                <SelectTrigger id="store-assignment" className="min-w-[220px]">
+                <SelectTrigger id="store-assignment">
                   <SelectValue placeholder="Assign store" />
                 </SelectTrigger>
                 <SelectContent>
@@ -9502,29 +11176,6 @@ const StoresManagement = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Store Members Dialog - Coming Soon */}
-      <Dialog open={showMembersDialog} onOpenChange={setShowMembersDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Store Members - {selectedStore?.name}</DialogTitle>
-            <DialogDescription className="sr-only">
-              View or manage members assigned to this store.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="text-center py-8">
-            <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-600 dark:text-gray-400 mb-4">
-              Store member management functionality is being set up.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              You'll be able to allocate providers to stores and manage their permissions here.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button onClick={() => setShowMembersDialog(false)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
     </div>
   );

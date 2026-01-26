@@ -141,6 +141,22 @@ export const companySchema = z.object({
   description: z.string().max(1000).optional(),
   contactEmail: z.string().email("Provide a valid contact email"),
   phone: z.string().min(6, "Business phone is required").max(20),
+  // Business Address Details
+  businessAddress: z.string().optional(),
+  businessCity: z.string().optional(),
+  businessState: z.string().optional(),
+  businessZipCode: z.string().optional(),
+  businessCountry: z.string().optional(),
+  businessType: z.string().optional(),
+  // Registration & Compliance
+  businessRegNumber: z.string().optional(),
+  businessTaxId: z.string().optional(),
+  // Bank Details
+  bankAccountName: z.string().optional(),
+  bankName: z.string().optional(),
+  bankAccountNumber: z.string().optional(),
+  bankRoutingNumber: z.string().optional(),
+  // Legacy nested structure (for backward compatibility)
   businessDetails: z.object({
     registrationNumber: z.string().optional(),
     taxId: z.string().optional(),
@@ -160,7 +176,7 @@ export const companySchema = z.object({
       if (value === "" || value === null || value === undefined) return undefined;
       return value;
     }, z.string().url().optional()),
-  }),
+  }).optional(),
   bankDetails: z.object({
     bankName: z.string().optional(),
     accountName: z.string().optional(),
@@ -168,14 +184,14 @@ export const companySchema = z.object({
     routingNumber: z.string().optional(),
     swiftCode: z.string().optional(),
     notes: z.string().optional(),
-  }),
+  }).optional(),
   locationDetails: z.object({
-    addressLine1: z.string().min(1, "Address line 1 is required"),
+    addressLine1: z.string().min(1, "Address line 1 is required").optional(),
     addressLine2: z.string().optional(),
-    city: z.string().min(1, "City is required"),
+    city: z.string().min(1, "City is required").optional(),
     state: z.string().optional(),
     lga: z.string().optional(),
-    country: z.string().min(1, "Country is required"),
+    country: z.string().min(1, "Country is required").optional(),
     coordinates: z
       .object({
         latitude: z
@@ -202,7 +218,7 @@ export const companySchema = z.object({
           .optional(),
       })
       .optional(),
-  }),
+  }).optional(),
 });
 
 export type CompanyForm = z.infer<typeof companySchema>;
@@ -212,6 +228,19 @@ export const defaultCompanyFormValues: CompanyForm = {
   description: "",
   contactEmail: "",
   phone: "",
+  businessAddress: "",
+  businessCity: "",
+  businessState: "",
+  businessZipCode: "",
+  businessCountry: "",
+  businessType: "",
+  businessRegNumber: "",
+  businessTaxId: "",
+  bankAccountName: "",
+  bankName: "",
+  bankAccountNumber: "",
+  bankRoutingNumber: "",
+  // Legacy nested structure
   businessDetails: {
     registrationNumber: "",
     taxId: "",

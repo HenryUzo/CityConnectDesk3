@@ -17,7 +17,6 @@ import AdminDashboard from "@/pages/admin-dashboard";
 import AdminSuperDashboard from "@/pages/admin-super-dashboard";
 import AdminAiConversationsPage from "@/pages/admin-ai-conversations";
 import AdminAiPreparedRequestsPage from "@/pages/admin-ai-prepared-requests";
-import AdminPricingRulesPage from "@/pages/admin-pricing-rules";
 import AdminProviderMatchingPage from "@/pages/admin-provider-matching";
 import BookArtisan from "@/pages/book-artisan";
 import ServiceCategories from "@/pages/service-categories";
@@ -52,12 +51,19 @@ function Router() {
       <ProtectedRoute path="/admin" component={AdminDashboard} />
       <ProtectedRoute path="/admin/ai/conversations" component={AdminAiConversationsPage} />
       <ProtectedRoute path="/admin/ai/prepared-requests" component={AdminAiPreparedRequestsPage} />
-      <ProtectedRoute path="/admin/pricing-rules" component={AdminPricingRulesPage} />
+      <Route path="/admin/pricing-rules">
+        <Redirect to="/admin-dashboard/pricing-rules" />
+      </Route>
       <ProtectedRoute path="/admin/providers/matching" component={AdminProviderMatchingPage} />
       <Route path="/admin/login">
         <Redirect to="/admin-dashboard" />
       </Route>
       <Route path="/admin-dashboard/stores/inventory/:storeId">
+        <AdminAuthProvider>
+          <AdminSuperDashboard />
+        </AdminAuthProvider>
+      </Route>
+      <Route path="/admin-dashboard/stores/members/:storeId">
         <AdminAuthProvider>
           <AdminSuperDashboard />
         </AdminAuthProvider>

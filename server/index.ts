@@ -6,6 +6,16 @@ import { sql } from "drizzle-orm";
 import { db, dbReady } from "./db";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { setupAuth } from "./auth";
+
+// Intercept process.exit to see if anything is trying to exit
+const originalExit = process.exit;
+process.exit = function(code?: number | string) {
+  console.error("[PROCESS] process.exit() called with code:", code);
+  console.error("[PROCESS] Stack trace:");
+  console.error(new Error().stack);
+  return originalExit.call(process, code) as never;
+} as any;
 
 const app = express();
 app.set("trust proxy", 1);
@@ -15,8 +25,8 @@ const paystackWebhookPaths = new Set([
   "/api/payments/paystack/webhook",
   "/api/paystack/webhook",
 ]);
-const jsonParser = express.json();
-const urlencodedParser = express.urlencoded({ extended: false });
+const jsonParser = express.json({ limit: '50mb' });
+const urlencodedParser = express.urlencoded({ extended: false, limit: '50mb' });
 const rawPaystackParser = express.raw({ type: "*/*" });
 
 function isPaystackWebhookPath(path: string) {
@@ -88,6 +98,9 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization", "x-estate-id", "x-user-id", "x-user-email"],
 }));
 app.options("*", cors());
+
+// Setup Passport.js and express-session for authentication
+setupAuth(app);
 
 /** Request logging for /api responses (trimmed to avoid noisy logs) */
 app.use((req, res, next) => {
@@ -223,7 +236,11 @@ async function ensureCompaniesTable() {
   await db.execute(sql`
     ALTER TABLE companies
     ADD COLUMN IF NOT EXISTS provider_id varchar REFERENCES users(id),
-    ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}';
+    ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS business_details jsonb,
+    ADD COLUMN IF NOT EXISTS bank_details jsonb,
+    ADD COLUMN IF NOT EXISTS location_details jsonb,
+    ADD COLUMN IF NOT EXISTS submitted_at timestamp;
   `);
 }
 
@@ -364,8 +381,9 @@ async function ensureMongoIdMappingTable() {
   `);
 }
 
-// Boot sequence
-(async () => {
+// Boot sequence - start immediately without IIFE
+let bootPromise = (async () => {
+  console.log("[BOOT] Starting boot sequence...");
   try {
     await dbReady;
     // Create required extensions and enums first to avoid ALTER type errors
@@ -385,7 +403,15 @@ async function ensureMongoIdMappingTable() {
   }
 
   // Register the rest of your routes (SSR/API defined in ./routes)
-  const server = await registerRoutes(app);
+  let server;
+  try {
+    log("[BOOT] Registering routes...");
+    server = await registerRoutes(app);
+    log("[BOOT] Routes registered successfully");
+  } catch (e) {
+    console.error("[BOOT] Failed to register routes:", e);
+    process.exit(1);
+  }
 
   // Global error handler — do NOT throw/rethrow
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -406,17 +432,90 @@ async function ensureMongoIdMappingTable() {
       next();
     });
 
-    await setupVite(app, server);
+    try {
+      log("[BOOT] Setting up Vite...");
+      await setupVite(app, server);
+      log("[BOOT] Vite setup complete");
+    } catch (e) {
+      console.error("[BOOT] Failed to setup Vite:", e);
+      process.exit(1);
+    }
   } else {
-    // In production, ensure frontend build is accessible at client/dist
-    await import("./prepare-static").then((m) => m.prepareStaticFiles()).catch(console.error);
-    serveStatic(app);
+    try {
+      // In production, ensure frontend build is accessible at client/dist
+      await import("./prepare-static").then((m) => m.prepareStaticFiles()).catch(console.error);
+      serveStatic(app);
+    } catch (e) {
+      console.error("[BOOT] Failed to prepare static files:", e);
+      process.exit(1);
+    }
   }
 
   // Replit/Render/Heroku style port
   const port = parseInt(process.env.PORT || "5000", 10);
-  // Listen on IPv6 unspecified address so both IPv6 (::1) and IPv4 (127.0.0.1) work locally.
-  server.listen({ port, host: "::", reusePort: true }, () =>
-    log(`serving on port ${port}`)
-  );
+  // Allow overriding the host via the HOST env var for development (defaults to localhost for Windows compatibility)
+  const host = process.env.HOST || "127.0.0.1";
+  
+  // Handle unhandled promise rejections
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[UNHANDLED REJECTION]', { 
+      reason, 
+      message: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack : undefined
+    });
+    console.error('[UNHANDLED REJECTION] Details:', reason);
+    // Don't exit - let the process stay alive to see the error
+  });
+  
+  // Handle unhandled exceptions
+  process.on('uncaughtException', (error) => {
+    console.error('[UNCAUGHT EXCEPTION]', {
+      message: error.message,
+      stack: error.stack
+    });
+    // Don't exit - let the process stay alive
+  });
+  
+  log("[BOOT] Starting server listener on " + host + ":" + port);
+  console.log("[TIMESTAMP] " + new Date().toISOString());
+  console.log("[BOOT] Server object type:", typeof server);
+  console.log("[BOOT] Server methods:", Object.getOwnPropertyNames(Object.getPrototypeOf(server)).slice(0, 20).join(", "));
+  
+  server.on('error', (err) => {
+    console.error('[SERVER ERROR]', err);
+  });
+  server.on('listening', () => {
+    log(`✓ Server is now listening on ${host}:${port}`);
+    console.log("[TIMESTAMP] Server listening at " + new Date().toISOString());
+  });
+  
+  console.log("[TIMESTAMP] Calling server.listen() at " + new Date().toISOString());
+  server.listen(port, host, () => {
+    log(`serving on port ${port}`);
+    console.log("[BOOT] Server is now listening and ready to accept connections");
+    console.log("[TIMESTAMP] Listen callback executed at " + new Date().toISOString());
+    // Keep stdin open to prevent process exit
+    if (process.stdin.isTTY === false) {
+      process.stdin.resume();
+    }
+  });
+  
+  console.log("[TIMESTAMP] After server.listen() call at " + new Date().toISOString());
+  
+  // Set keepalive timeouts to verify the process is still running
+  setInterval(() => {
+    console.log("[KEEPALIVE] Process running at " + new Date().toISOString());
+  }, 1000);
+  
+  // Never complete this promise to keep the process alive
+  return new Promise(() => {
+    console.log("[BOOT] Promise waiting - process should stay alive");
+  });
 })();
+
+bootPromise.then(() => {
+  console.log("[BOOT] Boot promise resolved - this should never happen");
+}).catch(e => {
+  console.error("[BOOT] Boot promise failed:", e);
+  process.exit(1);
+});
