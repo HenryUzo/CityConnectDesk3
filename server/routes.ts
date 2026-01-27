@@ -3098,6 +3098,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     email: z.string().email().optional(),
     ownerId: z.string().min(1, "Owner is required"),
     estateId: z.string().optional(),
+    companyId: z.string().optional(),
     isActive: z.boolean().optional(),
   });
 
@@ -3107,7 +3108,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const { search } = req.query;
+      const { search, companyId } = req.query;
       let query = db.select().from(stores);
 
       if (typeof search === "string" && search.trim().length > 0) {
@@ -3120,6 +3121,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ilike(stores.email, term),
           ),
         );
+      }
+
+      if (typeof companyId === "string" && companyId.trim().length > 0) {
+        query = query.where(eq(stores.companyId, companyId.trim()));
       }
 
       const rows = await query.orderBy(desc(stores.createdAt));
@@ -3146,6 +3151,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           email: parsed.email,
           ownerId: parsed.ownerId,
           estateId: parsed.estateId,
+          companyId: parsed.companyId,
           isActive: parsed.isActive ?? true,
         })
         .returning();

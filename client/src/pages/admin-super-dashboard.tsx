@@ -8383,6 +8383,13 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
               <RefreshCw className="w-4 h-4 mr-2" />
               Refresh
             </Button>
+            <Button
+              variant="outline"
+              onClick={() => setLocation(`/admin-dashboard/stores?companyId=${companyMembersCompanyId}`)}
+            >
+              <Store className="w-4 h-4 mr-2" />
+              Manage Stores
+            </Button>
             <Button onClick={() => setShowCompanyActions(true)}>
               <ClipboardList className="w-4 h-4 mr-2" />
               Manage Actions
@@ -9727,6 +9734,8 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
 // Stores Management Component
 const StoresManagement = () => {
     const [location, setLocation] = useLocation();
+  const [locationPath, locationQuery] = location.split("?");
+  const storeCompanyId = new URLSearchParams(locationQuery || "").get("companyId");
     const [search, setSearch] = useState("");
     const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
     const [selectedStore, setSelectedStore] = useState<any>(null);
@@ -9750,25 +9759,38 @@ const StoresManagement = () => {
       queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
     });
 
+    const { data: companies = [] } = useQuery({
+      queryKey: ["admin-companies"],
+      queryFn: () => adminApiRequest("GET", "/api/admin/companies"),
+    });
+
   const { user } = useAdminAuth();
   const { toast } = useToast();
 
     const { data: stores, isLoading } = useQuery({
-      queryKey: ["/api/admin/stores", { search }],
+      queryKey: ["/api/admin/stores", { search, companyId: storeCompanyId }],
       queryFn: () => {
         const params = new URLSearchParams();
         if (search) params.append("search", search);
-      const queryString = params.toString();
-      return adminApiRequest(
-        "GET",
+        if (storeCompanyId) params.append("companyId", storeCompanyId);
+        const queryString = params.toString();
+        return adminApiRequest(
+          "GET",
           `/api/admin/stores${queryString ? "?" + queryString : ""}`,
         );
       },
     });
 
+    const storeCompany = storeCompanyId && Array.isArray(companies)
+      ? companies.find((company: any) => String(company.id || company._id) === String(storeCompanyId))
+      : null;
+    const scopedStores = storeCompanyId && Array.isArray(stores)
+      ? stores.filter((store: any) => String(store.companyId || store.company_id) === String(storeCompanyId))
+      : stores;
+
     // derive filtered stores according to selected tab
-    const filteredStores = Array.isArray(stores)
-      ? stores.filter((s: any) => {
+    const filteredStores = Array.isArray(scopedStores)
+      ? scopedStores.filter((s: any) => {
           if (storeTab === "global") return !s.estateId && !s.estate_id;
           // estate tab: filter by selectedEstateFilter (if set), else show none
           if (storeTab === "estate") {
@@ -9822,6 +9844,18 @@ const StoresManagement = () => {
       }),
   });
 
+  const companyMatchesProvider = (provider: any, company: any) => {
+    if (!provider || !company) return false;
+    const providerCompany = String(provider.company || "").trim().toLowerCase();
+    const companyName = String(company.name || "").trim().toLowerCase();
+    const companyId = String(company.id || company._id || "").trim().toLowerCase();
+    return providerCompany === companyName || providerCompany === companyId;
+  };
+
+  const scopedStoreProviders = Array.isArray(storeProviders)
+    ? (storeCompany ? storeProviders.filter((provider: any) => companyMatchesProvider(provider, storeCompany)) : storeProviders)
+    : [];
+
   const isStoreOwnerProvider = (p: any) => {
     if (!p) return false;
     const cats = Array.isArray(p.categories) ? p.categories : [];
@@ -9837,8 +9871,8 @@ const StoresManagement = () => {
 
   // Auto-fill phone/email when a store owner is selected
   useEffect(() => {
-    if (!selectedOwnerId || !Array.isArray(storeProviders)) return;
-    const owner = storeProviders.find(
+    if (!selectedOwnerId || !Array.isArray(scopedStoreProviders)) return;
+    const owner = scopedStoreProviders.find(
       (p: any) => (p.id || p._id) === selectedOwnerId && isStoreOwnerProvider(p),
     );
     if (!owner) return;
@@ -10200,8 +10234,8 @@ const StoresManagement = () => {
       });
       return;
     }
-    const eligible = Array.isArray(storeProviders)
-      ? storeProviders.filter((p: any) => isStoreOwnerProvider(p))
+    const eligible = Array.isArray(scopedStoreProviders)
+      ? scopedStoreProviders.filter((p: any) => isStoreOwnerProvider(p))
       : [];
     if (!selectedOwnerId) {
       toast({ title: "Select a store owner", description: "Assign a provider with the store owner category.", variant: "destructive" });
@@ -10214,6 +10248,10 @@ const StoresManagement = () => {
     }
     const storeId = selectedStore?._id || selectedStore?.id;
     const payload: any = { ...formData, ownerId: selectedOwnerId };
+    const storeCompanyIdValue = storeCompanyId || selectedStore?.companyId || selectedStore?.company_id;
+    if (storeCompanyIdValue) {
+      payload.companyId = storeCompanyIdValue;
+    }
     // include estate assignment when set; for edits, explicitly clear with null when switching to global
     if (selectedStoreAssignment && selectedStoreAssignment !== "global") {
       payload.estateId = selectedStoreAssignment;
@@ -10227,7 +10265,13 @@ const StoresManagement = () => {
 
   if (isStoreMembersPage) {
     const memberRows = Array.isArray(storeMembers) ? storeMembers : [];
-    const providerList = Array.isArray(storeProviders) ? storeProviders : [];
+    const storeMembersCompanyId = storeMembersStore?.companyId || storeMembersStore?.company_id || "";
+    const storeMembersCompany = storeMembersCompanyId && Array.isArray(companies)
+      ? companies.find((company: any) => String(company.id || company._id) === String(storeMembersCompanyId))
+      : null;
+    const providerList = Array.isArray(scopedStoreProviders)
+      ? (storeMembersCompany ? scopedStoreProviders.filter((provider: any) => companyMatchesProvider(provider, storeMembersCompany)) : scopedStoreProviders)
+      : [];
     const storeOwnerId = storeMembersStore?.ownerId || storeMembersStore?.owner_id || "";
     const storeOwnerUser = providerList.find(
       (provider: any) => String(provider.id || provider._id) === String(storeOwnerId),

@@ -293,6 +293,7 @@ export const stores = pgTable("stores", {
     .default(sql`gen_random_uuid()`),
   estateId: varchar("estate_id").references(() => estates.id), // Nullable - estate assigned by admin after approval
   ownerId: varchar("owner_id").references(() => users.id), // Optional: primary owner
+  companyId: varchar("company_id"), // Company that owns this store (optional)
   name: text("name").notNull(),
   description: text("description"),
   location: text("location").notNull(), // Physical location/address
