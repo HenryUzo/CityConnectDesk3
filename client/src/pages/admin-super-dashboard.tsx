@@ -10232,7 +10232,8 @@ const StoresManagement = () => {
     const storeOwnerUser = providerList.find(
       (provider: any) => String(provider.id || provider._id) === String(storeOwnerId),
     );
-    const membersWithOwner = storeOwnerId && !memberRows.some(
+    const storeOwnerEligible = !!storeOwnerUser && isStoreOwnerProvider(storeOwnerUser);
+    const membersWithOwner = storeOwnerId && storeOwnerEligible && !memberRows.some(
       (member: any) => String(member.userId || member.user?.id || "") === String(storeOwnerId),
     )
       ? [
@@ -10259,7 +10260,9 @@ const StoresManagement = () => {
         ]
       : memberRows.map((member: any) => ({
           ...member,
-          isStoreOwner: String(member.userId || member.user?.id || "") === String(storeOwnerId),
+          isStoreOwner:
+            storeOwnerEligible &&
+            String(member.userId || member.user?.id || "") === String(storeOwnerId),
         }));
     const availableProviders = providerList.filter((provider: any) => {
       const providerId = provider.id || provider._id;
