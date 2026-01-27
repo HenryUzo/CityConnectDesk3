@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { adminApiRequest } from "@/lib/adminApi";
+import { adminApiRequest, AdminAPI } from "@/lib/adminApi";
+import { useEffect } from "react";
 import {
   Users,
   UserCheck,
@@ -73,8 +74,10 @@ export default function AdminDashboard() {
   const { toast } = useToast();
 
   // Stats
-  const { data: stats } = useQuery<Stats>({
+  const { data: stats, error: statsError, isLoading: statsLoading } = useQuery<Stats>({
     queryKey: ["/api/admin/dashboard/stats"],
+    queryFn: () => AdminAPI.dashboard.getStats(),
+    refetchInterval: 5000,
   });
 
   // All users (auto-refresh)
@@ -146,7 +149,10 @@ export default function AdminDashboard() {
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Total Users</p>
                   <p className="text-2xl font-bold text-foreground" data-testid="text-total-users">
-                    {stats?.totalUsers || allUsers.length}
+                    {typeof stats?.totalUsers === 'number' ? stats.totalUsers : allUsers.length}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1" title={JSON.stringify(stats)}>
+                    stats: {stats ? 'loaded' : 'null'}, allUsers: {allUsers.length}
                   </p>
                 </div>
                 <div className="bg-primary/10 p-3 rounded-lg">

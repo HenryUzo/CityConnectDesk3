@@ -203,6 +203,14 @@ async function ensureUsersColumns() {
   `);
 }
 
+async function ensureEstatesColumns() {
+  await db.execute(sql`
+    ALTER TABLE estates
+      ADD COLUMN IF NOT EXISTS access_type text,
+      ADD COLUMN IF NOT EXISTS access_code text;
+  `);
+}
+
 // Ensure minimal users table exists so schema guard ALTERs can run.
 async function ensureUsersTable() {
   await db.execute(sql`
@@ -241,6 +249,29 @@ async function ensureCompaniesTable() {
     ADD COLUMN IF NOT EXISTS bank_details jsonb,
     ADD COLUMN IF NOT EXISTS location_details jsonb,
     ADD COLUMN IF NOT EXISTS submitted_at timestamp;
+  `);
+}
+
+async function ensureNotificationsTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id varchar NOT NULL REFERENCES users(id),
+      title varchar(120) NOT NULL,
+      message text NOT NULL,
+      type varchar(20) NOT NULL DEFAULT 'info',
+      metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+      is_read boolean NOT NULL DEFAULT false,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
+  `);
+  await db.execute(sql`
+    ALTER TABLE notifications
+    ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+    CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
   `);
 }
 
@@ -392,7 +423,9 @@ let bootPromise = (async () => {
     await ensureServiceRequestsColumns();
     await ensureUsersTable();
     await ensureUsersColumns();
+    await ensureEstatesColumns();
     await ensureCompaniesTable();
+    await ensureNotificationsTable();
     await ensureProviderRequestsTable();
     await ensureTransactionsColumns();
     await ensureMongoIdMappingTable();

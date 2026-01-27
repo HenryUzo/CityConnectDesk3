@@ -29,6 +29,14 @@ export function ProtectedRoute({
     );
   }
 
+  if (user.role === "provider" && user.isApproved === false) {
+    return (
+      <Route path={path}>
+        <Redirect to="/waiting-room" />
+      </Route>
+    );
+  }
+
   return (
     <Route path={path}>
       <Component />

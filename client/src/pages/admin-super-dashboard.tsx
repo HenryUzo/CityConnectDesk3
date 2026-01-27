@@ -1,4 +1,4 @@
-import {
+﻿import {
   useState,
   useEffect,
   useCallback,
@@ -143,176 +143,176 @@ import {
 
 // Shopping-focused emoji palette (generated into dropdown)
 const EMOJI_GROUPS = [
-  { value: "🍎", names: ["Apple", "Apple Bag", "Apple Basket", "Apple Box", "Apple Jam", "Apple Juice", "Apple Pie", "Apple Snack", "Apple Crate", "Apple Pack"] },
-  { value: "🍏", names: ["Green Apple", "Green Apple Box", "Green Apple Juice", "Green Apple Pie", "Green Apple Snack", "Green Apple Basket", "Green Apple Crate", "Green Apple Jam", "Green Apple Pack", "Green Apple Bundle"] },
-  { value: "🍌", names: ["Banana", "Banana Bunch", "Banana Chips", "Banana Smoothie", "Banana Yogurt", "Banana Bread", "Banana Pack", "Banana Basket", "Banana Split", "Banana Snack"] },
-  { value: "🍇", names: ["Grapes", "Grape Box", "Grape Juice", "Grape Jam", "Grape Pack", "Grape Snack", "Grape Basket", "Grape Bundle", "Grape Carton", "Grape Tray"] },
-  { value: "🍓", names: ["Strawberry", "Strawberry Box", "Strawberry Jam", "Strawberry Yogurt", "Strawberry Milk", "Strawberry Cake", "Strawberry Pack", "Strawberry Basket", "Strawberry Snack", "Strawberry Tart"] },
-  { value: "🍒", names: ["Cherry", "Cherry Box", "Cherry Jam", "Cherry Juice", "Cherry Pack", "Cherry Basket", "Cherry Tart", "Cherry Snack", "Cherry Mix", "Cherry Crate"] },
-  { value: "🍑", names: ["Peach", "Peach Jam", "Peach Juice", "Peach Tart", "Peach Basket", "Peach Crate", "Peach Yogurt", "Peach Pack", "Peach Snack", "Peach Slices"] },
-  { value: "🍍", names: ["Pineapple", "Pineapple Slices", "Pineapple Juice", "Pineapple Rings", "Pineapple Jam", "Pineapple Pack", "Pineapple Snack", "Pineapple Basket", "Pineapple Chunks", "Pineapple Crate"] },
-  { value: "🥭", names: ["Mango", "Mango Juice", "Mango Slices", "Mango Jam", "Mango Lassi", "Mango Pack", "Mango Basket", "Mango Snack", "Mango Chutney", "Mango Crate"] },
-  { value: "🍉", names: ["Watermelon", "Watermelon Slice", "Watermelon Juice", "Watermelon Pack", "Watermelon Snack", "Watermelon Basket", "Watermelon Wedges", "Watermelon Crate", "Watermelon Bowl", "Watermelon Platter"] },
-  { value: "🥝", names: ["Kiwi", "Kiwi Pack", "Kiwi Slices", "Kiwi Yogurt", "Kiwi Juice", "Kiwi Basket", "Kiwi Snack", "Kiwi Crate", "Kiwi Mix", "Kiwi Platter"] },
-  { value: "🍊", names: ["Orange", "Orange Juice", "Orange Pack", "Orange Basket", "Orange Crate", "Orange Marmalade", "Orange Snack", "Orange Segments", "Orange Carton", "Orange Mix"] },
-  { value: "🍋", names: ["Lemon", "Lemonade", "Lemon Pack", "Lemon Basket", "Lemon Crate", "Lemon Wedges", "Lemon Pie", "Lemon Tart", "Lemon Snack", "Lemon Mix"] },
-  { value: "🍈", names: ["Melon", "Melon Wedges", "Melon Pack", "Melon Basket", "Melon Crate", "Melon Juice", "Melon Snack", "Melon Platter", "Melon Mix", "Melon Slices"] },
-  { value: "🍐", names: ["Pear", "Pear Pack", "Pear Basket", "Pear Crate", "Pear Juice", "Pear Snack", "Pear Slices", "Pear Tart", "Pear Mix", "Pear Bowl"] },
-  { value: "🍆", names: ["Eggplant", "Eggplant Pack", "Eggplant Basket", "Eggplant Crate", "Eggplant Cutlets", "Eggplant Parm", "Eggplant Mix", "Eggplant Grill", "Eggplant Tray", "Eggplant Dip"] },
-  { value: "🥑", names: ["Avocado", "Avocado Pack", "Avocado Basket", "Avocado Toast", "Avocado Dip", "Avocado Mix", "Avocado Crate", "Avocado Salad", "Avocado Sushi", "Avocado Bowl"] },
-  { value: "🌽", names: ["Corn", "Corn on Cob", "Corn Pack", "Corn Basket", "Corn Crate", "Corn Chips", "Corn Meal", "Corn Mix", "Corn Snack", "Corn Tray"] },
-  { value: "🥕", names: ["Carrot", "Carrot Pack", "Carrot Basket", "Carrot Crate", "Carrot Juice", "Carrot Snack", "Carrot Sticks", "Carrot Cake", "Carrot Mix", "Carrot Tray"] },
-  { value: "🥔", names: ["Potato", "Potato Bag", "Potato Pack", "Potato Basket", "Potato Crate", "Potato Wedges", "Potato Chips", "Potato Mash", "Potato Mix", "Potato Tray"] },
-  { value: "🥦", names: ["Broccoli", "Broccoli Pack", "Broccoli Basket", "Broccoli Crate", "Broccoli Florets", "Broccoli Mix", "Broccoli Snack", "Broccoli Tray", "Broccoli Salad", "Broccoli Stir Fry"] },
-  { value: "🥬", names: ["Lettuce", "Lettuce Pack", "Lettuce Basket", "Lettuce Crate", "Lettuce Mix", "Lettuce Heads", "Lettuce Wraps", "Lettuce Salad", "Lettuce Tray", "Lettuce Stack"] },
-  { value: "🍅", names: ["Tomato", "Tomato Pack", "Tomato Basket", "Tomato Crate", "Tomato Sauce", "Tomato Puree", "Tomato Soup", "Tomato Mix", "Tomato Snack", "Tomato Tray"] },
-  { value: "🧄", names: ["Garlic", "Garlic Pack", "Garlic Basket", "Garlic Crate", "Garlic Paste", "Garlic Powder", "Garlic Mix", "Garlic Snack", "Garlic Tray", "Garlic Bulbs"] },
-  { value: "🧅", names: ["Onion", "Onion Pack", "Onion Basket", "Onion Crate", "Onion Rings", "Onion Powder", "Onion Mix", "Onion Snack", "Onion Tray", "Onion Bulbs"] },
-  { value: "🌶️", names: ["Chili Pepper", "Chili Pack", "Chili Basket", "Chili Crate", "Chili Flakes", "Chili Powder", "Chili Mix", "Chili Snack", "Chili Tray", "Chili Sauce"] },
-  { value: "🍄", names: ["Mushroom", "Mushroom Pack", "Mushroom Basket", "Mushroom Crate", "Mushroom Mix", "Mushroom Snack", "Mushroom Soup", "Mushroom Tray", "Mushroom Slices", "Mushroom Skewers"] },
-  { value: "🥐", names: ["Croissant", "Croissant Pack", "Croissant Basket", "Croissant Crate", "Chocolate Croissant", "Almond Croissant", "Butter Croissant", "Mini Croissant", "Croissant Tray", "Croissant Snack"] },
-  { value: "🍞", names: ["Bread Loaf", "Bread Pack", "Bread Basket", "Bread Crate", "Wholegrain Bread", "Sourdough Bread", "White Bread", "Rye Bread", "Bread Rolls", "Bread Tray"] },
-  { value: "🥯", names: ["Bagel", "Bagel Pack", "Bagel Basket", "Bagel Crate", "Sesame Bagel", "Everything Bagel", "Plain Bagel", "Cinnamon Bagel", "Bagel Tray", "Bagel Snack"] },
-  { value: "🥞", names: ["Pancake", "Pancake Pack", "Pancake Mix", "Pancake Stack", "Pancake Syrup", "Pancake Basket", "Pancake Crate", "Pancake Tray", "Pancake Snack", "Mini Pancake"] },
-  { value: "🧇", names: ["Waffle", "Waffle Pack", "Waffle Mix", "Waffle Stack", "Waffle Syrup", "Waffle Basket", "Waffle Crate", "Waffle Tray", "Waffle Snack", "Mini Waffle"] },
-  { value: "🥖", names: ["Baguette", "Baguette Pack", "Baguette Basket", "Baguette Crate", "Garlic Baguette", "Seeded Baguette", "Classic Baguette", "Mini Baguette", "Baguette Tray", "Baguette Snack"] },
-  { value: "🍗", names: ["Chicken Drumstick", "Chicken Bucket", "Chicken Pack", "Chicken Basket", "Chicken Crate", "BBQ Chicken", "Spicy Chicken", "Fried Chicken", "Roast Chicken", "Chicken Tray"] },
-  { value: "🥩", names: ["Steak", "Steak Pack", "Steak Basket", "Steak Crate", "Ribeye Steak", "Sirloin Steak", "Flank Steak", "Steak Marinade", "Steak Tray", "Steak Cuts"] },
-  { value: "🥓", names: ["Bacon", "Bacon Pack", "Bacon Basket", "Bacon Crate", "Smoked Bacon", "Crispy Bacon", "Turkey Bacon", "Bacon Bits", "Bacon Tray", "Bacon Strips"] },
-  { value: "🍖", names: ["Meat Ribs", "Rib Rack", "BBQ Ribs", "Smoked Ribs", "Ribs Pack", "Ribs Basket", "Ribs Crate", "Ribs Tray", "Honey Ribs", "Spicy Ribs"] },
-  { value: "🍤", names: ["Fried Shrimp", "Shrimp Pack", "Shrimp Basket", "Shrimp Crate", "Shrimp Cocktail", "Shrimp Tray", "Shrimp Skewers", "Shrimp Snack", "Garlic Shrimp", "Spicy Shrimp"] },
-  { value: "🐟", names: ["Fish Fillet", "Fish Pack", "Fish Basket", "Fish Crate", "Salmon Fillet", "Cod Fillet", "Tilapia Fillet", "Fish Tray", "Smoked Fish", "Fish Steak"] },
-  { value: "🍣", names: ["Sushi Roll", "Sushi Box", "Sushi Pack", "Sushi Tray", "Salmon Sushi", "Tuna Sushi", "Veggie Sushi", "Sushi Platter", "Sushi Combo", "Nigiri Sushi"] },
-  { value: "🍕", names: ["Pizza Slice", "Pizza Box", "Cheese Pizza", "Pepperoni Pizza", "Veggie Pizza", "BBQ Pizza", "Pizza Combo", "Pizza Party", "Pizza Pack", "Pizza Tray"] },
-  { value: "🍔", names: ["Burger", "Cheeseburger", "Double Burger", "Veggie Burger", "Chicken Burger", "Burger Combo", "Burger Pack", "Burger Box", "Burger Meal", "Burger Tray"] },
-  { value: "🌭", names: ["Hotdog", "Chili Dog", "Cheese Dog", "BBQ Hotdog", "Hotdog Combo", "Hotdog Pack", "Hotdog Box", "Hotdog Meal", "Hotdog Tray", "Hotdog Snack"] },
-  { value: "🥪", names: ["Sandwich", "Club Sandwich", "Chicken Sandwich", "Turkey Sandwich", "Veggie Sandwich", "Sandwich Box", "Sandwich Pack", "Sandwich Meal", "Sandwich Tray", "BLT Sandwich"] },
-  { value: "🌮", names: ["Taco", "Beef Taco", "Chicken Taco", "Fish Taco", "Veggie Taco", "Taco Pack", "Taco Box", "Taco Meal", "Taco Tray", "Taco Combo"] },
-  { value: "🌯", names: ["Burrito", "Beef Burrito", "Chicken Burrito", "Veggie Burrito", "Bean Burrito", "Burrito Pack", "Burrito Box", "Burrito Meal", "Burrito Tray", "Burrito Combo"] },
-  { value: "🥙", names: ["Pita Pocket", "Falafel Pita", "Chicken Pita", "Lamb Pita", "Veggie Pita", "Pita Pack", "Pita Box", "Pita Meal", "Pita Tray", "Pita Combo"] },
-  { value: "🍜", names: ["Ramen Bowl", "Ramen Pack", "Ramen Box", "Spicy Ramen", "Chicken Ramen", "Veggie Ramen", "Miso Ramen", "Ramen Meal", "Ramen Tray", "Ramen Combo"] },
-  { value: "🍝", names: ["Pasta", "Spaghetti", "Pasta Pack", "Pasta Box", "Pasta Meal", "Pasta Tray", "Pasta Combo", "Creamy Pasta", "Tomato Pasta", "Pesto Pasta"] },
-  { value: "🍲", names: ["Stew", "Stew Pack", "Stew Bowl", "Beef Stew", "Chicken Stew", "Veggie Stew", "Spicy Stew", "Stew Meal", "Stew Tray", "Stew Combo"] },
-  { value: "🍛", names: ["Curry", "Chicken Curry", "Beef Curry", "Veggie Curry", "Curry Pack", "Curry Box", "Curry Meal", "Curry Tray", "Curry Combo", "Spicy Curry"] },
-  { value: "🍚", names: ["Rice Bowl", "Rice Pack", "Rice Bag", "Brown Rice", "Jasmine Rice", "Basmati Rice", "Sticky Rice", "Rice Box", "Rice Meal", "Rice Tray"] },
-  { value: "🍥", names: ["Fish Cake", "Fish Cake Pack", "Fish Cake Box", "Fish Cake Tray", "Spicy Fish Cake", "Sesame Fish Cake", "Veggie Fish Cake", "Fish Cake Meal", "Fish Cake Snack", "Fish Cake Combo"] },
-  { value: "🍩", names: ["Doughnut", "Glazed Doughnut", "Chocolate Doughnut", "Sprinkle Doughnut", "Doughnut Box", "Doughnut Pack", "Doughnut Tray", "Doughnut Snack", "Filled Doughnut", "Mini Doughnut"] },
-  { value: "🍪", names: ["Cookie", "Chocolate Chip Cookie", "Oatmeal Cookie", "Sugar Cookie", "Cookie Box", "Cookie Pack", "Cookie Tray", "Cookie Snack", "Cookie Gift", "Cookie Tin"] },
-  { value: "🍫", names: ["Chocolate Bar", "Dark Chocolate", "Milk Chocolate", "White Chocolate", "Chocolate Pack", "Chocolate Box", "Chocolate Gift", "Chocolate Snack", "Chocolate Mix", "Chocolate Tray"] },
-  { value: "🍿", names: ["Popcorn", "Butter Popcorn", "Caramel Popcorn", "Cheese Popcorn", "Popcorn Tub", "Popcorn Pack", "Popcorn Box", "Popcorn Snack", "Popcorn Bowl", "Popcorn Mix"] },
-  { value: "🧃", names: ["Juice Box", "Apple Juice Box", "Orange Juice Box", "Grape Juice Box", "Mixed Fruit Juice", "Juice Pack", "Juice Carton", "Juice Bottle", "Juice Cooler", "Juice Case"] },
-  { value: "🥤", names: ["Soft Drink", "Soda Can", "Soda Bottle", "Cola Can", "Lemon Soda", "Orange Soda", "Ginger Soda", "Soda Pack", "Soda Crate", "Soda Mix"] },
-  { value: "🧋", names: ["Bubble Tea", "Milk Tea", "Taro Bubble Tea", "Matcha Bubble Tea", "Brown Sugar Bubble Tea", "Fruit Bubble Tea", "Bubble Tea Pack", "Bubble Tea Tray", "Bubble Tea Kit", "Bubble Tea Mix"] },
-  { value: "☕", names: ["Coffee", "Latte", "Cappuccino", "Espresso", "Mocha", "Iced Coffee", "Coffee Pack", "Coffee Beans", "Coffee Pods", "Coffee Gift"] },
-  { value: "🍷", names: ["Red Wine", "White Wine", "Rosé Wine", "Sparkling Wine", "Wine Bottle", "Wine Pack", "Wine Crate", "Wine Gift", "Wine Box", "Wine Pairing"] },
-  { value: "🍺", names: ["Beer", "Beer Can", "Beer Bottle", "Craft Beer", "Lager Beer", "Ale Beer", "Beer Pack", "Beer Crate", "Beer Combo", "Beer Gift"] },
-  { value: "🥛", names: ["Milk Carton", "Milk Bottle", "Whole Milk", "Skim Milk", "Almond Milk", "Oat Milk", "Soy Milk", "Milk Pack", "Milk Crate", "Milk Cooler"] },
-  { value: "🧀", names: ["Cheese Block", "Cheddar Cheese", "Mozzarella Cheese", "Parmesan Cheese", "Cheese Pack", "Cheese Tray", "Cheese Platter", "Cheese Snack", "Cheese Crate", "Cheese Basket"] },
-  { value: "🍶", names: ["Sake Bottle", "Sake Pack", "Sake Gift", "Sake Crate", "Rice Wine", "Premium Sake", "Sparkling Sake", "Sake Set", "Sake Box", "Sake Pairing"] },
-  { value: "🧴", names: ["Lotion", "Body Lotion", "Hand Lotion", "Face Cream", "Sunscreen", "Lotion Pack", "Lotion Gift", "Lotion Set", "Lotion Bottle", "Lotion Tube"] },
-  { value: "🧻", names: ["Paper Towel", "Paper Roll", "Toilet Roll", "Kitchen Towel", "Paper Pack", "Paper Bulk", "Paper Value Pack", "Paper Carton", "Paper Bundle", "Paper Case"] },
-  { value: "🧽", names: ["Sponge", "Cleaning Sponge", "Scrub Sponge", "Kitchen Sponge", "Bath Sponge", "Sponge Pack", "Sponge Bulk", "Sponge Set", "Sponge Value Pack", "Sponge Duo"] },
-  { value: "🧹", names: ["Broom", "Cleaning Broom", "Floor Broom", "Broom Set", "Broom With Dustpan", "Broom Pack", "Broom Value Pack", "Broom Combo", "Outdoor Broom", "Indoor Broom"] },
-  { value: "🧺", names: ["Laundry Basket", "Storage Basket", "Market Basket", "Picnic Basket", "Gift Basket", "Fruit Basket", "Grocery Basket", "Home Basket", "Basket Set", "Basket Duo"] },
-  { value: "🧼", names: ["Soap Bar", "Hand Soap", "Body Soap", "Face Soap", "Soap Pack", "Soap Gift", "Soap Set", "Soap Refill", "Liquid Soap", "Foam Soap"] },
-  { value: "🧦", names: ["Socks", "Ankle Socks", "Crew Socks", "Sport Socks", "Wool Socks", "Dress Socks", "Socks Pack", "Socks Gift", "Socks Bundle", "Socks Trio"] },
-  { value: "👕", names: ["T-Shirt", "Graphic Tee", "Basic Tee", "Sport Tee", "V-Neck Tee", "Long Sleeve Tee", "T-Shirt Pack", "T-Shirt Duo", "T-Shirt Bundle", "T-Shirt Gift"] },
-  { value: "👖", names: ["Jeans", "Slim Jeans", "Straight Jeans", "Relaxed Jeans", "Dark Jeans", "Light Jeans", "Jeans Pack", "Jeans Duo", "Jeans Bundle", "Jeans Gift"] },
-  { value: "👗", names: ["Dress", "Summer Dress", "Evening Dress", "Casual Dress", "Floral Dress", "Party Dress", "Dress Pack", "Dress Duo", "Dress Bundle", "Dress Gift"] },
-  { value: "👔", names: ["Shirt", "Formal Shirt", "Oxford Shirt", "Linen Shirt", "Checked Shirt", "Striped Shirt", "Shirt Pack", "Shirt Duo", "Shirt Bundle", "Shirt Gift"] },
-  { value: "🧥", names: ["Jacket", "Denim Jacket", "Leather Jacket", "Puffer Jacket", "Blazer Jacket", "Rain Jacket", "Jacket Pack", "Jacket Duo", "Jacket Bundle", "Jacket Gift"] },
-  { value: "🧢", names: ["Cap", "Baseball Cap", "Trucker Cap", "Snapback Cap", "Dad Cap", "Sport Cap", "Cap Pack", "Cap Duo", "Cap Bundle", "Cap Gift"] },
-  { value: "👟", names: ["Sneakers", "Running Sneakers", "Casual Sneakers", "High-Top Sneakers", "Court Sneakers", "Trail Sneakers", "Sneaker Pack", "Sneaker Duo", "Sneaker Bundle", "Sneaker Gift"] },
-  { value: "👠", names: ["Heels", "Stiletto Heels", "Block Heels", "Kitten Heels", "Party Heels", "Dress Heels", "Heels Pack", "Heels Duo", "Heels Bundle", "Heels Gift"] },
-  { value: "👞", names: ["Dress Shoes", "Oxford Shoes", "Derby Shoes", "Loafer Shoes", "Wingtip Shoes", "Leather Shoes", "Shoe Pack", "Shoe Duo", "Shoe Bundle", "Shoe Gift"] },
-  { value: "🎒", names: ["Backpack", "Travel Backpack", "School Backpack", "Laptop Backpack", "Hiking Backpack", "Mini Backpack", "Backpack Pack", "Backpack Duo", "Backpack Bundle", "Backpack Gift"] },
-  { value: "👜", names: ["Handbag", "Tote Bag", "Shoulder Bag", "Crossbody Bag", "Clutch Bag", "Satchel Bag", "Bag Pack", "Bag Duo", "Bag Bundle", "Bag Gift"] },
-  { value: "💍", names: ["Ring", "Gold Ring", "Silver Ring", "Diamond Ring", "Engagement Ring", "Wedding Ring", "Ring Box", "Ring Gift", "Ring Pair", "Ring Set"] },
-  { value: "⌚", names: ["Watch", "Smart Watch", "Sport Watch", "Dress Watch", "Classic Watch", "Metal Watch", "Watch Box", "Watch Gift", "Watch Pair", "Watch Set"] },
-  { value: "📱", names: ["Smartphone", "Phone Case", "Phone Charger", "Phone Screen Guard", "Phone Bundle", "Phone Earbuds", "Phone Power Bank", "Phone Mount", "Phone Cable", "Phone Stand"] },
-  { value: "💻", names: ["Laptop", "Laptop Sleeve", "Laptop Stand", "Laptop Charger", "Laptop Dock", "Laptop Bundle", "Laptop Cooling Pad", "Laptop Bag", "Laptop Combo", "Laptop Kit"] },
-  { value: "🎧", names: ["Headphones", "Wireless Headphones", "Noise Canceling Headphones", "Gaming Headset", "On-Ear Headphones", "Over-Ear Headphones", "Headphone Case", "Headphone Stand", "Headphone Bundle", "Headphone Gift"] },
-  { value: "🖥️", names: ["Monitor", "Gaming Monitor", "Office Monitor", "Curved Monitor", "4K Monitor", "Monitor Stand", "Monitor Arm", "Monitor Bundle", "Monitor Pair", "Monitor Gift"] },
-  { value: "📺", names: ["Television", "Smart TV", "LED TV", "OLED TV", "4K TV", "TV Wall Mount", "TV Soundbar", "TV Bundle", "TV Gift", "TV Pair"] },
-  { value: "🧸", names: ["Teddy Bear", "Stuffed Animal", "Plush Toy", "Toy Bundle", "Toy Gift", "Toy Set", "Toy Box", "Toy Basket", "Toy Pack", "Toy Plush"] },
-  { value: "📚", names: ["Books", "Novel Pack", "Cookbook", "Children Book", "Notebook Set", "Journal Pack", "Planner", "Story Book", "Workbook", "Reference Book"] },
-  { value: "✏️", names: ["Pencil", "Pencil Pack", "Colored Pencil Set", "Mechanical Pencil", "Pencil Case", "Pencil Box", "Pencil Kit", "Pencil Duo", "Pencil Bundle", "Pencil Gift"] },
-  { value: "🖊️", names: ["Pen", "Gel Pen", "Ballpoint Pen", "Fountain Pen", "Pen Pack", "Pen Case", "Pen Box", "Pen Set", "Pen Duo", "Pen Gift"] },
-  { value: "📒", names: ["Notebook", "Spiral Notebook", "Hardcover Notebook", "Softcover Notebook", "Notebook Pack", "Notebook Bundle", "Notebook Set", "Notebook Gift", "Notebook Duo", "Notebook Trio"] },
-  { value: "🧴", names: ["Shampoo", "Conditioner", "Body Wash", "Face Wash", "Hair Serum", "Body Lotion", "Hand Cream", "Hair Oil", "Shower Gel", "Self Care Kit"] },
-  { value: "🧹", names: ["Cleaning Mop", "Cleaning Kit", "Cleaning Spray", "Cleaning Cloths", "Cleaning Bucket", "Cleaning Gloves", "Cleaning Set", "Cleaning Bundle", "Cleaning Wipes", "Cleaning Pads"] },
-  { value: "🧺", names: ["Laundry Hamper", "Laundry Bag", "Laundry Basket", "Laundry Detergent", "Laundry Softener", "Laundry Pods", "Laundry Sheets", "Laundry Bundle", "Laundry Kit", "Laundry Pair"] },
-  { value: "🧊", names: ["Ice Tray", "Ice Pack", "Ice Cube", "Ice Bag", "Ice Bucket", "Ice Maker", "Ice Scoop", "Ice Stones", "Ice Set", "Ice Bundle"] },
-  { value: "🛏️", names: ["Bed", "Bed Sheet", "Bed Set", "Duvet", "Comforter", "Pillow", "Pillow Cases", "Mattress Topper", "Bed Blanket", "Bed Throw"] },
-  { value: "🛋️", names: ["Sofa", "Sofa Cover", "Throw Pillow", "Cushion", "Sofa Set", "Sectional Sofa", "Loveseat", "Recliner Sofa", "Sofa Blanket", "Sofa Protector"] },
-  { value: "🪑", names: ["Chair", "Dining Chair", "Office Chair", "Desk Chair", "Bar Stool", "Folding Chair", "Patio Chair", "Gaming Chair", "Accent Chair", "Chair Cushion"] },
-  { value: "🍽️", names: ["Dinner Set", "Plate Set", "Bowl Set", "Cutlery Set", "Glass Set", "Mug Set", "Serving Tray", "Serving Bowl", "Kitchen Utensils", "Table Napkins"] },
-  { value: "🔪", names: ["Kitchen Knife", "Chef Knife", "Knife Set", "Cutting Board", "Knife Sharpener", "Knife Block", "Paring Knife", "Bread Knife", "Utility Knife", "Knife Bundle"] },
-  { value: "🍳", names: ["Frying Pan", "Nonstick Pan", "Skillet", "Sauté Pan", "Omelette Pan", "Griddle Pan", "Pan Set", "Pan Duo", "Pan Bundle", "Pan Gift"] },
-  { value: "🥣", names: ["Mixing Bowl", "Salad Bowl", "Soup Bowl", "Cereal Bowl", "Bowl Set", "Bowl Duo", "Bowl Bundle", "Bowl Gift", "Bowl Pack", "Serving Bowl"] },
-  { value: "🧂", names: ["Salt Shaker", "Pepper Grinder", "Spice Rack", "Spice Jars", "Seasoning Pack", "Herb Mix", "Spice Blend", "Salt Pack", "Pepper Pack", "Spice Kit"] },
-  { value: "🪥", names: ["Toothbrush", "Toothpaste", "Oral Care Kit", "Mouthwash", "Floss", "Toothbrush Pack", "Toothbrush Duo", "Toothbrush Bundle", "Toothbrush Gift", "Toothbrush Holder"] },
-  { value: "🍼", names: ["Baby Bottle", "Baby Formula", "Baby Food", "Baby Snack", "Baby Spoon", "Baby Bowl", "Baby Bib", "Baby Cup", "Baby Utensils", "Baby Sippy Cup"] },
-  { value: "🧸", names: ["Baby Plush", "Baby Toy", "Baby Rattle", "Baby Teether", "Baby Book", "Baby Blocks", "Baby Gift", "Baby Set", "Baby Bundle", "Baby Stacker"] },
-  { value: "🐾", names: ["Pet Treats", "Pet Food", "Pet Toy", "Pet Leash", "Pet Collar", "Pet Bed", "Pet Bowl", "Pet Grooming", "Pet Shampoo", "Pet Bundle"] },
-  { value: "⚽", names: ["Soccer Ball", "Football", "Futsal Ball", "Training Ball", "Match Ball", "Ball Pump", "Ball Net", "Ball Pack", "Ball Duo", "Ball Bundle"] },
-  { value: "🏀", names: ["Basketball", "Outdoor Basketball", "Indoor Basketball", "Training Basketball", "Match Basketball", "Basketball Pump", "Basketball Net", "Basketball Pack", "Basketball Duo", "Basketball Bundle"] },
-  { value: "🏐", names: ["Volleyball", "Beach Volleyball", "Indoor Volleyball", "Training Volleyball", "Match Volleyball", "Volleyball Pump", "Volleyball Net", "Volleyball Pack", "Volleyball Duo", "Volleyball Bundle"] },
-  { value: "🏓", names: ["Ping Pong Paddle", "Ping Pong Balls", "Table Tennis Set", "Ping Pong Net", "Ping Pong Racket", "Ping Pong Case", "Ping Pong Pack", "Ping Pong Duo", "Ping Pong Bundle", "Ping Pong Gift"] },
-  { value: "🎯", names: ["Dartboard", "Dart Set", "Soft Tip Darts", "Steel Tip Darts", "Dart Flights", "Dart Shafts", "Dart Case", "Dart Pack", "Dart Bundle", "Dart Gift"] },
-  { value: "🎲", names: ["Board Game", "Dice Set", "Card Game", "Puzzle", "Game Bundle", "Game Pack", "Strategy Game", "Family Game", "Party Game", "Game Gift"] },
-  { value: "📦", names: ["Storage Box", "Gift Box", "Shipping Box", "Moving Box", "Organizer Box", "Folding Box", "Clear Box", "Decor Box", "Box Bundle", "Box Set"] },
-  { value: "🛒", names: ["Shopping Cart Token", "Shopping Basket Tag", "Reusable Tote", "Market Bag", "Grocery Tote", "Foldable Tote", "Insulated Bag", "Eco Bag", "Canvas Bag", "Cart Clip"] },
-  { value: "🦊", names: ["Fox"] },
-  { value: "🦁", names: ["Lion"] },
-  { value: "🐯", names: ["Tiger"] },
-  { value: "🐻", names: ["Bear"] },
-  { value: "🐼", names: ["Panda"] },
-  { value: "🐨", names: ["Koala"] },
-  { value: "🐵", names: ["Monkey Face"] },
-  { value: "🐒", names: ["Monkey"] },
-  { value: "🦉", names: ["Owl"] },
-  { value: "🐧", names: ["Penguin"] },
-  { value: "🐦", names: ["Bird"] },
-  { value: "🐤", names: ["Baby Chick"] },
-  { value: "🐣", names: ["Hatching Chick"] },
-  { value: "🐥", names: ["Front-Facing Baby Chick"] },
-  { value: "🐺", names: ["Wolf"] },
-  { value: "🐗", names: ["Boar"] },
-  { value: "🐴", names: ["Horse"] },
-  { value: "🦄", names: ["Unicorn"] },
-  { value: "🐝", names: ["Honeybee"] },
-  { value: "🐛", names: ["Bug"] },
-  { value: "🦋", names: ["Butterfly"] },
-  { value: "🐌", names: ["Snail"] },
-  { value: "🐢", names: ["Turtle"] },
-  { value: "🐍", names: ["Snake"] },
-  { value: "🦖", names: ["T-Rex"] },
-  { value: "🦕", names: ["Sauropod"] },
-  { value: "🐙", names: ["Octopus"] },
-  { value: "🦑", names: ["Squid"] },
-  { value: "🐠", names: ["Tropical Fish"] },
-  { value: "🐳", names: ["Spouting Whale"] },
-  { value: "🐬", names: ["Dolphin"] },
-  { value: "🐋", names: ["Whale"] },
-  { value: "🐊", names: ["Crocodile"] },
-  { value: "🦈", names: ["Shark"] },
-  { value: "🐅", names: ["Tiger (Alt)"] },
-  { value: "🦓", names: ["Zebra"] },
-  { value: "🐘", names: ["Elephant"] },
-  { value: "🦏", names: ["Rhinoceros"] },
-  { value: "🦛", names: ["Hippopotamus"] },
-  { value: "🐫", names: ["Two-Hump Camel"] },
-  { value: "🐪", names: ["Single-Hump Camel"] },
-  { value: "🦒", names: ["Giraffe"] },
-  { value: "🐃", names: ["Water Buffalo"] },
-  { value: "🐂", names: ["Ox"] },
-  { value: "🐄", names: ["Cow"] },
-  { value: "🐐", names: ["Goat"] },
-  { value: "🐑", names: ["Sheep"] },
-  { value: "🐎", names: ["Racehorse"] },
-  { value: "🐖", names: ["Pig"] },
-  { value: "🐓", names: ["Rooster"] },
+  { value: "ðŸŽ", names: ["Apple", "Apple Bag", "Apple Basket", "Apple Box", "Apple Jam", "Apple Juice", "Apple Pie", "Apple Snack", "Apple Crate", "Apple Pack"] },
+  { value: "ðŸ", names: ["Green Apple", "Green Apple Box", "Green Apple Juice", "Green Apple Pie", "Green Apple Snack", "Green Apple Basket", "Green Apple Crate", "Green Apple Jam", "Green Apple Pack", "Green Apple Bundle"] },
+  { value: "ðŸŒ", names: ["Banana", "Banana Bunch", "Banana Chips", "Banana Smoothie", "Banana Yogurt", "Banana Bread", "Banana Pack", "Banana Basket", "Banana Split", "Banana Snack"] },
+  { value: "ðŸ‡", names: ["Grapes", "Grape Box", "Grape Juice", "Grape Jam", "Grape Pack", "Grape Snack", "Grape Basket", "Grape Bundle", "Grape Carton", "Grape Tray"] },
+  { value: "ðŸ“", names: ["Strawberry", "Strawberry Box", "Strawberry Jam", "Strawberry Yogurt", "Strawberry Milk", "Strawberry Cake", "Strawberry Pack", "Strawberry Basket", "Strawberry Snack", "Strawberry Tart"] },
+  { value: "ðŸ’", names: ["Cherry", "Cherry Box", "Cherry Jam", "Cherry Juice", "Cherry Pack", "Cherry Basket", "Cherry Tart", "Cherry Snack", "Cherry Mix", "Cherry Crate"] },
+  { value: "ðŸ‘", names: ["Peach", "Peach Jam", "Peach Juice", "Peach Tart", "Peach Basket", "Peach Crate", "Peach Yogurt", "Peach Pack", "Peach Snack", "Peach Slices"] },
+  { value: "ðŸ", names: ["Pineapple", "Pineapple Slices", "Pineapple Juice", "Pineapple Rings", "Pineapple Jam", "Pineapple Pack", "Pineapple Snack", "Pineapple Basket", "Pineapple Chunks", "Pineapple Crate"] },
+  { value: "ðŸ¥­", names: ["Mango", "Mango Juice", "Mango Slices", "Mango Jam", "Mango Lassi", "Mango Pack", "Mango Basket", "Mango Snack", "Mango Chutney", "Mango Crate"] },
+  { value: "ðŸ‰", names: ["Watermelon", "Watermelon Slice", "Watermelon Juice", "Watermelon Pack", "Watermelon Snack", "Watermelon Basket", "Watermelon Wedges", "Watermelon Crate", "Watermelon Bowl", "Watermelon Platter"] },
+  { value: "ðŸ¥", names: ["Kiwi", "Kiwi Pack", "Kiwi Slices", "Kiwi Yogurt", "Kiwi Juice", "Kiwi Basket", "Kiwi Snack", "Kiwi Crate", "Kiwi Mix", "Kiwi Platter"] },
+  { value: "ðŸŠ", names: ["Orange", "Orange Juice", "Orange Pack", "Orange Basket", "Orange Crate", "Orange Marmalade", "Orange Snack", "Orange Segments", "Orange Carton", "Orange Mix"] },
+  { value: "ðŸ‹", names: ["Lemon", "Lemonade", "Lemon Pack", "Lemon Basket", "Lemon Crate", "Lemon Wedges", "Lemon Pie", "Lemon Tart", "Lemon Snack", "Lemon Mix"] },
+  { value: "ðŸˆ", names: ["Melon", "Melon Wedges", "Melon Pack", "Melon Basket", "Melon Crate", "Melon Juice", "Melon Snack", "Melon Platter", "Melon Mix", "Melon Slices"] },
+  { value: "ðŸ", names: ["Pear", "Pear Pack", "Pear Basket", "Pear Crate", "Pear Juice", "Pear Snack", "Pear Slices", "Pear Tart", "Pear Mix", "Pear Bowl"] },
+  { value: "ðŸ†", names: ["Eggplant", "Eggplant Pack", "Eggplant Basket", "Eggplant Crate", "Eggplant Cutlets", "Eggplant Parm", "Eggplant Mix", "Eggplant Grill", "Eggplant Tray", "Eggplant Dip"] },
+  { value: "ðŸ¥‘", names: ["Avocado", "Avocado Pack", "Avocado Basket", "Avocado Toast", "Avocado Dip", "Avocado Mix", "Avocado Crate", "Avocado Salad", "Avocado Sushi", "Avocado Bowl"] },
+  { value: "ðŸŒ½", names: ["Corn", "Corn on Cob", "Corn Pack", "Corn Basket", "Corn Crate", "Corn Chips", "Corn Meal", "Corn Mix", "Corn Snack", "Corn Tray"] },
+  { value: "ðŸ¥•", names: ["Carrot", "Carrot Pack", "Carrot Basket", "Carrot Crate", "Carrot Juice", "Carrot Snack", "Carrot Sticks", "Carrot Cake", "Carrot Mix", "Carrot Tray"] },
+  { value: "ðŸ¥”", names: ["Potato", "Potato Bag", "Potato Pack", "Potato Basket", "Potato Crate", "Potato Wedges", "Potato Chips", "Potato Mash", "Potato Mix", "Potato Tray"] },
+  { value: "ðŸ¥¦", names: ["Broccoli", "Broccoli Pack", "Broccoli Basket", "Broccoli Crate", "Broccoli Florets", "Broccoli Mix", "Broccoli Snack", "Broccoli Tray", "Broccoli Salad", "Broccoli Stir Fry"] },
+  { value: "ðŸ¥¬", names: ["Lettuce", "Lettuce Pack", "Lettuce Basket", "Lettuce Crate", "Lettuce Mix", "Lettuce Heads", "Lettuce Wraps", "Lettuce Salad", "Lettuce Tray", "Lettuce Stack"] },
+  { value: "ðŸ…", names: ["Tomato", "Tomato Pack", "Tomato Basket", "Tomato Crate", "Tomato Sauce", "Tomato Puree", "Tomato Soup", "Tomato Mix", "Tomato Snack", "Tomato Tray"] },
+  { value: "ðŸ§„", names: ["Garlic", "Garlic Pack", "Garlic Basket", "Garlic Crate", "Garlic Paste", "Garlic Powder", "Garlic Mix", "Garlic Snack", "Garlic Tray", "Garlic Bulbs"] },
+  { value: "ðŸ§…", names: ["Onion", "Onion Pack", "Onion Basket", "Onion Crate", "Onion Rings", "Onion Powder", "Onion Mix", "Onion Snack", "Onion Tray", "Onion Bulbs"] },
+  { value: "ðŸŒ¶ï¸", names: ["Chili Pepper", "Chili Pack", "Chili Basket", "Chili Crate", "Chili Flakes", "Chili Powder", "Chili Mix", "Chili Snack", "Chili Tray", "Chili Sauce"] },
+  { value: "ðŸ„", names: ["Mushroom", "Mushroom Pack", "Mushroom Basket", "Mushroom Crate", "Mushroom Mix", "Mushroom Snack", "Mushroom Soup", "Mushroom Tray", "Mushroom Slices", "Mushroom Skewers"] },
+  { value: "ðŸ¥", names: ["Croissant", "Croissant Pack", "Croissant Basket", "Croissant Crate", "Chocolate Croissant", "Almond Croissant", "Butter Croissant", "Mini Croissant", "Croissant Tray", "Croissant Snack"] },
+  { value: "ðŸž", names: ["Bread Loaf", "Bread Pack", "Bread Basket", "Bread Crate", "Wholegrain Bread", "Sourdough Bread", "White Bread", "Rye Bread", "Bread Rolls", "Bread Tray"] },
+  { value: "ðŸ¥¯", names: ["Bagel", "Bagel Pack", "Bagel Basket", "Bagel Crate", "Sesame Bagel", "Everything Bagel", "Plain Bagel", "Cinnamon Bagel", "Bagel Tray", "Bagel Snack"] },
+  { value: "ðŸ¥ž", names: ["Pancake", "Pancake Pack", "Pancake Mix", "Pancake Stack", "Pancake Syrup", "Pancake Basket", "Pancake Crate", "Pancake Tray", "Pancake Snack", "Mini Pancake"] },
+  { value: "ðŸ§‡", names: ["Waffle", "Waffle Pack", "Waffle Mix", "Waffle Stack", "Waffle Syrup", "Waffle Basket", "Waffle Crate", "Waffle Tray", "Waffle Snack", "Mini Waffle"] },
+  { value: "ðŸ¥–", names: ["Baguette", "Baguette Pack", "Baguette Basket", "Baguette Crate", "Garlic Baguette", "Seeded Baguette", "Classic Baguette", "Mini Baguette", "Baguette Tray", "Baguette Snack"] },
+  { value: "ðŸ—", names: ["Chicken Drumstick", "Chicken Bucket", "Chicken Pack", "Chicken Basket", "Chicken Crate", "BBQ Chicken", "Spicy Chicken", "Fried Chicken", "Roast Chicken", "Chicken Tray"] },
+  { value: "ðŸ¥©", names: ["Steak", "Steak Pack", "Steak Basket", "Steak Crate", "Ribeye Steak", "Sirloin Steak", "Flank Steak", "Steak Marinade", "Steak Tray", "Steak Cuts"] },
+  { value: "ðŸ¥“", names: ["Bacon", "Bacon Pack", "Bacon Basket", "Bacon Crate", "Smoked Bacon", "Crispy Bacon", "Turkey Bacon", "Bacon Bits", "Bacon Tray", "Bacon Strips"] },
+  { value: "ðŸ–", names: ["Meat Ribs", "Rib Rack", "BBQ Ribs", "Smoked Ribs", "Ribs Pack", "Ribs Basket", "Ribs Crate", "Ribs Tray", "Honey Ribs", "Spicy Ribs"] },
+  { value: "ðŸ¤", names: ["Fried Shrimp", "Shrimp Pack", "Shrimp Basket", "Shrimp Crate", "Shrimp Cocktail", "Shrimp Tray", "Shrimp Skewers", "Shrimp Snack", "Garlic Shrimp", "Spicy Shrimp"] },
+  { value: "ðŸŸ", names: ["Fish Fillet", "Fish Pack", "Fish Basket", "Fish Crate", "Salmon Fillet", "Cod Fillet", "Tilapia Fillet", "Fish Tray", "Smoked Fish", "Fish Steak"] },
+  { value: "ðŸ£", names: ["Sushi Roll", "Sushi Box", "Sushi Pack", "Sushi Tray", "Salmon Sushi", "Tuna Sushi", "Veggie Sushi", "Sushi Platter", "Sushi Combo", "Nigiri Sushi"] },
+  { value: "ðŸ•", names: ["Pizza Slice", "Pizza Box", "Cheese Pizza", "Pepperoni Pizza", "Veggie Pizza", "BBQ Pizza", "Pizza Combo", "Pizza Party", "Pizza Pack", "Pizza Tray"] },
+  { value: "ðŸ”", names: ["Burger", "Cheeseburger", "Double Burger", "Veggie Burger", "Chicken Burger", "Burger Combo", "Burger Pack", "Burger Box", "Burger Meal", "Burger Tray"] },
+  { value: "ðŸŒ­", names: ["Hotdog", "Chili Dog", "Cheese Dog", "BBQ Hotdog", "Hotdog Combo", "Hotdog Pack", "Hotdog Box", "Hotdog Meal", "Hotdog Tray", "Hotdog Snack"] },
+  { value: "ðŸ¥ª", names: ["Sandwich", "Club Sandwich", "Chicken Sandwich", "Turkey Sandwich", "Veggie Sandwich", "Sandwich Box", "Sandwich Pack", "Sandwich Meal", "Sandwich Tray", "BLT Sandwich"] },
+  { value: "ðŸŒ®", names: ["Taco", "Beef Taco", "Chicken Taco", "Fish Taco", "Veggie Taco", "Taco Pack", "Taco Box", "Taco Meal", "Taco Tray", "Taco Combo"] },
+  { value: "ðŸŒ¯", names: ["Burrito", "Beef Burrito", "Chicken Burrito", "Veggie Burrito", "Bean Burrito", "Burrito Pack", "Burrito Box", "Burrito Meal", "Burrito Tray", "Burrito Combo"] },
+  { value: "ðŸ¥™", names: ["Pita Pocket", "Falafel Pita", "Chicken Pita", "Lamb Pita", "Veggie Pita", "Pita Pack", "Pita Box", "Pita Meal", "Pita Tray", "Pita Combo"] },
+  { value: "ðŸœ", names: ["Ramen Bowl", "Ramen Pack", "Ramen Box", "Spicy Ramen", "Chicken Ramen", "Veggie Ramen", "Miso Ramen", "Ramen Meal", "Ramen Tray", "Ramen Combo"] },
+  { value: "ðŸ", names: ["Pasta", "Spaghetti", "Pasta Pack", "Pasta Box", "Pasta Meal", "Pasta Tray", "Pasta Combo", "Creamy Pasta", "Tomato Pasta", "Pesto Pasta"] },
+  { value: "ðŸ²", names: ["Stew", "Stew Pack", "Stew Bowl", "Beef Stew", "Chicken Stew", "Veggie Stew", "Spicy Stew", "Stew Meal", "Stew Tray", "Stew Combo"] },
+  { value: "ðŸ›", names: ["Curry", "Chicken Curry", "Beef Curry", "Veggie Curry", "Curry Pack", "Curry Box", "Curry Meal", "Curry Tray", "Curry Combo", "Spicy Curry"] },
+  { value: "ðŸš", names: ["Rice Bowl", "Rice Pack", "Rice Bag", "Brown Rice", "Jasmine Rice", "Basmati Rice", "Sticky Rice", "Rice Box", "Rice Meal", "Rice Tray"] },
+  { value: "ðŸ¥", names: ["Fish Cake", "Fish Cake Pack", "Fish Cake Box", "Fish Cake Tray", "Spicy Fish Cake", "Sesame Fish Cake", "Veggie Fish Cake", "Fish Cake Meal", "Fish Cake Snack", "Fish Cake Combo"] },
+  { value: "ðŸ©", names: ["Doughnut", "Glazed Doughnut", "Chocolate Doughnut", "Sprinkle Doughnut", "Doughnut Box", "Doughnut Pack", "Doughnut Tray", "Doughnut Snack", "Filled Doughnut", "Mini Doughnut"] },
+  { value: "ðŸª", names: ["Cookie", "Chocolate Chip Cookie", "Oatmeal Cookie", "Sugar Cookie", "Cookie Box", "Cookie Pack", "Cookie Tray", "Cookie Snack", "Cookie Gift", "Cookie Tin"] },
+  { value: "ðŸ«", names: ["Chocolate Bar", "Dark Chocolate", "Milk Chocolate", "White Chocolate", "Chocolate Pack", "Chocolate Box", "Chocolate Gift", "Chocolate Snack", "Chocolate Mix", "Chocolate Tray"] },
+  { value: "ðŸ¿", names: ["Popcorn", "Butter Popcorn", "Caramel Popcorn", "Cheese Popcorn", "Popcorn Tub", "Popcorn Pack", "Popcorn Box", "Popcorn Snack", "Popcorn Bowl", "Popcorn Mix"] },
+  { value: "ðŸ§ƒ", names: ["Juice Box", "Apple Juice Box", "Orange Juice Box", "Grape Juice Box", "Mixed Fruit Juice", "Juice Pack", "Juice Carton", "Juice Bottle", "Juice Cooler", "Juice Case"] },
+  { value: "ðŸ¥¤", names: ["Soft Drink", "Soda Can", "Soda Bottle", "Cola Can", "Lemon Soda", "Orange Soda", "Ginger Soda", "Soda Pack", "Soda Crate", "Soda Mix"] },
+  { value: "ðŸ§‹", names: ["Bubble Tea", "Milk Tea", "Taro Bubble Tea", "Matcha Bubble Tea", "Brown Sugar Bubble Tea", "Fruit Bubble Tea", "Bubble Tea Pack", "Bubble Tea Tray", "Bubble Tea Kit", "Bubble Tea Mix"] },
+  { value: "â˜•", names: ["Coffee", "Latte", "Cappuccino", "Espresso", "Mocha", "Iced Coffee", "Coffee Pack", "Coffee Beans", "Coffee Pods", "Coffee Gift"] },
+  { value: "ðŸ·", names: ["Red Wine", "White Wine", "RosÃ© Wine", "Sparkling Wine", "Wine Bottle", "Wine Pack", "Wine Crate", "Wine Gift", "Wine Box", "Wine Pairing"] },
+  { value: "ðŸº", names: ["Beer", "Beer Can", "Beer Bottle", "Craft Beer", "Lager Beer", "Ale Beer", "Beer Pack", "Beer Crate", "Beer Combo", "Beer Gift"] },
+  { value: "ðŸ¥›", names: ["Milk Carton", "Milk Bottle", "Whole Milk", "Skim Milk", "Almond Milk", "Oat Milk", "Soy Milk", "Milk Pack", "Milk Crate", "Milk Cooler"] },
+  { value: "ðŸ§€", names: ["Cheese Block", "Cheddar Cheese", "Mozzarella Cheese", "Parmesan Cheese", "Cheese Pack", "Cheese Tray", "Cheese Platter", "Cheese Snack", "Cheese Crate", "Cheese Basket"] },
+  { value: "ðŸ¶", names: ["Sake Bottle", "Sake Pack", "Sake Gift", "Sake Crate", "Rice Wine", "Premium Sake", "Sparkling Sake", "Sake Set", "Sake Box", "Sake Pairing"] },
+  { value: "ðŸ§´", names: ["Lotion", "Body Lotion", "Hand Lotion", "Face Cream", "Sunscreen", "Lotion Pack", "Lotion Gift", "Lotion Set", "Lotion Bottle", "Lotion Tube"] },
+  { value: "ðŸ§»", names: ["Paper Towel", "Paper Roll", "Toilet Roll", "Kitchen Towel", "Paper Pack", "Paper Bulk", "Paper Value Pack", "Paper Carton", "Paper Bundle", "Paper Case"] },
+  { value: "ðŸ§½", names: ["Sponge", "Cleaning Sponge", "Scrub Sponge", "Kitchen Sponge", "Bath Sponge", "Sponge Pack", "Sponge Bulk", "Sponge Set", "Sponge Value Pack", "Sponge Duo"] },
+  { value: "ðŸ§¹", names: ["Broom", "Cleaning Broom", "Floor Broom", "Broom Set", "Broom With Dustpan", "Broom Pack", "Broom Value Pack", "Broom Combo", "Outdoor Broom", "Indoor Broom"] },
+  { value: "ðŸ§º", names: ["Laundry Basket", "Storage Basket", "Market Basket", "Picnic Basket", "Gift Basket", "Fruit Basket", "Grocery Basket", "Home Basket", "Basket Set", "Basket Duo"] },
+  { value: "ðŸ§¼", names: ["Soap Bar", "Hand Soap", "Body Soap", "Face Soap", "Soap Pack", "Soap Gift", "Soap Set", "Soap Refill", "Liquid Soap", "Foam Soap"] },
+  { value: "ðŸ§¦", names: ["Socks", "Ankle Socks", "Crew Socks", "Sport Socks", "Wool Socks", "Dress Socks", "Socks Pack", "Socks Gift", "Socks Bundle", "Socks Trio"] },
+  { value: "ðŸ‘•", names: ["T-Shirt", "Graphic Tee", "Basic Tee", "Sport Tee", "V-Neck Tee", "Long Sleeve Tee", "T-Shirt Pack", "T-Shirt Duo", "T-Shirt Bundle", "T-Shirt Gift"] },
+  { value: "ðŸ‘–", names: ["Jeans", "Slim Jeans", "Straight Jeans", "Relaxed Jeans", "Dark Jeans", "Light Jeans", "Jeans Pack", "Jeans Duo", "Jeans Bundle", "Jeans Gift"] },
+  { value: "ðŸ‘—", names: ["Dress", "Summer Dress", "Evening Dress", "Casual Dress", "Floral Dress", "Party Dress", "Dress Pack", "Dress Duo", "Dress Bundle", "Dress Gift"] },
+  { value: "ðŸ‘”", names: ["Shirt", "Formal Shirt", "Oxford Shirt", "Linen Shirt", "Checked Shirt", "Striped Shirt", "Shirt Pack", "Shirt Duo", "Shirt Bundle", "Shirt Gift"] },
+  { value: "ðŸ§¥", names: ["Jacket", "Denim Jacket", "Leather Jacket", "Puffer Jacket", "Blazer Jacket", "Rain Jacket", "Jacket Pack", "Jacket Duo", "Jacket Bundle", "Jacket Gift"] },
+  { value: "ðŸ§¢", names: ["Cap", "Baseball Cap", "Trucker Cap", "Snapback Cap", "Dad Cap", "Sport Cap", "Cap Pack", "Cap Duo", "Cap Bundle", "Cap Gift"] },
+  { value: "ðŸ‘Ÿ", names: ["Sneakers", "Running Sneakers", "Casual Sneakers", "High-Top Sneakers", "Court Sneakers", "Trail Sneakers", "Sneaker Pack", "Sneaker Duo", "Sneaker Bundle", "Sneaker Gift"] },
+  { value: "ðŸ‘ ", names: ["Heels", "Stiletto Heels", "Block Heels", "Kitten Heels", "Party Heels", "Dress Heels", "Heels Pack", "Heels Duo", "Heels Bundle", "Heels Gift"] },
+  { value: "ðŸ‘ž", names: ["Dress Shoes", "Oxford Shoes", "Derby Shoes", "Loafer Shoes", "Wingtip Shoes", "Leather Shoes", "Shoe Pack", "Shoe Duo", "Shoe Bundle", "Shoe Gift"] },
+  { value: "ðŸŽ’", names: ["Backpack", "Travel Backpack", "School Backpack", "Laptop Backpack", "Hiking Backpack", "Mini Backpack", "Backpack Pack", "Backpack Duo", "Backpack Bundle", "Backpack Gift"] },
+  { value: "ðŸ‘œ", names: ["Handbag", "Tote Bag", "Shoulder Bag", "Crossbody Bag", "Clutch Bag", "Satchel Bag", "Bag Pack", "Bag Duo", "Bag Bundle", "Bag Gift"] },
+  { value: "ðŸ’", names: ["Ring", "Gold Ring", "Silver Ring", "Diamond Ring", "Engagement Ring", "Wedding Ring", "Ring Box", "Ring Gift", "Ring Pair", "Ring Set"] },
+  { value: "âŒš", names: ["Watch", "Smart Watch", "Sport Watch", "Dress Watch", "Classic Watch", "Metal Watch", "Watch Box", "Watch Gift", "Watch Pair", "Watch Set"] },
+  { value: "ðŸ“±", names: ["Smartphone", "Phone Case", "Phone Charger", "Phone Screen Guard", "Phone Bundle", "Phone Earbuds", "Phone Power Bank", "Phone Mount", "Phone Cable", "Phone Stand"] },
+  { value: "ðŸ’»", names: ["Laptop", "Laptop Sleeve", "Laptop Stand", "Laptop Charger", "Laptop Dock", "Laptop Bundle", "Laptop Cooling Pad", "Laptop Bag", "Laptop Combo", "Laptop Kit"] },
+  { value: "ðŸŽ§", names: ["Headphones", "Wireless Headphones", "Noise Canceling Headphones", "Gaming Headset", "On-Ear Headphones", "Over-Ear Headphones", "Headphone Case", "Headphone Stand", "Headphone Bundle", "Headphone Gift"] },
+  { value: "ðŸ–¥ï¸", names: ["Monitor", "Gaming Monitor", "Office Monitor", "Curved Monitor", "4K Monitor", "Monitor Stand", "Monitor Arm", "Monitor Bundle", "Monitor Pair", "Monitor Gift"] },
+  { value: "ðŸ“º", names: ["Television", "Smart TV", "LED TV", "OLED TV", "4K TV", "TV Wall Mount", "TV Soundbar", "TV Bundle", "TV Gift", "TV Pair"] },
+  { value: "ðŸ§¸", names: ["Teddy Bear", "Stuffed Animal", "Plush Toy", "Toy Bundle", "Toy Gift", "Toy Set", "Toy Box", "Toy Basket", "Toy Pack", "Toy Plush"] },
+  { value: "ðŸ“š", names: ["Books", "Novel Pack", "Cookbook", "Children Book", "Notebook Set", "Journal Pack", "Planner", "Story Book", "Workbook", "Reference Book"] },
+  { value: "âœï¸", names: ["Pencil", "Pencil Pack", "Colored Pencil Set", "Mechanical Pencil", "Pencil Case", "Pencil Box", "Pencil Kit", "Pencil Duo", "Pencil Bundle", "Pencil Gift"] },
+  { value: "ðŸ–Šï¸", names: ["Pen", "Gel Pen", "Ballpoint Pen", "Fountain Pen", "Pen Pack", "Pen Case", "Pen Box", "Pen Set", "Pen Duo", "Pen Gift"] },
+  { value: "ðŸ“’", names: ["Notebook", "Spiral Notebook", "Hardcover Notebook", "Softcover Notebook", "Notebook Pack", "Notebook Bundle", "Notebook Set", "Notebook Gift", "Notebook Duo", "Notebook Trio"] },
+  { value: "ðŸ§´", names: ["Shampoo", "Conditioner", "Body Wash", "Face Wash", "Hair Serum", "Body Lotion", "Hand Cream", "Hair Oil", "Shower Gel", "Self Care Kit"] },
+  { value: "ðŸ§¹", names: ["Cleaning Mop", "Cleaning Kit", "Cleaning Spray", "Cleaning Cloths", "Cleaning Bucket", "Cleaning Gloves", "Cleaning Set", "Cleaning Bundle", "Cleaning Wipes", "Cleaning Pads"] },
+  { value: "ðŸ§º", names: ["Laundry Hamper", "Laundry Bag", "Laundry Basket", "Laundry Detergent", "Laundry Softener", "Laundry Pods", "Laundry Sheets", "Laundry Bundle", "Laundry Kit", "Laundry Pair"] },
+  { value: "ðŸ§Š", names: ["Ice Tray", "Ice Pack", "Ice Cube", "Ice Bag", "Ice Bucket", "Ice Maker", "Ice Scoop", "Ice Stones", "Ice Set", "Ice Bundle"] },
+  { value: "ðŸ›ï¸", names: ["Bed", "Bed Sheet", "Bed Set", "Duvet", "Comforter", "Pillow", "Pillow Cases", "Mattress Topper", "Bed Blanket", "Bed Throw"] },
+  { value: "ðŸ›‹ï¸", names: ["Sofa", "Sofa Cover", "Throw Pillow", "Cushion", "Sofa Set", "Sectional Sofa", "Loveseat", "Recliner Sofa", "Sofa Blanket", "Sofa Protector"] },
+  { value: "ðŸª‘", names: ["Chair", "Dining Chair", "Office Chair", "Desk Chair", "Bar Stool", "Folding Chair", "Patio Chair", "Gaming Chair", "Accent Chair", "Chair Cushion"] },
+  { value: "ðŸ½ï¸", names: ["Dinner Set", "Plate Set", "Bowl Set", "Cutlery Set", "Glass Set", "Mug Set", "Serving Tray", "Serving Bowl", "Kitchen Utensils", "Table Napkins"] },
+  { value: "ðŸ”ª", names: ["Kitchen Knife", "Chef Knife", "Knife Set", "Cutting Board", "Knife Sharpener", "Knife Block", "Paring Knife", "Bread Knife", "Utility Knife", "Knife Bundle"] },
+  { value: "ðŸ³", names: ["Frying Pan", "Nonstick Pan", "Skillet", "SautÃ© Pan", "Omelette Pan", "Griddle Pan", "Pan Set", "Pan Duo", "Pan Bundle", "Pan Gift"] },
+  { value: "ðŸ¥£", names: ["Mixing Bowl", "Salad Bowl", "Soup Bowl", "Cereal Bowl", "Bowl Set", "Bowl Duo", "Bowl Bundle", "Bowl Gift", "Bowl Pack", "Serving Bowl"] },
+  { value: "ðŸ§‚", names: ["Salt Shaker", "Pepper Grinder", "Spice Rack", "Spice Jars", "Seasoning Pack", "Herb Mix", "Spice Blend", "Salt Pack", "Pepper Pack", "Spice Kit"] },
+  { value: "ðŸª¥", names: ["Toothbrush", "Toothpaste", "Oral Care Kit", "Mouthwash", "Floss", "Toothbrush Pack", "Toothbrush Duo", "Toothbrush Bundle", "Toothbrush Gift", "Toothbrush Holder"] },
+  { value: "ðŸ¼", names: ["Baby Bottle", "Baby Formula", "Baby Food", "Baby Snack", "Baby Spoon", "Baby Bowl", "Baby Bib", "Baby Cup", "Baby Utensils", "Baby Sippy Cup"] },
+  { value: "ðŸ§¸", names: ["Baby Plush", "Baby Toy", "Baby Rattle", "Baby Teether", "Baby Book", "Baby Blocks", "Baby Gift", "Baby Set", "Baby Bundle", "Baby Stacker"] },
+  { value: "ðŸ¾", names: ["Pet Treats", "Pet Food", "Pet Toy", "Pet Leash", "Pet Collar", "Pet Bed", "Pet Bowl", "Pet Grooming", "Pet Shampoo", "Pet Bundle"] },
+  { value: "âš½", names: ["Soccer Ball", "Football", "Futsal Ball", "Training Ball", "Match Ball", "Ball Pump", "Ball Net", "Ball Pack", "Ball Duo", "Ball Bundle"] },
+  { value: "ðŸ€", names: ["Basketball", "Outdoor Basketball", "Indoor Basketball", "Training Basketball", "Match Basketball", "Basketball Pump", "Basketball Net", "Basketball Pack", "Basketball Duo", "Basketball Bundle"] },
+  { value: "ðŸ", names: ["Volleyball", "Beach Volleyball", "Indoor Volleyball", "Training Volleyball", "Match Volleyball", "Volleyball Pump", "Volleyball Net", "Volleyball Pack", "Volleyball Duo", "Volleyball Bundle"] },
+  { value: "ðŸ“", names: ["Ping Pong Paddle", "Ping Pong Balls", "Table Tennis Set", "Ping Pong Net", "Ping Pong Racket", "Ping Pong Case", "Ping Pong Pack", "Ping Pong Duo", "Ping Pong Bundle", "Ping Pong Gift"] },
+  { value: "ðŸŽ¯", names: ["Dartboard", "Dart Set", "Soft Tip Darts", "Steel Tip Darts", "Dart Flights", "Dart Shafts", "Dart Case", "Dart Pack", "Dart Bundle", "Dart Gift"] },
+  { value: "ðŸŽ²", names: ["Board Game", "Dice Set", "Card Game", "Puzzle", "Game Bundle", "Game Pack", "Strategy Game", "Family Game", "Party Game", "Game Gift"] },
+  { value: "ðŸ“¦", names: ["Storage Box", "Gift Box", "Shipping Box", "Moving Box", "Organizer Box", "Folding Box", "Clear Box", "Decor Box", "Box Bundle", "Box Set"] },
+  { value: "ðŸ›’", names: ["Shopping Cart Token", "Shopping Basket Tag", "Reusable Tote", "Market Bag", "Grocery Tote", "Foldable Tote", "Insulated Bag", "Eco Bag", "Canvas Bag", "Cart Clip"] },
+  { value: "ðŸ¦Š", names: ["Fox"] },
+  { value: "ðŸ¦", names: ["Lion"] },
+  { value: "ðŸ¯", names: ["Tiger"] },
+  { value: "ðŸ»", names: ["Bear"] },
+  { value: "ðŸ¼", names: ["Panda"] },
+  { value: "ðŸ¨", names: ["Koala"] },
+  { value: "ðŸµ", names: ["Monkey Face"] },
+  { value: "ðŸ’", names: ["Monkey"] },
+  { value: "ðŸ¦‰", names: ["Owl"] },
+  { value: "ðŸ§", names: ["Penguin"] },
+  { value: "ðŸ¦", names: ["Bird"] },
+  { value: "ðŸ¤", names: ["Baby Chick"] },
+  { value: "ðŸ£", names: ["Hatching Chick"] },
+  { value: "ðŸ¥", names: ["Front-Facing Baby Chick"] },
+  { value: "ðŸº", names: ["Wolf"] },
+  { value: "ðŸ—", names: ["Boar"] },
+  { value: "ðŸ´", names: ["Horse"] },
+  { value: "ðŸ¦„", names: ["Unicorn"] },
+  { value: "ðŸ", names: ["Honeybee"] },
+  { value: "ðŸ›", names: ["Bug"] },
+  { value: "ðŸ¦‹", names: ["Butterfly"] },
+  { value: "ðŸŒ", names: ["Snail"] },
+  { value: "ðŸ¢", names: ["Turtle"] },
+  { value: "ðŸ", names: ["Snake"] },
+  { value: "ðŸ¦–", names: ["T-Rex"] },
+  { value: "ðŸ¦•", names: ["Sauropod"] },
+  { value: "ðŸ™", names: ["Octopus"] },
+  { value: "ðŸ¦‘", names: ["Squid"] },
+  { value: "ðŸ ", names: ["Tropical Fish"] },
+  { value: "ðŸ³", names: ["Spouting Whale"] },
+  { value: "ðŸ¬", names: ["Dolphin"] },
+  { value: "ðŸ‹", names: ["Whale"] },
+  { value: "ðŸŠ", names: ["Crocodile"] },
+  { value: "ðŸ¦ˆ", names: ["Shark"] },
+  { value: "ðŸ…", names: ["Tiger (Alt)"] },
+  { value: "ðŸ¦“", names: ["Zebra"] },
+  { value: "ðŸ˜", names: ["Elephant"] },
+  { value: "ðŸ¦", names: ["Rhinoceros"] },
+  { value: "ðŸ¦›", names: ["Hippopotamus"] },
+  { value: "ðŸ«", names: ["Two-Hump Camel"] },
+  { value: "ðŸª", names: ["Single-Hump Camel"] },
+  { value: "ðŸ¦’", names: ["Giraffe"] },
+  { value: "ðŸƒ", names: ["Water Buffalo"] },
+  { value: "ðŸ‚", names: ["Ox"] },
+  { value: "ðŸ„", names: ["Cow"] },
+  { value: "ðŸ", names: ["Goat"] },
+  { value: "ðŸ‘", names: ["Sheep"] },
+  { value: "ðŸŽ", names: ["Racehorse"] },
+  { value: "ðŸ–", names: ["Pig"] },
+  { value: "ðŸ“", names: ["Rooster"] },
 ];
 
 const CATEGORY_TAG_OPTIONS = [
@@ -348,12 +348,12 @@ const EMOJI_OPTIONS = Array.from(
   new Map(
     EMOJI_GROUPS.map(({ value, names }) => {
       const normalized = normalizeEmoji(value);
-      return [normalized, names[0] ?? "Emoji"];
+      return [normalized, names[0] || "Emoji"];
     }),
   ).entries(),
 )
   .map(([value, label]) => ({ value, label }))
-  .sort((a, b) => a.label.localeCompare(b.label));
+  .sort((a, b) => String(a.label).localeCompare(String(b.label)));
 
 // Admin auth context (local to this page file)
 type AdminUser = any;
@@ -453,7 +453,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
         if (cancelled) return;
         const normalizedUser = normalizeAdminUser(sessionUser);
         setUser(normalizedUser);
-        const memberships = normalizedUser?.memberships ?? [];
+        const memberships = normalizedUser?.memberships || [];
         if (memberships.length > 0 && !selectedEstateId) {
           setSelectedEstateId(memberships[0].estateId);
         }
@@ -496,7 +496,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
       sessionStorage.setItem("admin_refresh_token", response.refreshToken);
 
       // Restore estate selection if user has memberships
-      const memberships = normalizedUser?.memberships ?? [];
+      const memberships = normalizedUser?.memberships || [];
       if (memberships.length > 0 && !selectedEstateId) {
         const firstEstate = memberships[0].estateId;
         setSelectedEstateId(firstEstate);
@@ -520,7 +520,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
         // Support two response shapes:
         // 1) token-based: { accessToken, refreshToken, user }
         // 2) session-based: user object returned directly
-        const userObj = response?.user ?? response;
+        const userObj = response?.user || response;
         const accessToken = response?.accessToken ?? null;
         const refreshToken = response?.refreshToken ?? null;
 
@@ -538,7 +538,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
         setUser(normalizedUser);
 
         // Auto-select first estate for tenant scoping
-        const memberships = normalizedUser?.memberships ?? [];
+        const memberships = normalizedUser?.memberships || [];
         if (memberships.length > 0) {
           const firstEstate = memberships[0].estateId;
           setSelectedEstateId(firstEstate);
@@ -649,7 +649,7 @@ const AdminLogin = () => {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                 required
                 data-testid="input-admin-password"
               />
@@ -874,7 +874,7 @@ const AiConversationsPanel = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
         ) : error ? (
           <p className="text-sm text-destructive">Failed to load AI conversations.</p>
         ) : (
@@ -898,10 +898,10 @@ const AiConversationsPanel = () => {
                     <TableCell>{r.category}</TableCell>
                     <TableCell>{r.urgency}</TableCell>
                     <TableCell>{r.recommendedApproach}</TableCell>
-                    <TableCell>{Number.isFinite(Number(r.confidenceScore)) ? Number(r.confidenceScore) : "—"}</TableCell>
+                    <TableCell>{Number.isFinite(Number(r.confidenceScore)) ? Number(r.confidenceScore) : "â€”"}</TableCell>
                     <TableCell>{r.status}</TableCell>
                     <TableCell>
-                      {r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "—"}
+                      {r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "â€”"}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -948,7 +948,7 @@ const AiPreparedRequestsPanel = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
         ) : error ? (
           <p className="text-sm text-destructive">Failed to load prepared requests.</p>
         ) : (
@@ -972,18 +972,18 @@ const AiPreparedRequestsPanel = () => {
                   const estimateText =
                     est && Number.isFinite(Number(est.min)) && Number.isFinite(Number(est.max))
                       ? `${Number(est.min)} - ${Number(est.max)}`
-                      : "—";
+                      : "â€”";
 
                   return (
                     <TableRow key={r.id}>
                       <TableCell className="font-mono text-xs">{r.resident}</TableCell>
                       <TableCell>{r.category}</TableCell>
                       <TableCell>{r.urgency}</TableCell>
-                      <TableCell className="max-w-[420px] truncate">{r.headline ?? "—"}</TableCell>
-                      <TableCell className="max-w-[220px] truncate">{r.scope ?? "—"}</TableCell>
+                      <TableCell className="max-w-[420px] truncate">{r.headline || "—"}</TableCell>
+                      <TableCell className="max-w-[220px] truncate">{r.scope || "—"}</TableCell>
                       <TableCell>{Number.isFinite(Number(r.imageCount)) ? Number(r.imageCount) : 0}</TableCell>
                       <TableCell>{estimateText}</TableCell>
-                      <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "—"}</TableCell>
+                      <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "â€”"}</TableCell>
                     </TableRow>
                   );
                 })}
@@ -1087,7 +1087,7 @@ const PricingRulesPanel = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
         ) : error ? (
           <p className="text-sm text-destructive">Failed to load pricing rules.</p>
         ) : (rows || []).length === 0 ? (
@@ -1122,13 +1122,13 @@ const PricingRulesPanel = () => {
                 {(rows || []).map((r: any) => (
                   <TableRow key={r.id}>
                     <TableCell className="font-medium">{r.name}</TableCell>
-                    <TableCell>{r.category ?? "—"}</TableCell>
-                    <TableCell>{r.urgency ?? "—"}</TableCell>
-                    <TableCell className="max-w-[240px] truncate">{r.scope ?? "—"}</TableCell>
+                    <TableCell>{r.category || "—"}</TableCell>
+                    <TableCell>{r.urgency || "—"}</TableCell>
+                    <TableCell className="max-w-[240px] truncate">{r.scope || "—"}</TableCell>
                     <TableCell>{r.minPrice}</TableCell>
                     <TableCell>{r.maxPrice}</TableCell>
                     <TableCell>{r.isActive ? "Yes" : "No"}</TableCell>
-                    <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "—"}</TableCell>
+                    <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "â€”"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -1297,7 +1297,7 @@ const ProviderMatchingPanel = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
         ) : error ? (
           <p className="text-sm text-destructive">Failed to load provider matching settings.</p>
         ) : (
@@ -1320,7 +1320,7 @@ const ProviderMatchingPanel = () => {
                     <TableCell>{p.isApproved ? "Yes" : "No"}</TableCell>
                     <TableCell>{p.matching?.isEnabled === false ? "No" : "Yes"}</TableCell>
                     <TableCell>
-                      {p.matching?.updatedAt ? new Date(p.matching.updatedAt).toLocaleString() : "—"}
+                      {p.matching?.updatedAt ? new Date(p.matching.updatedAt).toLocaleString() : "â€”"}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -1378,7 +1378,7 @@ const AnalyticsPanel = ({ orderStats }: { orderStats: any }) => {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold">
-              ₦{(orderStats?.totalRevenue || 0).toLocaleString()}
+              â‚¦{(orderStats?.totalRevenue || 0).toLocaleString()}
             </p>
             <p className="text-xs text-muted-foreground mt-1">Across all orders</p>
           </CardContent>
@@ -1454,7 +1454,7 @@ const AnalyticsPanel = ({ orderStats }: { orderStats: any }) => {
                     <p className="text-xs text-muted-foreground">{order.service || order.category}</p>
                   </div>
                   <div className="text-right">
-                    <p className="font-medium">₦{(order.totalAmount || 0).toLocaleString()}</p>
+                    <p className="font-medium">â‚¦{(order.totalAmount || 0).toLocaleString()}</p>
                     <p className="text-xs text-muted-foreground capitalize">{order.status}</p>
                   </div>
                 </div>
@@ -1528,7 +1528,7 @@ const UsersManagement = () => {
     }
   }, []);
 
-  // Users (unified) — array normalized for the table
+  // Users (unified) â€” array normalized for the table
   const { data: users = [], isLoading } = useQuery<any[]>({
     queryKey: [
       `${import.meta.env.VITE_API_URL}/api/admin/users/all`,
@@ -1540,7 +1540,7 @@ const UsersManagement = () => {
         role: roleFilter === "all" ? undefined : roleFilter, // 'admin' | 'resident' | 'provider'
       });
       // Always return an array for the table:
-      return Array.isArray(r) ? r : (r?.items ?? []);
+      return Array.isArray(r) ? r : (r?.items || []);
     },
   });
 
@@ -1582,7 +1582,7 @@ const UsersManagement = () => {
     }
   };
 
-  // Memberships query – use the correct endpoint
+  // Memberships query â€“ use the correct endpoint
   const { data: userMemberships } = useQuery({
     queryKey: ["admin-user-memberships", membershipUser?._id || membershipUser?.id],
     queryFn: () => {
@@ -1594,7 +1594,7 @@ const UsersManagement = () => {
     enabled: !!membershipUser,
   });
 
-  // Toggle active/inactive – use /api/admin/users/{id}
+  // Toggle active/inactive â€“ use /api/admin/users/{id}
   const toggleUserStatusMutation = useMutation({
     mutationFn: ({ userId, isActive }: { userId: string; isActive: boolean }) =>
       adminApiRequest("PATCH", `/api/admin/users/${userId}`, { isActive }),
@@ -1632,7 +1632,7 @@ const UsersManagement = () => {
     },
   });
 
-  // Reset password (admin) – calls server endpoint that may return a generated temp password
+  // Reset password (admin) â€“ calls server endpoint that may return a generated temp password
   const [showTempPasswordModal, setShowTempPasswordModal] = useState(false);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [tempPasswordUser, setTempPasswordUser] = useState<any>(null);
@@ -1676,7 +1676,7 @@ const UsersManagement = () => {
     deleteUserMutation.mutate(userId);
   };
 
-  // Create user – POST to /api/admin/users
+  // Create user â€“ POST to /api/admin/users
   const createUserMutation = useMutation({
     mutationFn: (userData: any) =>
       adminApiRequest("POST", "/api/admin/users", userData),
@@ -1695,7 +1695,7 @@ const UsersManagement = () => {
     },
   });
 
-  // Update user – PATCH to /api/admin/users/{id}
+  // Update user â€“ PATCH to /api/admin/users/{id}
   const updateUserMutation = useMutation({
     mutationFn: ({ userId, userData }: { userId: string; userData: any }) =>
       adminApiRequest("PATCH", `/api/admin/users/${userId}`, userData),
@@ -2161,7 +2161,7 @@ const UsersManagement = () => {
                                 setResetConfirmUserId(userId);
                                 setResetConfirmOpen(true);
                               }}
-                              disabled={(resetPasswordMutation as any).isPending ?? false}
+                              disabled={(resetPasswordMutation as any).isPending || false}
                               data-testid={`button-reset-password-${userId}`}
                             >
                               <ShieldOff className="w-4 h-4 text-yellow-600" />
@@ -2629,7 +2629,7 @@ const UsersManagement = () => {
                   setResetConfirmUserId(null);
                   setResetConfirmUser(null);
                 }}
-                disabled={(resetPasswordMutation as any).isPending ?? false}
+                disabled={(resetPasswordMutation as any).isPending || false}
               >
                 {(resetPasswordMutation as any).isPending ? "Resetting..." : "Confirm reset"}
               </Button>
@@ -3509,7 +3509,7 @@ const ProvidersManagement = () => {
                       {previewData.company || "Independent"}
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {previewProvider?.location || "Location not provided"} ·{" "}
+                      {previewProvider?.location || "Location not provided"} Â·{" "}
                       <a
                         href={previewData.email ? `mailto:${previewData.email}` : "#"}
                         className="text-blue-600 dark:text-blue-400"
@@ -3543,7 +3543,7 @@ const ProvidersManagement = () => {
                 <div className="rounded-xl border bg-gray-50 dark:bg-gray-800/50 p-4">
                   <p className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Experience</p>
                   <p className="text-sm text-muted-foreground">
-                    {previewData.experience || 0} years · {previewData.description || "No summary provided"}
+                    {previewData.experience || 0} years Â· {previewData.description || "No summary provided"}
                   </p>
                 </div>
               </div>
@@ -3551,11 +3551,11 @@ const ProvidersManagement = () => {
               <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Email</p>
-                  <p className="font-medium">{previewData.email || "—"}</p>
+                  <p className="font-medium">{previewData.email || "â€”"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Phone</p>
-                  <p className="font-medium">{previewData.phone || "—"}</p>
+                  <p className="font-medium">{previewData.phone || "â€”"}</p>
                 </div>
                 <div className="md:col-span-2">
                   <p className="text-xs text-muted-foreground mb-2">Categories</p>
@@ -3909,121 +3909,18 @@ const CategoriesManagement = () => {
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [iconSearch, setIconSearch] = useState("");
   const BASE_EMOJI_OPTIONS = [
-    "🔧",
-    "🧹",
-    "🛠️",
-    "⚡",
-    "🚰",
-    "🔌",
-    "📦",
-    "🧑‍🔧",
-    "🏠",
-    "🧰",
-    "🚿",
-    "✨",
-    "🧼",
-    "🧽",
-    "🪠",
-    "🪜",
-    "🔨",
-    "⛑️",
+    "🔧", "🧹", "🛠️", "⚡", "🚰", "🔌", "🔦", "🧑‍🔧", "🏠", "🧰",
+    "🚿", "✨", "🧼", "🧽", "🪣", "🪜", "🔨", "⛏️",
   ];
 
   const SERVICE_CATEGORY_EMOJI = [
-    "🛡️",
-    "🚶‍♂️",
-    "🚧",
-    "🎥",
-    "🚨",
-    "👮‍♂️",
-    "🚗",
-    "🚌",
-    "🚕",
-    "🚐",
-    "🚛",
-    "⚙️",
-    "💡",
-    "💧",
-    "🌊",
-    "🗑️",
-    "🏗️",
-    "🧾",
-    "🌳",
-    "🐜",
-    "🌬️",
-    "🔋",
-    "🪚",
-    "🔑",
-    "🎨",
-    "🔥",
-    "🧱",
-    "🏃‍♂️",
-    "🚑",
-    "🩺",
-    "🧘‍♂️",
-    "👩‍⚕️",
-    "👵",
-    "💊",
-    "👶",
-    "👩‍🍼",
-    "🚘",
-    "🌱",
-    "🏊‍♂️",
-    "🥦",
-    "🧺",
-    "🍱",
-    "🥕",
-    "🛒",
-    "🧴",
-    "👕",
-    "👔",
-    "🛋️",
-    "🐭",
-    "🚫",
-    "🐾",
-    "✂️",
-    "🐶",
-    "🐕",
-    "🦴",
-    "🎉",
-    "⚽",
-    "🎊",
-    "🏡",
-    "🏊‍♀️",
-    "🎓",
-    "📚",
-    "🏫",
-    "🎵",
-    "💃",
-    "💻",
-    "🔁",
-    "🏬",
-    "📄",
-    "💳",
-    "📥",
-    "💰",
-    "🧾",
-    "💵",
-    "📁",
-    "🪪",
-    "👨‍👩‍👧‍👦",
-    "🚙",
-    "📘",
-    "🏢",
-    "📢",
-    "📣",
-    "📯",
-    "📊",
-    "🔒",
-    "📈",
-    "🤖",
-    "📱",
-    "📨",
-    "🤝",
-    "🚚",
-    "🔍",
-    "🕒",
-    "✅",
+    "🛡️", "🚶‍♂️", "🚧", "🎥", "🚨", "👮‍♂️", "🚗", "🚌", "🚕", "🚙",
+    "🚛", "⚙️", "💡", "💧", "🌊", "🗑️", "🗺️", "🧾", "🌳", "🌾",
+    "🌬️", "📋", "🪚", "🔑", "🎨", "📥", "🧱", "🏃‍♂️", "🚑", "🩺",
+    "🧘‍♂️", "👨‍⚕️", "👨‍👩‍👧‍👦", "🚘", "🌱", "🏊‍♂️", "🥦", "🧺", "🐱", "🥕",
+    "🦴", "🎉", "⚽", "🎊", "🎬", "🏊‍♀️", "🎮", "🎵", "🎸", "🎹",
+    "📞", "🎭", "📚", "🫎", "🚙", "📅", "🏠", "💬", "🎓", "📲",
+    "🎪", "⚙️", "🔐", "🎯", "🔒", "🔓", "🎈", "🎀", "📍", "✅",
   ];
 
   const emojiOptions = Array.from(
@@ -4454,7 +4351,7 @@ const CategoriesManagement = () => {
                       setFormData({ ...formData, icon: e.target.value })
                     }
                     onFocus={() => setIconPickerOpen(true)}
-                    placeholder="🔧 (optional emoji icon)"
+                    placeholder="ðŸ”§ (optional emoji icon)"
                     data-testid="input-category-icon"
                   />
                 </PopoverTrigger>
@@ -4614,7 +4511,7 @@ const CategoriesManagement = () => {
                       setFormData({ ...formData, icon: e.target.value })
                     }
                     onFocus={() => setIconPickerOpen(true)}
-                    placeholder="🔧 (optional emoji icon)"
+                    placeholder="ðŸ”§ (optional emoji icon)"
                     data-testid="input-edit-category-icon"
                   />
                 </PopoverTrigger>
@@ -5619,8 +5516,8 @@ const RecentActivity = () => {
                     className="text-xs text-muted-foreground"
                     data-testid={`activity-details-${index}`}
                   >
-                    {activity.user?.name || "System"} •{" "}
-                    {activity.details || "No details"} •{" "}
+                    {activity.user?.name || "System"} â€¢{" "}
+                    {activity.details || "No details"} â€¢{" "}
                     {activity.createdAt
                       ? new Date(activity.createdAt).toLocaleString()
                       : "Unknown time"}
@@ -5733,12 +5630,12 @@ const PostgreSQLBridgeStats = () => {
         },
         {
           label: "Pending Inspection",
-          value: bridgeStats.serviceRequests.pendingInspection ?? 0,
+          value: bridgeStats.serviceRequests.pendingInspection - 0,
           color: "bg-orange-500",
         },
         {
           label: "Assigned",
-          value: bridgeStats.serviceRequests.assigned ?? 0,
+          value: bridgeStats.serviceRequests.assigned - 0,
           color: "bg-indigo-500",
         },
         {
@@ -5770,7 +5667,7 @@ const PostgreSQLBridgeStats = () => {
           <Badge variant="outline">Live Data</Badge>
           {bridgeStats?.source && (
             <Badge variant="outline" className="text-xs">
-              {bridgeStats.source.toUpperCase()} • {new Date(bridgeStats.timestamp).toLocaleTimeString()}
+              {bridgeStats.source.toUpperCase()} â€¢ {new Date(bridgeStats.timestamp).toLocaleTimeString()}
             </Badge>
           )}
           <Button
@@ -5856,7 +5753,7 @@ const EstatePerformanceCard = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
         ) : !rows || rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">No estate data available.</p>
         ) : (
@@ -5868,10 +5765,10 @@ const EstatePerformanceCard = () => {
                   <div className="w-20 h-2 bg-gray-200 rounded-full">
                     <div
                       className="h-2 bg-green-500 rounded-full"
-                      style={{ width: `${Math.max(0, Math.min(100, Number(row.completionRate ?? 0)))}%` }}
+                      style={{ width: `${Math.max(0, Math.min(100, Number(row.completionRate - 0)))}%` }}
                     ></div>
                   </div>
-                  <span className="text-xs text-muted-foreground">{Number(row.completionRate ?? 0)}%</span>
+                  <span className="text-xs text-muted-foreground">{Number(row.completionRate - 0)}%</span>
                 </div>
               </div>
             ))}
@@ -5903,22 +5800,18 @@ const DashboardStats = () => {
   });
 
   const totalProviders =
-    stats?.totalProviders ?? bridgeStats?.users?.totalProviders ?? 0;
+    (stats?.totalProviders ?? 0) - (bridgeStats?.users?.totalProviders ?? 0);
   const totalResidents =
-    stats?.totalResidents ?? bridgeStats?.users?.totalResidents ?? 0;
+    (stats?.totalResidents ?? 0) - (bridgeStats?.users?.totalResidents ?? 0);
   const pendingApprovals =
-    stats?.pendingApprovals ?? bridgeStats?.users?.pendingProviders ?? 0;
+    (stats?.pendingApprovals ?? 0) - (bridgeStats?.users?.pendingProviders ?? 0);
   const totalRequests =
-    stats?.totalRequests ?? bridgeStats?.serviceRequests?.total ?? 0;
+    (stats?.totalRequests ?? 0) - (bridgeStats?.serviceRequests?.total ?? 0);
   const activeRequests =
-    stats?.activeRequests ??
-    bridgeStats?.serviceRequests?.pending ??
-    0;
-  const totalUsers =
-    (Array.isArray(allUsers) ? allUsers.length : undefined) ??
-    stats?.totalUsers ??
-    totalProviders + totalResidents;
-  const activeEstatesCount = Array.isArray(allEstates) ? allEstates.length : stats?.totalEstates ?? 0;
+    (stats?.activeRequests ?? 0) -
+    (bridgeStats?.serviceRequests?.pending ?? 0);
+  const totalUsers = stats?.totalUsers ?? 0;
+  const activeEstatesCount = Array.isArray(allEstates) ? allEstates.length : (stats?.totalEstates ?? 0);
 
   if (isLoading) {
     return (
@@ -5953,7 +5846,7 @@ const DashboardStats = () => {
     },
     {
       title: "Total Revenue",
-      value: `NGN ${(stats?.totalRevenue ?? 0).toLocaleString()}`,
+      value: `NGN ${(stats?.totalRevenue - 0).toLocaleString()}`,
       icon: DollarSign,
       change: "+0%",
     },
@@ -6007,8 +5900,8 @@ export default function AdminSuperDashboard() {
   const [location, setLocation] = useLocation();
   const activeTab = (() => {
     if (!location.startsWith("/admin-dashboard")) return "dashboard";
-    const pathPart = location.split("/")[2] ?? "dashboard";
-    return pathPart.split("?")[0].split("#")[0] || "dashboard";
+    const pathPart = location.split("/")[2] || "dashboard";
+    return String(pathPart).split("?")[0].split("#")[0] || "dashboard";
   })();
   const setActiveTab = (tab: string) => setLocation(`/admin-dashboard/${tab}`);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -6029,6 +5922,11 @@ export default function AdminSuperDashboard() {
   const { data: orderStats } = useQuery({
     queryKey: ["admin-orders-analytics"],
     queryFn: () => adminApiRequest("GET", "/api/admin/orders/analytics/stats"),
+    enabled: isSuperAdmin,
+  });
+  const { data: categoriesList = [] } = useQuery({
+    queryKey: ["/api/admin/categories"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/categories"),
     enabled: isSuperAdmin,
   });
   useEffect(() => {
@@ -6285,7 +6183,7 @@ export default function AdminSuperDashboard() {
                             Received{" "}
                             {request.createdAt
                               ? new Date(request.createdAt).toLocaleString()
-                              : "—"}
+                              : "â€”"}
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
@@ -6343,7 +6241,7 @@ export default function AdminSuperDashboard() {
                 </DialogHeader>
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    {selectedRequestForDecline?.name || "Provider"} – {selectedRequestForDecline?.email}
+                    {selectedRequestForDecline?.name || "Provider"} â€“ {selectedRequestForDecline?.email}
                   </p>
                   <Textarea
                     value={declineReason}
@@ -6382,7 +6280,7 @@ export default function AdminSuperDashboard() {
                 </DialogHeader>
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    {selectedRequestForDecline?.name || "Provider"} – {selectedRequestForDecline?.email}
+                    {selectedRequestForDecline?.name || "Provider"} â€“ {selectedRequestForDecline?.email}
                   </p>
                   <Textarea
                     value={declineReason}
@@ -6438,7 +6336,7 @@ export default function AdminSuperDashboard() {
             {activeTab === "users" && <UsersManagement />}
             {activeTab === "estates" && <EstatesManagement />}
             {activeTab === "providers" && <ProvidersManagement />}
-            {activeTab === "companies" && <CompaniesManagement />}
+            {activeTab === "companies" && <CompaniesManagement categoriesList={categoriesList} />}
             {activeTab === "item-categories" && <ItemCategoriesPage />}
             {activeTab === "stores" && <StoresManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
@@ -7230,7 +7128,7 @@ const OrdersManagement = () => {
                     Total Revenue
                   </p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                    ₦{orderStats.totalRevenue?.toLocaleString()}
+                    â‚¦{orderStats.totalRevenue?.toLocaleString()}
                   </p>
                 </div>
               </div>
@@ -7262,7 +7160,7 @@ const OrdersManagement = () => {
                     Avg Order Value
                   </p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                    ₦{orderStats.avgOrderValue?.toFixed(0)}
+                    â‚¦{orderStats.avgOrderValue?.toFixed(0)}
                   </p>
                 </div>
               </div>
@@ -7346,7 +7244,7 @@ const OrdersManagement = () => {
             </div>
 
             <div>
-              <Label htmlFor="min-price">Min Price (₦)</Label>
+              <Label htmlFor="min-price">Min Price (â‚¦)</Label>
               <Input
                 id="min-price"
                 type="number"
@@ -7438,7 +7336,7 @@ const OrdersManagement = () => {
                         {order.vendor?.name || "Unknown"}
                       </td>
                       <td className="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
-                        ₦{order.total.toLocaleString()}
+                        â‚¦{order.total.toLocaleString()}
                       </td>
                       <td className="px-6 py-4">
                         <span
@@ -7586,7 +7484,7 @@ const OrdersManagement = () => {
                 <div>
                   <Label>Total Amount</Label>
                   <p className="text-sm font-medium">
-                    ₦{selectedOrder.total.toLocaleString()}
+                    â‚¦{selectedOrder.total.toLocaleString()}
                   </p>
                 </div>
                 <div>
@@ -7613,7 +7511,7 @@ const OrdersManagement = () => {
                         </p>
                       </div>
                       <p className="font-medium">
-                        ₦{(item.price * item.quantity).toLocaleString()}
+                        â‚¦{(item.price * item.quantity).toLocaleString()}
                       </p>
                     </div>
                   ))}
@@ -7792,7 +7690,7 @@ const OrdersManagement = () => {
                 />
               </div>
               <div>
-                <Label htmlFor="refund-amount">Refund Amount (₦)</Label>
+                <Label htmlFor="refund-amount">Refund Amount (â‚¦)</Label>
                 <Input
                   id="refund-amount"
                   type="number"
@@ -7836,7 +7734,7 @@ const OrdersManagement = () => {
 };
 
 // Companies Management Component
-const CompaniesManagement = () => {
+const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }) => {
   const { toast } = useToast();
   const [showAddCompany, setShowAddCompany] = useState(false);
   const [showViewCompany, setShowViewCompany] = useState(false);
@@ -7893,12 +7791,199 @@ const CompaniesManagement = () => {
     return FIELD_LABELS[k] || k.replace(/([A-Z])/g, " $1").replace(/[_-]/g, " ").replace(/^./, (s) => s.toUpperCase());
   }
 
+  const [location, setLocation] = useLocation();
   const { data: companies = [], isLoading, refetch } = useQuery({
     queryKey: ["admin-companies"],
     queryFn: () => adminApiRequest("GET", "/api/admin/companies"),
     staleTime: 30_000, // 30 seconds
     refetchInterval: 60_000, // Refetch every 60 seconds
   });
+  const companyMembersCompanyId = (() => {
+    const segments = location.split("/").filter(Boolean);
+    if (
+      segments[0] === "admin-dashboard" &&
+      segments[1] === "companies" &&
+      segments[2] === "members"
+    ) {
+      return segments[3] || null;
+    }
+    return null;
+  })();
+  const isCompanyMembersPage = Boolean(companyMembersCompanyId);
+  const selectedCompanyForMembers =
+    companyMembersCompanyId && Array.isArray(companies)
+      ? companies.find((company: any) => (company.id || company._id) === companyMembersCompanyId)
+      : null;
+  const goToCompanies = () => setLocation("/admin-dashboard/companies");
+  const goToCompanyMembers = (companyId: string) =>
+    setLocation(`/admin-dashboard/companies/members/${companyId}`);
+  const companyMatchesProvider = (provider: any, company: any) => {
+    if (!provider || !company) return false;
+    const providerCompany = String(provider.company || "").trim().toLowerCase();
+    const companyName = String(company.name || "").trim().toLowerCase();
+    const companyId = String(company.id || company._id || "").trim().toLowerCase();
+    return providerCompany === companyName || providerCompany === companyId;
+  };
+  const { data: companyProvidersRaw = [] } = useQuery({
+    queryKey: ["/api/admin/users/all", { role: "provider", companyId: companyMembersCompanyId }],
+    queryFn: () => adminApiRequest("GET", "/api/admin/users/all", { role: "provider" }),
+    enabled: isCompanyMembersPage,
+  });
+  const { data: companyProviderRequests = [] } = useQuery({
+    queryKey: ["admin/provider-requests", companyMembersCompanyId],
+    queryFn: () => adminApiRequest("GET", "/api/admin/provider-requests"),
+    enabled: isCompanyMembersPage,
+  });
+  const { data: companyServiceRequests = [] } = useQuery({
+    queryKey: ["/api/admin/bridge/service-requests", companyMembersCompanyId],
+    queryFn: () => adminApiRequest("GET", "/api/admin/bridge/service-requests"),
+    enabled: isCompanyMembersPage,
+  });
+  const companyProviders = Array.isArray(companyProvidersRaw) && selectedCompanyForMembers
+    ? companyProvidersRaw.filter((provider: any) => companyMatchesProvider(provider, selectedCompanyForMembers))
+    : [];
+  const companyProviderIds = new Set(
+    companyProviders.map((provider: any) => provider.id || provider._id),
+  );
+  const providerLookup = new Map(
+    companyProviders.map((provider: any) => [provider.id || provider._id, provider]),
+  );
+  const companyRequests = Array.isArray(companyServiceRequests)
+    ? companyServiceRequests.filter((req: any) =>
+        companyProviderIds.has(req.providerId || req.provider_id),
+      )
+    : [];
+  const pendingProviderRequests = Array.isArray(companyProviderRequests) && selectedCompanyForMembers
+    ? companyProviderRequests.filter((req: any) => {
+        const companyName = String(selectedCompanyForMembers.name || "").toLowerCase();
+        return String(req.company || "").toLowerCase() === companyName;
+      })
+    : [];
+  const availableProviders = Array.isArray(companyProvidersRaw) && selectedCompanyForMembers
+    ? companyProvidersRaw.filter((provider: any) => !companyMatchesProvider(provider, selectedCompanyForMembers))
+    : [];
+  const updateProviderApprovalMutation = useMutation({
+    mutationFn: ({ providerId, approved }: { providerId: string; approved: boolean }) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, { isApproved: approved }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["admin/provider-requests"] });
+      toast({ title: "Provider updated" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to update provider",
+        description: error.response?.data?.error || "Unable to update provider.",
+        variant: "destructive",
+      });
+    },
+  });
+  const assignProviderToCompanyMutation = useMutation({
+    mutationFn: (providerId: string) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, {
+        company: selectedCompanyForMembers?.name || "",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      toast({ title: "Provider assigned to company" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to assign provider",
+        description: error.response?.data?.error || "Unable to assign provider.",
+        variant: "destructive",
+      });
+    },
+  });
+  const removeProviderFromCompanyMutation = useMutation({
+    mutationFn: (providerId: string) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, {
+        company: "",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      toast({ title: "Provider removed from company" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to remove provider",
+        description: error.response?.data?.error || "Unable to remove provider.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const assignCategoriesToProviderMutation = useMutation({
+    mutationFn: ({ providerId, categories }: { providerId: string; categories: string[] }) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, {
+        categories: categories,
+      }),
+    onSuccess: () => {
+      // Invalidate all related queries to ensure changes reflect across the app
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+      // Invalidate any company-related queries that might cache provider data
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      // Invalidate store-related queries
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/stores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/marketplace"] });
+      // Invalidate provider requests queries
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/provider-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["provider-requests"] });
+      // Invalidate service requests that might reference providers
+      queryClient.invalidateQueries({ queryKey: ["/api/service-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/service-requests"] });
+      toast({ title: "Categories assigned successfully" });
+      setShowCategoryDialog(false);
+      setSelectedProviderForCategory(null);
+      setSelectedCategories([]);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to assign categories",
+        description: error.response?.data?.error || "Unable to assign categories.",
+        variant: "destructive",
+      });
+    },
+  });
+  const assignServiceRequestMutation = useMutation({
+    mutationFn: ({ requestId, providerId }: { requestId: string; providerId: string }) =>
+      adminApiRequest("POST", `/api/admin/service-requests/${requestId}/assign`, { providerId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/service-requests"] });
+      toast({ title: "Service request assigned" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to assign request",
+        description: error.response?.data?.message || "Unable to assign request.",
+        variant: "destructive",
+      });
+    },
+  });
+  const [companyTaskForm, setCompanyTaskForm] = useState({
+    title: "",
+    description: "",
+    assigneeId: "",
+    priority: "medium",
+    status: "open",
+    dueDate: "",
+  });
+  const [companyTasks, setCompanyTasks] = useState<any[]>([]);
+  useEffect(() => {
+    if (!companyMembersCompanyId) return;
+    const key = `company-members:${companyMembersCompanyId}:tasks`;
+    const saved = window.localStorage.getItem(key);
+    setCompanyTasks(saved ? JSON.parse(saved) : []);
+  }, [companyMembersCompanyId]);
+  useEffect(() => {
+    if (!companyMembersCompanyId) return;
+    const key = `company-members:${companyMembersCompanyId}:tasks`;
+    window.localStorage.setItem(key, JSON.stringify(companyTasks));
+  }, [companyTasks, companyMembersCompanyId]);
 
   const createCompanyMutation = useMutation({
     mutationFn: (payload: any) =>
@@ -8168,6 +8253,808 @@ const CompaniesManagement = () => {
     setShowEditCompany(false);
   };
 
+  const totalProviders = companyProviders.length;
+  const approvedProviders = companyProviders.filter((p: any) => p.isApproved).length;
+  const pendingApprovalsCount = pendingProviderRequests.length;
+  const avgRating =
+    totalProviders > 0
+      ? (
+          companyProviders.reduce((acc: number, p: any) => acc + Number(p.rating || 0), 0) /
+          totalProviders
+        ).toFixed(1)
+      : "0.0";
+  const openCompanyRequests = companyRequests.filter((req: any) => {
+    const status = String(req.status || "").toLowerCase();
+    return status !== "completed" && status !== "cancelled";
+  });
+  const maintenanceRequests = companyRequests.filter((req: any) => {
+    const category = String(req.category || "").toLowerCase();
+    return category.includes("maintenance");
+  });
+  const activityEvents = companyRequests
+    .slice()
+    .sort((a: any, b: any) => {
+      const aTime = new Date(a.createdAt || a.created_at || 0).getTime();
+      const bTime = new Date(b.createdAt || b.created_at || 0).getTime();
+      return bTime - aTime;
+    })
+    .slice(0, 6);
+  const unassignedRequests = Array.isArray(companyServiceRequests)
+    ? companyServiceRequests.filter((req: any) => !req.providerId && !req.provider_id)
+    : [];
+
+  // Helper function to safely display emoji
+  const safeEmoji = (emoji: string | null | undefined): string => {
+    if (!emoji) return "";
+    // Check if emoji is valid by testing if it's a proper character
+    const cleaned = emoji.trim();
+    if (cleaned.length === 0) return "";
+    // Return only single emoji or valid characters
+    return /^[\p{Emoji}]+$/u.test(cleaned) ? cleaned : "";
+  };
+
+  const [serviceAssignment, setServiceAssignment] = useState({
+    requestId: "",
+    providerId: "",
+  });
+  const [selectedProviderToAdd, setSelectedProviderToAdd] = useState("");
+  const [showCompanyActions, setShowCompanyActions] = useState(false);
+  const [showCategoryDialog, setShowCategoryDialog] = useState(false);
+  const [selectedProviderForCategory, setSelectedProviderForCategory] = useState<any>(null);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [providersViewMode, setProvidersViewMode] = useState<"table" | "card">("table");
+  const handleAddCompanyTask = () => {
+    if (!companyTaskForm.title.trim() || !companyTaskForm.assigneeId) {
+      toast({
+        title: "Task title and assignee required",
+        variant: "destructive",
+      });
+      return;
+    }
+    const newTask = {
+      id: crypto.randomUUID(),
+      title: companyTaskForm.title.trim(),
+      description: companyTaskForm.description.trim(),
+      assigneeId: companyTaskForm.assigneeId,
+      priority: companyTaskForm.priority,
+      status: companyTaskForm.status,
+      dueDate: companyTaskForm.dueDate,
+      createdAt: new Date().toISOString(),
+    };
+    setCompanyTasks((prev) => [newTask, ...prev]);
+    setCompanyTaskForm({
+      title: "",
+      description: "",
+      assigneeId: "",
+      priority: "medium",
+      status: "open",
+      dueDate: "",
+    });
+  };
+  const handleAssignServiceRequest = () => {
+    if (!serviceAssignment.requestId || !serviceAssignment.providerId) {
+      toast({
+        title: "Select request and provider",
+        variant: "destructive",
+      });
+      return;
+    }
+    assignServiceRequestMutation.mutate({
+      requestId: serviceAssignment.requestId,
+      providerId: serviceAssignment.providerId,
+    });
+    setServiceAssignment({ requestId: "", providerId: "" });
+  };
+
+  if (isCompanyMembersPage) {
+    if (!selectedCompanyForMembers) {
+      return (
+        <div className="space-y-4">
+          <Button variant="outline" onClick={goToCompanies}>
+            <ChevronLeft className="w-4 h-4 mr-2" />
+            Back to Companies
+          </Button>
+          <Card>
+            <CardContent className="p-6 text-sm text-muted-foreground">
+              Company not found. Return to companies list and try again.
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <Button variant="ghost" className="px-0" onClick={goToCompanies}>
+              <ChevronLeft className="w-4 h-4 mr-2" />
+              Back to Companies
+            </Button>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+              {selectedCompanyForMembers.name} Members
+            </h1>
+            <p className="text-gray-600 dark:text-gray-400">
+              Manage providers, approvals, and assignments for this company.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] })}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Refresh
+            </Button>
+            <Button onClick={() => setShowCompanyActions(true)}>
+              <ClipboardList className="w-4 h-4 mr-2" />
+              Manage Actions
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">Total Providers</div>
+              <div className="text-2xl font-semibold">{totalProviders}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">Approved Providers</div>
+              <div className="text-2xl font-semibold">{approvedProviders}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">Pending Approvals</div>
+              <div className="text-2xl font-semibold">{pendingApprovalsCount}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">Average Rating</div>
+              <div className="text-2xl font-semibold">{avgRating}</div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Company Providers</CardTitle>
+                  <CardDescription>Active providers assigned to this company.</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">{providersViewMode === "table" ? "Table" : "Cards"}</span>
+                  <button
+                    onClick={() => setProvidersViewMode(providersViewMode === "table" ? "card" : "table")}
+                    className="relative inline-flex h-6 w-11 items-center rounded-full bg-muted hover:bg-muted/80 transition-colors"
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        providersViewMode === "card" ? "translate-x-6" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                {providersViewMode === "table" ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Provider</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Rating</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Categories</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {companyProviders.length > 0 ? (
+                        companyProviders.map((provider: any) => {
+                          const providerId = provider.id || provider._id;
+                          const rating = provider.rating ? Number(provider.rating).toFixed(1) : "N/A";
+                          return (
+                            <TableRow key={providerId}>
+                              <TableCell className="font-medium">{provider.name || provider.email}</TableCell>
+                              <TableCell>{provider.email}</TableCell>
+                              <TableCell>{rating}</TableCell>
+                              <TableCell>
+                                <Badge variant={provider.isApproved ? "default" : "secondary"}>
+                                  {provider.isApproved ? "Approved" : "Pending"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-wrap gap-1">
+                                  {provider.categories && provider.categories.length > 0 ? (
+                                    provider.categories.slice(0, 3).map((categoryId: string) => {
+                                      const category = categoriesList.find((c: any) => c.id === categoryId || c._id === categoryId || c.key === categoryId);
+                                      const emoji = safeEmoji(category?.emoji);
+                                      return (
+                                        <Badge key={categoryId} variant="outline" className="text-xs">
+                                          {category ? `${emoji} ${category.name}`.trim() : categoryId}
+                                        </Badge>
+                                      );
+                                    })
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground">None</span>
+                                  )}
+                                  {provider.categories && provider.categories.length > 3 && (
+                                    <Badge variant="secondary" className="text-xs">
+                                      +{provider.categories.length - 3}
+                                    </Badge>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex justify-end gap-2 flex-wrap">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      updateProviderApprovalMutation.mutate({
+                                        providerId,
+                                        approved: !provider.isApproved,
+                                      })
+                                    }
+                                  >
+                                    {provider.isApproved ? "Revoke" : "Approve"}
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setSelectedProviderForCategory(provider);
+                                      setSelectedCategories(provider.categories || []);
+                                      setShowCategoryDialog(true);
+                                    }}
+                                  >
+                                    Categories
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => removeProviderFromCompanyMutation.mutate(providerId)}
+                                  >
+                                    Remove
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                            No providers assigned yet.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 p-4">
+                    {companyProviders.length > 0 ? (
+                      companyProviders.map((provider: any) => {
+                        const providerId = provider.id || provider._id;
+                        const rating = provider.rating ? Number(provider.rating).toFixed(1) : "N/A";
+                        return (
+                          <div key={providerId} className="border rounded-lg p-4 space-y-3 hover:bg-muted/50 transition-colors">
+                            <div className="space-y-1">
+                              <div className="font-semibold text-sm">{provider.name || provider.email}</div>
+                              <div className="text-xs text-muted-foreground">{provider.email}</div>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium">Rating:</span>
+                                <span className="text-sm font-semibold">{rating}</span>
+                              </div>
+                              <Badge variant={provider.isApproved ? "default" : "secondary"} className="text-xs">
+                                {provider.isApproved ? "Approved" : "Pending"}
+                              </Badge>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-xs font-medium text-muted-foreground">Categories</div>
+                              <div className="flex flex-wrap gap-1">
+                                {provider.categories && provider.categories.length > 0 ? (
+                                  provider.categories.slice(0, 2).map((categoryId: string) => {
+                                    const category = categoriesList.find((c: any) => c.id === categoryId || c._id === categoryId || c.key === categoryId);
+                                    const emoji = safeEmoji(category?.emoji);
+                                    return (
+                                      <Badge key={categoryId} variant="outline" className="text-xs">
+                                        {category ? `${emoji} ${category.name}`.trim() : categoryId}
+                                      </Badge>
+                                    );
+                                  })
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">None</span>
+                                )}
+                                {provider.categories && provider.categories.length > 2 && (
+                                  <Badge variant="secondary" className="text-xs">
+                                    +{provider.categories.length - 2}
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex gap-2 pt-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1 text-xs h-8"
+                                onClick={() =>
+                                  updateProviderApprovalMutation.mutate({
+                                    providerId,
+                                    approved: !provider.isApproved,
+                                  })
+                                }
+                              >
+                                {provider.isApproved ? "Revoke" : "Approve"}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1 text-xs h-8"
+                                onClick={() => {
+                                  setSelectedProviderForCategory(provider);
+                                  setSelectedCategories(provider.categories || []);
+                                  setShowCategoryDialog(true);
+                                }}
+                              >
+                                Categories
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-xs h-8"
+                                onClick={() => removeProviderFromCompanyMutation.mutate(providerId)}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="col-span-2 py-8 text-center text-sm text-muted-foreground">
+                        No providers assigned yet.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Service Requests</CardTitle>
+                <CardDescription>Requests assigned to this companyâ€™s providers.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <Badge variant="outline">Active: {openCompanyRequests.length}</Badge>
+                  <Badge variant="outline">Maintenance: {maintenanceRequests.length}</Badge>
+                </div>
+                {openCompanyRequests.length > 0 ? (
+                  openCompanyRequests.slice(0, 6).map((req: any) => (
+                    <div key={req.id} className="flex items-center justify-between rounded-lg border border-border p-3">
+                      <div>
+                        <div className="font-medium">{req.category || "Service Request"}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {req.description || "No description"}
+                        </div>
+                      </div>
+                      <Badge variant="outline">{req.status || "pending"}</Badge>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No active requests yet.</div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Provider Activity</CardTitle>
+                <CardDescription>Recent activity and ratings from residents.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {activityEvents.length > 0 ? (
+                  activityEvents.map((req: any) => {
+                    const providerId = req.providerId || req.provider_id;
+                    const provider = providerLookup.get(providerId);
+                    return (
+                      <div key={req.id} className="rounded-lg border border-border p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="font-medium">
+                            {provider?.name || provider?.email || "Assigned provider"}
+                          </div>
+                          <Badge variant="outline">{req.status || "pending"}</Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {req.category || "Service request"} - Rating {provider?.rating ?? "N/A"}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-sm text-muted-foreground">No recent activity yet.</div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Actions Hub</CardTitle>
+                <CardDescription>Open approvals, assignments, and tasks in one place.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3">
+                  <div className="flex items-center justify-between rounded-lg border border-border p-3 text-sm">
+                    <span>Pending approvals</span>
+                    <Badge variant="outline">{pendingApprovalsCount}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border border-border p-3 text-sm">
+                    <span>Unassigned requests</span>
+                    <Badge variant="outline">{unassignedRequests.length}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border border-border p-3 text-sm">
+                    <span>Open tasks</span>
+                    <Badge variant="outline">{companyTasks.length}</Badge>
+                  </div>
+                </div>
+                <Button className="w-full" onClick={() => setShowCompanyActions(true)}>
+                  Open Actions
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+        <Dialog open={showCompanyActions} onOpenChange={setShowCompanyActions}>
+          <DialogContent className="w-[70vw] max-w-5xl max-h-[90vh] overflow-auto">
+            <DialogHeader>
+              <DialogTitle>Company Actions</DialogTitle>
+              <DialogDescription>
+                Approvals, assignments, and task management for {selectedCompanyForMembers.name}.
+              </DialogDescription>
+            </DialogHeader>
+            <Tabs defaultValue="approvals">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="approvals">Approvals</TabsTrigger>
+                <TabsTrigger value="add-provider">Add Provider</TabsTrigger>
+                <TabsTrigger value="requests">Requests</TabsTrigger>
+                <TabsTrigger value="tasks">Tasks</TabsTrigger>
+              </TabsList>
+              <TabsContent value="approvals" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Pending Approvals</CardTitle>
+                    <CardDescription>Provider requests waiting for approval.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {pendingProviderRequests.length > 0 ? (
+                      pendingProviderRequests.map((req: any) => (
+                        <div key={req.id} className="rounded-lg border border-border p-3">
+                          <div className="font-medium">{req.name || req.email}</div>
+                          <div className="text-xs text-muted-foreground">{req.email}</div>
+                          <Button
+                            size="sm"
+                            className="mt-3"
+                            onClick={() =>
+                              updateProviderApprovalMutation.mutate({
+                                providerId: req.providerId,
+                                approved: true,
+                              })
+                            }
+                            disabled={!req.providerId}
+                          >
+                            Approve Provider
+                          </Button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-muted-foreground">No pending approvals.</div>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+              <TabsContent value="add-provider" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Add Provider</CardTitle>
+                    <CardDescription>Assign an existing provider to this company.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <Select value={selectedProviderToAdd} onValueChange={setSelectedProviderToAdd}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableProviders.length > 0 ? (
+                          availableProviders.map((provider: any) => (
+                            <SelectItem key={provider.id || provider._id} value={provider.id || provider._id}>
+                              {provider.name || provider.email}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No available providers
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      className="w-full"
+                      onClick={() => {
+                        if (!selectedProviderToAdd) {
+                          toast({ title: "Select a provider", variant: "destructive" });
+                          return;
+                        }
+                        assignProviderToCompanyMutation.mutate(selectedProviderToAdd);
+                        setSelectedProviderToAdd("");
+                      }}
+                      disabled={assignProviderToCompanyMutation.isPending}
+                    >
+                      Add Provider
+                    </Button>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+              <TabsContent value="requests" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Assign Service Request</CardTitle>
+                    <CardDescription>Allocate open requests to a provider.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <Select
+                      value={serviceAssignment.requestId}
+                      onValueChange={(value) => setServiceAssignment((prev) => ({ ...prev, requestId: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select request" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {unassignedRequests.length > 0 ? (
+                          unassignedRequests.map((req: any) => (
+                            <SelectItem key={req.id} value={req.id}>
+                              {req.category || "Service request"}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No unassigned requests
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={serviceAssignment.providerId}
+                      onValueChange={(value) => setServiceAssignment((prev) => ({ ...prev, providerId: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {companyProviders.length > 0 ? (
+                          companyProviders.map((provider: any) => (
+                            <SelectItem key={provider.id || provider._id} value={provider.id || provider._id}>
+                              {provider.name || provider.email}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No providers available
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <Button className="w-full" onClick={handleAssignServiceRequest}>
+                      Assign Request
+                    </Button>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+              <TabsContent value="tasks" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Task Allocation</CardTitle>
+                    <CardDescription>Assign internal tasks and track progress.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <Input
+                      placeholder="Task title"
+                      value={companyTaskForm.title}
+                      onChange={(e) => setCompanyTaskForm((prev) => ({ ...prev, title: e.target.value }))}
+                    />
+                    <Textarea
+                      placeholder="Task description"
+                      value={companyTaskForm.description}
+                      onChange={(e) => setCompanyTaskForm((prev) => ({ ...prev, description: e.target.value }))}
+                      rows={3}
+                    />
+                    <Select
+                      value={companyTaskForm.assigneeId}
+                      onValueChange={(value) => setCompanyTaskForm((prev) => ({ ...prev, assigneeId: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Assign to provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {companyProviders.length > 0 ? (
+                          companyProviders.map((provider: any) => (
+                            <SelectItem key={provider.id || provider._id} value={provider.id || provider._id}>
+                              {provider.name || provider.email}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No providers available
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Select
+                        value={companyTaskForm.priority}
+                        onValueChange={(value) => setCompanyTaskForm((prev) => ({ ...prev, priority: value }))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Priority" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="low">Low</SelectItem>
+                          <SelectItem value="medium">Medium</SelectItem>
+                          <SelectItem value="high">High</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={companyTaskForm.status}
+                        onValueChange={(value) => setCompanyTaskForm((prev) => ({ ...prev, status: value }))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="open">Open</SelectItem>
+                          <SelectItem value="in_progress">In Progress</SelectItem>
+                          <SelectItem value="done">Done</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Input
+                      type="date"
+                      value={companyTaskForm.dueDate}
+                      onChange={(e) => setCompanyTaskForm((prev) => ({ ...prev, dueDate: e.target.value }))}
+                    />
+                    <Button onClick={handleAddCompanyTask}>Add Task</Button>
+                    <div className="space-y-2">
+                      {companyTasks.length > 0 ? (
+                        companyTasks.map((task) => (
+                          <div key={task.id} className="rounded-lg border border-border p-3">
+                            <div className="font-medium">{task.title}</div>
+                            <div className="text-xs text-muted-foreground">{task.description || "No description"}</div>
+                            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                              <Badge variant="outline">{task.priority}</Badge>
+                              <Badge variant="outline">{task.status}</Badge>
+                              {task.dueDate ? <Badge variant="outline">Due {task.dueDate}</Badge> : null}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-sm text-muted-foreground">No tasks assigned yet.</div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+          </DialogContent>
+        </Dialog>
+
+        {/* Category Assignment Dialog */}
+        <Dialog open={showCategoryDialog} onOpenChange={setShowCategoryDialog}>
+          <DialogContent className="max-w-3xl w-[60vw]">
+            <DialogHeader>
+              <DialogTitle>Assign Service Categories</DialogTitle>
+              <DialogDescription>
+                Select service categories for {selectedProviderForCategory?.name || selectedProviderForCategory?.email}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              {selectedProviderForCategory?.categories && selectedProviderForCategory.categories.length > 0 && (
+                <div className="bg-muted p-3 rounded-lg">
+                  <div className="text-sm font-medium mb-2">Currently Assigned Categories:</div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedProviderForCategory.categories.map((categoryId: string) => {
+                      const category = categoriesList.find((c: any) => 
+                        c.id === categoryId || c._id === categoryId || c.key === categoryId
+                      );
+                      const emoji = safeEmoji(category?.emoji);
+                      return (
+                        <Badge key={categoryId} variant="outline" className="text-xs">
+                          {category ? `${emoji} ${category.name}`.trim() : categoryId}
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-3">
+                {categoriesList.length > 0 ? (
+                  categoriesList.map((category: any) => (
+                    <div key={category.id || category._id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`category-${category.id || category._id}`}
+                        checked={selectedCategories.includes(category.id) || selectedCategories.includes(category._id) || selectedCategories.includes(category.key)}
+                        onCheckedChange={(checked) => {
+                          const categoryId = category.id || category._id;
+                          if (checked) {
+                            setSelectedCategories([...selectedCategories, categoryId]);
+                          } else {
+                            setSelectedCategories(selectedCategories.filter((c) => c !== categoryId && c !== category._id && c !== category.key));
+                          }
+                        }}
+                      />
+                      <label
+                        htmlFor={`category-${category.id || category._id}`}
+                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                      >
+                        {safeEmoji(category.emoji)} {category.name}
+                      </label>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No categories available.</div>
+                )}
+              </div>
+            </div>
+            <DialogFooter className="flex items-center justify-between">
+              <Button 
+                variant="destructive" 
+                onClick={() => {
+                  if (selectedProviderForCategory) {
+                    const providerId = selectedProviderForCategory.id || selectedProviderForCategory._id;
+                    assignCategoriesToProviderMutation.mutate({
+                      providerId,
+                      categories: [],
+                    });
+                  }
+                }}
+                disabled={assignCategoriesToProviderMutation.isPending || selectedCategories.length === 0}
+              >
+                Clear All Categories
+              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setShowCategoryDialog(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (selectedProviderForCategory) {
+                      const providerId = selectedProviderForCategory.id || selectedProviderForCategory._id;
+                      assignCategoriesToProviderMutation.mutate({
+                        providerId,
+                        categories: selectedCategories,
+                      });
+                    }
+                  }}
+                  disabled={assignCategoriesToProviderMutation.isPending}
+                >
+                  {assignCategoriesToProviderMutation.isPending ? "Saving..." : "Save Categories"}
+                </Button>
+              </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -8434,11 +9321,11 @@ const CompaniesManagement = () => {
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Contact Email</Label>
-                  <p className="text-sm">{selectedCompany.contactEmail || "—"}</p>
+                  <p className="text-sm">{selectedCompany.contactEmail || "â€”"}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Phone</Label>
-                  <p className="text-sm">{selectedCompany.phone || "—"}</p>
+                  <p className="text-sm">{selectedCompany.phone || "â€”"}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Submitted At</Label>
@@ -8447,17 +9334,17 @@ const CompaniesManagement = () => {
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Description</Label>
-                <p className="text-sm">{selectedCompany.description || "—"}</p>
+                <p className="text-sm">{selectedCompany.description || "â€”"}</p>
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Provider</Label>
-                <p className="text-sm">{selectedCompany.providerName || selectedCompany.provider_id || "—"}</p>
+                <p className="text-sm">{selectedCompany.providerName || selectedCompany.provider_id || "â€”"}</p>
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Active</Label>
                 <div>
                   <Badge variant={selectedCompany.isActive ? "default" : "outline"} className="text-sm">
-                    {typeof selectedCompany.isActive !== "undefined" ? (selectedCompany.isActive ? "Active" : "Inactive") : "—"}
+                    {typeof selectedCompany.isActive !== "undefined" ? (selectedCompany.isActive ? "Active" : "Inactive") : "â€”"}
                   </Badge>
                 </div>
               </div>
@@ -8781,8 +9668,8 @@ const CompaniesManagement = () => {
                     {companies.map((company: any) => (
                       <tr key={company.id} className="border-t border-border hover:bg-gray-50 dark:hover:bg-gray-900/50">
                         <td className="px-4 py-3 font-medium">{company.name}</td>
-                        <td className="px-4 py-3">{company.contactEmail || "—"}</td>
-                        <td className="px-4 py-3">{company.phone || "—"}</td>
+                        <td className="px-4 py-3">{company.contactEmail || "â€”"}</td>
+                        <td className="px-4 py-3">{company.phone || "â€”"}</td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex gap-2 justify-end">
                             <Button
@@ -8793,6 +9680,15 @@ const CompaniesManagement = () => {
                               title="View details"
                             >
                               <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => goToCompanyMembers(company.id)}
+                              data-testid={`button-company-members-${company.id}`}
+                              title="Manage members"
+                            >
+                              <Users className="w-4 h-4" />
                             </Button>
                             <Button
                               variant="ghost"
@@ -9200,7 +10096,7 @@ const StoresManagement = () => {
       inventoryEditForm.reset({
         name: inventoryEditingItem.name || "",
         price: Number(inventoryEditingItem.price || 0),
-        stock: Number(inventoryEditingItem.stock ?? 0),
+        stock: Number(inventoryEditingItem.stock - 0),
         description: inventoryEditingItem.description || "",
         category: inventoryEditingItem.category || itemCategories?.[0]?.name || "",
         image: primaryImage,
@@ -9682,7 +10578,7 @@ const StoresManagement = () => {
                       <div className="text-right">
                         <p className="text-sm font-medium">{event.amount}</p>
                         <p className="text-xs text-muted-foreground">
-                          {event.createdAt ? new Date(event.createdAt).toLocaleString() : "—"}
+                          {event.createdAt ? new Date(event.createdAt).toLocaleString() : "â€”"}
                         </p>
                       </div>
                     </div>
@@ -9963,10 +10859,10 @@ const StoresManagement = () => {
                                     </div>
                                   </div>
                                 </td>
-                                <td className="px-4 py-3">{item.category || "—"}</td>
+                                <td className="px-4 py-3">{item.category || "â€”"}</td>
                                 <td className="px-4 py-3">
                                   <div className="font-medium">{formatPrice(item)}</div>
-                                  <div className="text-xs text-muted-foreground">Stock: {item.stock ?? 0}</div>
+                                  <div className="text-xs text-muted-foreground">Stock: {item.stock - 0}</div>
                                 </td>
                                 <td className="px-4 py-3">
                                   <Badge variant={item.isActive ? "default" : "secondary"}>
@@ -10047,7 +10943,7 @@ const StoresManagement = () => {
                               </div>
                               <div className="flex items-center justify-between text-sm">
                                 <span className="font-medium">{formatPrice(item)}</span>
-                                <span className="text-muted-foreground">Stock: {item.stock ?? 0}</span>
+                                <span className="text-muted-foreground">Stock: {item.stock - 0}</span>
                               </div>
                               <div className="flex items-center justify-between">
                                 <Badge variant={item.isActive ? "default" : "secondary"}>
@@ -10445,7 +11341,7 @@ const StoresManagement = () => {
                   if (images.length === 0) {
                     toast({
                       title: "Add at least one image",
-                      description: "Upload 1–6 images before adding the item.",
+                      description: "Upload 1â€“6 images before adding the item.",
                       variant: "destructive",
                     });
                     return;
@@ -10489,7 +11385,7 @@ const StoresManagement = () => {
                     <FormControl>
                       <div className="space-y-2">
                         <p className="text-xs text-muted-foreground">
-                          Upload 1–6 images. {Math.max(0, 6 - inventoryImagePreview.length)} remaining.
+                          Upload 1â€“6 images. {Math.max(0, 6 - inventoryImagePreview.length)} remaining.
                         </p>
                         {inventoryImagePreview.length > 0 && (
                           <div className="grid grid-cols-2 gap-2">
@@ -10794,11 +11690,11 @@ const StoresManagement = () => {
                     </div>
                     <div className="rounded border p-3">
                       <p className="text-xs text-muted-foreground">Stock</p>
-                      <p className="text-lg font-semibold">{viewInventoryItem.stock ?? 0}</p>
+                      <p className="text-lg font-semibold">{viewInventoryItem.stock - 0}</p>
                     </div>
                     <div className="rounded border p-3">
                       <p className="text-xs text-muted-foreground">Category</p>
-                      <p className="text-sm font-medium">{viewInventoryItem.category || "—"}</p>
+                      <p className="text-sm font-medium">{viewInventoryItem.category || "â€”"}</p>
                     </div>
                     <div className="rounded border p-3">
                       <p className="text-xs text-muted-foreground">Status</p>
@@ -10810,7 +11706,7 @@ const StoresManagement = () => {
                   <div className="rounded border p-3">
                     <p className="text-xs text-muted-foreground mb-1">ID</p>
                     <p className="text-sm font-mono break-all">
-                      {viewInventoryItem._id || viewInventoryItem.id || "—"}
+                      {viewInventoryItem._id || viewInventoryItem.id || "â€”"}
                     </p>
                   </div>
                 </div>
@@ -10936,8 +11832,8 @@ const StoresManagement = () => {
                         {store.location}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                        <div>{store.phone || "—"}</div>
-                        <div>{store.email || "—"}</div>
+                        <div>{store.phone || "â€”"}</div>
+                        <div>{store.email || "â€”"}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <Badge
@@ -11425,3 +12321,4 @@ const ItemCategoriesPage = () => {
     </div>
   );
 };
+

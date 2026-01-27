@@ -12,6 +12,9 @@ import {
 } from "./refresh-token-service";
 import { requireAuth } from "./auth-middleware";
 import { authRateLimiter } from "./rate-limiter";
+import { db } from "./db";
+import { estates, memberships } from "@shared/schema";
+import { eq } from "drizzle-orm";
 
 const scryptAsync = promisify(scrypt);
 
@@ -41,9 +44,54 @@ export function setupJWTAuth(app: Express) {
         name: z.string().optional(),
         email: z.string().email(),
         phone: z.string().optional(),
+        inviteCode: z.string().optional(),
+        estateId: z.string().optional(),
       });
 
-      const { username, password, name, email, phone } = schema.parse(req.body);
+      const { username, password, name, email, phone, inviteCode, estateId } = schema.parse(req.body);
+
+      const trimmedInvite = inviteCode?.trim() || "";
+      const trimmedEstateId = estateId?.trim() || "";
+      if (trimmedInvite && trimmedEstateId) {
+        return res.status(400).json({ message: "Provide either an access code or select an estate" });
+      }
+
+      let resolvedEstateId: string | null = null;
+      if (trimmedInvite) {
+        const [estate] = await db
+          .select({ id: estates.id, accessType: estates.accessType })
+          .from(estates)
+          .where(eq(estates.accessCode, trimmedInvite))
+          .limit(1);
+
+        if (!estate) {
+          return res.status(400).json({ message: "Invalid access code" });
+        }
+
+        const accessType = (estate.accessType || "").toLowerCase();
+        if (accessType && accessType !== "open" && accessType !== "code") {
+          return res.status(400).json({ message: "Access code not allowed for this estate" });
+        }
+
+        resolvedEstateId = estate.id;
+      } else if (trimmedEstateId) {
+        const [estate] = await db
+          .select({ id: estates.id, accessType: estates.accessType })
+          .from(estates)
+          .where(eq(estates.id, trimmedEstateId))
+          .limit(1);
+
+        if (!estate) {
+          return res.status(400).json({ message: "Estate not found" });
+        }
+
+        const accessType = (estate.accessType || "").toLowerCase();
+        if (accessType && accessType !== "open" && accessType !== "code") {
+          return res.status(400).json({ message: "Estate does not allow open registration" });
+        }
+
+        resolvedEstateId = estate.id;
+      }
 
       const existingUser = await storage.getUserByUsername(username);
       if (existingUser) {
@@ -59,6 +107,17 @@ export function setupJWTAuth(app: Express) {
         isActive: true,
         isApproved: true,
       } as any);
+
+      if (resolvedEstateId) {
+        await db.insert(memberships).values({
+          userId: user.id,
+          estateId: resolvedEstateId,
+          role: "resident",
+          isPrimary: true,
+          isActive: true,
+          status: "active",
+        });
+      }
 
       // Generate JWT tokens
       const tokens = generateTokenPair({

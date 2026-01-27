@@ -15,12 +15,15 @@ import {
   memberships,
   transactions,
   estates,
+  notifications,
   type User,
   type InsertUser,
   type ServiceRequest,
   type InsertServiceRequest,
   type Company,
   type InsertCompany,
+  type Notification,
+  type InsertNotification,
   type ProviderRequest,
   type InsertProviderRequest,
   type RequestMessage,
@@ -232,6 +235,13 @@ export interface IStorage {
   deleteProviderRequestByProviderId(providerId: string): Promise<void>;
   getProviderRequestById(requestId: string): Promise<ProviderRequest | null>;
   deleteProviderRequest(requestId: string): Promise<void>;
+  createNotification(input: InsertNotification): Promise<Notification>;
+  listNotificationsForUser(
+    userId: string,
+    options?: { limit?: number; offset?: number },
+  ): Promise<Notification[]>;
+  markNotificationRead(userId: string, notificationId: string): Promise<Notification | undefined>;
+  markAllNotificationsRead(userId: string): Promise<{ updated: number }>;
   getPostgresIdFromMongoId(entityType: string, mongoId: string): Promise<string | null>;
   createAuditLog(entry: InsertAuditLog): Promise<AuditLog>;
   getOrders(params?: OrdersQueryParams): Promise<OrdersListResult>;
@@ -270,39 +280,55 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUser(id: string): Promise<User | undefined> {
-    const user = await prisma.user.findUnique({
-      where: { id },
-      include: includeProviderCompany,
-    });
-    return this.mapUser(user);
+    // Fetch from Drizzle (source of truth), not Prisma
+    // This ensures we always get the correct role data
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+    return user as User | undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
     const normalized = (username || "").trim();
-    let user = await prisma.user.findUnique({
-      where: { email: normalized },
-      include: includeProviderCompany,
-    });
-    if (!user) {
-      user = await prisma.user.findFirst({
-        where: { name: normalized },
-        include: includeProviderCompany,
-      });
-    }
-    return this.mapUser(user);
+    // Fetch from Drizzle (source of truth), not Prisma
+    // Try email first
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, normalized))
+      .limit(1);
+    if (user) return user as User;
+    
+    // If not found by email, try by name
+    const byName = await db
+      .select()
+      .from(users)
+      .where(eq(users.name, normalized))
+      .limit(1);
+    return byName[0] as User | undefined;
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    const user = await prisma.user.findUnique({
-      where: { email },
-      include: includeProviderCompany,
-    });
-    return this.mapUser(user);
+    // Fetch from Drizzle (source of truth), not Prisma
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    return user as User | undefined;
   }
 
   async getUserByAccessCode(accessCode: string): Promise<User | undefined> {
-    // Prisma User model currently does not expose accessCode, so return undefined.
-    return undefined;
+    const normalized = (accessCode || "").trim();
+    if (!normalized) return undefined;
+    const [row] = await db
+      .select()
+      .from(users)
+      .where(eq(users.accessCode, normalized))
+      .limit(1);
+    return row as any;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
@@ -312,6 +338,22 @@ export class DatabaseStorage implements IStorage {
       .returning();
     
     // Mirror the user in Prisma so wallet FK works
+    // Map Drizzle role (e.g., "super_admin") to Prisma enum (e.g., "SUPER_ADMIN")
+    const mapRoleToPrisma = (role: any) => {
+      if (!role) return "RESIDENT";
+      const lower = String(role).toLowerCase();
+      const map: Record<string, any> = {
+        "resident": "RESIDENT",
+        "provider": "PROVIDER",
+        "admin": "ADMIN",
+        "super_admin": "SUPER_ADMIN",
+        "estate_admin": "ESTATE_ADMIN",
+        "moderator": "MODERATOR",
+        "support": "SUPPORT",
+      };
+      return map[lower] || "RESIDENT";
+    };
+    
     try {
       await prisma.user.upsert({
         where: { id: user.id },
@@ -319,7 +361,7 @@ export class DatabaseStorage implements IStorage {
           email: user.email,
           name: user.name,
           passwordHash: user.password,
-          globalRole: (user.globalRole as string | undefined)?.toUpperCase() as any,
+          globalRole: mapRoleToPrisma(user.globalRole),
           isApproved: user.isApproved,
           isActive: user.isActive,
         },
@@ -328,7 +370,7 @@ export class DatabaseStorage implements IStorage {
           email: user.email,
           name: user.name,
           passwordHash: user.password,
-          globalRole: (user.globalRole as string | undefined)?.toUpperCase() as any,
+          globalRole: mapRoleToPrisma(user.globalRole),
           isApproved: user.isApproved,
           isActive: user.isActive,
         },
@@ -351,6 +393,42 @@ export class DatabaseStorage implements IStorage {
       .set({ ...updates, updatedAt: new Date() })
       .where(eq(users.id, id))
       .returning();
+    
+    // Keep Prisma in sync with Drizzle
+    if (user) {
+      try {
+        // Map Drizzle role (e.g., "super_admin") to Prisma enum (e.g., "SUPER_ADMIN")
+        const mapRoleToPrisma = (role: any) => {
+          if (!role) return "RESIDENT";
+          const lower = String(role).toLowerCase();
+          const map: Record<string, any> = {
+            "resident": "RESIDENT",
+            "provider": "PROVIDER",
+            "admin": "ADMIN",
+            "super_admin": "SUPER_ADMIN",
+            "estate_admin": "ESTATE_ADMIN",
+            "moderator": "MODERATOR",
+            "support": "SUPPORT",
+          };
+          return map[lower] || "RESIDENT";
+        };
+        
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            email: user.email,
+            name: user.name,
+            passwordHash: user.password,
+            globalRole: mapRoleToPrisma(user.globalRole),
+            isApproved: user.isApproved,
+            isActive: user.isActive,
+          },
+        });
+      } catch (error) {
+        console.warn("Failed to sync user update to Prisma:", (error as Error).message);
+      }
+    }
+    
     return user || undefined;
   }
 
@@ -851,14 +929,39 @@ export class DatabaseStorage implements IStorage {
       .set({ isApproved: true, updatedAt: new Date() })
       .where(eq(users.id, providerId))
       .returning();
+    
+    // Keep Prisma in sync with Drizzle
+    if (provider) {
+      try {
+        await prisma.user.update({
+          where: { id: provider.id },
+          data: {
+            isApproved: true,
+          },
+        });
+      } catch (error) {
+        console.warn("Failed to sync provider approval to Prisma:", (error as Error).message);
+      }
+    }
+    
     return provider || undefined;
   }
 
   async deleteUser(userId: string): Promise<boolean> {
+    // Delete from Drizzle users table
     const deleted = await db
       .delete(users)
       .where(eq(users.id, userId))
       .returning();
+    
+    // Also delete from Prisma User table to keep both in sync
+    try {
+      await prisma.user.delete({ where: { id: userId } });
+    } catch (error) {
+      // User might not exist in Prisma, which is fine
+      console.warn("User not found in Prisma during delete:", userId);
+    }
+    
     return deleted.length > 0;
   }
 
@@ -975,6 +1078,51 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return row;
+  }
+
+  async createNotification(input: InsertNotification): Promise<Notification> {
+    const [row] = await db
+      .insert(notifications)
+      .values(input)
+      .returning();
+    return row as any;
+  }
+
+  async listNotificationsForUser(
+    userId: string,
+    options: { limit?: number; offset?: number } = {},
+  ): Promise<Notification[]> {
+    const limit = Math.max(1, options.limit ?? 50);
+    const offset = Math.max(0, options.offset ?? 0);
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit)
+      .offset(offset);
+    return rows as any;
+  }
+
+  async markNotificationRead(
+    userId: string,
+    notificationId: string,
+  ): Promise<Notification | undefined> {
+    const [row] = await db
+      .update(notifications)
+      .set({ isRead: true })
+      .where(and(eq(notifications.id, notificationId), eq(notifications.userId, userId)))
+      .returning();
+    return row as any;
+  }
+
+  async markAllNotificationsRead(userId: string): Promise<{ updated: number }> {
+    const rows = await db
+      .update(notifications)
+      .set({ isRead: true })
+      .where(eq(notifications.userId, userId))
+      .returning();
+    return { updated: rows.length };
   }
 
   async createAuditLog(entry: InsertAuditLog): Promise<AuditLog> {

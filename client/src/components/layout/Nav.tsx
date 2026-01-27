@@ -13,7 +13,10 @@ import {
 } from "lucide-react";
 
 import { ProfilePics } from "@/components/resident/CityBuddyMessage";
+import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { useProfile } from "@/contexts/ProfileContext";
+import { useAuth } from "@/hooks/use-auth";
+import { useLocation } from "wouter";
 
 export type LayoutNavPage =
   | "homepage"
@@ -57,6 +60,18 @@ export default function Nav({
 }: LayoutNavProps) {
   const { firstName, lastName, email } = useProfile();
   const [isCollapsed, setIsCollapsed] = useState(defaultExpanded === false);
+
+  const { logoutMutation } = useAuth();
+  const [, setLocation] = useLocation();
+
+  const handleSignOut = async () => {
+    try {
+      await logoutMutation.mutateAsync();
+      setLocation("/");
+    } catch (err) {
+      // swallow — useAuth shows toast on error
+    }
+  };
 
   const [isBelowLg, setIsBelowLg] = useState(false);
 
@@ -196,6 +211,10 @@ export default function Nav({
         </div>
       </div>
 
+      <div className={`px-2 ${collapsed ? "flex justify-center" : ""}`}>
+        <NotificationBell collapsed={collapsed} />
+      </div>
+
       {/* PRIMARY NAV SECTION */}
       <div className="flex flex-col gap-2 px-2">
         {navItems.map(renderNavItem)}
@@ -228,6 +247,7 @@ export default function Nav({
         {!collapsed && (
           <button
             type="button"
+            onClick={handleSignOut}
             className="mt-4 flex items-center gap-2 text-xs uppercase tracking-wide text-white/80 hover:text-white"
           >
             <LogOut size={16} />

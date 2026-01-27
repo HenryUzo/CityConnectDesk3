@@ -161,6 +161,8 @@ export const estates = pgTable("estates", {
   slug: text("slug").notNull().unique(),
   description: text("description"),
   address: text("address").notNull(),
+  accessType: text("access_type"),
+  accessCode: text("access_code"),
   coverage: jsonb("coverage").notNull(), // GeoJSON Polygon
   settings: jsonb("settings").notNull().default('{"servicesEnabled":[],"marketplaceEnabled":true,"paymentMethods":[],"deliveryRules":{}}'),
   isActive: boolean("is_active").notNull().default(true),
@@ -347,6 +349,21 @@ export const storeEstates = pgTable("store_estates", {
 }, (table) => ({
   uniqueStoreEstate: sql`UNIQUE (${table.storeId}, ${table.estateId})`,
 }));
+
+export const notifications = pgTable("notifications", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id),
+  title: varchar("title", { length: 120 }).notNull(),
+  message: text("message").notNull(),
+  type: varchar("type", { length: 20 }).notNull().default("info"),
+  metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  isRead: boolean("is_read").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
 
 // Marketplace Items table (from MongoDB)
 export const marketplaceItems = pgTable("marketplace_items", {
@@ -888,6 +905,11 @@ export const insertMembershipSchema = createInsertSchema(memberships).omit({
   updatedAt: true,
 });
 
+export const insertNotificationSchema = createInsertSchema(notifications).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertCategorySchema = createInsertSchema(categories).omit({
   id: true,
   createdAt: true,
@@ -954,6 +976,8 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Membership = typeof memberships.$inferSelect;
 export type InsertMembership = z.infer<typeof insertMembershipSchema>;
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
 export type Category = typeof categories.$inferSelect;
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
 export type Store = typeof stores.$inferSelect;

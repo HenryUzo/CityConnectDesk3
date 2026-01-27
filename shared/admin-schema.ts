@@ -37,6 +37,10 @@ export const providerRequestSchema = z.object({
   categories: z.array(z.string()).optional().default([]),
   experience: z.preprocess(toNumber, z.number().int().nonnegative()).default(0),
   description: z.string().optional().default(""),
+  password: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().min(6, "Password must be at least 6 characters").optional(),
+  ),
 });
 
 export type ProviderRequestInput = z.infer<typeof providerRequestSchema>;

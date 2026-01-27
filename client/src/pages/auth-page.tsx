@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
@@ -15,11 +15,20 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { ArrowLeft } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 type Company = {
   id: string;
   name: string;
   description?: string;
+};
+
+type EstateOption = {
+  id: string;
+  name: string;
+  address?: string;
+  slug?: string;
+  accessType?: string | null;
 };
 
 
@@ -29,8 +38,10 @@ const residentRegisterSchema = z.object({
   email: z.string().email("Invalid email address"),
   phone: z.string().min(10, "Phone number must be at least 10 digits"),
   password: z.string().min(6, "Password must be at least 6 characters"),
+  inviteCode: z.string().optional(),
+  estateId: z.string().optional(),
   location: z.object({
-    address: z.string().min(1, "Location is required"),
+    address: z.string().optional(),
     latitude: z.number().optional(),
     longitude: z.number().optional(),
   }),
@@ -76,6 +87,7 @@ const providerLoginSchema = z.object({
 export default function AuthPage() {
   const [, setLocation] = useLocation();
   const { user, loginMutation, registerMutation } = useAuth();
+  const { toast } = useToast();
   const [userType, setUserType] = useState<"resident" | "provider">("resident");
   const [loginMethod, setLoginMethod] = useState<"email" | "code">("email");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -106,6 +118,8 @@ export default function AuthPage() {
       email: "",
       phone: "",
       password: "",
+      inviteCode: "",
+      estateId: "",
       location: {
         address: "",
         latitude: undefined,
@@ -130,9 +144,22 @@ export default function AuthPage() {
   const { data: companies = [], isLoading: isCompaniesLoading } = useQuery<Company[]>({
     queryKey: ["companies"],
     queryFn: async () => {
-      const res = await fetch("/api/companies");
+      const res = await fetch("/api/companies?public=true");
       if (!res.ok) {
         throw new Error("Failed to load companies");
+      }
+      return res.json();
+    },
+    enabled: authMode === "register" && userType === "provider",
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const { data: openAccessEstates = [] } = useQuery<EstateOption[]>({
+    queryKey: ["public-estates", "open-access"],
+    queryFn: async () => {
+      const res = await fetch("/api/estates?filter=open-access");
+      if (!res.ok) {
+        throw new Error("Failed to load estates");
       }
       return res.json();
     },
@@ -153,13 +180,20 @@ export default function AuthPage() {
     }
   }, [authMode, userType, companies, providerRegisterForm]);
 
+  const inviteCodeValue = residentRegisterForm.watch("inviteCode");
+  const estateSelectionDisabled = Boolean(inviteCodeValue && inviteCodeValue.trim().length > 0);
+
   // Redirect if already logged in - after all hooks are declared
   useEffect(() => {
     if (user) {
       if (user.role === "resident") {
         setLocation("/resident");
       } else if (user.role === "provider") {
-        setLocation("/provider");
+        if (user.isApproved === false) {
+          setLocation("/waiting-room");
+        } else {
+          setLocation("/provider");
+        }
       } else if (user.role === "admin") {
         setLocation("/admin");
       }
@@ -172,23 +206,42 @@ export default function AuthPage() {
 
   const onLogin = async (data: any) => {
     try {
+      let loginData;
+      
       if (userType === "resident") {
         if (data.accessCode) {
-          await loginMutation.mutateAsync({ 
+          loginData = { 
             username: data.accessCode,
             password: "x" // Dummy password for access code login
-          });
+          };
         } else {
-          await loginMutation.mutateAsync({ 
+          loginData = { 
             username: data.email, 
             password: data.password 
-          });
+          };
         }
       } else {
-        await loginMutation.mutateAsync({ 
+        loginData = { 
           username: data.email, 
           password: data.password 
-        });
+        };
+      }
+      
+      const loggedInUser = await loginMutation.mutateAsync(loginData);
+      
+      // Handle redirect immediately after login
+      if (loggedInUser) {
+        if (loggedInUser.role === "resident") {
+          setLocation("/resident");
+        } else if (loggedInUser.role === "provider") {
+          if (loggedInUser.isApproved === false) {
+            setLocation("/waiting-room");
+          } else {
+            setLocation("/provider");
+          }
+        } else if (loggedInUser.role === "admin") {
+          setLocation("/admin");
+        }
       }
     } catch (error) {
       console.error("Login failed:", error);
@@ -197,6 +250,38 @@ export default function AuthPage() {
 
   const onRegister = async (data: any) => {
     try {
+      if (userType === "provider") {
+        const payload = {
+          firstName: data.firstName,
+          lastName: data.lastName,
+          name: [data.firstName, data.lastName].filter(Boolean).join(" ").trim(),
+          email: data.email,
+          phone: data.phone,
+          company: data.company || "",
+          experience: Number.isFinite(Number(data.experience)) ? Number(data.experience) : 0,
+          password: data.password,
+        };
+
+        const res = await fetch("/api/company/provider-requests", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(errorData?.message || "Signup failed.");
+        }
+
+        toast({
+          title: "Provider request submitted",
+          description: "Your provider account has been submitted for approval.",
+        });
+        setAuthMode("login");
+        setUserType("provider");
+        return;
+      }
+
       // Transform location data for submission
       const fullName = [data.firstName, data.lastName]
         .filter(Boolean)
@@ -215,11 +300,34 @@ export default function AuthPage() {
         submitData.location = data.location.address;
         submitData.latitude = data.location.latitude;
         submitData.longitude = data.location.longitude;
+        const invite = data.inviteCode?.trim();
+        const estate = data.estateId?.trim();
+        if (invite) {
+          submitData.inviteCode = invite;
+          delete submitData.estateId;
+        } else if (estate) {
+          submitData.estateId = estate;
+          delete submitData.inviteCode;
+        } else {
+          delete submitData.inviteCode;
+          delete submitData.estateId;
+        }
       }
 
       await registerMutation.mutateAsync(submitData);
-    } catch (error) {
-      console.error("Registration failed:", error);
+      toast({
+        title: "Account created successfully",
+      });
+      setAuthMode("login");
+      setUserType("resident");
+    } catch (error: any) {
+      const message =
+        error?.message || error?.response?.data?.message || "Signup failed.";
+      toast({
+        title: "Registration failed",
+        description: message,
+        variant: "destructive",
+      });
     }
   };
 
@@ -392,7 +500,11 @@ export default function AuthPage() {
                     </div>
                     ) : (
                       <Form {...residentRegisterForm}>
-                        <form onSubmit={residentRegisterForm.handleSubmit(onRegister)} className="space-y-4 sm:space-y-5 mt-4 sm:mt-6">
+                        <form autoComplete="new-password" onSubmit={residentRegisterForm.handleSubmit(onRegister)} className="space-y-4 sm:space-y-5 mt-4 sm:mt-6">
+                          <div className="sr-only" aria-hidden="true">
+                            <input type="text" name="username" autoComplete="username" tabIndex={-1} />
+                            <input type="password" name="password" autoComplete="new-password" tabIndex={-1} />
+                          </div>
                           <div className="grid grid-cols-2 gap-3 sm:gap-4">
                             <FormField
                               control={residentRegisterForm.control}
@@ -444,7 +556,14 @@ export default function AuthPage() {
                                     {...field} 
                                     type="email"
                                     inputMode="email"
-                                    autoComplete="email"
+                                    autoComplete="off"
+                                    data-lpignore="true"
+                                    data-bwignore="true"
+                                    data-1p-ignore="true"
+                                    data-form-type="other"
+                                    autoCapitalize="none"
+                                    autoCorrect="off"
+                                    spellCheck={false}
                                     className="h-11 sm:h-12 text-base"
                                     placeholder="Enter your email"
                                     data-testid="input-email" 
@@ -496,14 +615,82 @@ export default function AuthPage() {
                           />
                           <FormField
                             control={residentRegisterForm.control}
+                            name="estateId"
+                            render={({ field }) => (
+                              <FormItem className="space-y-1.5 sm:space-y-2">
+                                <FormLabel className="text-sm sm:text-base font-medium">Estate or Region</FormLabel>
+                                <FormControl>
+                                  <Select
+                                    value={field.value || ""}
+                                    onValueChange={(value) => {
+                                      field.onChange(value);
+                                      if (value) {
+                                        residentRegisterForm.setValue("inviteCode", "");
+                                      }
+                                    }}
+                                    disabled={estateSelectionDisabled}
+                                  >
+                                    <SelectTrigger className="h-11 sm:h-12 text-base">
+                                      <SelectValue placeholder="Select your estate or region" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {openAccessEstates.length > 0 ? (
+                                        openAccessEstates.map((estate) => (
+                                          <SelectItem key={estate.id} value={estate.id}>
+                                            <div className="flex flex-col">
+                                              <span className="font-medium">{estate.name}</span>
+                                              {estate.address ? (
+                                                <span className="text-xs text-muted-foreground">{estate.address}</span>
+                                              ) : null}
+                                            </div>
+                                          </SelectItem>
+                                        ))
+                                      ) : (
+                                        <SelectItem value="none" disabled>
+                                          No estates available
+                                        </SelectItem>
+                                      )}
+                                    </SelectContent>
+                                  </Select>
+                                </FormControl>
+                                <FormMessage className="text-xs sm:text-sm" />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={residentRegisterForm.control}
+                            name="inviteCode"
+                            render={({ field }) => (
+                              <FormItem className="space-y-1.5 sm:space-y-2">
+                                <FormLabel className="text-sm sm:text-base font-medium">Access Code (optional)</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    {...field}
+                                    className="h-11 sm:h-12 text-base"
+                                    placeholder="Enter invite/access code"
+                                    onChange={(e) => {
+                                      field.onChange(e.target.value);
+                                      if (e.target.value) {
+                                        residentRegisterForm.setValue("estateId", "");
+                                      }
+                                    }}
+                                    data-testid="input-resident-access-code"
+                                  />
+                                </FormControl>
+                                <FormMessage className="text-xs sm:text-sm" />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={residentRegisterForm.control}
                             name="location"
                             render={({ field }) => (
                               <FormItem className="space-y-1.5 sm:space-y-2">
-                                <FormLabel className="text-sm sm:text-base font-medium">Location (Block/Flat)</FormLabel>
+                                <FormLabel className="text-sm sm:text-base font-medium">Location (Block/Flat, optional)</FormLabel>
                                 <FormControl>
                                   <Input
                                     placeholder="e.g., Block 5, Flat 3B"
-                                    value={field.value.address}
+                                    value={field.value?.address || ""}
                                     onChange={(e) => field.onChange({
                                       address: e.target.value,
                                       latitude: undefined,
@@ -545,7 +732,10 @@ export default function AuthPage() {
                                     {...field} 
                                     type="email"
                                     inputMode="email"
-                                    autoComplete="email"
+                                    autoComplete="off"
+                                    autoCapitalize="none"
+                                    autoCorrect="off"
+                                    spellCheck={false}
                                     className="h-11 sm:h-12 text-base"
                                     placeholder="Enter your email"
                                     data-testid="input-provider-email" 
@@ -586,7 +776,12 @@ export default function AuthPage() {
                       </Form>
                     ) : (
                       <Form {...providerRegisterForm}>
-                        <form onSubmit={providerRegisterForm.handleSubmit(onRegister)} className="space-y-4 sm:space-y-5">
+                        {/* Disable browser autofill on registration form to avoid credentials leaking into wrong fields */}
+                        <form autoComplete="new-password" onSubmit={providerRegisterForm.handleSubmit(onRegister)} className="space-y-4 sm:space-y-5">
+                          <div className="sr-only" aria-hidden="true">
+                            <input type="text" name="username" autoComplete="username" tabIndex={-1} />
+                            <input type="password" name="password" autoComplete="new-password" tabIndex={-1} />
+                          </div>
                           <div className="grid grid-cols-2 gap-3 sm:gap-4">
                             <FormField
                               control={providerRegisterForm.control}
@@ -638,7 +833,14 @@ export default function AuthPage() {
                                     {...field} 
                                     type="email"
                                     inputMode="email"
-                                    autoComplete="email"
+                                    autoComplete="off"
+                                    data-lpignore="true"
+                                    data-bwignore="true"
+                                    data-1p-ignore="true"
+                                    data-form-type="other"
+                                    autoCapitalize="none"
+                                    autoCorrect="off"
+                                    spellCheck={false}
                                     className="h-11 sm:h-12 text-base"
                                     placeholder="Enter your email"
                                     data-testid="input-provider-email" 
@@ -817,19 +1019,19 @@ export default function AuthPage() {
             <div className="space-y-4">
               <div className="flex items-center justify-center space-x-2">
                 <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
-                  ✓
+                  Ô£ô
                 </div>
                 <span>Verified Service Providers</span>
               </div>
               <div className="flex items-center justify-center space-x-2">
                 <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
-                  ✓
+                  Ô£ô
                 </div>
                 <span>Real-time Order Tracking</span>
               </div>
               <div className="flex items-center justify-center space-x-2">
                 <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
-                  ✓
+                  Ô£ô
                 </div>
                 <span>Secure Payments</span>
               </div>
@@ -850,3 +1052,4 @@ export default function AuthPage() {
     </div>
   );
 }
+

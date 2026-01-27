@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { Server as SocketIOServer } from "socket.io";
 import { z } from "zod";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
@@ -26,6 +27,7 @@ import {
   providerMatchingSettings,
   orders,
   storeMembers,
+  notifications,
 } from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
@@ -560,6 +562,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public: list estates/regions (supports open-access filter)
+  app.get("/api/estates", async (req, res, next) => {
+    try {
+      const filter = String(req.query.filter || "");
+      const whereParts: any[] = [eq(estates.isActive, true)];
+      if (filter === "open-access") {
+        whereParts.push(
+          or(
+            isNull(estates.accessType),
+            ilike(estates.accessType, "open"),
+            ilike(estates.accessType, "code"),
+          ),
+        );
+      }
+
+      const where = whereParts.length > 1 ? and(...whereParts) : whereParts[0];
+      const rows = await db
+        .select({
+          id: estates.id,
+          name: estates.name,
+          address: estates.address,
+          slug: estates.slug,
+          accessType: estates.accessType,
+        })
+        .from(estates)
+        .where(where)
+        .orderBy(asc(estates.name));
+
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Get estates the current user is a member of
   app.get("/api/my-estates", requireAuth, async (req, res, next) => {
     try {
@@ -582,6 +618,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .filter((e: any) => e && e.id);
 
       res.json(out);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/notifications", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+      const rows = await storage.listNotificationsForUser(userId);
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/notifications/:id/read", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+      const updated = await storage.markNotificationRead(userId, req.params.id);
+      if (!updated) return res.status(404).json({ message: "Notification not found" });
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/notifications/mark-all-read", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+      const result = await storage.markAllNotificationsRead(userId);
+      res.json({ ok: true, updated: result.updated });
     } catch (error) {
       next(error);
     }
@@ -1259,6 +1329,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Service request not found" });
       }
 
+      if (updated.residentId) {
+        const notification = await storage.createNotification({
+          userId: updated.residentId,
+          title: "New Update on Your Request",
+          message: "An admin left an update on your request.",
+          type: "info",
+        });
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        io?.to(`user-${updated.residentId}`).emit("notification:new", notification);
+      }
+
       // TODO: Send notification/email to the resident
       res.json({ success: true, message: "Advice sent successfully", request: updated });
     } catch (error) {
@@ -1284,6 +1365,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!serviceRequest) {
         return res.status(404).json({ message: "Service request not found" });
+      }
+
+      if (serviceRequest.residentId) {
+        const notification = await storage.createNotification({
+          userId: serviceRequest.residentId,
+          title: "Provider Assigned",
+          message: "A provider has been assigned to your request.",
+          type: "info",
+        });
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        io?.to(`user-${serviceRequest.residentId}`).emit("notification:new", notification);
       }
 
       // TODO: Send notification to the assigned provider
@@ -1861,6 +1953,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!provider) {
         return res.status(404).json({ message: "Provider not found" });
       }
+
+      const notification = await storage.createNotification({
+        userId: provider.id,
+        title: "Provider Account Approved",
+        message: "Your provider account has been verified. You can now access your dashboard.",
+        type: "action",
+        metadata: { kind: "provider_approved" },
+      });
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      io?.to(`user-${provider.id}`).emit("notification:new", notification);
+      io?.to(`user-${provider.id}`).emit("provider:approved", { ok: true });
 
       await storage.deleteProviderRequestByProviderId(id);
       await storage.createAuditLog({
@@ -2503,14 +2606,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/companies", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
+      const isPublic =
+        String(req.query.public || "") === "true" ||
+        String(req.query.public || "") === "1";
+      const isAuthenticated = req.isAuthenticated();
+
+      let query = db.select().from(companies);
+      if (!isAuthenticated || isPublic) {
+        query = query.where(eq(companies.isActive, true));
       }
 
-      const rows = await db
-        .select()
-        .from(companies)
-        .orderBy(desc(companies.createdAt));
+      const rows = await query.orderBy(desc(companies.createdAt));
       res.json(rows);
     } catch (error) {
       next(error);
@@ -3512,8 +3618,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .json({ message: "A provider with that email already exists" });
       }
 
-      const tempPassword = randomBytes(8).toString("hex");
-      const hashedPassword = await hashPassword(tempPassword);
+      const passwordToUse = parsed.password?.trim() || randomBytes(8).toString("hex");
+      const hashedPassword = await hashPassword(passwordToUse);
 
       const combinedName = (parsed.name || `${parsed.firstName} ${parsed.lastName}`).trim();
       const user = await storage.createUser({
@@ -3944,4 +4050,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   const httpServer = createServer(app);
+  const io = new SocketIOServer(httpServer, {
+    cors: { origin: "*", credentials: true },
+  });
+  app.set("io", io);
+  io.on("connection", (socket) => {
+    socket.on("join", (userId: string) => {
+      if (!userId) return;
+      socket.join(`user-${userId}`);
+    });
+  });
   return httpServer;}

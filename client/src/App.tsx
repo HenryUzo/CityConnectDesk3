@@ -6,9 +6,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "./hooks/use-auth";
 import { ProtectedRoute } from "./lib/protected-route";
 import { AdminAuthProvider } from "@/pages/admin-super-dashboard";
+import { NotificationsProvider } from "@/contexts/NotificationsContext";
 
 import LandingPage from "@/pages/landing-page";
 import AuthPage from "@/pages/auth-page";
+import WaitingRoom from "@/pages/waiting-room";
+import NotificationsPage from "@/pages/notifications";
 import ProviderDashboard from "@/pages/provider-dashboard";
 import ProviderCompanyRegistration from "@/pages/provider-company-registration";
 import CompanyDashboard from "@/pages/company-dashboard";
@@ -42,6 +45,8 @@ function Router() {
     <Switch>
       <Route path="/" component={LandingPage} />
       <Route path="/auth" component={AuthPage} />
+      <Route path="/waiting-room" component={WaitingRoom} />
+      <ProtectedRoute path="/notifications" component={NotificationsPage} />
       <ProtectedRoute path="/resident" component={Homepage} />
       <Route path="/company-registration" component={ProviderCompanyRegistration} />
       <Route path="/company-dashboard" component={CompanyDashboard} />
@@ -64,6 +69,11 @@ function Router() {
         </AdminAuthProvider>
       </Route>
       <Route path="/admin-dashboard/stores/members/:storeId">
+        <AdminAuthProvider>
+          <AdminSuperDashboard />
+        </AdminAuthProvider>
+      </Route>
+      <Route path="/admin-dashboard/companies/members/:companyId">
         <AdminAuthProvider>
           <AdminSuperDashboard />
         </AdminAuthProvider>
@@ -96,12 +106,14 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <ProfileProvider>
-          <TooltipProvider>
-          <Toaster />
-          <Router />
-          </TooltipProvider>
-        </ProfileProvider>
+        <NotificationsProvider>
+          <ProfileProvider>
+            <TooltipProvider>
+            <Toaster />
+            <Router />
+            </TooltipProvider>
+          </ProfileProvider>
+        </NotificationsProvider>
       </AuthProvider>
     </QueryClientProvider>
   );
