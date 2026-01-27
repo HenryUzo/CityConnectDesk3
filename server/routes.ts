@@ -55,6 +55,10 @@ import {
   handlePaystackWebhook,
 } from "./paystackHandlers";
 import { requireAuth, requireResident, requireSuperAdmin } from "./auth-middleware";
+
+// Define requireAdmin as an alias for requireSuperAdmin
+const requireAdmin = requireSuperAdmin;
+
 import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
 import * as ai from "./ai";
 import { runDiagnosis, GEMINI_FALLBACK_DIAGNOSIS, GEMINI_SAFETY_FALLBACK, getGeminiModel } from "./ai/diagnose";
