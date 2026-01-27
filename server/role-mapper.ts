@@ -7,7 +7,7 @@
 export function mapRoleToPrismaEnum(drizzleRole: string | undefined | null): string {
   if (!drizzleRole) return "RESIDENT";
   
-  const lower = String(drizzleRole).toLowerCase();
+  const lower = drizzleRole.toLowerCase();
   
   // Map snake_case Drizzle roles to UPPER_CASE Prisma enums
   const roleMap: Record<string, string> = {
