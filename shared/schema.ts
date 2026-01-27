@@ -144,6 +144,18 @@ export const storeApprovalStatusEnum = pgEnum("store_approval_status", [
   "approved",
   "rejected",
 ]);
+export const broadcastTargetEnum = pgEnum("broadcast_target", [
+  "all_residents",
+  "all_providers",
+  "all_users",
+  "estate_residents",
+  "estate_providers",
+]);
+export const broadcastStatusEnum = pgEnum("broadcast_status", [
+  "draft",
+  "sent",
+  "scheduled",
+]);
 
 // Simple app settings (key/value) table for global configs
 export const appSettings = pgTable("app_settings", {
@@ -489,6 +501,45 @@ export const orders = pgTable("orders", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Broadcast Messages table
+export const broadcastMessages = pgTable("broadcast_messages", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  senderId: varchar("sender_id")
+    .notNull()
+    .references(() => users.id),
+  estateId: varchar("estate_id").references(() => estates.id), // Null for system-wide broadcasts
+  target: broadcastTargetEnum("target").notNull(),
+  subject: text("subject").notNull(),
+  message: text("message").notNull(),
+  status: broadcastStatusEnum("status").notNull().default("draft"),
+  scheduledFor: timestamp("scheduled_for"),
+  sentAt: timestamp("sent_at"),
+  recipientCount: integer("recipient_count").default(0),
+  deliveredCount: integer("delivered_count").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Admin Impersonation Sessions table
+export const impersonationSessions = pgTable("impersonation_sessions", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  superAdminId: varchar("super_admin_id")
+    .notNull()
+    .references(() => users.id),
+  targetUserId: varchar("target_user_id")
+    .notNull()
+    .references(() => users.id),
+  reason: text("reason"),
+  startedAt: timestamp("started_at").defaultNow(),
+  endedAt: timestamp("ended_at"),
+  ipAddress: text("ip_address"),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
 // Audit Logs table (from MongoDB)
 export const auditLogs = pgTable("audit_logs", {
   id: varchar("id")
@@ -727,6 +778,7 @@ export const estatesRelations = relations(estates, ({ many }) => ({
   categories: many(categories),
   auditLogs: many(auditLogs),
   stores: many(stores),
+  broadcastMessages: many(broadcastMessages),
 }));
 
 export const usersRelations = relations(users, ({ many, one }) => ({
@@ -743,6 +795,9 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   wallet: one(wallets),
   ownedStores: many(stores),
   storeMembers: many(storeMembers),
+  broadcastMessagesSent: many(broadcastMessages),
+  impersonationSessionsAsAdmin: many(impersonationSessions, { relationName: "superAdminSessions" }),
+  impersonationSessionsAsTarget: many(impersonationSessions, { relationName: "targetUserSessions" }),
 }));
 
 export const membershipsRelations = relations(memberships, ({ one }) => ({
@@ -887,6 +942,30 @@ export const transactionsRelations = relations(transactions, ({ one }) => ({
   }),
 }));
 
+export const broadcastMessagesRelations = relations(broadcastMessages, ({ one }) => ({
+  sender: one(users, {
+    fields: [broadcastMessages.senderId],
+    references: [users.id],
+  }),
+  estate: one(estates, {
+    fields: [broadcastMessages.estateId],
+    references: [estates.id],
+  }),
+}));
+
+export const impersonationSessionsRelations = relations(impersonationSessions, ({ one }) => ({
+  superAdmin: one(users, {
+    fields: [impersonationSessions.superAdminId],
+    references: [users.id],
+    relationName: "superAdminSessions",
+  }),
+  targetUser: one(users, {
+    fields: [impersonationSessions.targetUserId],
+    references: [users.id],
+    relationName: "targetUserSessions",
+  }),
+}));
+
 // Insert schemas
 export const insertEstateSchema = createInsertSchema(estates).omit({
   id: true,
@@ -970,6 +1049,17 @@ export const insertTransactionSchema = createInsertSchema(transactions).omit({
   createdAt: true,
 });
 
+export const insertBroadcastMessageSchema = createInsertSchema(broadcastMessages).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertImpersonationSessionSchema = createInsertSchema(impersonationSessions).omit({
+  id: true,
+  startedAt: true,
+});
+
 // Types
 export type Estate = typeof estates.$inferSelect;
 export type InsertEstate = z.infer<typeof insertEstateSchema>;
@@ -1006,6 +1096,10 @@ export type InsertRequestBillItem = typeof requestBillItems.$inferInsert;
 export type Inspection = typeof inspections.$inferSelect;
 export type InsertInspection = typeof inspections.$inferInsert;
 export type DeviceAssignment = typeof deviceAssignments.$inferSelect;
+export type BroadcastMessage = typeof broadcastMessages.$inferSelect;
+export type InsertBroadcastMessage = z.infer<typeof insertBroadcastMessageSchema>;
+export type ImpersonationSession = typeof impersonationSessions.$inferSelect;
+export type InsertImpersonationSession = z.infer<typeof insertImpersonationSessionSchema>;
 
 // Extended user types for login
 export const residentLoginSchema = z
