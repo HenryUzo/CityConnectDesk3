@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS "marketplace_items" (
+	"id" varchar PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"estate_id" varchar,
+	"store_id" varchar,
+	"vendor_id" varchar NOT NULL,
+	"name" text NOT NULL,
+	"description" text,
+	"price" numeric(10, 2) NOT NULL,
+	"currency" varchar(10) NOT NULL DEFAULT 'NGN',
+	"unit_of_measure" varchar NOT NULL DEFAULT 'piece',
+	"category" text NOT NULL,
+	"subcategory" text,
+	"stock" integer NOT NULL DEFAULT 0,
+	"images" text[],
+	"is_active" boolean NOT NULL DEFAULT true,
+	"created_at" timestamp DEFAULT now(),
+	"updated_at" timestamp DEFAULT now(),
+	CONSTRAINT "marketplace_items_vendor_id_users_id_fk" FOREIGN KEY ("vendor_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action,
+	CONSTRAINT "marketplace_items_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action,
+	CONSTRAINT "marketplace_items_estate_id_estates_id_fk" FOREIGN KEY ("estate_id") REFERENCES "public"."estates"("id") ON DELETE no action ON UPDATE no action
+);

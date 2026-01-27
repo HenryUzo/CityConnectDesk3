@@ -4,10 +4,14 @@ import { Check } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
+type CheckboxProps = React.ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root> & {
+  indicatorClassName?: string;
+};
+
 const Checkbox = React.forwardRef<
   React.ElementRef<typeof CheckboxPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root>
->(({ className, ...props }, ref) => (
+  CheckboxProps
+>(({ className, indicatorClassName, ...props }, ref) => (
   <CheckboxPrimitive.Root
     ref={ref}
     className={cn(
@@ -17,9 +21,9 @@ const Checkbox = React.forwardRef<
     {...props}
   >
     <CheckboxPrimitive.Indicator
-      className={cn("flex items-center justify-center text-current")}
+      className={cn("flex items-center justify-center text-current", indicatorClassName)}
     >
-      <Check className="h-4 w-4" />
+      <Check className={cn("h-4 w-4", indicatorClassName ? "" : "h-4 w-4")} />
     </CheckboxPrimitive.Indicator>
   </CheckboxPrimitive.Root>
 ))

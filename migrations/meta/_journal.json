@@ -15,6 +15,13 @@
       "when": 1766213435948,
       "tag": "0001_rbac-memberships",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1769245019673,
+      "tag": "0002_create_marketplace_items",
+      "breakpoints": true
     }
   ]
 }

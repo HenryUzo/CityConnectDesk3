@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LogOut, Building, Users, UserCheck, ClipboardList, LayoutDashboard, BarChart3, Settings } from "lucide-react";
+import { LogOut, Building, Users, UserCheck, ClipboardList, LayoutDashboard, BarChart3, Settings, Bot, SlidersHorizontal } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -27,6 +27,10 @@ export function AdminLayout({ children, title }: AdminLayoutProps) {
   ];
 
   if (user?.globalRole === 'super_admin') {
+    navLinks.push({ href: "/admin/ai/conversations", icon: Bot, label: "AI Conversations" });
+    navLinks.push({ href: "/admin/ai/prepared-requests", icon: Bot, label: "AI Prepared Requests" });
+    navLinks.push({ href: "/admin/pricing-rules", icon: SlidersHorizontal, label: "Pricing Rules" });
+    navLinks.push({ href: "/admin/providers/matching", icon: UserCheck, label: "Provider Matching" });
     navLinks.push({ href: "/admin-super", icon: Building, label: "Super Admin" });
   }
 

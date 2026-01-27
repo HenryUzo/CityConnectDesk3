@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { Server as SocketIOServer } from "socket.io";
 import { z } from "zod";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
@@ -21,23 +22,28 @@ import {
   transactions,
   companies,
   providerRequests,
-  broadcastMessages,
-  insertBroadcastMessageSchema,
-  impersonationSessions,
-  insertImpersonationSessionSchema,
+  aiPreparedRequests,
+  pricingRules,
+  providerMatchingSettings,
+  orders,
+  storeMembers,
+  notifications,
 } from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
 import marketplaceRoutes from "./marketplace-routes";
-import { randomBytes, scrypt } from "crypto";
+import { createHash, randomBytes, scrypt } from "crypto";
 import { promisify } from "util";
-import { and, count, desc, eq, ilike, or, sum, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, or, sum, sql, gte, lte, isNotNull, isNull, asc } from "drizzle-orm";
 import {
   createMarketplaceItemSchema,
   createProviderSchema,
   providerRequestSchema,
   updateMarketplaceItemSchema,
 } from "@shared/admin-schema";
+import { TransactionStatus } from "@prisma/client";
+import type { Transaction as PrismaTransaction } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import {
   createPendingPaystackTransaction,
   verifyAndFinalizePaystackCharge,
@@ -48,18 +54,37 @@ import {
   handlePaystackVerify,
   handlePaystackWebhook,
 } from "./paystackHandlers";
-import { TransactionStatus, Prisma } from "@prisma/client";
-import type { Transaction as PrismaTransaction } from "@prisma/client";
-import { requireAuth, requireResident } from "./auth-middleware";
+import { requireAuth, requireResident, requireSuperAdmin } from "./auth-middleware";
+
+// Define requireAdmin as an alias for requireSuperAdmin
+const requireAdmin = requireSuperAdmin;
+
 import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
 import * as ai from "./ai";
 import { runDiagnosis, GEMINI_FALLBACK_DIAGNOSIS, GEMINI_SAFETY_FALLBACK, getGeminiModel } from "./ai/diagnose";
 import { generateGeminiContent } from "./ai/geminiClient";
-import { resolveActiveEstateContext, requireActiveEstateMembership } from "./middlewares/estate-context";
 
-const isAdminOrSuper = (req: Express["request"]) =>
-  req.isAuthenticated() &&
-  (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+function membershipIsActive(membership: { isActive?: boolean | null; status?: string | null } | undefined) {
+  if (!membership) return false;
+  const isActiveFlag = membership.isActive ?? true;
+  if (!isActiveFlag) return false;
+  const status = (membership.status ?? "").toLowerCase();
+  if (status && status !== "active") return false;
+  return status === "active" || status === "";
+}
+
+const isAdminOrSuper = (req: Express["request"]) => {
+  // Support both session auth (req.user + req.isAuthenticated) and JWT auth (req.auth)
+  const sessionOk =
+    req.isAuthenticated() &&
+    (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+
+  const jwtOk =
+    Boolean(req.auth) &&
+    ((req.auth as any)?.role === "admin" || (req.auth as any)?.globalRole === "super_admin");
+
+  return sessionOk || jwtOk;
+};
 
 // Accept flexible inputs, normalize output types
 const CreateServiceRequest = insertServiceRequestSchema.extend({
@@ -89,6 +114,18 @@ const AIDiagnosisRequestSchema = z.object({
   description: z.string().min(10, "Description must be at least 10 characters"),
   urgency: z.enum(["low", "medium", "high", "emergency"]).optional(),
   specialInstructions: z.string().optional(),
+});
+
+const AIDescriptionValidationRequestSchema = z.object({
+  category: z.string().optional(),
+  description: z.string().min(5, "Description is required").max(2000),
+});
+
+const AIDescriptionValidationResponseSchema = z.object({
+  valid: z.boolean(),
+  reason: z.string().default(""),
+  improvedPrompt: z.string().default(""),
+  suggestedRewriteExamples: z.array(z.string()).default([]),
 });
 
 export const AIDiagnosisResponseSchema = z.object({
@@ -190,21 +227,157 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // Service Requests Routes
+
+  // Provider matching preview (resident-safe): a short preview list only — no assignment/booking.
+  app.get("/api/providers/preview", requireAuth, requireResident, async (req, res, next) => {
+    try {
+      const schema = z.object({
+        category: z.string().min(1),
+        urgency: z.string().optional(),
+        limit: z
+          .union([z.string(), z.number()])
+          .optional()
+          .transform((v) => {
+            if (v == null || v === "") return 4;
+            const n = typeof v === "number" ? v : Number(v);
+            return Number.isFinite(n) ? Math.max(2, Math.min(4, Math.floor(n))) : 4;
+          }),
+        estateId: z.string().optional(),
+      });
+
+      const parsed = schema.parse(req.query);
+
+      const requestedEstateId = typeof parsed.estateId === "string" && parsed.estateId.trim() ? parsed.estateId.trim() : undefined;
+      let activeEstateId = requestedEstateId;
+      if (!activeEstateId) {
+        const membershipsForUser = await storage.getMembershipsForUser(req.auth!.userId);
+        const primary = membershipsForUser.find((m) => m.isPrimary && m.isActive && m.status === "active");
+        activeEstateId = primary?.estateId;
+      }
+
+      const providers = await storage.getProviders({
+        approved: true,
+        category: parsed.category,
+      });
+
+      const verifiedProviders = (providers || []).filter((p: any) => p?.isActive !== false && p?.isApproved === true);
+      const providerIds = verifiedProviders.map((p: any) => p.id).filter(Boolean);
+
+      if (providerIds.length === 0) {
+        return res.json({
+          providers: [],
+          usedEstateId: activeEstateId ?? null,
+          estateSpecificCount: 0,
+        });
+      }
+
+      const completedJobRows = await db
+        .select({ providerId: serviceRequests.providerId, completedJobs: count() })
+        .from(serviceRequests)
+        .where(and(inArray(serviceRequests.providerId, providerIds as any), eq(serviceRequests.status, "completed")))
+        .groupBy(serviceRequests.providerId);
+
+      const completedJobsByProvider = new Map<string, number>();
+      for (const r of completedJobRows) {
+        const pid = (r as any).providerId as string | null;
+        if (!pid) continue;
+        completedJobsByProvider.set(pid, Number((r as any).completedJobs ?? 0));
+      }
+
+      let estateMatchedIds = new Set<string>();
+      if (activeEstateId) {
+        const membershipRows = await db
+          .select({ userId: memberships.userId })
+          .from(memberships)
+          .where(
+            and(
+              eq(memberships.estateId, activeEstateId),
+              eq(memberships.isActive, true),
+              eq(memberships.status, "active"),
+              inArray(memberships.userId, providerIds as any),
+            ),
+          );
+        estateMatchedIds = new Set(membershipRows.map((m: { userId: string }) => m.userId));
+      }
+
+      const preview = verifiedProviders
+        .map((p: any) => {
+          const ratingNum = Number(p.rating ?? 0);
+          const completedJobs = completedJobsByProvider.get(p.id) ?? 0;
+          const isEstateMatch = activeEstateId ? estateMatchedIds.has(p.id) : false;
+
+          const badges: string[] = [];
+          if (isEstateMatch) badges.push("Estate recommended");
+          if (ratingNum >= 4.5) badges.push("Top rated");
+          if (completedJobs >= 25) badges.push("Experienced");
+
+          const fastResponder = Boolean((p.metadata as any)?.fastResponder);
+          if (fastResponder) badges.push("Fast responder");
+
+          return {
+            id: String(p.id),
+            name: String(p.name ?? ""),
+            serviceCategory: String(p.serviceCategory ?? parsed.category),
+            rating: Number.isFinite(ratingNum) ? ratingNum : 0,
+            completedJobs,
+            responseTime: "Response time not available",
+            location: String(p.location ?? "City-wide"),
+            badges,
+            verificationStatus: "Verified" as const,
+            image: (p.metadata as any)?.avatarUrl ? String((p.metadata as any).avatarUrl) : undefined,
+            __estateMatch: isEstateMatch,
+          };
+        })
+        .sort((a: any, b: any) => {
+          // 1) Estate proximity
+          if (a.__estateMatch !== b.__estateMatch) return a.__estateMatch ? -1 : 1;
+          // 2) Rating
+          if (b.rating !== a.rating) return b.rating - a.rating;
+          // 3) Completed jobs
+          return (b.completedJobs ?? 0) - (a.completedJobs ?? 0);
+        });
+
+      const limited = preview.slice(0, parsed.limit ?? 4).map(({ __estateMatch, ...rest }: any) => rest);
+      const estateSpecificCount = activeEstateId ? preview.filter((p: any) => p.__estateMatch).length : 0;
+
+      res.json({
+        providers: limited,
+        usedEstateId: activeEstateId ?? null,
+        estateSpecificCount,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post(
     "/api/service-requests",
     requireAuth,
-    resolveActiveEstateContext,
-    requireActiveEstateMembership,
     async (req, res, next) => {
       try {
       if (!req.isAuthenticated() || req.user?.role !== "resident") {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
+      const headerEstate = typeof req.headers["x-estate-id"] === "string" ? req.headers["x-estate-id"].trim() : undefined;
+      const queryEstate = typeof req.query.estateId === "string" ? req.query.estateId.trim() : undefined;
+      const bodyEstate = typeof (req.body as any)?.estateId === "string" ? String((req.body as any).estateId).trim() : undefined;
+      const requestedEstateId = headerEstate || queryEstate || bodyEstate || undefined;
+
+      // estateId is optional in schema; only attach it when it is valid AND the user is an active member.
+      let estateId: string | undefined;
+      if (requestedEstateId) {
+        const membership = await storage.getMembershipByUserAndEstate(req.user.id, requestedEstateId);
+        if (!membershipIsActive(membership)) {
+          return res.status(403).json({ message: "Your estate membership is not active." });
+        }
+        estateId = requestedEstateId;
+      }
+
       const parsed = CreateServiceRequest.parse({
         ...req.body,
         residentId: req.user.id,
-        estateId: req.auth?.activeEstateId,
+        estateId,
       });
 
       const created = await storage.createServiceRequest(parsed);
@@ -267,6 +440,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Service request not found" });
       }
 
+      // Broadcast update to SSE clients
+      try {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        if (global.__serviceRequestSseClients && Array.isArray(global.__serviceRequestSseClients)) {
+          const payload = { type: "updated", request: serviceRequest };
+          const data = JSON.stringify(payload);
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          for (const c of global.__serviceRequestSseClients) {
+            try {
+              c.res.write(`event: service-request\n`);
+              c.res.write(`data: ${data}\n\n`);
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Failed to broadcast service-request updated event", e);
+      }
+
       res.json(serviceRequest);
     } catch (error) {
       next(error);
@@ -295,6 +490,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Server-Sent Events endpoint for streaming service-request events (created/updated/assigned)
+  app.get("/api/service-requests/stream", requireAuth, (req, res) => {
+    try {
+      // set SSE headers
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders?.();
+
+      // ensure global client list
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__serviceRequestSseClients ||= [];
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const id = Date.now() + Math.random();
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      global.__serviceRequestSseClients.push({ id, res });
+
+      req.on("close", () => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          global.__serviceRequestSseClients = (global.__serviceRequestSseClients || []).filter((c: any) => c.id !== id);
+        } catch (e) {
+          // ignore
+        }
+      });
+    } catch (e) {
+      console.error("SSE setup failed", e);
+      try { res.status(500).end(); } catch {}
+    }
+  });
+
   app.post("/api/service-requests/:id/accept", async (req, res, next) => {
     try {
       if (!req.isAuthenticated() || req.user?.role !== "provider") {
@@ -308,7 +538,124 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Service request not found" });
       }
 
+      // Broadcast assignment to SSE clients
+      try {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        if (global.__serviceRequestSseClients && Array.isArray(global.__serviceRequestSseClients)) {
+          const payload = { type: "assigned", request: serviceRequest };
+          const data = JSON.stringify(payload);
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          for (const c of global.__serviceRequestSseClients) {
+            try {
+              c.res.write(`event: service-request\n`);
+              c.res.write(`data: ${data}\n\n`);
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Failed to broadcast service-request assigned event", e);
+      }
+
       res.json(serviceRequest);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Public: list estates/regions (supports open-access filter)
+  app.get("/api/estates", async (req, res, next) => {
+    try {
+      const filter = String(req.query.filter || "");
+      const whereParts: any[] = [eq(estates.isActive, true)];
+      if (filter === "open-access") {
+        whereParts.push(
+          or(
+            isNull(estates.accessType),
+            ilike(estates.accessType, "open"),
+            ilike(estates.accessType, "code"),
+          ),
+        );
+      }
+
+      const where = whereParts.length > 1 ? and(...whereParts) : whereParts[0];
+      const rows = await db
+        .select({
+          id: estates.id,
+          name: estates.name,
+          address: estates.address,
+          slug: estates.slug,
+          accessType: estates.accessType,
+        })
+        .from(estates)
+        .where(where)
+        .orderBy(asc(estates.name));
+
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Get estates the current user is a member of
+  app.get("/api/my-estates", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const rows = await db
+        .select({
+          id: estates.id,
+          name: estates.name,
+          slug: estates.slug,
+        })
+        .from(memberships)
+        .leftJoin(estates, eq(estates.id, memberships.estateId))
+        .where(eq(memberships.userId, userId));
+
+      // Filter out null joins
+      const out = (rows || [])
+        .map((r: any) => ({ id: r.id, name: r.name, slug: r.slug }))
+        .filter((e: any) => e && e.id);
+
+      res.json(out);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/notifications", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+      const rows = await storage.listNotificationsForUser(userId);
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/notifications/:id/read", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+      const updated = await storage.markNotificationRead(userId, req.params.id);
+      if (!updated) return res.status(404).json({ message: "Notification not found" });
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/notifications/mark-all-read", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+      const result = await storage.markAllNotificationsRead(userId);
+      res.json({ ok: true, updated: result.updated });
     } catch (error) {
       next(error);
     }
@@ -419,6 +766,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post(
+    "/api/ai/validate-description",
+    requireAuth,
+    requireResident,
+    async (req, res) => {
+      const parsedBody = AIDescriptionValidationRequestSchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        return res.status(400).json({
+          error: "Invalid request body",
+          details: parsedBody.error.flatten(),
+        });
+      }
+
+      try {
+        const { category, description } = parsedBody.data;
+
+        const ip =
+          (req.headers["x-forwarded-for"] as string)?.split(",")[0] ||
+          req.socket.remoteAddress ||
+          "unknown";
+        const userKey = `${req.user?.id ?? "anon"}:${ip}`;
+        const now = Date.now();
+        const windowMs = 60_000;
+        const maxRequests = 10;
+        const rateMap: Map<string, { count: number; windowStart: number }> =
+          ((global as any).__aiValidateRate ||= new Map<
+            string,
+            { count: number; windowStart: number }
+          >());
+
+        const rate =
+          rateMap.get(userKey) ||
+          ({ count: 0, windowStart: now } as {
+            count: number;
+            windowStart: number;
+          });
+        if (now - rate.windowStart > windowMs) {
+          rate.count = 0;
+          rate.windowStart = now;
+        }
+        rate.count += 1;
+        rateMap.set(userKey, rate);
+        if (rate.count > maxRequests) {
+          return res
+            .status(429)
+            .json({ error: "Rate limit exceeded. Try again shortly." });
+        }
+
+        const model = getGeminiModel(
+          process.env.GEMINI_MODEL || "gemini-1.5-flash"
+        );
+
+        const prompt = [
+          "Return ONLY a single JSON object. No markdown, no code fences, no extra text.",
+          "You validate whether a resident's service request description is sufficiently detailed to proceed to the next step (uploading an optional supporting image).",
+          "Consider it VALID if it includes at least: (1) what is wrong, (2) location/area, and (3) timing or context. Otherwise INVALID.",
+          "If INVALID, provide an improved prompt the user can paste, and 2-3 short example rewrites.",
+          "Output must match this exact JSON shape:",
+          '{"valid":true,"reason":"","improvedPrompt":"","suggestedRewriteExamples":[""]}',
+          "",
+          `Category: ${category || "(unknown)"}`,
+          "Description:",
+          description,
+        ].join("\n");
+
+        const { text, blocked } = await generateGeminiContent(model, prompt);
+        if (blocked) {
+          return res
+            .status(503)
+            .json({ error: "AI response was blocked." });
+        }
+
+        const raw = (text || "").trim();
+        const tryParseJson = (s: string) => {
+          try {
+            return JSON.parse(s);
+          } catch {
+            return null;
+          }
+        };
+
+        let obj = tryParseJson(raw);
+        if (!obj) {
+          const match = raw.match(/\{[\s\S]*\}/);
+          if (match) obj = tryParseJson(match[0]);
+        }
+
+        if (!obj) {
+          return res
+            .status(502)
+            .json({ error: "AI returned non-JSON output." });
+        }
+
+        const normalized = AIDescriptionValidationResponseSchema.parse(obj);
+        return res.json(normalized);
+      } catch (error) {
+        console.error("[AI] validate-description failed:", error);
+        return res
+          .status(500)
+          .json({ error: "Unable to validate description right now." });
+      }
+    }
+  );
+
   app.get("/api/ai/health", async (req, res) => {
     const provider = "gemini";
     const configured = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY);
@@ -471,6 +922,392 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ success: true, active: await ai.getActiveProvider() });
   });
 
+  // --- AI prepared request snapshots (resident writes, super admin reads) ---
+  // IMPORTANT: Store no raw chat messages and mask resident identity.
+  app.post(
+    "/api/ai/prepared-requests/snapshot",
+    requireAuth,
+    requireResident,
+    async (req, res, next) => {
+      try {
+        const userId = req.auth?.userId ?? req.user?.id;
+        if (!userId) return res.status(401).json({ message: "Authentication required" });
+
+        const body = (req.body ?? {}) as any;
+        const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+        const category = typeof body.category === "string" ? body.category : null;
+        const urgency = typeof body.urgency === "string" ? body.urgency : null;
+        const recommendedApproach = typeof body.recommendedApproach === "string" ? body.recommendedApproach : "";
+        const confidenceScore = Number.isFinite(Number(body.confidenceScore)) ? Number(body.confidenceScore) : 0;
+        const requiresConsultancy = Boolean(body.requiresConsultancy);
+        const readyToBook = Boolean(body.readyToBook);
+        const estateId = typeof body.estateId === "string" ? body.estateId : undefined;
+
+        if (!sessionId || !category || !urgency || !recommendedApproach) {
+          return res.status(400).json({ message: "Invalid snapshot payload" });
+        }
+
+        const salt = process.env.APP_SECRET || process.env.SESSION_SECRET || "dev";
+        const residentHash = createHash("sha256")
+          .update(`${salt}:${userId}`)
+          .digest("hex");
+
+        const snapshot = typeof body.snapshot === "object" && body.snapshot ? body.snapshot : {};
+
+        // Upsert by sessionId
+        const existing = await db
+          .select({ id: aiPreparedRequests.id })
+          .from(aiPreparedRequests)
+          .where(eq(aiPreparedRequests.sessionId, sessionId))
+          .limit(1);
+
+        if (existing.length) {
+          await db
+            .update(aiPreparedRequests)
+            .set({
+              residentHash,
+              estateId: estateId ?? null,
+              category: category as any,
+              urgency: urgency as any,
+              recommendedApproach,
+              confidenceScore,
+              requiresConsultancy,
+              readyToBook,
+              snapshot,
+              updatedAt: new Date(),
+            })
+            .where(eq(aiPreparedRequests.sessionId, sessionId));
+        } else {
+          await db.insert(aiPreparedRequests).values({
+            sessionId,
+            residentHash,
+            estateId: estateId ?? null,
+            category: category as any,
+            urgency: urgency as any,
+            recommendedApproach,
+            confidenceScore,
+            requiresConsultancy,
+            readyToBook,
+            snapshot,
+          });
+        }
+
+        return res.json({ ok: true });
+      } catch (error) {
+        // If the observability table does not exist yet, don't fail the resident flow.
+        const msg = (error as any)?.message || "";
+        if (typeof msg === "string" && msg.includes("ai_prepared_requests")) {
+          console.warn("AI snapshot storage not available (ai_prepared_requests missing). Skipping snapshot.", msg);
+          return res.json({ ok: false, warning: "ai_prepared_requests table not present" });
+        }
+        next(error);
+      }
+    }
+  );
+
+  const computePriceEstimate = async (params: {
+    category: string;
+    urgency: string;
+    scope?: string | null;
+  }): Promise<{ min: number; max: number; ruleId?: string } | null> => {
+    const scope = (params.scope || "").trim() || null;
+
+    const candidates = await db
+      .select({
+        id: pricingRules.id,
+        category: pricingRules.category,
+        urgency: pricingRules.urgency,
+        scope: pricingRules.scope,
+        minPrice: pricingRules.minPrice,
+        maxPrice: pricingRules.maxPrice,
+      })
+      .from(pricingRules)
+      .where(eq(pricingRules.isActive, true));
+
+    const scoreRule = (r: any) => {
+      let score = 0;
+      if (r.category && r.category === params.category) score += 10;
+      if (r.urgency && r.urgency === params.urgency) score += 5;
+      if (r.scope && scope && String(r.scope).toLowerCase() === scope.toLowerCase()) score += 3;
+      if (!r.category) score += 1;
+      return score;
+    };
+
+    const best = (candidates || [])
+      .filter((r: any) => !r.category || r.category === params.category)
+      .filter((r: any) => !r.urgency || r.urgency === params.urgency)
+      .filter((r: any) => !r.scope || (scope && String(r.scope).toLowerCase() === scope.toLowerCase()))
+      .sort((a: any, b: any) => scoreRule(b) - scoreRule(a))[0];
+
+    if (!best) return null;
+
+    const min = Number(best.minPrice);
+    const max = Number(best.maxPrice);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    return { min, max, ruleId: best.id };
+  };
+
+  // --- SUPER_ADMIN-only AI observability ---
+  app.get(
+    "/api/admin/ai/conversations",
+    requireAuth,
+    requireSuperAdmin,
+    async (req, res, next) => {
+      try {
+        const rows = await db
+          .select({
+            sessionId: aiPreparedRequests.sessionId,
+            category: aiPreparedRequests.category,
+            urgency: aiPreparedRequests.urgency,
+            recommendedApproach: aiPreparedRequests.recommendedApproach,
+            confidenceScore: aiPreparedRequests.confidenceScore,
+            requiresConsultancy: aiPreparedRequests.requiresConsultancy,
+            readyToBook: aiPreparedRequests.readyToBook,
+            createdAt: aiPreparedRequests.createdAt,
+            updatedAt: aiPreparedRequests.updatedAt,
+          })
+          .from(aiPreparedRequests)
+          .orderBy(desc(aiPreparedRequests.updatedAt))
+          .limit(200);
+
+        return res.json(
+          (rows || []).map((r: any) => ({
+            conversationId: r.sessionId,
+            category: r.category,
+            urgency: r.urgency,
+            recommendedApproach: r.recommendedApproach,
+            confidenceScore: r.confidenceScore,
+            requiresConsultancy: r.requiresConsultancy,
+            status: r.readyToBook ? "ready_to_book" : "in_progress",
+            createdAt: r.createdAt,
+            updatedAt: r.updatedAt,
+          }))
+        );
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/ai/prepared-requests",
+    requireAuth,
+    requireSuperAdmin,
+    async (req, res, next) => {
+      try {
+        const rows = await db
+          .select({
+            id: aiPreparedRequests.id,
+            sessionId: aiPreparedRequests.sessionId,
+            residentHash: aiPreparedRequests.residentHash,
+            estateId: aiPreparedRequests.estateId,
+            category: aiPreparedRequests.category,
+            urgency: aiPreparedRequests.urgency,
+            recommendedApproach: aiPreparedRequests.recommendedApproach,
+            confidenceScore: aiPreparedRequests.confidenceScore,
+            requiresConsultancy: aiPreparedRequests.requiresConsultancy,
+            readyToBook: aiPreparedRequests.readyToBook,
+            snapshot: aiPreparedRequests.snapshot,
+            createdAt: aiPreparedRequests.createdAt,
+            updatedAt: aiPreparedRequests.updatedAt,
+          })
+          .from(aiPreparedRequests)
+          .orderBy(desc(aiPreparedRequests.updatedAt))
+          .limit(200);
+
+        const results = await Promise.all(
+          (rows || []).map(async (r: any) => {
+            const scope = r.snapshot?.scope ?? null;
+            const estimate = await computePriceEstimate({
+              category: r.category,
+              urgency: r.urgency,
+              scope,
+            });
+
+            return {
+              id: r.id,
+              conversationId: r.sessionId,
+              resident: `resident_${String(r.residentHash || "").slice(0, 8)}`,
+              estateId: r.estateId,
+              category: r.category,
+              urgency: r.urgency,
+              recommendedApproach: r.recommendedApproach,
+              confidenceScore: r.confidenceScore,
+              requiresConsultancy: r.requiresConsultancy,
+              readyToBook: r.readyToBook,
+              headline: r.snapshot?.headline ?? null,
+              imageCount: Number.isFinite(Number(r.snapshot?.imageCount)) ? Number(r.snapshot?.imageCount) : 0,
+              scope: scope,
+              priceEstimate: estimate,
+              createdAt: r.createdAt,
+              updatedAt: r.updatedAt,
+            };
+          })
+        );
+
+        return res.json(results);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  // --- SUPER_ADMIN-only Pricing Rules ---
+  app.get("/api/admin/pricing-rules", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const rows = await db.select().from(pricingRules).orderBy(desc(pricingRules.updatedAt));
+      return res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/pricing-rules", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const body = (req.body ?? {}) as any;
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!name) return res.status(400).json({ message: "Name is required" });
+
+      const category = typeof body.category === "string" ? body.category : null;
+      const urgency = typeof body.urgency === "string" ? body.urgency : null;
+      const scope = typeof body.scope === "string" ? body.scope.trim() : null;
+      const minPrice = Number.isFinite(Number(body.minPrice)) ? String(body.minPrice) : "0";
+      const maxPrice = Number.isFinite(Number(body.maxPrice)) ? String(body.maxPrice) : "0";
+      const isActive = body.isActive === undefined ? true : Boolean(body.isActive);
+
+      const [created] = await db
+        .insert(pricingRules)
+        .values({
+          name,
+          category: (category as any) ?? null,
+          urgency: (urgency as any) ?? null,
+          scope,
+          minPrice,
+          maxPrice,
+          isActive,
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      return res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/pricing-rules/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const id = String(req.params.id || "");
+      const body = (req.body ?? {}) as any;
+
+      const patch: any = { updatedAt: new Date() };
+      if (typeof body.name === "string") patch.name = body.name.trim();
+      if (typeof body.category === "string" || body.category === null) patch.category = body.category as any;
+      if (typeof body.urgency === "string" || body.urgency === null) patch.urgency = body.urgency as any;
+      if (typeof body.scope === "string" || body.scope === null) patch.scope = body.scope;
+      if (body.minPrice !== undefined && Number.isFinite(Number(body.minPrice))) patch.minPrice = String(body.minPrice);
+      if (body.maxPrice !== undefined && Number.isFinite(Number(body.maxPrice))) patch.maxPrice = String(body.maxPrice);
+      if (body.isActive !== undefined) patch.isActive = Boolean(body.isActive);
+
+      const updated = await db
+        .update(pricingRules)
+        .set(patch)
+        .where(eq(pricingRules.id, id))
+        .returning();
+
+      if (!updated.length) return res.status(404).json({ message: "Not found" });
+      return res.json(updated[0]);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // --- SUPER_ADMIN-only Provider Matching ---
+  app.get("/api/admin/providers/matching", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const providers = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          phone: users.phone,
+          categories: users.categories,
+          serviceCategory: users.serviceCategory,
+          isActive: users.isActive,
+          isApproved: users.isApproved,
+        })
+        .from(users)
+        .where(eq(users.role, "provider" as any));
+
+      const settingsRows = await db
+        .select({
+          providerId: providerMatchingSettings.providerId,
+          isEnabled: providerMatchingSettings.isEnabled,
+          settings: providerMatchingSettings.settings,
+          updatedAt: providerMatchingSettings.updatedAt,
+        })
+        .from(providerMatchingSettings);
+
+      const settingsByProvider = new Map<string, any>();
+      for (const row of settingsRows || []) settingsByProvider.set(row.providerId, row);
+
+      return res.json(
+        (providers || []).map((p: any) => ({
+          ...p,
+          matching: settingsByProvider.get(p.id) ?? { isEnabled: true, settings: {}, updatedAt: null },
+        }))
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch(
+    "/api/admin/providers/:id/matching-settings",
+    requireAuth,
+    requireSuperAdmin,
+    async (req, res, next) => {
+      try {
+        const providerId = String(req.params.id || "");
+        const body = (req.body ?? {}) as any;
+        const isEnabled = body.isEnabled === undefined ? undefined : Boolean(body.isEnabled);
+        const settings = typeof body.settings === "object" && body.settings ? body.settings : undefined;
+
+        const existing = await db
+          .select({ id: providerMatchingSettings.id })
+          .from(providerMatchingSettings)
+          .where(eq(providerMatchingSettings.providerId, providerId))
+          .limit(1);
+
+        if (existing.length) {
+          const patch: any = { updatedAt: new Date() };
+          if (isEnabled !== undefined) patch.isEnabled = isEnabled;
+          if (settings !== undefined) patch.settings = settings;
+          const updated = await db
+            .update(providerMatchingSettings)
+            .set(patch)
+            .where(eq(providerMatchingSettings.providerId, providerId))
+            .returning();
+          return res.json(updated[0]);
+        }
+
+        const [created] = await db
+          .insert(providerMatchingSettings)
+          .values({
+            providerId,
+            isEnabled: isEnabled ?? true,
+            settings: settings ?? {},
+            updatedAt: new Date(),
+          })
+          .returning();
+
+        return res.status(201).json(created);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
   // Admin: Send advice with inspection dates/times to resident
   app.post("/api/admin/service-requests/:id/advice", async (req, res, next) => {
     try {
@@ -494,6 +1331,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!updated) {
         return res.status(404).json({ message: "Service request not found" });
+      }
+
+      if (updated.residentId) {
+        const notification = await storage.createNotification({
+          userId: updated.residentId,
+          title: "New Update on Your Request",
+          message: "An admin left an update on your request.",
+          type: "info",
+        });
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        io?.to(`user-${updated.residentId}`).emit("notification:new", notification);
       }
 
       // TODO: Send notification/email to the resident
@@ -521,6 +1369,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!serviceRequest) {
         return res.status(404).json({ message: "Service request not found" });
+      }
+
+      if (serviceRequest.residentId) {
+        const notification = await storage.createNotification({
+          userId: serviceRequest.residentId,
+          title: "Provider Assigned",
+          message: "A provider has been assigned to your request.",
+          type: "info",
+        });
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        io?.to(`user-${serviceRequest.residentId}`).emit("notification:new", notification);
       }
 
       // TODO: Send notification to the assigned provider
@@ -847,7 +1706,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin Routes
   app.get("/api/admin/users", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -862,7 +1721,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Unified list with search + role filter (used by admin dashboard)
   app.get("/api/admin/users/all", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -888,7 +1747,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create user
   app.post("/api/admin/users", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -925,7 +1784,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update user
   app.patch("/api/admin/users/:id", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -948,7 +1807,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: reset a user's password (admin-only)
   app.post("/api/admin/users/:id/reset-password", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -1008,6 +1867,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get memberships for a specific user
+  app.get("/api/admin/users/:id/memberships", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id: userId } = req.params;
+      const userMemberships = await db
+        .select({
+          id: memberships.id,
+          userId: memberships.userId,
+          estateId: memberships.estateId,
+          role: memberships.role,
+          status: memberships.status,
+          isActive: memberships.isActive,
+          permissions: memberships.permissions,
+          createdAt: memberships.createdAt,
+          updatedAt: memberships.updatedAt,
+          estateName: estates.name,
+        })
+        .from(memberships)
+        .where(eq(memberships.userId, userId))
+        .leftJoin(estates, eq(estates.id, memberships.estateId))
+        .orderBy(desc(memberships.createdAt));
+
+      res.json(userMemberships);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/admin/providers", async (req, res, next) => {
     try {
       const isAdmin = req.isAuthenticated() && (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
@@ -1023,7 +1914,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         category: category as string,
       });
 
-      res.json(providers);
+      // Enrich providers with company details if they have a company association
+      const enrichedProviders = await Promise.all(
+        providers.map(async (p: typeof providers[0]) => {
+          if (!p.company) return p;
+          // p.company currently holds just the company name/ID string
+          // In a full implementation, fetch the company record to get more details
+          return { ...p, companyAssociation: p.company };
+        })
+      );
+
+      res.json(enrichedProviders);
     } catch (error) {
       next(error);
     }
@@ -1056,6 +1957,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!provider) {
         return res.status(404).json({ message: "Provider not found" });
       }
+
+      const notification = await storage.createNotification({
+        userId: provider.id,
+        title: "Provider Account Approved",
+        message: "Your provider account has been verified. You can now access your dashboard.",
+        type: "action",
+        metadata: { kind: "provider_approved" },
+      });
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      io?.to(`user-${provider.id}`).emit("notification:new", notification);
+      io?.to(`user-${provider.id}`).emit("provider:approved", { ok: true });
 
       await storage.deleteProviderRequestByProviderId(id);
       await storage.createAuditLog({
@@ -1112,6 +2024,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // POST /api/admin/providers/:providerId/assign-company - Link provider to a company
+  app.post("/api/admin/providers/:providerId/assign-company", async (req, res, next) => {
+    try {
+      const isAdmin = req.isAuthenticated() && (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+      if (!isAdmin) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { providerId } = req.params;
+      const { companyId } = req.body as { companyId: string };
+
+      if (!companyId) {
+        return res.status(400).json({ error: "companyId is required" });
+      }
+
+      // Verify provider exists
+      const provider = await storage.getUser(providerId);
+      if (!provider) {
+        return res.status(404).json({ error: "Provider not found" });
+      }
+
+      // Update the provider's company association
+      const updatedProvider = await storage.updateUser(providerId, { company: companyId });
+
+      await storage.createAuditLog({
+        actorId: req.user?.id ?? "system",
+        action: "assign_provider_to_company",
+        target: "provider",
+        targetId: providerId,
+        meta: {
+          providerEmail: provider.email,
+          companyId,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent") ?? "",
+      });
+
+      res.json({ success: true, provider: updatedProvider });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/admin/providers", async (req, res, next) => {
     try {
       const isAdmin = req.isAuthenticated() && (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
@@ -1130,8 +2085,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const hashedPassword = await hashPassword(parsed.password);
+      const combinedName = (parsed.name || `${parsed.firstName} ${parsed.lastName}`).trim();
       const provider = await storage.createUser({
-        name: parsed.name,
+        firstName: parsed.firstName,
+        lastName: parsed.lastName,
+        name: combinedName,
         email: parsed.email,
         phone: parsed.phone || "",
         password: hashedPassword,
@@ -1174,10 +2132,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: bridge stats (users + service requests from canonical Postgres tables)
   app.get("/api/admin/bridge/stats", async (req, res, next) => {
     try {
-      const isAdmin =
-        req.isAuthenticated() &&
-        (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
-      if (!isAdmin) {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -1190,13 +2145,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(and(eq(users.role, "provider"), eq(users.isApproved, false))),
       ]);
 
-      const [[srTotal], [srPending], [srInProgress], [srCompleted], [srCancelled]] =
+      const [[srTotal], [srPending], [srPendingInspection], [srAssigned], [srInProgress], [srCompleted], [srCancelled]] =
         await Promise.all([
           db.select({ c: count() }).from(serviceRequests),
           db
             .select({ c: count() })
             .from(serviceRequests)
             .where(eq(serviceRequests.status, "pending")),
+          db
+            .select({ c: count() })
+            .from(serviceRequests)
+            .where(eq(serviceRequests.status, "pending_inspection")),
+          db
+            .select({ c: count() })
+            .from(serviceRequests)
+            .where(eq(serviceRequests.status, "assigned")),
           db
             .select({ c: count() })
             .from(serviceRequests)
@@ -1212,6 +2175,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ]);
 
       res.json({
+        source: "postgresql",
+        timestamp: new Date().toISOString(),
         users: {
           totalResidents: Number(residents?.c ?? 0),
           totalProviders: Number(providers?.c ?? 0),
@@ -1220,6 +2185,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         serviceRequests: {
           total: Number(srTotal?.c ?? 0),
           pending: Number(srPending?.c ?? 0),
+          pendingInspection: Number(srPendingInspection?.c ?? 0),
+          assigned: Number(srAssigned?.c ?? 0),
           inProgress: Number(srInProgress?.c ?? 0),
           completed: Number(srCompleted?.c ?? 0),
           cancelled: Number(srCancelled?.c ?? 0),
@@ -1227,6 +2194,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       next(error);
+    }
+  });
+
+  // Database health check
+  app.get("/api/admin/health/database", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
+
+      // Test Postgres connection and get table sizes
+      const [userCount] = await db.select({ count: count() }).from(users);
+      const [srCount] = await db.select({ count: count() }).from(serviceRequests);
+      const [estateCount] = await db.select({ count: count() }).from(estates);
+
+      return res.json({
+        status: "healthy",
+        database: "postgresql",
+        timestamp: new Date().toISOString(),
+        tables: {
+          users: { count: Number(userCount?.count ?? 0) },
+          serviceRequests: { count: Number(srCount?.count ?? 0) },
+          estates: { count: Number(estateCount?.count ?? 0) },
+        },
+      });
+    } catch (error: any) {
+      return res.status(503).json({
+        status: "unhealthy",
+        database: "postgresql",
+        error: error?.message || "Database connection failed",
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
+  // Diagnostic endpoint to show if migrations were applied
+  app.get("/api/admin/diagnostics/migrations", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
+
+      // Check if critical tables exist and have data
+      const [userStats] = await db.select({ count: count(), minDate: sql`min(created_at)` }).from(users);
+      const [srStats] = await db.select({ count: count(), minDate: sql`min(created_at)` }).from(serviceRequests);
+      const [estateStats] = await db.select({ count: count(), minDate: sql`min(created_at)` }).from(estates);
+
+      // Count by role
+      const [roleBreakdown] = await db
+        .select({
+          role: users.role,
+          count: count(),
+        })
+        .from(users)
+        .groupBy(users.role);
+
+      // Count by request status
+      const [statusBreakdown] = await db
+        .select({
+          status: serviceRequests.status,
+          count: count(),
+        })
+        .from(serviceRequests)
+        .groupBy(serviceRequests.status);
+
+      return res.json({
+        timestamp: new Date().toISOString(),
+        tables: {
+          users: {
+            total: Number(userStats?.count ?? 0),
+            oldestRecord: userStats?.minDate ? new Date(userStats.minDate).toISOString() : null,
+          },
+          serviceRequests: {
+            total: Number(srStats?.count ?? 0),
+            oldestRecord: srStats?.minDate ? new Date(srStats.minDate).toISOString() : null,
+          },
+          estates: {
+            total: Number(estateStats?.count ?? 0),
+            oldestRecord: estateStats?.minDate ? new Date(estateStats.minDate).toISOString() : null,
+          },
+        },
+        breakdowns: {
+          usersByRole: roleBreakdown || [],
+          requestsByStatus: statusBreakdown || [],
+        },
+        recommendation:
+          Number(userStats?.count ?? 0) === 0
+            ? "No users found in database. Run migrations with: npm run db:migrate"
+            : "Database appears healthy with data.",
+      });
+    } catch (error: any) {
+      return res.status(503).json({
+        status: "error",
+        error: error?.message || "Diagnostics query failed",
+        timestamp: new Date().toISOString(),
+        recommendation: "Check database connection and ensure migrations are applied.",
+      });
     }
   });
 
@@ -1303,11 +2363,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin dashboard stats (front-end expects /api/admin/dashboard/stats)
   app.get("/api/admin/dashboard/stats", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
       const stats = await storage.getUserStats();
       res.json(stats);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Estate performance for admin dashboard card
+  app.get("/api/admin/dashboard/estate-performance", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
+
+      const rows = await db
+        .select({
+          estateId: estates.id,
+          name: estates.name,
+          totalRequests: count(serviceRequests.id),
+          completedRequests: sql<number>`coalesce(sum(case when ${serviceRequests.status} = 'completed' then 1 else 0 end), 0)`,
+        })
+        .from(estates)
+        .leftJoin(serviceRequests, eq(serviceRequests.estateId, estates.id))
+        .groupBy(estates.id)
+        .orderBy(desc(count(serviceRequests.id)))
+        .limit(5);
+
+      const out = (rows || []).map((r: any) => {
+        const total = Number(r.totalRequests ?? 0);
+        const completed = Number(r.completedRequests ?? 0);
+        const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+        return {
+          estateId: r.estateId,
+          name: r.name,
+          totalRequests: total,
+          completedRequests: completed,
+          completionRate: pct,
+        };
+      });
+
+      return res.json(out);
     } catch (error) {
       next(error);
     }
@@ -1473,38 +2568,144 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Simple Server-Sent Events endpoint for lightweight broadcasts (categories updates)
+  // Clients can open an EventSource to receive category change notifications.
+  const sseClients: Array<{
+    id: number;
+    res: any;
+  }> = [];
+  let sseId = 1;
+
+  function sendSseEvent(name: string, data: any) {
+    const payload = `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (let i = sseClients.length - 1; i >= 0; i--) {
+      const c = sseClients[i];
+      try {
+        c.res.write(payload);
+      } catch (err) {
+        // remove dead client
+        sseClients.splice(i, 1);
+      }
+    }
+  }
+
+  app.get('/api/events', (req, res) => {
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.flushHeaders?.();
+    const id = sseId++;
+    sseClients.push({ id, res });
+    // send a greeting so clients know the stream is alive
+    res.write(`event: ready\ndata: ${JSON.stringify({ time: Date.now() })}\n\n`);
+
+    req.on('close', () => {
+      for (let i = sseClients.length - 1; i >= 0; i--) {
+        if (sseClients[i].id === id) sseClients.splice(i, 1);
+      }
+    });
+  });
+
   app.get("/api/companies", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
+      const isPublic =
+        String(req.query.public || "") === "true" ||
+        String(req.query.public || "") === "1";
+      const isAuthenticated = req.isAuthenticated();
+
+      let query = db.select().from(companies);
+      if (!isAuthenticated || isPublic) {
+        query = query.where(eq(companies.isActive, true));
       }
 
-      const rows = await db
-        .select()
-        .from(companies)
-        .orderBy(desc(companies.createdAt));
+      const rows = await query.orderBy(desc(companies.createdAt));
       res.json(rows);
     } catch (error) {
       next(error);
     }
   });
 
-  // Audit log listing (limit optional)
+  // Audit log listing (limit/search/date filters)
   app.get("/api/admin/audit-logs", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      const limit =
-        Math.min(Math.max(Number(req.query.limit ?? 10), 1), 100) || 10;
+      if (!isAdminOrSuper(req)) return res.status(401).json({ message: "Unauthorized" });
 
-      const logs = await db
-        .select()
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 10), 1), 100) || 10;
+      const search = (req.query.search ?? "").toString().trim();
+      const dateFrom = (req.query.dateFrom ?? "").toString().trim();
+      const dateTo = (req.query.dateTo ?? "").toString().trim();
+
+      const whereParts: any[] = [];
+
+      if (dateFrom) {
+        const from = new Date(`${dateFrom}T00:00:00.000Z`);
+        if (!Number.isNaN(from.getTime())) whereParts.push(sql`${auditLogs.createdAt} >= ${from}`);
+      }
+      if (dateTo) {
+        const to = new Date(`${dateTo}T23:59:59.999Z`);
+        if (!Number.isNaN(to.getTime())) whereParts.push(sql`${auditLogs.createdAt} <= ${to}`);
+      }
+
+      if (search) {
+        const pattern = `%${search.toLowerCase()}%`;
+        whereParts.push(
+          sql`(
+            lower(${auditLogs.action}) like ${pattern}
+            or lower(${auditLogs.target}) like ${pattern}
+            or lower(${auditLogs.targetId}) like ${pattern}
+            or lower(coalesce(${users.name}, '')) like ${pattern}
+            or lower(coalesce(${users.email}, '')) like ${pattern}
+            or lower(cast(${auditLogs.meta} as text)) like ${pattern}
+          )`
+        );
+      }
+
+      const q = db
+        .select({
+          id: auditLogs.id,
+          action: auditLogs.action,
+          target: auditLogs.target,
+          targetId: auditLogs.targetId,
+          meta: auditLogs.meta,
+          createdAt: auditLogs.createdAt,
+          actorId: auditLogs.actorId,
+          actorName: users.name,
+          actorEmail: users.email,
+        })
         .from(auditLogs)
+        .leftJoin(users, eq(users.id, auditLogs.actorId))
+        .where(whereParts.length ? and(...whereParts) : undefined)
         .orderBy(desc(auditLogs.createdAt))
         .limit(limit);
 
-      res.json(logs);
+      const rows = await q;
+
+      const normalized = (rows || []).map((r: any) => {
+        const meta = (typeof r.meta === "object" && r.meta) ? r.meta : {};
+        const details =
+          typeof meta.details === "string" ? meta.details :
+          typeof meta.message === "string" ? meta.message :
+          typeof meta.reason === "string" ? meta.reason :
+          Object.keys(meta).length ? JSON.stringify(meta) : null;
+
+        return {
+          id: r.id,
+          action: r.action,
+          target: r.target,
+          targetId: r.targetId,
+          createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+          details,
+          user: {
+            id: r.actorId,
+            name: r.actorName ?? null,
+            email: r.actorEmail ?? null,
+          },
+        };
+      });
+
+      return res.json(normalized);
     } catch (error) {
       next(error);
     }
@@ -1649,6 +2850,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update a membership (allow changing estate, role, status, etc.)
+  app.patch("/api/admin/memberships/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const updates: any = {};
+      const allowed = ["estateId", "role", "status", "isActive", "isPrimary", "permissions"];
+      for (const k of allowed) {
+        if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+          // map client keys to DB column names if necessary
+          if (k === "estateId") updates.estateId = req.body[k];
+          else updates[k] = req.body[k];
+        }
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "No valid fields provided for update" });
+      }
+
+      const [updated] = await db
+        .update(memberships)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(eq(memberships.id, id))
+        .returning();
+
+      if (!updated) return res.status(404).json({ message: "Membership not found" });
+
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Admin: categories management
   app.get("/api/admin/categories", async (req, res, next) => {
     try {
@@ -1680,6 +2917,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const parsed = insertCategorySchema.parse(req.body);
       const [created] = await db.insert(categories).values(parsed).returning();
+      // Broadcast category creation to SSE listeners
+      try {
+        // sendSseEvent is defined earlier in this file
+        // @ts-ignore
+        sendSseEvent('categories', { action: 'created', category: created });
+      } catch (err) {
+        // ignore
+      }
       res.status(201).json(created);
     } catch (error) {
       next(error);
@@ -1708,6 +2953,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Category not found" });
       }
 
+      try {
+        // notify clients of update
+        // @ts-ignore
+        sendSseEvent('categories', { action: 'updated', category: updated });
+      } catch (err) {
+        // ignore
+      }
       res.json(updated);
     } catch (error) {
       next(error);
@@ -1728,6 +2980,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!deleted || deleted.length === 0) {
         return res.status(404).json({ message: "Category not found" });
+      }
+
+      try {
+        // notify clients of deletion
+        // @ts-ignore
+        sendSseEvent('categories', { action: 'deleted', categoryId: id });
+      } catch (err) {
+        // ignore
       }
 
       res.json({ success: true, category: deleted[0] });
@@ -1842,6 +3102,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     email: z.string().email().optional(),
     ownerId: z.string().min(1, "Owner is required"),
     estateId: z.string().optional(),
+    companyId: z.string().optional(),
     isActive: z.boolean().optional(),
   });
 
@@ -1851,7 +3112,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const { search } = req.query;
+      const { search, companyId } = req.query;
       let query = db.select().from(stores);
 
       if (typeof search === "string" && search.trim().length > 0) {
@@ -1864,6 +3125,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ilike(stores.email, term),
           ),
         );
+      }
+
+      if (typeof companyId === "string" && companyId.trim().length > 0) {
+        query = query.where(eq(stores.companyId, companyId.trim()));
       }
 
       const rows = await query.orderBy(desc(stores.createdAt));
@@ -1890,6 +3155,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           email: parsed.email,
           ownerId: parsed.ownerId,
           estateId: parsed.estateId,
+          companyId: parsed.companyId,
           isActive: parsed.isActive ?? true,
         })
         .returning();
@@ -1928,6 +3194,136 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const StoreMemberSchema = z.object({
+    userId: z.string().min(1, "User ID is required"),
+    role: z.string().optional(),
+    canManageItems: z.boolean().optional(),
+    canManageOrders: z.boolean().optional(),
+    isActive: z.boolean().optional(),
+  });
+
+  app.get("/api/admin/stores/:storeId/members", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { storeId } = req.params;
+      const rows = await db
+        .select({
+          member: storeMembers,
+          user: users,
+        })
+        .from(storeMembers)
+        .innerJoin(users, eq(storeMembers.userId, users.id))
+        .where(eq(storeMembers.storeId, storeId))
+        .orderBy(desc(storeMembers.createdAt));
+
+      res.json(
+        rows.map(({ member, user }: { member: typeof storeMembers; user: typeof users }) => ({
+          ...member,
+          user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role,
+            isActive: user.isActive,
+          },
+        })),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/stores/:storeId/members", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { storeId } = req.params;
+      const parsed = StoreMemberSchema.parse(req.body);
+
+      const existing = await db
+        .select()
+        .from(storeMembers)
+        .where(
+          and(
+            eq(storeMembers.storeId, storeId),
+            eq(storeMembers.userId, parsed.userId),
+          ),
+        );
+      if (existing.length > 0) {
+        return res.status(409).json({ message: "Member already assigned to this store" });
+      }
+
+      const [created] = await db
+        .insert(storeMembers)
+        .values({
+          storeId,
+          userId: parsed.userId,
+          role: parsed.role ?? "member",
+          canManageItems: parsed.canManageItems ?? true,
+          canManageOrders: parsed.canManageOrders ?? true,
+          isActive: parsed.isActive ?? true,
+        })
+        .returning();
+
+      res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/stores/:storeId/members/:memberId", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { storeId, memberId } = req.params;
+      const updates = StoreMemberSchema.partial().parse(req.body);
+
+      const [updated] = await db
+        .update(storeMembers)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(and(eq(storeMembers.id, memberId), eq(storeMembers.storeId, storeId)))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Store member not found" });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/admin/stores/:storeId/members/:memberId", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { storeId, memberId } = req.params;
+      const [deleted] = await db
+        .delete(storeMembers)
+        .where(and(eq(storeMembers.id, memberId), eq(storeMembers.storeId, storeId)))
+        .returning();
+
+      if (!deleted) {
+        return res.status(404).json({ message: "Store member not found" });
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   const MarketplaceItemAdminSchema = createMarketplaceItemSchema.extend({
     storeId: z.string().min(1, "Store ID is required"),
     estateId: z.string().optional(),
@@ -1949,6 +3345,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const rows = await query.orderBy(desc(marketplaceItems.createdAt));
       res.json(rows);
     } catch (error) {
+      console.error("/api/admin/marketplace GET error:", error);
       next(error);
     }
   });
@@ -1980,6 +3377,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.status(201).json(created);
     } catch (error) {
+      console.error("/api/admin/marketplace POST error:", error);
       next(error);
     }
   });
@@ -2037,33 +3435,184 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: Companies (for providers)
   app.get("/api/admin/companies", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
+      console.log("Fetching companies...");
       const companies = await storage.getCompanies();
+      console.log("Companies fetched successfully:", companies.length);
       res.json(companies);
     } catch (error) {
-      next(error);
+      console.error("Error in GET /api/admin/companies:", error);
+      console.error("Error message:", error instanceof Error ? error.message : String(error));
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack");
+      res.status(500).json({ 
+        error: "Failed to fetch companies",
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 
   app.post("/api/admin/companies", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const { name, description, contactEmail, phone } = req.body || {};
+      const {
+        name,
+        description,
+        contactEmail,
+        phone,
+        isActive,
+        // Business Details
+        businessAddress,
+        businessCity,
+        businessState,
+        businessZipCode,
+        businessCountry,
+        businessType,
+        // Registration & Compliance
+        businessRegNumber,
+        businessTaxId,
+        // Bank Details
+        bankAccountName,
+        bankName,
+        bankAccountNumber,
+        bankRoutingNumber,
+      } = req.body || {};
+
       if (!name) return res.status(400).json({ message: "Name is required" });
+
+      // Structure the business details - filter out empty values
+      const businessDetailsObj: any = {};
+      if (businessAddress) businessDetailsObj.address = businessAddress;
+      if (businessCity) businessDetailsObj.city = businessCity;
+      if (businessState) businessDetailsObj.state = businessState;
+      if (businessZipCode) businessDetailsObj.zipCode = businessZipCode;
+      if (businessCountry) businessDetailsObj.country = businessCountry;
+      if (businessType) businessDetailsObj.type = businessType;
+      if (businessRegNumber) businessDetailsObj.registrationNumber = businessRegNumber;
+      if (businessTaxId) businessDetailsObj.taxId = businessTaxId;
+
+      const bankDetailsObj: any = {};
+      if (bankAccountName) bankDetailsObj.accountName = bankAccountName;
+      if (bankName) bankDetailsObj.bankName = bankName;
+      if (bankAccountNumber) bankDetailsObj.accountNumber = bankAccountNumber;
+      if (bankRoutingNumber) bankDetailsObj.routingNumber = bankRoutingNumber;
 
       const company = await storage.createCompany({
         name,
         description,
         contactEmail,
         phone,
+        isActive: isActive !== false,
+        businessDetails: businessDetailsObj,
+        bankDetails: bankDetailsObj,
+        details: {}, // Ensure details is initialized
       } as any);
 
       res.status(201).json(company);
+    } catch (error) {
+      console.error("POST /api/admin/companies error:", error);
+      console.error("Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      next(error);
+    }
+  });
+
+  app.put("/api/admin/companies/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      console.log("PUT /api/admin/companies/:id - ID:", id);
+      console.log("Request body:", JSON.stringify(req.body, null, 2));
+      
+      // Accept structured fields for companies (partial updates allowed)
+      const patchSchema = z.object({
+        name: z.string().optional(),
+        description: z.string().optional(),
+        contactEmail: z.string().email().optional(),
+        phone: z.string().optional(),
+        providerId: z.string().optional().nullable(),
+        businessDetails: z.any().optional(),
+        bankDetails: z.any().optional(),
+        locationDetails: z.any().optional(),
+        submittedAt: z.preprocess((v) => {
+          if (!v) return undefined; if (typeof v === 'string') return new Date(v); return v;
+        }, z.date().optional()),
+        isActive: z.boolean().optional(),
+      }).partial();
+
+      const payload = patchSchema.parse(req.body || {});
+      console.log("Parsed payload:", JSON.stringify(payload, null, 2));
+
+      // Build update object for flat structured fields
+      const updates: any = {};
+      if (payload.name !== undefined) updates.name = payload.name;
+      if (payload.description !== undefined) updates.description = payload.description;
+      if (payload.contactEmail !== undefined) updates.contactEmail = payload.contactEmail;
+      if (payload.phone !== undefined) updates.phone = payload.phone;
+      if (payload.providerId !== undefined) updates.providerId = payload.providerId;
+      if (payload.isActive !== undefined) updates.isActive = payload.isActive;
+      if (payload.businessDetails !== undefined) updates.businessDetails = payload.businessDetails;
+      if (payload.bankDetails !== undefined) updates.bankDetails = payload.bankDetails;
+      if (payload.locationDetails !== undefined) updates.locationDetails = payload.locationDetails;
+      if (payload.submittedAt !== undefined) updates.submittedAt = payload.submittedAt;
+
+      console.log("Updates to apply:", JSON.stringify(updates, null, 2));
+
+      const company = await storage.updateCompany(id, updates as any);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+      
+      console.log("Company updated successfully:", JSON.stringify(company, null, 2));
+      res.json(company);
+    } catch (error) {
+      console.error("Error in PUT /api/admin/companies/:id:", error);
+      next(error);
+    }
+  });
+
+  // GET single company with structured fields
+  app.get("/api/admin/companies/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const [row] = await db
+        .select()
+        .from(companies)
+        .where(eq(companies.id, id))
+        .limit(1 as any);
+
+      if (!row) return res.status(404).json({ message: "Company not found" });
+      res.json(row);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/admin/companies/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const deleted = await storage.deleteCompany(id);
+
+      if (!deleted) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+
+      res.json({ message: "Company deleted successfully" });
     } catch (error) {
       next(error);
     }
@@ -2079,11 +3628,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .json({ message: "A provider with that email already exists" });
       }
 
-      const tempPassword = randomBytes(8).toString("hex");
-      const hashedPassword = await hashPassword(tempPassword);
+      const passwordToUse = parsed.password?.trim() || randomBytes(8).toString("hex");
+      const hashedPassword = await hashPassword(passwordToUse);
 
+      const combinedName = (parsed.name || `${parsed.firstName} ${parsed.lastName}`).trim();
       const user = await storage.createUser({
-        name: parsed.name,
+        firstName: parsed.firstName,
+        lastName: parsed.lastName,
+        name: combinedName,
         email: parsed.email,
         phone: parsed.phone || "",
         password: hashedPassword,
@@ -2094,7 +3646,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isApproved: false,
         metadata: parsed.description ? { description: parsed.description } : undefined,
       } as any);
-      const created = await storage.createProviderRequest({ ...parsed, providerId: user.id });
+      const created = await storage.createProviderRequest({ ...parsed, name: combinedName, providerId: user.id });
       await storage.createAuditLog({
         actorId: user.id,
         action: "create_provider_request",
@@ -2210,419 +3762,312 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ============================================
-  // SUPER ADMIN FEATURES
-  // ============================================
+  // ========== ORDERS MANAGEMENT ENDPOINTS ==========
 
-  // Broadcast Messages API
-  app.get("/api/admin/broadcast-messages", requireAdmin, async (req, res, next) => {
+  // Admin: Get all orders with pagination and filtering
+  app.get("/api/admin/orders", async (req, res, next) => {
     try {
-      const messages = await db
-        .select()
-        .from(broadcastMessages)
-        .orderBy(desc(broadcastMessages.createdAt));
-      res.json(messages);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post("/api/admin/broadcast-messages", requireAdmin, async (req, res, next) => {
-    try {
-      const userId = req.auth?.id;
-      if (!userId) {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const data = insertBroadcastMessageSchema.parse({
-        ...req.body,
-        senderId: userId,
-      });
+      const {
+        page = "1",
+        limit = "20",
+        sortBy = "createdAt",
+        sortOrder = "desc",
+        status,
+        search,
+        minTotal,
+        maxTotal,
+        startDate,
+        endDate,
+        hasDispute,
+      } = req.query;
 
-      const [message] = await db
-        .insert(broadcastMessages)
-        .values(data)
-        .returning();
+      const pageNum = Math.max(1, parseInt(page as string) || 1);
+      const limitNum = Math.max(1, Math.min(100, parseInt(limit as string) || 20));
+      const offset = (pageNum - 1) * limitNum;
 
-      // If status is 'sent', mark as sent now
-      if (data.status === "sent") {
-        // Get recipient count based on target
-        let recipientCount = 0;
-        if (data.target === "all_users") {
-          const result = await db.select({ count: count() }).from(users);
-          recipientCount = result[0]?.count || 0;
-        } else if (data.target === "all_residents") {
-          const result = await db
-            .select({ count: count() })
-            .from(users)
-            .where(eq(users.role, "resident"));
-          recipientCount = result[0]?.count || 0;
-        } else if (data.target === "all_providers") {
-          const result = await db
-            .select({ count: count() })
-            .from(users)
-            .where(eq(users.role, "provider"));
-          recipientCount = result[0]?.count || 0;
-        } else if (data.target === "estate_residents" && data.estateId) {
-          const result = await db
-            .select({ count: count() })
-            .from(memberships)
-            .where(
-              and(
-                eq(memberships.estateId, data.estateId),
-                eq(memberships.role, "resident")
-              )
-            );
-          recipientCount = result[0]?.count || 0;
-        } else if (data.target === "estate_providers" && data.estateId) {
-          const result = await db
-            .select({ count: count() })
-            .from(memberships)
-            .where(
-              and(
-                eq(memberships.estateId, data.estateId),
-                eq(memberships.role, "provider")
-              )
-            );
-          recipientCount = result[0]?.count || 0;
-        }
+      let query = db.select().from(orders);
 
-        await db
-          .update(broadcastMessages)
-          .set({
-            sentAt: new Date(),
-            recipientCount,
-            deliveredCount: recipientCount, // For now, assume all delivered
-          })
-          .where(eq(broadcastMessages.id, message.id));
+      // Filter by status
+      if (status && status !== "all") {
+        query = query.where(eq(orders.status, status as any));
       }
 
-      // Log the broadcast action
-      await db.insert(auditLogs).values({
-        actorId: userId,
-        estateId: data.estateId || null,
-        action: "broadcast_message_created",
-        target: "broadcast_message",
-        targetId: message.id,
-        meta: { subject: data.subject, target: data.target },
-      });
+      // Filter by total price range - using sql to compare decimal
+      if (minTotal) {
+        query = query.where(
+          sql`CAST(total AS NUMERIC) >= ${parseFloat(minTotal as string)}`
+        );
+      }
+      if (maxTotal) {
+        query = query.where(
+          sql`CAST(total AS NUMERIC) <= ${parseFloat(maxTotal as string)}`
+        );
+      }
 
-      res.json(message);
+      // Filter by date range
+      if (startDate) {
+        query = query.where(
+          sql`created_at >= ${new Date(startDate as string)}`
+        );
+      }
+      if (endDate) {
+        query = query.where(
+          sql`created_at <= ${new Date(endDate as string)}`
+        );
+      }
+
+      // Filter by dispute status
+      if (hasDispute === "true") {
+        query = query.where(sql`dispute IS NOT NULL`);
+      } else if (hasDispute === "false") {
+        query = query.where(sql`dispute IS NULL`);
+      }
+
+      // Sort
+      const orderFn = sortOrder === "desc" ? desc(orders.createdAt) : asc(orders.createdAt);
+      query = query.orderBy(orderFn);
+
+      // Pagination
+      const totalResult = await db
+        .select({ count: sql`count(*)` })
+        .from(orders);
+
+      const total = parseInt((totalResult[0]?.count as number)?.toString() || "0");
+      const rows = await query.limit(limitNum).offset(offset);
+
+      res.json({
+        data: rows,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      });
     } catch (error) {
+      console.error("Error fetching orders:", error);
       next(error);
     }
   });
 
-  // Admin Impersonation API
-  app.post("/api/admin/impersonate", requireAdmin, async (req, res, next) => {
+  // Admin: Get orders analytics/statistics
+  app.get("/api/admin/orders/analytics/stats", async (req, res, next) => {
     try {
-      const superAdminId = req.auth?.id;
-      const superAdminRole = req.auth?.globalRole;
-      
-      if (!superAdminId || superAdminRole !== "super_admin") {
-        return res.status(403).json({ message: "Only super admins can impersonate users" });
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const { targetUserId, reason } = req.body;
-      if (!targetUserId) {
-        return res.status(400).json({ message: "Target user ID is required" });
+      // Get statistics using SQL
+      const statsResult = await db.execute(sql`
+        SELECT 
+          COUNT(*) as total_orders,
+          COUNT(CASE WHEN status = 'DELIVERED' THEN 1 END) as delivered,
+          COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending,
+          COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END) as cancelled,
+          COUNT(CASE WHEN status = 'PROCESSING' THEN 1 END) as processing,
+          COALESCE(SUM(CAST(total AS NUMERIC)), 0) as total_revenue,
+          COALESCE(AVG(CAST(total AS NUMERIC)), 0) as average_order_value
+        FROM "Order"
+      `);
+
+      // Get recent orders
+      const recentOrdersResult = await db.execute(sql`
+        SELECT 
+          id,
+          status,
+          total,
+          "createdAt",
+          "buyerId"
+        FROM "Order"
+        ORDER BY "createdAt" DESC
+        LIMIT 5
+      `);
+
+      const stats = statsResult.rows[0] || {
+        total_orders: 0,
+        delivered: 0,
+        pending: 0,
+        cancelled: 0,
+        processing: 0,
+        total_revenue: 0,
+        average_order_value: 0,
+      };
+
+      const totalOrders = parseInt(stats.total_orders.toString());
+      const completedOrders = parseInt(stats.delivered.toString());
+      const pendingOrders = parseInt(stats.pending.toString());
+      const cancelledOrders = parseInt(stats.cancelled.toString());
+      const processingOrders = parseInt(stats.processing.toString());
+
+      res.json({
+        totalOrders,
+        completedOrders,
+        pendingOrders,
+        cancelledOrders,
+        processingOrders,
+        disputedOrders: 0,
+        totalRevenue: parseFloat(stats.total_revenue.toString()),
+        averageOrderValue: parseFloat(stats.average_order_value.toString()),
+        byStatus: {
+          delivered: completedOrders,
+          pending: pendingOrders,
+          cancelled: cancelledOrders,
+          processing: processingOrders,
+          confirmed: 0,
+        },
+        recentOrders: (recentOrdersResult.rows || []).map((order: any) => ({
+          id: order.id,
+          resident: order.buyerId,
+          category: "Service",
+          status: order.status,
+          totalAmount: parseFloat(order.total?.toString() || "0"),
+          createdAt: order.createdAt,
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching order stats:", error);
+      next(error);
+    }
+  });
+
+  // Admin: Update order status
+  app.patch("/api/admin/orders/:orderId/status", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
       }
 
-      // Get target user
-      const [targetUser] = await db
-        .select()
-        .from(users)
-        .where(eq(users.id, targetUserId))
-        .limit(1);
+      const { orderId } = req.params;
+      const { status } = req.body;
 
-      if (!targetUser) {
-        return res.status(404).json({ message: "Target user not found" });
+      if (!status || !["pending", "confirmed", "processing", "dispatched", "delivered", "cancelled", "disputed"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status" });
       }
 
-      // Don't allow impersonating another super admin
-      if (targetUser.globalRole === "super_admin") {
-        return res.status(403).json({ message: "Cannot impersonate another super admin" });
-      }
-
-      // End any existing active impersonation sessions
-      await db
-        .update(impersonationSessions)
-        .set({ isActive: false, endedAt: new Date() })
-        .where(
-          and(
-            eq(impersonationSessions.superAdminId, superAdminId),
-            eq(impersonationSessions.isActive, true)
-          )
-        );
-
-      // Create new impersonation session
-      const [session] = await db
-        .insert(impersonationSessions)
-        .values({
-          superAdminId,
-          targetUserId,
-          reason: reason || "Support request",
-          ipAddress: req.ip,
+      const [updated] = await db
+        .update(orders)
+        .set({
+          status: status as any,
+          updatedAt: new Date(),
         })
+        .where(eq(orders.id, orderId))
         .returning();
 
-      // Log the impersonation
-      await db.insert(auditLogs).values({
-        actorId: superAdminId,
-        action: "admin_impersonation_started",
-        target: "user",
-        targetId: targetUserId,
-        meta: { reason, sessionId: session.id },
-        ipAddress: req.ip,
-        userAgent: req.get("user-agent"),
-      });
+      if (!updated) {
+        return res.status(404).json({ message: "Order not found" });
+      }
 
-      res.json({
-        session,
-        targetUser: {
-          id: targetUser.id,
-          name: targetUser.name,
-          email: targetUser.email,
-          role: targetUser.role,
-        },
-      });
+      res.json(updated);
     } catch (error) {
+      console.error("Error updating order status:", error);
       next(error);
     }
   });
 
-  app.post("/api/admin/impersonate/end", requireAdmin, async (req, res, next) => {
+  // Admin: Create dispute for order
+  app.post("/api/admin/orders/:orderId/dispute", async (req, res, next) => {
     try {
-      const superAdminId = req.auth?.id;
-      if (!superAdminId) {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const { sessionId } = req.body;
-      if (!sessionId) {
-        return res.status(400).json({ message: "Session ID is required" });
+      const { orderId } = req.params;
+      const { reason, description } = req.body;
+
+      if (!reason) {
+        return res.status(400).json({ message: "Dispute reason is required" });
       }
 
-      // End the session
-      const [session] = await db
-        .update(impersonationSessions)
-        .set({ isActive: false, endedAt: new Date() })
-        .where(
-          and(
-            eq(impersonationSessions.id, sessionId),
-            eq(impersonationSessions.superAdminId, superAdminId),
-            eq(impersonationSessions.isActive, true)
-          )
-        )
+      const [updated] = await db
+        .update(orders)
+        .set({
+          dispute: {
+            reason,
+            description: description || "",
+            status: "open",
+            createdAt: new Date().toISOString(),
+          } as any,
+          status: "disputed",
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, orderId))
         .returning();
 
-      if (!session) {
-        return res.status(404).json({ message: "Active session not found" });
+      if (!updated) {
+        return res.status(404).json({ message: "Order not found" });
       }
 
-      // Log the end of impersonation
-      await db.insert(auditLogs).values({
-        actorId: superAdminId,
-        action: "admin_impersonation_ended",
-        target: "user",
-        targetId: session.targetUserId,
-        meta: { sessionId },
-        ipAddress: req.ip,
-        userAgent: req.get("user-agent"),
-      });
-
-      res.json({ success: true });
+      res.json(updated);
     } catch (error) {
+      console.error("Error creating dispute:", error);
       next(error);
     }
   });
 
-  app.get("/api/admin/impersonate/active", requireAdmin, async (req, res, next) => {
+  // Admin: Resolve dispute for order
+  app.patch("/api/admin/orders/:orderId/dispute", async (req, res, next) => {
     try {
-      const superAdminId = req.auth?.id;
-      if (!superAdminId) {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const sessions = await db
+      const { orderId } = req.params;
+      const { status, resolution, refundAmount } = req.body;
+
+      if (!status || !["resolved", "rejected", "escalated"].includes(status)) {
+        return res.status(400).json({ message: "Invalid dispute status" });
+      }
+
+      if (!resolution) {
+        return res.status(400).json({ message: "Resolution is required" });
+      }
+
+      const [current] = await db
         .select()
-        .from(impersonationSessions)
-        .where(
-          and(
-            eq(impersonationSessions.superAdminId, superAdminId),
-            eq(impersonationSessions.isActive, true)
-          )
-        );
+        .from(orders)
+        .where(eq(orders.id, orderId));
 
-      res.json(sessions);
+      if (!current) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      const updatedDispute = {
+        ...(current.dispute as Record<string, any> || {}),
+        status,
+        resolution,
+        refundAmount: refundAmount || 0,
+        resolvedAt: new Date().toISOString(),
+      };
+
+      const [updated] = await db
+        .update(orders)
+        .set({
+          dispute: updatedDispute as any,
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, orderId))
+        .returning();
+
+      res.json(updated);
     } catch (error) {
-      next(error);
-    }
-  });
-
-  // Enhanced Audit Logs API
-  app.get("/api/admin/audit-logs/enhanced", requireAdmin, async (req, res, next) => {
-    try {
-      const { estateId, action, startDate, endDate, limit = "100" } = req.query;
-      
-      let query = db.select().from(auditLogs);
-      const conditions = [];
-
-      if (estateId && typeof estateId === "string") {
-        conditions.push(eq(auditLogs.estateId, estateId));
-      }
-
-      if (action && typeof action === "string") {
-        conditions.push(eq(auditLogs.action, action));
-      }
-
-      if (startDate && typeof startDate === "string") {
-        conditions.push(sql`${auditLogs.createdAt} >= ${new Date(startDate)}`);
-      }
-
-      if (endDate && typeof endDate === "string") {
-        conditions.push(sql`${auditLogs.createdAt} <= ${new Date(endDate)}`);
-      }
-
-      if (conditions.length > 0) {
-        query = query.where(and(...conditions));
-      }
-
-      const logs = await query
-        .orderBy(desc(auditLogs.createdAt))
-        .limit(parseInt(limit as string, 10));
-
-      res.json(logs);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  // Enhanced Dashboard Stats with Filters
-  app.get("/api/admin/dashboard/stats/enhanced", requireAdmin, async (req, res, next) => {
-    try {
-      const { estateId, startDate, endDate } = req.query;
-      
-      // Build base conditions
-      const conditions = [];
-      if (estateId && typeof estateId === "string") {
-        conditions.push(eq(serviceRequests.estateId, estateId));
-      }
-      if (startDate && typeof startDate === "string") {
-        conditions.push(sql`${serviceRequests.createdAt} >= ${new Date(startDate)}`);
-      }
-      if (endDate && typeof endDate === "string") {
-        conditions.push(sql`${serviceRequests.createdAt} <= ${new Date(endDate)}`);
-      }
-
-      // Get service request stats
-      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-      
-      const [totalRequests] = await db
-        .select({ count: count() })
-        .from(serviceRequests)
-        .where(whereClause);
-
-      const [pendingRequests] = await db
-        .select({ count: count() })
-        .from(serviceRequests)
-        .where(
-          whereClause
-            ? and(whereClause, eq(serviceRequests.status, "pending"))
-            : eq(serviceRequests.status, "pending")
-        );
-
-      const [inProgressRequests] = await db
-        .select({ count: count() })
-        .from(serviceRequests)
-        .where(
-          whereClause
-            ? and(whereClause, eq(serviceRequests.status, "in_progress"))
-            : eq(serviceRequests.status, "in_progress")
-        );
-
-      const [completedRequests] = await db
-        .select({ count: count() })
-        .from(serviceRequests)
-        .where(
-          whereClause
-            ? and(whereClause, eq(serviceRequests.status, "completed"))
-            : eq(serviceRequests.status, "completed")
-        );
-
-      // Get active vendors (providers)
-      const activeVendorsConditions = estateId
-        ? [eq(memberships.estateId, estateId as string), eq(memberships.role, "provider"), eq(memberships.isActive, true)]
-        : [eq(users.role, "provider"), eq(users.isActive, true)];
-
-      const [activeVendors] = estateId
-        ? await db
-            .select({ count: count() })
-            .from(memberships)
-            .where(and(...activeVendorsConditions))
-        : await db
-            .select({ count: count() })
-            .from(users)
-            .where(and(...activeVendorsConditions));
-
-      // Get dues/payment stats
-      const paymentConditions = [];
-      if (estateId && typeof estateId === "string") {
-        paymentConditions.push(eq(serviceRequests.estateId, estateId));
-      }
-      if (startDate && typeof startDate === "string") {
-        paymentConditions.push(sql`${serviceRequests.createdAt} >= ${new Date(startDate)}`);
-      }
-      if (endDate && typeof endDate === "string") {
-        paymentConditions.push(sql`${serviceRequests.createdAt} <= ${new Date(endDate)}`);
-      }
-
-      const paymentWhereClause = paymentConditions.length > 0 ? and(...paymentConditions) : undefined;
-
-      const [totalDues] = await db
-        .select({ total: sum(serviceRequests.billedAmount) })
-        .from(serviceRequests)
-        .where(paymentWhereClause);
-
-      const [paidDues] = await db
-        .select({ total: sum(serviceRequests.billedAmount) })
-        .from(serviceRequests)
-        .where(
-          paymentWhereClause
-            ? and(paymentWhereClause, eq(serviceRequests.paymentStatus, "completed"))
-            : eq(serviceRequests.paymentStatus, "completed")
-        );
-
-      const [pendingDues] = await db
-        .select({ total: sum(serviceRequests.billedAmount) })
-        .from(serviceRequests)
-        .where(
-          paymentWhereClause
-            ? and(paymentWhereClause, eq(serviceRequests.paymentStatus, "pending"))
-            : eq(serviceRequests.paymentStatus, "pending")
-        );
-
-      res.json({
-        serviceRequests: {
-          total: totalRequests.count || 0,
-          pending: pendingRequests.count || 0,
-          inProgress: inProgressRequests.count || 0,
-          completed: completedRequests.count || 0,
-        },
-        vendors: {
-          active: activeVendors.count || 0,
-        },
-        dues: {
-          total: parseFloat(totalDues.total || "0"),
-          paid: parseFloat(paidDues.total || "0"),
-          pending: parseFloat(pendingDues.total || "0"),
-        },
-      });
-    } catch (error) {
+      console.error("Error resolving dispute:", error);
       next(error);
     }
   });
 
   const httpServer = createServer(app);
-  return httpServer;
-}
+  const io = new SocketIOServer(httpServer, {
+    cors: { origin: "*", credentials: true },
+  });
+  app.set("io", io);
+  io.on("connection", (socket) => {
+    socket.on("join", (userId: string) => {
+      if (!userId) return;
+      socket.join(`user-${userId}`);
+    });
+  });
+  return httpServer;}

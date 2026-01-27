@@ -36,16 +36,16 @@ export function ResidentLayout({ title, children }: ResidentLayoutProps) {
   return (
     <div className="min-h-screen bg-gray-50 flex">
       {/* Left Sidebar - Green */}
-      <aside className="w-72 bg-emerald-800 text-white flex flex-col fixed h-screen">
+      <aside className="w-72 bg-emerald-900 text-white flex flex-col fixed h-screen">
         {/* Logo */}
-        <div className="p-6 border-b border-emerald-700">
-          <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center">
-              <Home className="w-5 h-5" />
+        <div className="p-6 border-b border-emerald-800">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 bg-emerald-700 rounded-md flex items-center justify-center">
+              <Home className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold">CityConnect</h1>
-              <p className="text-xs text-emerald-200">VGC</p>
+              <h1 className="text-lg font-bold">CityConnect</h1>
+              <p className="text-xs text-emerald-300">VGC</p>
             </div>
           </div>
         </div>
@@ -53,89 +53,97 @@ export function ResidentLayout({ title, children }: ResidentLayoutProps) {
         {/* Search */}
         <div className="p-4">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-emerald-300" />
+            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-4 h-4 text-emerald-200" />
             <Input
               type="text"
               placeholder="Search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 bg-emerald-700/50 border-emerald-600 text-white placeholder:text-emerald-300 focus:bg-emerald-700"
+              className="w-full pl-12 pr-3 bg-emerald-800/60 border-0 text-white placeholder:text-emerald-300 rounded-full h-10"
             />
           </div>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-4 space-y-1">
+        <nav className="flex-1 px-4 mt-2">
+          {/** Dashboard */}
           <Link href="/resident">
-            <button className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              isActive('/resident') ? 'bg-emerald-700' : 'hover:bg-emerald-700/50'
-            }`}>
-              <LayoutGrid className="w-5 h-5" />
+            <a
+              className={`group flex items-center gap-3 px-4 py-3 rounded-lg mb-2 transition-colors ${
+                isActive("/resident")
+                  ? "bg-emerald-700 shadow-md"
+                  : "hover:bg-emerald-800/50"
+              }`}
+            >
+              <span
+                className={`inline-block w-1 h-8 rounded-r-md mr-3 ${
+                  isActive("/resident") ? "bg-emerald-500" : "bg-transparent"
+                }`}
+              />
+              <LayoutGrid className="w-5 h-5 text-white" />
               <span className="font-medium">Dashboard</span>
-            </button>
+            </a>
           </Link>
 
           <Link href="/resident/requests/new">
-            <button className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              isActive('/resident/requests/new') || isActive('/book-artisan') ? 'bg-emerald-600' : 'hover:bg-emerald-700/50'
-            }`}>
-              <Wrench className="w-5 h-5" />
+            <a
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg mb-2 transition-colors ${
+                isActive("/resident/requests/new") || isActive("/book-artisan")
+                  ? "bg-emerald-700/80"
+                  : "hover:bg-emerald-800/50"
+              }`}
+            >
+              <Wrench className="w-5 h-5 text-white" />
               <span className="font-medium">Book a Service</span>
-            </button>
+            </a>
           </Link>
 
           <Link href="/book-market-run">
-            <button className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              isActive('/book-market-run') ? 'bg-emerald-600' : 'hover:bg-emerald-700/50'
-            }`}>
-              <ShoppingBag className="w-5 h-5" />
+            <a
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg mb-2 transition-colors ${
+                isActive("/book-market-run") ? "bg-emerald-700/80" : "hover:bg-emerald-800/50"
+              }`}
+            >
+              <ShoppingBag className="w-5 h-5 text-white" />
               <span className="font-medium">Marketplace</span>
-            </button>
+            </a>
           </Link>
 
           <Link href="/track-orders">
-            <button className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              isActive('/track-orders') ? 'bg-emerald-600' : 'hover:bg-emerald-700/50'
-            }`}>
-              <ClipboardList className="w-5 h-5" />
+            <a
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg mb-2 transition-colors ${
+                isActive("/track-orders") ? "bg-emerald-700/80" : "hover:bg-emerald-800/50"
+              }`}
+            >
+              <ClipboardList className="w-5 h-5 text-white" />
               <span className="font-medium">Orders</span>
-            </button>
+            </a>
           </Link>
 
-          <Link href="/service-requests">
-            <button className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              isActive('/service-requests') ? 'bg-emerald-600' : 'hover:bg-emerald-700/50'
-            }`}>
-              <ListChecks className="w-5 h-5" />
-              <span className="font-medium">Service Requests</span>
-            </button>
-          </Link>
-
-          <div className="pt-6">
-            <p className="px-4 text-xs text-emerald-300 uppercase tracking-wider mb-2">Account</p>
-            <button className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-emerald-700/50 transition-colors">
-              <LifeBuoy className="w-5 h-5" />
+          <div className="mt-6 pt-6 border-t border-emerald-800">
+            <button className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-emerald-800/50 transition-colors">
+              <LifeBuoy className="w-5 h-5 text-white" />
               <span className="font-medium">Support</span>
             </button>
-            <button className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-emerald-700/50 transition-colors">
-              <Settings className="w-5 h-5" />
-              <span className="font-medium">Settings</span>
-            </button>
+            <Link href="/settings">
+              <a className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-emerald-800/50 transition-colors">
+                <Settings className="w-5 h-5 text-white" />
+                <span className="font-medium">Settings</span>
+              </a>
+            </Link>
           </div>
         </nav>
 
         {/* User Profile */}
-        <div className="p-4 border-t border-emerald-700">
+        <div className="p-4 border-t border-emerald-800 mt-auto">
           <div className="flex items-center space-x-3">
-            <Avatar className="w-10 h-10">
+            <Avatar className="w-12 h-12">
               <AvatarImage src="" alt={user?.name} />
-              <AvatarFallback className="bg-emerald-600 text-white">
-                {user?.name?.charAt(0) || 'U'}
-              </AvatarFallback>
+              <AvatarFallback className="bg-emerald-600 text-white">{user?.name?.charAt(0) || "O"}</AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{user?.name || 'Olivia Rhye'}</p>
-              <p className="text-xs text-emerald-300 truncate">{user?.email || 'olivia@untitledui.com'}</p>
+              <p className="text-sm font-medium truncate">{user?.name || "Olivia Rhye"}</p>
+              <p className="text-xs text-emerald-300 truncate">{user?.email || "olivia@untitledui.com"}</p>
             </div>
             <button onClick={handleLogout} className="text-emerald-300 hover:text-white">
               <LogOut className="w-5 h-5" />
@@ -153,10 +161,8 @@ export function ResidentLayout({ title, children }: ResidentLayoutProps) {
           </div>
         </header>
 
-        <div className="p-12 space-y-6 max-w-7xl mx-auto w-full">
-          {children}
-        </div>
+        <div className="p-12 space-y-6 max-w-7xl mx-auto w-full">{children}</div>
       </main>
     </div>
-  );
+  )
 }

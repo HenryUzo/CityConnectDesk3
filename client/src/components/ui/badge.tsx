@@ -23,14 +23,50 @@ const badgeVariants = cva(
   }
 )
 
-export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
-    VariantProps<typeof badgeVariants> {}
+export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement> {
+  variant?: string;
+  backgroundColor?: string;
+  textColor?: string;
+}
 
-function Badge({ className, variant, ...props }: BadgeProps) {
+function Badge({ className, variant, backgroundColor, textColor, ...props }: BadgeProps) {
+  const classes = cn(badgeVariants({ variant: variant as any }), className);
+  const style = {
+    ...(backgroundColor ? { backgroundColor } : {}),
+    ...(textColor ? { color: textColor } : {}),
+    ...(props.style || {}),
+  } as React.CSSProperties;
+
   return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props} />
+    <div className={classes} {...props} style={style} />
   )
 }
 
-export { Badge, badgeVariants }
+const DiscountBadge: React.FC<React.PropsWithChildren<{}>> = ({ children }) => (
+  <Badge className="bg-yellow-100 text-yellow-800">{children}</Badge>
+);
+
+const DistressBadge: React.FC<React.PropsWithChildren<{}>> = ({ children }) => (
+  <Badge className="bg-red-100 text-red-800">{children}</Badge>
+);
+
+const HotBadge: React.FC<React.PropsWithChildren<{}>> = ({ children }) => (
+  <Badge className="bg-pink-100 text-pink-800">{children}</Badge>
+);
+
+const RatingBadge: React.FC<{ rating?: number; text?: string }> = ({ rating, text }) => (
+  <div className="inline-flex items-center gap-2">
+    <span className="text-[12px] font-semibold">{rating ?? 0} ⭐</span>
+    {text && <span className="text-[12px] text-[#667085]">{text}</span>}
+  </div>
+);
+
+const RoundPriceBadge: React.FC<{ price?: string; topText?: string; bottomText?: string; variant?: string }> = ({ price, topText, bottomText }) => (
+  <div className="inline-flex flex-col items-center justify-center rounded-full bg-[#ecfdf3] px-3 py-2 text-[12px] font-semibold">
+    {topText && <span className="text-[10px] text-[#475467]">{topText}</span>}
+    <span className="text-[14px] text-[#039855]">{price}</span>
+    {bottomText && <span className="text-[10px] text-[#94a3b8]">{bottomText}</span>}
+  </div>
+);
+
+export { Badge, badgeVariants, DiscountBadge, DistressBadge, HotBadge, RatingBadge, RoundPriceBadge };

@@ -27,6 +27,7 @@ export const userRoleEnum = pgEnum("user_role", [
 ]);
 export const serviceStatusEnum = pgEnum("service_status", [
   "pending",
+  "pending_inspection",
   "assigned",
   "in_progress",
   "completed",
@@ -58,6 +59,17 @@ export const serviceCategoryEnum = pgEnum("service_category", [
   "phone_repair",
   "appliance_repair",
   "tailor",
+  // CityBuddy (resident chat) categories
+  "surveillance_monitoring",
+  "alarm_system",
+  "cleaning_janitorial",
+  "catering_services",
+  "it_support",
+  "maintenance_repair",
+  "packaging_solutions",
+  "marketing_advertising",
+  "home_tutors",
+  "furniture_making",
   "market_runner",
   "item_vendor",
 ]);
@@ -161,6 +173,8 @@ export const estates = pgTable("estates", {
   slug: text("slug").notNull().unique(),
   description: text("description"),
   address: text("address").notNull(),
+  accessType: text("access_type"),
+  accessCode: text("access_code"),
   coverage: jsonb("coverage").notNull(), // GeoJSON Polygon
   settings: jsonb("settings").notNull().default('{"servicesEnabled":[],"marketplaceEnabled":true,"paymentMethods":[],"deliveryRules":{}}'),
   isActive: boolean("is_active").notNull().default(true),
@@ -291,6 +305,7 @@ export const stores = pgTable("stores", {
     .default(sql`gen_random_uuid()`),
   estateId: varchar("estate_id").references(() => estates.id), // Nullable - estate assigned by admin after approval
   ownerId: varchar("owner_id").references(() => users.id), // Optional: primary owner
+  companyId: varchar("company_id"), // Company that owns this store (optional)
   name: text("name").notNull(),
   description: text("description"),
   location: text("location").notNull(), // Physical location/address
@@ -348,6 +363,21 @@ export const storeEstates = pgTable("store_estates", {
   uniqueStoreEstate: sql`UNIQUE (${table.storeId}, ${table.estateId})`,
 }));
 
+export const notifications = pgTable("notifications", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id),
+  title: varchar("title", { length: 120 }).notNull(),
+  message: text("message").notNull(),
+  type: varchar("type", { length: 20 }).notNull().default("info"),
+  metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  isRead: boolean("is_read").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 // Marketplace Items table (from MongoDB)
 export const marketplaceItems = pgTable("marketplace_items", {
   id: varchar("id")
@@ -395,7 +425,14 @@ export const companies = pgTable("companies", {
   contactEmail: text("contact_email"),
   phone: text("phone"),
   providerId: varchar("provider_id").references(() => users.id),
+  // Backwards-compatible blob retained until migration completes
   details: jsonb("details").notNull().default("{}"),
+
+  // New structured fields (JSON/nullable for smooth migration)
+  businessDetails: jsonb("business_details"),
+  bankDetails: jsonb("bank_details"),
+  locationDetails: jsonb("location_details"),
+  submittedAt: timestamp("submitted_at"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -680,6 +717,58 @@ export const deviceAssignments = pgTable("device_assignments", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// --- Super Admin observability/config tables ---
+
+export const aiPreparedRequests = pgTable("ai_prepared_requests", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  sessionId: text("session_id").notNull().unique(),
+  residentHash: text("resident_hash").notNull(),
+  estateId: varchar("estate_id").references(() => estates.id),
+  category: serviceCategoryEnum("category").notNull(),
+  urgency: urgencyEnum("urgency").notNull(),
+  recommendedApproach: text("recommended_approach").notNull(),
+  confidenceScore: integer("confidence_score").notNull().default(0),
+  requiresConsultancy: boolean("requires_consultancy").notNull().default(false),
+  readyToBook: boolean("ready_to_book").notNull().default(false),
+  snapshot: jsonb("snapshot").notNull().default("{}"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const pricingRules = pgTable("pricing_rules", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  category: serviceCategoryEnum("category"),
+  scope: text("scope"),
+  urgency: urgencyEnum("urgency"),
+  minPrice: decimal("min_price", { precision: 10, scale: 2 }).notNull().default(
+    "0",
+  ),
+  maxPrice: decimal("max_price", { precision: 10, scale: 2 }).notNull().default(
+    "0",
+  ),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const providerMatchingSettings = pgTable("provider_matching_settings", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  providerId: varchar("provider_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  settings: jsonb("settings").notNull().default("{}"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Relations
 export const estatesRelations = relations(estates, ({ many }) => ({
   memberships: many(memberships),
@@ -896,6 +985,11 @@ export const insertMembershipSchema = createInsertSchema(memberships).omit({
   updatedAt: true,
 });
 
+export const insertNotificationSchema = createInsertSchema(notifications).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertCategorySchema = createInsertSchema(categories).omit({
   id: true,
   createdAt: true,
@@ -973,6 +1067,8 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Membership = typeof memberships.$inferSelect;
 export type InsertMembership = z.infer<typeof insertMembershipSchema>;
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
 export type Category = typeof categories.$inferSelect;
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
 export type Store = typeof stores.$inferSelect;

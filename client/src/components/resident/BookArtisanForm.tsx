@@ -17,6 +17,33 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
+const CITYBUDDY_BOOKING_EVENTS_KEY = "citybuddy_booking_events_v1";
+
+function pushCityBuddyBookingEvent(evt: {
+  citybuddySessionId?: string | null;
+  serviceRequestId: string;
+  title?: string | null;
+  status?: string | null;
+}) {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = window.localStorage.getItem(CITYBUDDY_BOOKING_EVENTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    const list = Array.isArray(parsed) ? parsed : [];
+    list.push({
+      eventId: `${Date.now()}:${evt.serviceRequestId}`,
+      createdAtIso: new Date().toISOString(),
+      citybuddySessionId: evt.citybuddySessionId ?? null,
+      serviceRequestId: evt.serviceRequestId,
+      title: evt.title ?? null,
+      status: evt.status ?? null,
+    });
+    window.localStorage.setItem(CITYBUDDY_BOOKING_EVENTS_KEY, JSON.stringify(list.slice(-30)));
+  } catch {
+    // ignore
+  }
+}
+
 const formSchema = z.object({
   category: z.string().min(1, "Select a category"),
   description: z.string().min(5, "Describe the issue (min 5 chars)"),
@@ -31,6 +58,18 @@ type FormValues = z.infer<typeof formSchema>;
 
 export default function BookArtisanForm() {
   const { toast } = useToast();
+  const citybuddySessionId = (() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("citybuddySessionId");
+  })();
+  const preselectedProviderId = (() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("providerId");
+  })();
+  const preselectedProviderName = (() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("providerName");
+  })();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -59,12 +98,21 @@ export default function BookArtisanForm() {
         preferredTime: data.preferredTime
           ? new Date(data.preferredTime).toISOString()
           : undefined,
+        providerId: preselectedProviderId ?? undefined,
         specialInstructions: data.specialInstructions || undefined,
       };
       const res = await apiRequest("POST", "/api/service-requests", payload);
       return await res.json();
     },
-    onSuccess: () => {
+    onSuccess: (created: any) => {
+      if (created?.id) {
+        pushCityBuddyBookingEvent({
+          citybuddySessionId,
+          serviceRequestId: String(created.id),
+          title: created?.title ?? null,
+          status: String(created?.status ?? "pending"),
+        });
+      }
       toast({
         title: "Request submitted",
         description: "Your service request was created successfully.",
@@ -100,6 +148,13 @@ export default function BookArtisanForm() {
         <div className="text-lg font-semibold">Book an Artisan</div>
       </CardHeader>
       <CardContent>
+        {preselectedProviderName ? (
+          <div className="mb-4 rounded-md border bg-muted p-3">
+            <div className="text-sm text-muted-foreground">Selected provider</div>
+            <div className="font-medium text-foreground">{preselectedProviderName}</div>
+            <div className="mt-1 text-xs text-muted-foreground">Pre-selected only — you still confirm when submitting.</div>
+          </div>
+        ) : null}
         <form
           onSubmit={form.handleSubmit(onSubmit)}
           className="space-y-4"
@@ -118,11 +173,14 @@ export default function BookArtisanForm() {
                 </SelectTrigger>
                 <SelectContent>
                   {/* Keys should match your backend categories */}
-                  <SelectItem value="plumber">Plumber</SelectItem>
-                  <SelectItem value="electrician">Electrician</SelectItem>
-                  <SelectItem value="carpenter">Carpenter</SelectItem>
-                  <SelectItem value="market_runner">Market Runner</SelectItem>
-                  <SelectItem value="cleaner">Cleaner</SelectItem>
+                  <SelectItem value="surveillance_monitoring">Surveillance monitoring</SelectItem>
+                  <SelectItem value="cleaning_janitorial">Cleaning & janitorial</SelectItem>
+                  <SelectItem value="catering_services">Catering Services</SelectItem>
+                  <SelectItem value="it_support">IT Support</SelectItem>
+                  <SelectItem value="maintenance_repair">Maintenance & Repair</SelectItem>
+                  <SelectItem value="marketing_advertising">Marketing & Advertising</SelectItem>
+                  <SelectItem value="home_tutors">Home tutors</SelectItem>
+                  <SelectItem value="furniture_making">Furniture making</SelectItem>
                 </SelectContent>
               </Select>
               {form.formState.errors.category && (

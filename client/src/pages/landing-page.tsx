@@ -44,18 +44,27 @@ export default function LandingPage() {
   // Redirect to appropriate dashboard if already logged in
   useEffect(() => {
     if (user) {
-      if (user.role === "resident") {
+      const role = (user.globalRole || user.role || "").toLowerCase();
+      if (role === "resident") {
         setLocation("/resident");
-      } else if (user.role === "provider") {
+      } else if (role === "provider") {
         setLocation("/provider");
-      } else if (user.role === "admin") {
-        setLocation("/admin");
+      } else if (role === "admin" || role === "super_admin" || role === "estate_admin" || role === "moderator") {
+        // Super/admin roles use the super admin dashboard shell
+        setLocation("/admin-dashboard");
+      } else {
+        // Unknown role: send to auth instead of blank screen
+        setLocation("/auth");
       }
     }
   }, [user, setLocation]);
 
   if (user) {
-    return null;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-slate-950">
+        <div className="text-slate-700 dark:text-slate-200">Redirecting…</div>
+      </div>
+    );
   }
 
   const handleGetStarted = (userType: string) => {

@@ -1,4 +1,4 @@
-import {
+﻿import {
   useState,
   useEffect,
   useCallback,
@@ -28,6 +28,7 @@ import {
   type CreateProviderInput,
   type IMarketplaceItem,
 } from "@shared/admin-schema";
+import { businessTypes } from "@/components/company/CompanyRegistrationFormFields";
 import {
   Card,
   CardContent,
@@ -37,8 +38,11 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import EmojiCombobox from "@/components/admin/EmojiCombobox";
 import { Label } from "@/components/ui/label";
+import DetailsView from "@/components/admin/DetailsView";
 import { Textarea } from "@/components/ui/textarea";
+import formatDate from "@/utils/formatDate";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
@@ -87,6 +91,12 @@ import {
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
   AlertTriangle,
@@ -112,6 +122,7 @@ import {
   MessageSquare,
   Package,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Shield,
@@ -132,126 +143,176 @@ import {
 
 // Shopping-focused emoji palette (generated into dropdown)
 const EMOJI_GROUPS = [
-  { value: "🍎", names: ["Apple", "Apple Bag", "Apple Basket", "Apple Box", "Apple Jam", "Apple Juice", "Apple Pie", "Apple Snack", "Apple Crate", "Apple Pack"] },
-  { value: "🍏", names: ["Green Apple", "Green Apple Box", "Green Apple Juice", "Green Apple Pie", "Green Apple Snack", "Green Apple Basket", "Green Apple Crate", "Green Apple Jam", "Green Apple Pack", "Green Apple Bundle"] },
-  { value: "🍌", names: ["Banana", "Banana Bunch", "Banana Chips", "Banana Smoothie", "Banana Yogurt", "Banana Bread", "Banana Pack", "Banana Basket", "Banana Split", "Banana Snack"] },
-  { value: "🍇", names: ["Grapes", "Grape Box", "Grape Juice", "Grape Jam", "Grape Pack", "Grape Snack", "Grape Basket", "Grape Bundle", "Grape Carton", "Grape Tray"] },
-  { value: "🍓", names: ["Strawberry", "Strawberry Box", "Strawberry Jam", "Strawberry Yogurt", "Strawberry Milk", "Strawberry Cake", "Strawberry Pack", "Strawberry Basket", "Strawberry Snack", "Strawberry Tart"] },
-  { value: "🍒", names: ["Cherry", "Cherry Box", "Cherry Jam", "Cherry Juice", "Cherry Pack", "Cherry Basket", "Cherry Tart", "Cherry Snack", "Cherry Mix", "Cherry Crate"] },
-  { value: "🍑", names: ["Peach", "Peach Jam", "Peach Juice", "Peach Tart", "Peach Basket", "Peach Crate", "Peach Yogurt", "Peach Pack", "Peach Snack", "Peach Slices"] },
-  { value: "🍍", names: ["Pineapple", "Pineapple Slices", "Pineapple Juice", "Pineapple Rings", "Pineapple Jam", "Pineapple Pack", "Pineapple Snack", "Pineapple Basket", "Pineapple Chunks", "Pineapple Crate"] },
-  { value: "🥭", names: ["Mango", "Mango Juice", "Mango Slices", "Mango Jam", "Mango Lassi", "Mango Pack", "Mango Basket", "Mango Snack", "Mango Chutney", "Mango Crate"] },
-  { value: "🍉", names: ["Watermelon", "Watermelon Slice", "Watermelon Juice", "Watermelon Pack", "Watermelon Snack", "Watermelon Basket", "Watermelon Wedges", "Watermelon Crate", "Watermelon Bowl", "Watermelon Platter"] },
-  { value: "🥝", names: ["Kiwi", "Kiwi Pack", "Kiwi Slices", "Kiwi Yogurt", "Kiwi Juice", "Kiwi Basket", "Kiwi Snack", "Kiwi Crate", "Kiwi Mix", "Kiwi Platter"] },
-  { value: "🍊", names: ["Orange", "Orange Juice", "Orange Pack", "Orange Basket", "Orange Crate", "Orange Marmalade", "Orange Snack", "Orange Segments", "Orange Carton", "Orange Mix"] },
-  { value: "🍋", names: ["Lemon", "Lemonade", "Lemon Pack", "Lemon Basket", "Lemon Crate", "Lemon Wedges", "Lemon Pie", "Lemon Tart", "Lemon Snack", "Lemon Mix"] },
-  { value: "🍈", names: ["Melon", "Melon Wedges", "Melon Pack", "Melon Basket", "Melon Crate", "Melon Juice", "Melon Snack", "Melon Platter", "Melon Mix", "Melon Slices"] },
-  { value: "🍐", names: ["Pear", "Pear Pack", "Pear Basket", "Pear Crate", "Pear Juice", "Pear Snack", "Pear Slices", "Pear Tart", "Pear Mix", "Pear Bowl"] },
-  { value: "🍆", names: ["Eggplant", "Eggplant Pack", "Eggplant Basket", "Eggplant Crate", "Eggplant Cutlets", "Eggplant Parm", "Eggplant Mix", "Eggplant Grill", "Eggplant Tray", "Eggplant Dip"] },
-  { value: "🥑", names: ["Avocado", "Avocado Pack", "Avocado Basket", "Avocado Toast", "Avocado Dip", "Avocado Mix", "Avocado Crate", "Avocado Salad", "Avocado Sushi", "Avocado Bowl"] },
-  { value: "🌽", names: ["Corn", "Corn on Cob", "Corn Pack", "Corn Basket", "Corn Crate", "Corn Chips", "Corn Meal", "Corn Mix", "Corn Snack", "Corn Tray"] },
-  { value: "🥕", names: ["Carrot", "Carrot Pack", "Carrot Basket", "Carrot Crate", "Carrot Juice", "Carrot Snack", "Carrot Sticks", "Carrot Cake", "Carrot Mix", "Carrot Tray"] },
-  { value: "🥔", names: ["Potato", "Potato Bag", "Potato Pack", "Potato Basket", "Potato Crate", "Potato Wedges", "Potato Chips", "Potato Mash", "Potato Mix", "Potato Tray"] },
-  { value: "🥦", names: ["Broccoli", "Broccoli Pack", "Broccoli Basket", "Broccoli Crate", "Broccoli Florets", "Broccoli Mix", "Broccoli Snack", "Broccoli Tray", "Broccoli Salad", "Broccoli Stir Fry"] },
-  { value: "🥬", names: ["Lettuce", "Lettuce Pack", "Lettuce Basket", "Lettuce Crate", "Lettuce Mix", "Lettuce Heads", "Lettuce Wraps", "Lettuce Salad", "Lettuce Tray", "Lettuce Stack"] },
-  { value: "🍅", names: ["Tomato", "Tomato Pack", "Tomato Basket", "Tomato Crate", "Tomato Sauce", "Tomato Puree", "Tomato Soup", "Tomato Mix", "Tomato Snack", "Tomato Tray"] },
-  { value: "🧄", names: ["Garlic", "Garlic Pack", "Garlic Basket", "Garlic Crate", "Garlic Paste", "Garlic Powder", "Garlic Mix", "Garlic Snack", "Garlic Tray", "Garlic Bulbs"] },
-  { value: "🧅", names: ["Onion", "Onion Pack", "Onion Basket", "Onion Crate", "Onion Rings", "Onion Powder", "Onion Mix", "Onion Snack", "Onion Tray", "Onion Bulbs"] },
-  { value: "🌶️", names: ["Chili Pepper", "Chili Pack", "Chili Basket", "Chili Crate", "Chili Flakes", "Chili Powder", "Chili Mix", "Chili Snack", "Chili Tray", "Chili Sauce"] },
-  { value: "🍄", names: ["Mushroom", "Mushroom Pack", "Mushroom Basket", "Mushroom Crate", "Mushroom Mix", "Mushroom Snack", "Mushroom Soup", "Mushroom Tray", "Mushroom Slices", "Mushroom Skewers"] },
-  { value: "🥐", names: ["Croissant", "Croissant Pack", "Croissant Basket", "Croissant Crate", "Chocolate Croissant", "Almond Croissant", "Butter Croissant", "Mini Croissant", "Croissant Tray", "Croissant Snack"] },
-  { value: "🍞", names: ["Bread Loaf", "Bread Pack", "Bread Basket", "Bread Crate", "Wholegrain Bread", "Sourdough Bread", "White Bread", "Rye Bread", "Bread Rolls", "Bread Tray"] },
-  { value: "🥯", names: ["Bagel", "Bagel Pack", "Bagel Basket", "Bagel Crate", "Sesame Bagel", "Everything Bagel", "Plain Bagel", "Cinnamon Bagel", "Bagel Tray", "Bagel Snack"] },
-  { value: "🥞", names: ["Pancake", "Pancake Pack", "Pancake Mix", "Pancake Stack", "Pancake Syrup", "Pancake Basket", "Pancake Crate", "Pancake Tray", "Pancake Snack", "Mini Pancake"] },
-  { value: "🧇", names: ["Waffle", "Waffle Pack", "Waffle Mix", "Waffle Stack", "Waffle Syrup", "Waffle Basket", "Waffle Crate", "Waffle Tray", "Waffle Snack", "Mini Waffle"] },
-  { value: "🥖", names: ["Baguette", "Baguette Pack", "Baguette Basket", "Baguette Crate", "Garlic Baguette", "Seeded Baguette", "Classic Baguette", "Mini Baguette", "Baguette Tray", "Baguette Snack"] },
-  { value: "🍗", names: ["Chicken Drumstick", "Chicken Bucket", "Chicken Pack", "Chicken Basket", "Chicken Crate", "BBQ Chicken", "Spicy Chicken", "Fried Chicken", "Roast Chicken", "Chicken Tray"] },
-  { value: "🥩", names: ["Steak", "Steak Pack", "Steak Basket", "Steak Crate", "Ribeye Steak", "Sirloin Steak", "Flank Steak", "Steak Marinade", "Steak Tray", "Steak Cuts"] },
-  { value: "🥓", names: ["Bacon", "Bacon Pack", "Bacon Basket", "Bacon Crate", "Smoked Bacon", "Crispy Bacon", "Turkey Bacon", "Bacon Bits", "Bacon Tray", "Bacon Strips"] },
-  { value: "🍖", names: ["Meat Ribs", "Rib Rack", "BBQ Ribs", "Smoked Ribs", "Ribs Pack", "Ribs Basket", "Ribs Crate", "Ribs Tray", "Honey Ribs", "Spicy Ribs"] },
-  { value: "🍤", names: ["Fried Shrimp", "Shrimp Pack", "Shrimp Basket", "Shrimp Crate", "Shrimp Cocktail", "Shrimp Tray", "Shrimp Skewers", "Shrimp Snack", "Garlic Shrimp", "Spicy Shrimp"] },
-  { value: "🐟", names: ["Fish Fillet", "Fish Pack", "Fish Basket", "Fish Crate", "Salmon Fillet", "Cod Fillet", "Tilapia Fillet", "Fish Tray", "Smoked Fish", "Fish Steak"] },
-  { value: "🍣", names: ["Sushi Roll", "Sushi Box", "Sushi Pack", "Sushi Tray", "Salmon Sushi", "Tuna Sushi", "Veggie Sushi", "Sushi Platter", "Sushi Combo", "Nigiri Sushi"] },
-  { value: "🍕", names: ["Pizza Slice", "Pizza Box", "Cheese Pizza", "Pepperoni Pizza", "Veggie Pizza", "BBQ Pizza", "Pizza Combo", "Pizza Party", "Pizza Pack", "Pizza Tray"] },
-  { value: "🍔", names: ["Burger", "Cheeseburger", "Double Burger", "Veggie Burger", "Chicken Burger", "Burger Combo", "Burger Pack", "Burger Box", "Burger Meal", "Burger Tray"] },
-  { value: "🌭", names: ["Hotdog", "Chili Dog", "Cheese Dog", "BBQ Hotdog", "Hotdog Combo", "Hotdog Pack", "Hotdog Box", "Hotdog Meal", "Hotdog Tray", "Hotdog Snack"] },
-  { value: "🥪", names: ["Sandwich", "Club Sandwich", "Chicken Sandwich", "Turkey Sandwich", "Veggie Sandwich", "Sandwich Box", "Sandwich Pack", "Sandwich Meal", "Sandwich Tray", "BLT Sandwich"] },
-  { value: "🌮", names: ["Taco", "Beef Taco", "Chicken Taco", "Fish Taco", "Veggie Taco", "Taco Pack", "Taco Box", "Taco Meal", "Taco Tray", "Taco Combo"] },
-  { value: "🌯", names: ["Burrito", "Beef Burrito", "Chicken Burrito", "Veggie Burrito", "Bean Burrito", "Burrito Pack", "Burrito Box", "Burrito Meal", "Burrito Tray", "Burrito Combo"] },
-  { value: "🥙", names: ["Pita Pocket", "Falafel Pita", "Chicken Pita", "Lamb Pita", "Veggie Pita", "Pita Pack", "Pita Box", "Pita Meal", "Pita Tray", "Pita Combo"] },
-  { value: "🍜", names: ["Ramen Bowl", "Ramen Pack", "Ramen Box", "Spicy Ramen", "Chicken Ramen", "Veggie Ramen", "Miso Ramen", "Ramen Meal", "Ramen Tray", "Ramen Combo"] },
-  { value: "🍝", names: ["Pasta", "Spaghetti", "Pasta Pack", "Pasta Box", "Pasta Meal", "Pasta Tray", "Pasta Combo", "Creamy Pasta", "Tomato Pasta", "Pesto Pasta"] },
-  { value: "🍲", names: ["Stew", "Stew Pack", "Stew Bowl", "Beef Stew", "Chicken Stew", "Veggie Stew", "Spicy Stew", "Stew Meal", "Stew Tray", "Stew Combo"] },
-  { value: "🍛", names: ["Curry", "Chicken Curry", "Beef Curry", "Veggie Curry", "Curry Pack", "Curry Box", "Curry Meal", "Curry Tray", "Curry Combo", "Spicy Curry"] },
-  { value: "🍚", names: ["Rice Bowl", "Rice Pack", "Rice Bag", "Brown Rice", "Jasmine Rice", "Basmati Rice", "Sticky Rice", "Rice Box", "Rice Meal", "Rice Tray"] },
-  { value: "🍥", names: ["Fish Cake", "Fish Cake Pack", "Fish Cake Box", "Fish Cake Tray", "Spicy Fish Cake", "Sesame Fish Cake", "Veggie Fish Cake", "Fish Cake Meal", "Fish Cake Snack", "Fish Cake Combo"] },
-  { value: "🍩", names: ["Doughnut", "Glazed Doughnut", "Chocolate Doughnut", "Sprinkle Doughnut", "Doughnut Box", "Doughnut Pack", "Doughnut Tray", "Doughnut Snack", "Filled Doughnut", "Mini Doughnut"] },
-  { value: "🍪", names: ["Cookie", "Chocolate Chip Cookie", "Oatmeal Cookie", "Sugar Cookie", "Cookie Box", "Cookie Pack", "Cookie Tray", "Cookie Snack", "Cookie Gift", "Cookie Tin"] },
-  { value: "🍫", names: ["Chocolate Bar", "Dark Chocolate", "Milk Chocolate", "White Chocolate", "Chocolate Pack", "Chocolate Box", "Chocolate Gift", "Chocolate Snack", "Chocolate Mix", "Chocolate Tray"] },
-  { value: "🍿", names: ["Popcorn", "Butter Popcorn", "Caramel Popcorn", "Cheese Popcorn", "Popcorn Tub", "Popcorn Pack", "Popcorn Box", "Popcorn Snack", "Popcorn Bowl", "Popcorn Mix"] },
-  { value: "🧃", names: ["Juice Box", "Apple Juice Box", "Orange Juice Box", "Grape Juice Box", "Mixed Fruit Juice", "Juice Pack", "Juice Carton", "Juice Bottle", "Juice Cooler", "Juice Case"] },
-  { value: "🥤", names: ["Soft Drink", "Soda Can", "Soda Bottle", "Cola Can", "Lemon Soda", "Orange Soda", "Ginger Soda", "Soda Pack", "Soda Crate", "Soda Mix"] },
-  { value: "🧋", names: ["Bubble Tea", "Milk Tea", "Taro Bubble Tea", "Matcha Bubble Tea", "Brown Sugar Bubble Tea", "Fruit Bubble Tea", "Bubble Tea Pack", "Bubble Tea Tray", "Bubble Tea Kit", "Bubble Tea Mix"] },
-  { value: "☕", names: ["Coffee", "Latte", "Cappuccino", "Espresso", "Mocha", "Iced Coffee", "Coffee Pack", "Coffee Beans", "Coffee Pods", "Coffee Gift"] },
-  { value: "🍷", names: ["Red Wine", "White Wine", "Rosé Wine", "Sparkling Wine", "Wine Bottle", "Wine Pack", "Wine Crate", "Wine Gift", "Wine Box", "Wine Pairing"] },
-  { value: "🍺", names: ["Beer", "Beer Can", "Beer Bottle", "Craft Beer", "Lager Beer", "Ale Beer", "Beer Pack", "Beer Crate", "Beer Combo", "Beer Gift"] },
-  { value: "🥛", names: ["Milk Carton", "Milk Bottle", "Whole Milk", "Skim Milk", "Almond Milk", "Oat Milk", "Soy Milk", "Milk Pack", "Milk Crate", "Milk Cooler"] },
-  { value: "🧀", names: ["Cheese Block", "Cheddar Cheese", "Mozzarella Cheese", "Parmesan Cheese", "Cheese Pack", "Cheese Tray", "Cheese Platter", "Cheese Snack", "Cheese Crate", "Cheese Basket"] },
-  { value: "🍶", names: ["Sake Bottle", "Sake Pack", "Sake Gift", "Sake Crate", "Rice Wine", "Premium Sake", "Sparkling Sake", "Sake Set", "Sake Box", "Sake Pairing"] },
-  { value: "🧴", names: ["Lotion", "Body Lotion", "Hand Lotion", "Face Cream", "Sunscreen", "Lotion Pack", "Lotion Gift", "Lotion Set", "Lotion Bottle", "Lotion Tube"] },
-  { value: "🧻", names: ["Paper Towel", "Paper Roll", "Toilet Roll", "Kitchen Towel", "Paper Pack", "Paper Bulk", "Paper Value Pack", "Paper Carton", "Paper Bundle", "Paper Case"] },
-  { value: "🧽", names: ["Sponge", "Cleaning Sponge", "Scrub Sponge", "Kitchen Sponge", "Bath Sponge", "Sponge Pack", "Sponge Bulk", "Sponge Set", "Sponge Value Pack", "Sponge Duo"] },
-  { value: "🧹", names: ["Broom", "Cleaning Broom", "Floor Broom", "Broom Set", "Broom With Dustpan", "Broom Pack", "Broom Value Pack", "Broom Combo", "Outdoor Broom", "Indoor Broom"] },
-  { value: "🧺", names: ["Laundry Basket", "Storage Basket", "Market Basket", "Picnic Basket", "Gift Basket", "Fruit Basket", "Grocery Basket", "Home Basket", "Basket Set", "Basket Duo"] },
-  { value: "🧼", names: ["Soap Bar", "Hand Soap", "Body Soap", "Face Soap", "Soap Pack", "Soap Gift", "Soap Set", "Soap Refill", "Liquid Soap", "Foam Soap"] },
-  { value: "🧦", names: ["Socks", "Ankle Socks", "Crew Socks", "Sport Socks", "Wool Socks", "Dress Socks", "Socks Pack", "Socks Gift", "Socks Bundle", "Socks Trio"] },
-  { value: "👕", names: ["T-Shirt", "Graphic Tee", "Basic Tee", "Sport Tee", "V-Neck Tee", "Long Sleeve Tee", "T-Shirt Pack", "T-Shirt Duo", "T-Shirt Bundle", "T-Shirt Gift"] },
-  { value: "👖", names: ["Jeans", "Slim Jeans", "Straight Jeans", "Relaxed Jeans", "Dark Jeans", "Light Jeans", "Jeans Pack", "Jeans Duo", "Jeans Bundle", "Jeans Gift"] },
-  { value: "👗", names: ["Dress", "Summer Dress", "Evening Dress", "Casual Dress", "Floral Dress", "Party Dress", "Dress Pack", "Dress Duo", "Dress Bundle", "Dress Gift"] },
-  { value: "👔", names: ["Shirt", "Formal Shirt", "Oxford Shirt", "Linen Shirt", "Checked Shirt", "Striped Shirt", "Shirt Pack", "Shirt Duo", "Shirt Bundle", "Shirt Gift"] },
-  { value: "🧥", names: ["Jacket", "Denim Jacket", "Leather Jacket", "Puffer Jacket", "Blazer Jacket", "Rain Jacket", "Jacket Pack", "Jacket Duo", "Jacket Bundle", "Jacket Gift"] },
-  { value: "🧢", names: ["Cap", "Baseball Cap", "Trucker Cap", "Snapback Cap", "Dad Cap", "Sport Cap", "Cap Pack", "Cap Duo", "Cap Bundle", "Cap Gift"] },
-  { value: "👟", names: ["Sneakers", "Running Sneakers", "Casual Sneakers", "High-Top Sneakers", "Court Sneakers", "Trail Sneakers", "Sneaker Pack", "Sneaker Duo", "Sneaker Bundle", "Sneaker Gift"] },
-  { value: "👠", names: ["Heels", "Stiletto Heels", "Block Heels", "Kitten Heels", "Party Heels", "Dress Heels", "Heels Pack", "Heels Duo", "Heels Bundle", "Heels Gift"] },
-  { value: "👞", names: ["Dress Shoes", "Oxford Shoes", "Derby Shoes", "Loafer Shoes", "Wingtip Shoes", "Leather Shoes", "Shoe Pack", "Shoe Duo", "Shoe Bundle", "Shoe Gift"] },
-  { value: "🎒", names: ["Backpack", "Travel Backpack", "School Backpack", "Laptop Backpack", "Hiking Backpack", "Mini Backpack", "Backpack Pack", "Backpack Duo", "Backpack Bundle", "Backpack Gift"] },
-  { value: "👜", names: ["Handbag", "Tote Bag", "Shoulder Bag", "Crossbody Bag", "Clutch Bag", "Satchel Bag", "Bag Pack", "Bag Duo", "Bag Bundle", "Bag Gift"] },
-  { value: "💍", names: ["Ring", "Gold Ring", "Silver Ring", "Diamond Ring", "Engagement Ring", "Wedding Ring", "Ring Box", "Ring Gift", "Ring Pair", "Ring Set"] },
-  { value: "⌚", names: ["Watch", "Smart Watch", "Sport Watch", "Dress Watch", "Classic Watch", "Metal Watch", "Watch Box", "Watch Gift", "Watch Pair", "Watch Set"] },
-  { value: "📱", names: ["Smartphone", "Phone Case", "Phone Charger", "Phone Screen Guard", "Phone Bundle", "Phone Earbuds", "Phone Power Bank", "Phone Mount", "Phone Cable", "Phone Stand"] },
-  { value: "💻", names: ["Laptop", "Laptop Sleeve", "Laptop Stand", "Laptop Charger", "Laptop Dock", "Laptop Bundle", "Laptop Cooling Pad", "Laptop Bag", "Laptop Combo", "Laptop Kit"] },
-  { value: "🎧", names: ["Headphones", "Wireless Headphones", "Noise Canceling Headphones", "Gaming Headset", "On-Ear Headphones", "Over-Ear Headphones", "Headphone Case", "Headphone Stand", "Headphone Bundle", "Headphone Gift"] },
-  { value: "🖥️", names: ["Monitor", "Gaming Monitor", "Office Monitor", "Curved Monitor", "4K Monitor", "Monitor Stand", "Monitor Arm", "Monitor Bundle", "Monitor Pair", "Monitor Gift"] },
-  { value: "📺", names: ["Television", "Smart TV", "LED TV", "OLED TV", "4K TV", "TV Wall Mount", "TV Soundbar", "TV Bundle", "TV Gift", "TV Pair"] },
-  { value: "🧸", names: ["Teddy Bear", "Stuffed Animal", "Plush Toy", "Toy Bundle", "Toy Gift", "Toy Set", "Toy Box", "Toy Basket", "Toy Pack", "Toy Plush"] },
-  { value: "📚", names: ["Books", "Novel Pack", "Cookbook", "Children Book", "Notebook Set", "Journal Pack", "Planner", "Story Book", "Workbook", "Reference Book"] },
-  { value: "✏️", names: ["Pencil", "Pencil Pack", "Colored Pencil Set", "Mechanical Pencil", "Pencil Case", "Pencil Box", "Pencil Kit", "Pencil Duo", "Pencil Bundle", "Pencil Gift"] },
-  { value: "🖊️", names: ["Pen", "Gel Pen", "Ballpoint Pen", "Fountain Pen", "Pen Pack", "Pen Case", "Pen Box", "Pen Set", "Pen Duo", "Pen Gift"] },
-  { value: "📒", names: ["Notebook", "Spiral Notebook", "Hardcover Notebook", "Softcover Notebook", "Notebook Pack", "Notebook Bundle", "Notebook Set", "Notebook Gift", "Notebook Duo", "Notebook Trio"] },
-  { value: "🧴", names: ["Shampoo", "Conditioner", "Body Wash", "Face Wash", "Hair Serum", "Body Lotion", "Hand Cream", "Hair Oil", "Shower Gel", "Self Care Kit"] },
-  { value: "🧹", names: ["Cleaning Mop", "Cleaning Kit", "Cleaning Spray", "Cleaning Cloths", "Cleaning Bucket", "Cleaning Gloves", "Cleaning Set", "Cleaning Bundle", "Cleaning Wipes", "Cleaning Pads"] },
-  { value: "🧺", names: ["Laundry Hamper", "Laundry Bag", "Laundry Basket", "Laundry Detergent", "Laundry Softener", "Laundry Pods", "Laundry Sheets", "Laundry Bundle", "Laundry Kit", "Laundry Pair"] },
-  { value: "🧊", names: ["Ice Tray", "Ice Pack", "Ice Cube", "Ice Bag", "Ice Bucket", "Ice Maker", "Ice Scoop", "Ice Stones", "Ice Set", "Ice Bundle"] },
-  { value: "🛏️", names: ["Bed", "Bed Sheet", "Bed Set", "Duvet", "Comforter", "Pillow", "Pillow Cases", "Mattress Topper", "Bed Blanket", "Bed Throw"] },
-  { value: "🛋️", names: ["Sofa", "Sofa Cover", "Throw Pillow", "Cushion", "Sofa Set", "Sectional Sofa", "Loveseat", "Recliner Sofa", "Sofa Blanket", "Sofa Protector"] },
-  { value: "🪑", names: ["Chair", "Dining Chair", "Office Chair", "Desk Chair", "Bar Stool", "Folding Chair", "Patio Chair", "Gaming Chair", "Accent Chair", "Chair Cushion"] },
-  { value: "🍽️", names: ["Dinner Set", "Plate Set", "Bowl Set", "Cutlery Set", "Glass Set", "Mug Set", "Serving Tray", "Serving Bowl", "Kitchen Utensils", "Table Napkins"] },
-  { value: "🔪", names: ["Kitchen Knife", "Chef Knife", "Knife Set", "Cutting Board", "Knife Sharpener", "Knife Block", "Paring Knife", "Bread Knife", "Utility Knife", "Knife Bundle"] },
-  { value: "🍳", names: ["Frying Pan", "Nonstick Pan", "Skillet", "Sauté Pan", "Omelette Pan", "Griddle Pan", "Pan Set", "Pan Duo", "Pan Bundle", "Pan Gift"] },
-  { value: "🥣", names: ["Mixing Bowl", "Salad Bowl", "Soup Bowl", "Cereal Bowl", "Bowl Set", "Bowl Duo", "Bowl Bundle", "Bowl Gift", "Bowl Pack", "Serving Bowl"] },
-  { value: "🧂", names: ["Salt Shaker", "Pepper Grinder", "Spice Rack", "Spice Jars", "Seasoning Pack", "Herb Mix", "Spice Blend", "Salt Pack", "Pepper Pack", "Spice Kit"] },
-  { value: "🪥", names: ["Toothbrush", "Toothpaste", "Oral Care Kit", "Mouthwash", "Floss", "Toothbrush Pack", "Toothbrush Duo", "Toothbrush Bundle", "Toothbrush Gift", "Toothbrush Holder"] },
-  { value: "🍼", names: ["Baby Bottle", "Baby Formula", "Baby Food", "Baby Snack", "Baby Spoon", "Baby Bowl", "Baby Bib", "Baby Cup", "Baby Utensils", "Baby Sippy Cup"] },
-  { value: "🧸", names: ["Baby Plush", "Baby Toy", "Baby Rattle", "Baby Teether", "Baby Book", "Baby Blocks", "Baby Gift", "Baby Set", "Baby Bundle", "Baby Stacker"] },
-  { value: "🐾", names: ["Pet Treats", "Pet Food", "Pet Toy", "Pet Leash", "Pet Collar", "Pet Bed", "Pet Bowl", "Pet Grooming", "Pet Shampoo", "Pet Bundle"] },
-  { value: "⚽", names: ["Soccer Ball", "Football", "Futsal Ball", "Training Ball", "Match Ball", "Ball Pump", "Ball Net", "Ball Pack", "Ball Duo", "Ball Bundle"] },
-  { value: "🏀", names: ["Basketball", "Outdoor Basketball", "Indoor Basketball", "Training Basketball", "Match Basketball", "Basketball Pump", "Basketball Net", "Basketball Pack", "Basketball Duo", "Basketball Bundle"] },
-  { value: "🏐", names: ["Volleyball", "Beach Volleyball", "Indoor Volleyball", "Training Volleyball", "Match Volleyball", "Volleyball Pump", "Volleyball Net", "Volleyball Pack", "Volleyball Duo", "Volleyball Bundle"] },
-  { value: "🏓", names: ["Ping Pong Paddle", "Ping Pong Balls", "Table Tennis Set", "Ping Pong Net", "Ping Pong Racket", "Ping Pong Case", "Ping Pong Pack", "Ping Pong Duo", "Ping Pong Bundle", "Ping Pong Gift"] },
-  { value: "🎯", names: ["Dartboard", "Dart Set", "Soft Tip Darts", "Steel Tip Darts", "Dart Flights", "Dart Shafts", "Dart Case", "Dart Pack", "Dart Bundle", "Dart Gift"] },
-  { value: "🎲", names: ["Board Game", "Dice Set", "Card Game", "Puzzle", "Game Bundle", "Game Pack", "Strategy Game", "Family Game", "Party Game", "Game Gift"] },
-  { value: "📦", names: ["Storage Box", "Gift Box", "Shipping Box", "Moving Box", "Organizer Box", "Folding Box", "Clear Box", "Decor Box", "Box Bundle", "Box Set"] },
-  { value: "🛒", names: ["Shopping Cart Token", "Shopping Basket Tag", "Reusable Tote", "Market Bag", "Grocery Tote", "Foldable Tote", "Insulated Bag", "Eco Bag", "Canvas Bag", "Cart Clip"] },
+  { value: "ðŸŽ", names: ["Apple", "Apple Bag", "Apple Basket", "Apple Box", "Apple Jam", "Apple Juice", "Apple Pie", "Apple Snack", "Apple Crate", "Apple Pack"] },
+  { value: "ðŸ", names: ["Green Apple", "Green Apple Box", "Green Apple Juice", "Green Apple Pie", "Green Apple Snack", "Green Apple Basket", "Green Apple Crate", "Green Apple Jam", "Green Apple Pack", "Green Apple Bundle"] },
+  { value: "ðŸŒ", names: ["Banana", "Banana Bunch", "Banana Chips", "Banana Smoothie", "Banana Yogurt", "Banana Bread", "Banana Pack", "Banana Basket", "Banana Split", "Banana Snack"] },
+  { value: "ðŸ‡", names: ["Grapes", "Grape Box", "Grape Juice", "Grape Jam", "Grape Pack", "Grape Snack", "Grape Basket", "Grape Bundle", "Grape Carton", "Grape Tray"] },
+  { value: "ðŸ“", names: ["Strawberry", "Strawberry Box", "Strawberry Jam", "Strawberry Yogurt", "Strawberry Milk", "Strawberry Cake", "Strawberry Pack", "Strawberry Basket", "Strawberry Snack", "Strawberry Tart"] },
+  { value: "ðŸ’", names: ["Cherry", "Cherry Box", "Cherry Jam", "Cherry Juice", "Cherry Pack", "Cherry Basket", "Cherry Tart", "Cherry Snack", "Cherry Mix", "Cherry Crate"] },
+  { value: "ðŸ‘", names: ["Peach", "Peach Jam", "Peach Juice", "Peach Tart", "Peach Basket", "Peach Crate", "Peach Yogurt", "Peach Pack", "Peach Snack", "Peach Slices"] },
+  { value: "ðŸ", names: ["Pineapple", "Pineapple Slices", "Pineapple Juice", "Pineapple Rings", "Pineapple Jam", "Pineapple Pack", "Pineapple Snack", "Pineapple Basket", "Pineapple Chunks", "Pineapple Crate"] },
+  { value: "ðŸ¥­", names: ["Mango", "Mango Juice", "Mango Slices", "Mango Jam", "Mango Lassi", "Mango Pack", "Mango Basket", "Mango Snack", "Mango Chutney", "Mango Crate"] },
+  { value: "ðŸ‰", names: ["Watermelon", "Watermelon Slice", "Watermelon Juice", "Watermelon Pack", "Watermelon Snack", "Watermelon Basket", "Watermelon Wedges", "Watermelon Crate", "Watermelon Bowl", "Watermelon Platter"] },
+  { value: "ðŸ¥", names: ["Kiwi", "Kiwi Pack", "Kiwi Slices", "Kiwi Yogurt", "Kiwi Juice", "Kiwi Basket", "Kiwi Snack", "Kiwi Crate", "Kiwi Mix", "Kiwi Platter"] },
+  { value: "ðŸŠ", names: ["Orange", "Orange Juice", "Orange Pack", "Orange Basket", "Orange Crate", "Orange Marmalade", "Orange Snack", "Orange Segments", "Orange Carton", "Orange Mix"] },
+  { value: "ðŸ‹", names: ["Lemon", "Lemonade", "Lemon Pack", "Lemon Basket", "Lemon Crate", "Lemon Wedges", "Lemon Pie", "Lemon Tart", "Lemon Snack", "Lemon Mix"] },
+  { value: "ðŸˆ", names: ["Melon", "Melon Wedges", "Melon Pack", "Melon Basket", "Melon Crate", "Melon Juice", "Melon Snack", "Melon Platter", "Melon Mix", "Melon Slices"] },
+  { value: "ðŸ", names: ["Pear", "Pear Pack", "Pear Basket", "Pear Crate", "Pear Juice", "Pear Snack", "Pear Slices", "Pear Tart", "Pear Mix", "Pear Bowl"] },
+  { value: "ðŸ†", names: ["Eggplant", "Eggplant Pack", "Eggplant Basket", "Eggplant Crate", "Eggplant Cutlets", "Eggplant Parm", "Eggplant Mix", "Eggplant Grill", "Eggplant Tray", "Eggplant Dip"] },
+  { value: "ðŸ¥‘", names: ["Avocado", "Avocado Pack", "Avocado Basket", "Avocado Toast", "Avocado Dip", "Avocado Mix", "Avocado Crate", "Avocado Salad", "Avocado Sushi", "Avocado Bowl"] },
+  { value: "ðŸŒ½", names: ["Corn", "Corn on Cob", "Corn Pack", "Corn Basket", "Corn Crate", "Corn Chips", "Corn Meal", "Corn Mix", "Corn Snack", "Corn Tray"] },
+  { value: "ðŸ¥•", names: ["Carrot", "Carrot Pack", "Carrot Basket", "Carrot Crate", "Carrot Juice", "Carrot Snack", "Carrot Sticks", "Carrot Cake", "Carrot Mix", "Carrot Tray"] },
+  { value: "ðŸ¥”", names: ["Potato", "Potato Bag", "Potato Pack", "Potato Basket", "Potato Crate", "Potato Wedges", "Potato Chips", "Potato Mash", "Potato Mix", "Potato Tray"] },
+  { value: "ðŸ¥¦", names: ["Broccoli", "Broccoli Pack", "Broccoli Basket", "Broccoli Crate", "Broccoli Florets", "Broccoli Mix", "Broccoli Snack", "Broccoli Tray", "Broccoli Salad", "Broccoli Stir Fry"] },
+  { value: "ðŸ¥¬", names: ["Lettuce", "Lettuce Pack", "Lettuce Basket", "Lettuce Crate", "Lettuce Mix", "Lettuce Heads", "Lettuce Wraps", "Lettuce Salad", "Lettuce Tray", "Lettuce Stack"] },
+  { value: "ðŸ…", names: ["Tomato", "Tomato Pack", "Tomato Basket", "Tomato Crate", "Tomato Sauce", "Tomato Puree", "Tomato Soup", "Tomato Mix", "Tomato Snack", "Tomato Tray"] },
+  { value: "ðŸ§„", names: ["Garlic", "Garlic Pack", "Garlic Basket", "Garlic Crate", "Garlic Paste", "Garlic Powder", "Garlic Mix", "Garlic Snack", "Garlic Tray", "Garlic Bulbs"] },
+  { value: "ðŸ§…", names: ["Onion", "Onion Pack", "Onion Basket", "Onion Crate", "Onion Rings", "Onion Powder", "Onion Mix", "Onion Snack", "Onion Tray", "Onion Bulbs"] },
+  { value: "ðŸŒ¶ï¸", names: ["Chili Pepper", "Chili Pack", "Chili Basket", "Chili Crate", "Chili Flakes", "Chili Powder", "Chili Mix", "Chili Snack", "Chili Tray", "Chili Sauce"] },
+  { value: "ðŸ„", names: ["Mushroom", "Mushroom Pack", "Mushroom Basket", "Mushroom Crate", "Mushroom Mix", "Mushroom Snack", "Mushroom Soup", "Mushroom Tray", "Mushroom Slices", "Mushroom Skewers"] },
+  { value: "ðŸ¥", names: ["Croissant", "Croissant Pack", "Croissant Basket", "Croissant Crate", "Chocolate Croissant", "Almond Croissant", "Butter Croissant", "Mini Croissant", "Croissant Tray", "Croissant Snack"] },
+  { value: "ðŸž", names: ["Bread Loaf", "Bread Pack", "Bread Basket", "Bread Crate", "Wholegrain Bread", "Sourdough Bread", "White Bread", "Rye Bread", "Bread Rolls", "Bread Tray"] },
+  { value: "ðŸ¥¯", names: ["Bagel", "Bagel Pack", "Bagel Basket", "Bagel Crate", "Sesame Bagel", "Everything Bagel", "Plain Bagel", "Cinnamon Bagel", "Bagel Tray", "Bagel Snack"] },
+  { value: "ðŸ¥ž", names: ["Pancake", "Pancake Pack", "Pancake Mix", "Pancake Stack", "Pancake Syrup", "Pancake Basket", "Pancake Crate", "Pancake Tray", "Pancake Snack", "Mini Pancake"] },
+  { value: "ðŸ§‡", names: ["Waffle", "Waffle Pack", "Waffle Mix", "Waffle Stack", "Waffle Syrup", "Waffle Basket", "Waffle Crate", "Waffle Tray", "Waffle Snack", "Mini Waffle"] },
+  { value: "ðŸ¥–", names: ["Baguette", "Baguette Pack", "Baguette Basket", "Baguette Crate", "Garlic Baguette", "Seeded Baguette", "Classic Baguette", "Mini Baguette", "Baguette Tray", "Baguette Snack"] },
+  { value: "ðŸ—", names: ["Chicken Drumstick", "Chicken Bucket", "Chicken Pack", "Chicken Basket", "Chicken Crate", "BBQ Chicken", "Spicy Chicken", "Fried Chicken", "Roast Chicken", "Chicken Tray"] },
+  { value: "ðŸ¥©", names: ["Steak", "Steak Pack", "Steak Basket", "Steak Crate", "Ribeye Steak", "Sirloin Steak", "Flank Steak", "Steak Marinade", "Steak Tray", "Steak Cuts"] },
+  { value: "ðŸ¥“", names: ["Bacon", "Bacon Pack", "Bacon Basket", "Bacon Crate", "Smoked Bacon", "Crispy Bacon", "Turkey Bacon", "Bacon Bits", "Bacon Tray", "Bacon Strips"] },
+  { value: "ðŸ–", names: ["Meat Ribs", "Rib Rack", "BBQ Ribs", "Smoked Ribs", "Ribs Pack", "Ribs Basket", "Ribs Crate", "Ribs Tray", "Honey Ribs", "Spicy Ribs"] },
+  { value: "ðŸ¤", names: ["Fried Shrimp", "Shrimp Pack", "Shrimp Basket", "Shrimp Crate", "Shrimp Cocktail", "Shrimp Tray", "Shrimp Skewers", "Shrimp Snack", "Garlic Shrimp", "Spicy Shrimp"] },
+  { value: "ðŸŸ", names: ["Fish Fillet", "Fish Pack", "Fish Basket", "Fish Crate", "Salmon Fillet", "Cod Fillet", "Tilapia Fillet", "Fish Tray", "Smoked Fish", "Fish Steak"] },
+  { value: "ðŸ£", names: ["Sushi Roll", "Sushi Box", "Sushi Pack", "Sushi Tray", "Salmon Sushi", "Tuna Sushi", "Veggie Sushi", "Sushi Platter", "Sushi Combo", "Nigiri Sushi"] },
+  { value: "ðŸ•", names: ["Pizza Slice", "Pizza Box", "Cheese Pizza", "Pepperoni Pizza", "Veggie Pizza", "BBQ Pizza", "Pizza Combo", "Pizza Party", "Pizza Pack", "Pizza Tray"] },
+  { value: "ðŸ”", names: ["Burger", "Cheeseburger", "Double Burger", "Veggie Burger", "Chicken Burger", "Burger Combo", "Burger Pack", "Burger Box", "Burger Meal", "Burger Tray"] },
+  { value: "ðŸŒ­", names: ["Hotdog", "Chili Dog", "Cheese Dog", "BBQ Hotdog", "Hotdog Combo", "Hotdog Pack", "Hotdog Box", "Hotdog Meal", "Hotdog Tray", "Hotdog Snack"] },
+  { value: "ðŸ¥ª", names: ["Sandwich", "Club Sandwich", "Chicken Sandwich", "Turkey Sandwich", "Veggie Sandwich", "Sandwich Box", "Sandwich Pack", "Sandwich Meal", "Sandwich Tray", "BLT Sandwich"] },
+  { value: "ðŸŒ®", names: ["Taco", "Beef Taco", "Chicken Taco", "Fish Taco", "Veggie Taco", "Taco Pack", "Taco Box", "Taco Meal", "Taco Tray", "Taco Combo"] },
+  { value: "ðŸŒ¯", names: ["Burrito", "Beef Burrito", "Chicken Burrito", "Veggie Burrito", "Bean Burrito", "Burrito Pack", "Burrito Box", "Burrito Meal", "Burrito Tray", "Burrito Combo"] },
+  { value: "ðŸ¥™", names: ["Pita Pocket", "Falafel Pita", "Chicken Pita", "Lamb Pita", "Veggie Pita", "Pita Pack", "Pita Box", "Pita Meal", "Pita Tray", "Pita Combo"] },
+  { value: "ðŸœ", names: ["Ramen Bowl", "Ramen Pack", "Ramen Box", "Spicy Ramen", "Chicken Ramen", "Veggie Ramen", "Miso Ramen", "Ramen Meal", "Ramen Tray", "Ramen Combo"] },
+  { value: "ðŸ", names: ["Pasta", "Spaghetti", "Pasta Pack", "Pasta Box", "Pasta Meal", "Pasta Tray", "Pasta Combo", "Creamy Pasta", "Tomato Pasta", "Pesto Pasta"] },
+  { value: "ðŸ²", names: ["Stew", "Stew Pack", "Stew Bowl", "Beef Stew", "Chicken Stew", "Veggie Stew", "Spicy Stew", "Stew Meal", "Stew Tray", "Stew Combo"] },
+  { value: "ðŸ›", names: ["Curry", "Chicken Curry", "Beef Curry", "Veggie Curry", "Curry Pack", "Curry Box", "Curry Meal", "Curry Tray", "Curry Combo", "Spicy Curry"] },
+  { value: "ðŸš", names: ["Rice Bowl", "Rice Pack", "Rice Bag", "Brown Rice", "Jasmine Rice", "Basmati Rice", "Sticky Rice", "Rice Box", "Rice Meal", "Rice Tray"] },
+  { value: "ðŸ¥", names: ["Fish Cake", "Fish Cake Pack", "Fish Cake Box", "Fish Cake Tray", "Spicy Fish Cake", "Sesame Fish Cake", "Veggie Fish Cake", "Fish Cake Meal", "Fish Cake Snack", "Fish Cake Combo"] },
+  { value: "ðŸ©", names: ["Doughnut", "Glazed Doughnut", "Chocolate Doughnut", "Sprinkle Doughnut", "Doughnut Box", "Doughnut Pack", "Doughnut Tray", "Doughnut Snack", "Filled Doughnut", "Mini Doughnut"] },
+  { value: "ðŸª", names: ["Cookie", "Chocolate Chip Cookie", "Oatmeal Cookie", "Sugar Cookie", "Cookie Box", "Cookie Pack", "Cookie Tray", "Cookie Snack", "Cookie Gift", "Cookie Tin"] },
+  { value: "ðŸ«", names: ["Chocolate Bar", "Dark Chocolate", "Milk Chocolate", "White Chocolate", "Chocolate Pack", "Chocolate Box", "Chocolate Gift", "Chocolate Snack", "Chocolate Mix", "Chocolate Tray"] },
+  { value: "ðŸ¿", names: ["Popcorn", "Butter Popcorn", "Caramel Popcorn", "Cheese Popcorn", "Popcorn Tub", "Popcorn Pack", "Popcorn Box", "Popcorn Snack", "Popcorn Bowl", "Popcorn Mix"] },
+  { value: "ðŸ§ƒ", names: ["Juice Box", "Apple Juice Box", "Orange Juice Box", "Grape Juice Box", "Mixed Fruit Juice", "Juice Pack", "Juice Carton", "Juice Bottle", "Juice Cooler", "Juice Case"] },
+  { value: "ðŸ¥¤", names: ["Soft Drink", "Soda Can", "Soda Bottle", "Cola Can", "Lemon Soda", "Orange Soda", "Ginger Soda", "Soda Pack", "Soda Crate", "Soda Mix"] },
+  { value: "ðŸ§‹", names: ["Bubble Tea", "Milk Tea", "Taro Bubble Tea", "Matcha Bubble Tea", "Brown Sugar Bubble Tea", "Fruit Bubble Tea", "Bubble Tea Pack", "Bubble Tea Tray", "Bubble Tea Kit", "Bubble Tea Mix"] },
+  { value: "â˜•", names: ["Coffee", "Latte", "Cappuccino", "Espresso", "Mocha", "Iced Coffee", "Coffee Pack", "Coffee Beans", "Coffee Pods", "Coffee Gift"] },
+  { value: "ðŸ·", names: ["Red Wine", "White Wine", "RosÃ© Wine", "Sparkling Wine", "Wine Bottle", "Wine Pack", "Wine Crate", "Wine Gift", "Wine Box", "Wine Pairing"] },
+  { value: "ðŸº", names: ["Beer", "Beer Can", "Beer Bottle", "Craft Beer", "Lager Beer", "Ale Beer", "Beer Pack", "Beer Crate", "Beer Combo", "Beer Gift"] },
+  { value: "ðŸ¥›", names: ["Milk Carton", "Milk Bottle", "Whole Milk", "Skim Milk", "Almond Milk", "Oat Milk", "Soy Milk", "Milk Pack", "Milk Crate", "Milk Cooler"] },
+  { value: "ðŸ§€", names: ["Cheese Block", "Cheddar Cheese", "Mozzarella Cheese", "Parmesan Cheese", "Cheese Pack", "Cheese Tray", "Cheese Platter", "Cheese Snack", "Cheese Crate", "Cheese Basket"] },
+  { value: "ðŸ¶", names: ["Sake Bottle", "Sake Pack", "Sake Gift", "Sake Crate", "Rice Wine", "Premium Sake", "Sparkling Sake", "Sake Set", "Sake Box", "Sake Pairing"] },
+  { value: "ðŸ§´", names: ["Lotion", "Body Lotion", "Hand Lotion", "Face Cream", "Sunscreen", "Lotion Pack", "Lotion Gift", "Lotion Set", "Lotion Bottle", "Lotion Tube"] },
+  { value: "ðŸ§»", names: ["Paper Towel", "Paper Roll", "Toilet Roll", "Kitchen Towel", "Paper Pack", "Paper Bulk", "Paper Value Pack", "Paper Carton", "Paper Bundle", "Paper Case"] },
+  { value: "ðŸ§½", names: ["Sponge", "Cleaning Sponge", "Scrub Sponge", "Kitchen Sponge", "Bath Sponge", "Sponge Pack", "Sponge Bulk", "Sponge Set", "Sponge Value Pack", "Sponge Duo"] },
+  { value: "ðŸ§¹", names: ["Broom", "Cleaning Broom", "Floor Broom", "Broom Set", "Broom With Dustpan", "Broom Pack", "Broom Value Pack", "Broom Combo", "Outdoor Broom", "Indoor Broom"] },
+  { value: "ðŸ§º", names: ["Laundry Basket", "Storage Basket", "Market Basket", "Picnic Basket", "Gift Basket", "Fruit Basket", "Grocery Basket", "Home Basket", "Basket Set", "Basket Duo"] },
+  { value: "ðŸ§¼", names: ["Soap Bar", "Hand Soap", "Body Soap", "Face Soap", "Soap Pack", "Soap Gift", "Soap Set", "Soap Refill", "Liquid Soap", "Foam Soap"] },
+  { value: "ðŸ§¦", names: ["Socks", "Ankle Socks", "Crew Socks", "Sport Socks", "Wool Socks", "Dress Socks", "Socks Pack", "Socks Gift", "Socks Bundle", "Socks Trio"] },
+  { value: "ðŸ‘•", names: ["T-Shirt", "Graphic Tee", "Basic Tee", "Sport Tee", "V-Neck Tee", "Long Sleeve Tee", "T-Shirt Pack", "T-Shirt Duo", "T-Shirt Bundle", "T-Shirt Gift"] },
+  { value: "ðŸ‘–", names: ["Jeans", "Slim Jeans", "Straight Jeans", "Relaxed Jeans", "Dark Jeans", "Light Jeans", "Jeans Pack", "Jeans Duo", "Jeans Bundle", "Jeans Gift"] },
+  { value: "ðŸ‘—", names: ["Dress", "Summer Dress", "Evening Dress", "Casual Dress", "Floral Dress", "Party Dress", "Dress Pack", "Dress Duo", "Dress Bundle", "Dress Gift"] },
+  { value: "ðŸ‘”", names: ["Shirt", "Formal Shirt", "Oxford Shirt", "Linen Shirt", "Checked Shirt", "Striped Shirt", "Shirt Pack", "Shirt Duo", "Shirt Bundle", "Shirt Gift"] },
+  { value: "ðŸ§¥", names: ["Jacket", "Denim Jacket", "Leather Jacket", "Puffer Jacket", "Blazer Jacket", "Rain Jacket", "Jacket Pack", "Jacket Duo", "Jacket Bundle", "Jacket Gift"] },
+  { value: "ðŸ§¢", names: ["Cap", "Baseball Cap", "Trucker Cap", "Snapback Cap", "Dad Cap", "Sport Cap", "Cap Pack", "Cap Duo", "Cap Bundle", "Cap Gift"] },
+  { value: "ðŸ‘Ÿ", names: ["Sneakers", "Running Sneakers", "Casual Sneakers", "High-Top Sneakers", "Court Sneakers", "Trail Sneakers", "Sneaker Pack", "Sneaker Duo", "Sneaker Bundle", "Sneaker Gift"] },
+  { value: "ðŸ‘ ", names: ["Heels", "Stiletto Heels", "Block Heels", "Kitten Heels", "Party Heels", "Dress Heels", "Heels Pack", "Heels Duo", "Heels Bundle", "Heels Gift"] },
+  { value: "ðŸ‘ž", names: ["Dress Shoes", "Oxford Shoes", "Derby Shoes", "Loafer Shoes", "Wingtip Shoes", "Leather Shoes", "Shoe Pack", "Shoe Duo", "Shoe Bundle", "Shoe Gift"] },
+  { value: "ðŸŽ’", names: ["Backpack", "Travel Backpack", "School Backpack", "Laptop Backpack", "Hiking Backpack", "Mini Backpack", "Backpack Pack", "Backpack Duo", "Backpack Bundle", "Backpack Gift"] },
+  { value: "ðŸ‘œ", names: ["Handbag", "Tote Bag", "Shoulder Bag", "Crossbody Bag", "Clutch Bag", "Satchel Bag", "Bag Pack", "Bag Duo", "Bag Bundle", "Bag Gift"] },
+  { value: "ðŸ’", names: ["Ring", "Gold Ring", "Silver Ring", "Diamond Ring", "Engagement Ring", "Wedding Ring", "Ring Box", "Ring Gift", "Ring Pair", "Ring Set"] },
+  { value: "âŒš", names: ["Watch", "Smart Watch", "Sport Watch", "Dress Watch", "Classic Watch", "Metal Watch", "Watch Box", "Watch Gift", "Watch Pair", "Watch Set"] },
+  { value: "ðŸ“±", names: ["Smartphone", "Phone Case", "Phone Charger", "Phone Screen Guard", "Phone Bundle", "Phone Earbuds", "Phone Power Bank", "Phone Mount", "Phone Cable", "Phone Stand"] },
+  { value: "ðŸ’»", names: ["Laptop", "Laptop Sleeve", "Laptop Stand", "Laptop Charger", "Laptop Dock", "Laptop Bundle", "Laptop Cooling Pad", "Laptop Bag", "Laptop Combo", "Laptop Kit"] },
+  { value: "ðŸŽ§", names: ["Headphones", "Wireless Headphones", "Noise Canceling Headphones", "Gaming Headset", "On-Ear Headphones", "Over-Ear Headphones", "Headphone Case", "Headphone Stand", "Headphone Bundle", "Headphone Gift"] },
+  { value: "ðŸ–¥ï¸", names: ["Monitor", "Gaming Monitor", "Office Monitor", "Curved Monitor", "4K Monitor", "Monitor Stand", "Monitor Arm", "Monitor Bundle", "Monitor Pair", "Monitor Gift"] },
+  { value: "ðŸ“º", names: ["Television", "Smart TV", "LED TV", "OLED TV", "4K TV", "TV Wall Mount", "TV Soundbar", "TV Bundle", "TV Gift", "TV Pair"] },
+  { value: "ðŸ§¸", names: ["Teddy Bear", "Stuffed Animal", "Plush Toy", "Toy Bundle", "Toy Gift", "Toy Set", "Toy Box", "Toy Basket", "Toy Pack", "Toy Plush"] },
+  { value: "ðŸ“š", names: ["Books", "Novel Pack", "Cookbook", "Children Book", "Notebook Set", "Journal Pack", "Planner", "Story Book", "Workbook", "Reference Book"] },
+  { value: "âœï¸", names: ["Pencil", "Pencil Pack", "Colored Pencil Set", "Mechanical Pencil", "Pencil Case", "Pencil Box", "Pencil Kit", "Pencil Duo", "Pencil Bundle", "Pencil Gift"] },
+  { value: "ðŸ–Šï¸", names: ["Pen", "Gel Pen", "Ballpoint Pen", "Fountain Pen", "Pen Pack", "Pen Case", "Pen Box", "Pen Set", "Pen Duo", "Pen Gift"] },
+  { value: "ðŸ“’", names: ["Notebook", "Spiral Notebook", "Hardcover Notebook", "Softcover Notebook", "Notebook Pack", "Notebook Bundle", "Notebook Set", "Notebook Gift", "Notebook Duo", "Notebook Trio"] },
+  { value: "ðŸ§´", names: ["Shampoo", "Conditioner", "Body Wash", "Face Wash", "Hair Serum", "Body Lotion", "Hand Cream", "Hair Oil", "Shower Gel", "Self Care Kit"] },
+  { value: "ðŸ§¹", names: ["Cleaning Mop", "Cleaning Kit", "Cleaning Spray", "Cleaning Cloths", "Cleaning Bucket", "Cleaning Gloves", "Cleaning Set", "Cleaning Bundle", "Cleaning Wipes", "Cleaning Pads"] },
+  { value: "ðŸ§º", names: ["Laundry Hamper", "Laundry Bag", "Laundry Basket", "Laundry Detergent", "Laundry Softener", "Laundry Pods", "Laundry Sheets", "Laundry Bundle", "Laundry Kit", "Laundry Pair"] },
+  { value: "ðŸ§Š", names: ["Ice Tray", "Ice Pack", "Ice Cube", "Ice Bag", "Ice Bucket", "Ice Maker", "Ice Scoop", "Ice Stones", "Ice Set", "Ice Bundle"] },
+  { value: "ðŸ›ï¸", names: ["Bed", "Bed Sheet", "Bed Set", "Duvet", "Comforter", "Pillow", "Pillow Cases", "Mattress Topper", "Bed Blanket", "Bed Throw"] },
+  { value: "ðŸ›‹ï¸", names: ["Sofa", "Sofa Cover", "Throw Pillow", "Cushion", "Sofa Set", "Sectional Sofa", "Loveseat", "Recliner Sofa", "Sofa Blanket", "Sofa Protector"] },
+  { value: "ðŸª‘", names: ["Chair", "Dining Chair", "Office Chair", "Desk Chair", "Bar Stool", "Folding Chair", "Patio Chair", "Gaming Chair", "Accent Chair", "Chair Cushion"] },
+  { value: "ðŸ½ï¸", names: ["Dinner Set", "Plate Set", "Bowl Set", "Cutlery Set", "Glass Set", "Mug Set", "Serving Tray", "Serving Bowl", "Kitchen Utensils", "Table Napkins"] },
+  { value: "ðŸ”ª", names: ["Kitchen Knife", "Chef Knife", "Knife Set", "Cutting Board", "Knife Sharpener", "Knife Block", "Paring Knife", "Bread Knife", "Utility Knife", "Knife Bundle"] },
+  { value: "ðŸ³", names: ["Frying Pan", "Nonstick Pan", "Skillet", "SautÃ© Pan", "Omelette Pan", "Griddle Pan", "Pan Set", "Pan Duo", "Pan Bundle", "Pan Gift"] },
+  { value: "ðŸ¥£", names: ["Mixing Bowl", "Salad Bowl", "Soup Bowl", "Cereal Bowl", "Bowl Set", "Bowl Duo", "Bowl Bundle", "Bowl Gift", "Bowl Pack", "Serving Bowl"] },
+  { value: "ðŸ§‚", names: ["Salt Shaker", "Pepper Grinder", "Spice Rack", "Spice Jars", "Seasoning Pack", "Herb Mix", "Spice Blend", "Salt Pack", "Pepper Pack", "Spice Kit"] },
+  { value: "ðŸª¥", names: ["Toothbrush", "Toothpaste", "Oral Care Kit", "Mouthwash", "Floss", "Toothbrush Pack", "Toothbrush Duo", "Toothbrush Bundle", "Toothbrush Gift", "Toothbrush Holder"] },
+  { value: "ðŸ¼", names: ["Baby Bottle", "Baby Formula", "Baby Food", "Baby Snack", "Baby Spoon", "Baby Bowl", "Baby Bib", "Baby Cup", "Baby Utensils", "Baby Sippy Cup"] },
+  { value: "ðŸ§¸", names: ["Baby Plush", "Baby Toy", "Baby Rattle", "Baby Teether", "Baby Book", "Baby Blocks", "Baby Gift", "Baby Set", "Baby Bundle", "Baby Stacker"] },
+  { value: "ðŸ¾", names: ["Pet Treats", "Pet Food", "Pet Toy", "Pet Leash", "Pet Collar", "Pet Bed", "Pet Bowl", "Pet Grooming", "Pet Shampoo", "Pet Bundle"] },
+  { value: "âš½", names: ["Soccer Ball", "Football", "Futsal Ball", "Training Ball", "Match Ball", "Ball Pump", "Ball Net", "Ball Pack", "Ball Duo", "Ball Bundle"] },
+  { value: "ðŸ€", names: ["Basketball", "Outdoor Basketball", "Indoor Basketball", "Training Basketball", "Match Basketball", "Basketball Pump", "Basketball Net", "Basketball Pack", "Basketball Duo", "Basketball Bundle"] },
+  { value: "ðŸ", names: ["Volleyball", "Beach Volleyball", "Indoor Volleyball", "Training Volleyball", "Match Volleyball", "Volleyball Pump", "Volleyball Net", "Volleyball Pack", "Volleyball Duo", "Volleyball Bundle"] },
+  { value: "ðŸ“", names: ["Ping Pong Paddle", "Ping Pong Balls", "Table Tennis Set", "Ping Pong Net", "Ping Pong Racket", "Ping Pong Case", "Ping Pong Pack", "Ping Pong Duo", "Ping Pong Bundle", "Ping Pong Gift"] },
+  { value: "ðŸŽ¯", names: ["Dartboard", "Dart Set", "Soft Tip Darts", "Steel Tip Darts", "Dart Flights", "Dart Shafts", "Dart Case", "Dart Pack", "Dart Bundle", "Dart Gift"] },
+  { value: "ðŸŽ²", names: ["Board Game", "Dice Set", "Card Game", "Puzzle", "Game Bundle", "Game Pack", "Strategy Game", "Family Game", "Party Game", "Game Gift"] },
+  { value: "ðŸ“¦", names: ["Storage Box", "Gift Box", "Shipping Box", "Moving Box", "Organizer Box", "Folding Box", "Clear Box", "Decor Box", "Box Bundle", "Box Set"] },
+  { value: "ðŸ›’", names: ["Shopping Cart Token", "Shopping Basket Tag", "Reusable Tote", "Market Bag", "Grocery Tote", "Foldable Tote", "Insulated Bag", "Eco Bag", "Canvas Bag", "Cart Clip"] },
+  { value: "ðŸ¦Š", names: ["Fox"] },
+  { value: "ðŸ¦", names: ["Lion"] },
+  { value: "ðŸ¯", names: ["Tiger"] },
+  { value: "ðŸ»", names: ["Bear"] },
+  { value: "ðŸ¼", names: ["Panda"] },
+  { value: "ðŸ¨", names: ["Koala"] },
+  { value: "ðŸµ", names: ["Monkey Face"] },
+  { value: "ðŸ’", names: ["Monkey"] },
+  { value: "ðŸ¦‰", names: ["Owl"] },
+  { value: "ðŸ§", names: ["Penguin"] },
+  { value: "ðŸ¦", names: ["Bird"] },
+  { value: "ðŸ¤", names: ["Baby Chick"] },
+  { value: "ðŸ£", names: ["Hatching Chick"] },
+  { value: "ðŸ¥", names: ["Front-Facing Baby Chick"] },
+  { value: "ðŸº", names: ["Wolf"] },
+  { value: "ðŸ—", names: ["Boar"] },
+  { value: "ðŸ´", names: ["Horse"] },
+  { value: "ðŸ¦„", names: ["Unicorn"] },
+  { value: "ðŸ", names: ["Honeybee"] },
+  { value: "ðŸ›", names: ["Bug"] },
+  { value: "ðŸ¦‹", names: ["Butterfly"] },
+  { value: "ðŸŒ", names: ["Snail"] },
+  { value: "ðŸ¢", names: ["Turtle"] },
+  { value: "ðŸ", names: ["Snake"] },
+  { value: "ðŸ¦–", names: ["T-Rex"] },
+  { value: "ðŸ¦•", names: ["Sauropod"] },
+  { value: "ðŸ™", names: ["Octopus"] },
+  { value: "ðŸ¦‘", names: ["Squid"] },
+  { value: "ðŸ ", names: ["Tropical Fish"] },
+  { value: "ðŸ³", names: ["Spouting Whale"] },
+  { value: "ðŸ¬", names: ["Dolphin"] },
+  { value: "ðŸ‹", names: ["Whale"] },
+  { value: "ðŸŠ", names: ["Crocodile"] },
+  { value: "ðŸ¦ˆ", names: ["Shark"] },
+  { value: "ðŸ…", names: ["Tiger (Alt)"] },
+  { value: "ðŸ¦“", names: ["Zebra"] },
+  { value: "ðŸ˜", names: ["Elephant"] },
+  { value: "ðŸ¦", names: ["Rhinoceros"] },
+  { value: "ðŸ¦›", names: ["Hippopotamus"] },
+  { value: "ðŸ«", names: ["Two-Hump Camel"] },
+  { value: "ðŸª", names: ["Single-Hump Camel"] },
+  { value: "ðŸ¦’", names: ["Giraffe"] },
+  { value: "ðŸƒ", names: ["Water Buffalo"] },
+  { value: "ðŸ‚", names: ["Ox"] },
+  { value: "ðŸ„", names: ["Cow"] },
+  { value: "ðŸ", names: ["Goat"] },
+  { value: "ðŸ‘", names: ["Sheep"] },
+  { value: "ðŸŽ", names: ["Racehorse"] },
+  { value: "ðŸ–", names: ["Pig"] },
+  { value: "ðŸ“", names: ["Rooster"] },
 ];
 
 const CATEGORY_TAG_OPTIONS = [
@@ -287,12 +348,12 @@ const EMOJI_OPTIONS = Array.from(
   new Map(
     EMOJI_GROUPS.map(({ value, names }) => {
       const normalized = normalizeEmoji(value);
-      return [normalized, names[0] ?? "Emoji"];
+      return [normalized, names[0] || "Emoji"];
     }),
   ).entries(),
 )
   .map(([value, label]) => ({ value, label }))
-  .sort((a, b) => a.label.localeCompare(b.label));
+  .sort((a, b) => String(a.label).localeCompare(String(b.label)));
 
 // Admin auth context (local to this page file)
 type AdminUser = any;
@@ -302,7 +363,19 @@ const normalizeAdminUser = (rawUser: any): AdminUser | null => {
   return {
     ...rawUser,
     memberships: Array.isArray(rawUser.memberships) ? rawUser.memberships : [],
-    globalRole: rawUser.globalRole ?? rawUser.global_role ?? rawUser.role ?? null,
+        details: [],
+        businessAddress: "",
+        businessCity: "",
+        businessState: "",
+        businessZipCode: "",
+        businessCountry: "",
+        businessType: "",
+        businessRegNumber: "",
+        businessTaxId: "",
+        bankAccountName: "",
+        bankName: "",
+        bankAccountNumber: "",
+        bankRoutingNumber: "",
   };
 };
 
@@ -380,7 +453,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
         if (cancelled) return;
         const normalizedUser = normalizeAdminUser(sessionUser);
         setUser(normalizedUser);
-        const memberships = normalizedUser?.memberships ?? [];
+        const memberships = normalizedUser?.memberships || [];
         if (memberships.length > 0 && !selectedEstateId) {
           setSelectedEstateId(memberships[0].estateId);
         }
@@ -423,7 +496,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
       sessionStorage.setItem("admin_refresh_token", response.refreshToken);
 
       // Restore estate selection if user has memberships
-      const memberships = normalizedUser?.memberships ?? [];
+      const memberships = normalizedUser?.memberships || [];
       if (memberships.length > 0 && !selectedEstateId) {
         const firstEstate = memberships[0].estateId;
         setSelectedEstateId(firstEstate);
@@ -447,7 +520,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
         // Support two response shapes:
         // 1) token-based: { accessToken, refreshToken, user }
         // 2) session-based: user object returned directly
-        const userObj = response?.user ?? response;
+        const userObj = response?.user || response;
         const accessToken = response?.accessToken ?? null;
         const refreshToken = response?.refreshToken ?? null;
 
@@ -465,7 +538,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
         setUser(normalizedUser);
 
         // Auto-select first estate for tenant scoping
-        const memberships = normalizedUser?.memberships ?? [];
+        const memberships = normalizedUser?.memberships || [];
         if (memberships.length > 0) {
           const firstEstate = memberships[0].estateId;
           setSelectedEstateId(firstEstate);
@@ -576,7 +649,7 @@ const AdminLogin = () => {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                 required
                 data-testid="input-admin-password"
               />
@@ -609,8 +682,8 @@ const AdminSidebar = ({
   setIsMobileOpen: (open: boolean) => void;
 }) => {
   const { user, logout } = useAdminAuth();
-const [location, setLocation] = useLocation();
-  const menuItems = [
+  const [location, setLocation] = useLocation();
+  const menuItems: Array<{ id: string; label: string; icon: any }> = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "estates", label: "Estates", icon: Building2 },
     { id: "users", label: "Users", icon: Users },
@@ -631,6 +704,15 @@ const [location, setLocation] = useLocation();
   ];
 
   const isSuperAdmin = user?.globalRole === "super_admin";
+
+  if (isSuperAdmin) {
+    menuItems.push(
+      { id: "ai-conversations", label: "AI Conversations", icon: MessageSquare },
+      { id: "ai-prepared-requests", label: "AI Prepared Requests", icon: MessageSquare },
+      { id: "pricing-rules", label: "Pricing Rules", icon: Tags },
+      { id: "provider-matching", label: "Provider Matching", icon: UserCheck },
+    );
+  }
 
   return (
     <>
@@ -758,6 +840,635 @@ const [location, setLocation] = useLocation();
   );
 };
 
+const AiConversationsPanel = () => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  const {
+    data: rows = [],
+    isLoading,
+    error,
+  } = useQuery<any[]>({
+    queryKey: ["admin-ai-conversations"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/ai/conversations"),
+    enabled: isSuperAdmin,
+  });
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>AI Conversations</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>AI Conversations</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+        ) : error ? (
+          <p className="text-sm text-destructive">Failed to load AI conversations.</p>
+        ) : (
+          <div className="w-full overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Conversation</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Urgency</TableHead>
+                  <TableHead>Approach</TableHead>
+                  <TableHead>Confidence</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(rows || []).map((r: any) => (
+                  <TableRow key={r.conversationId}>
+                    <TableCell className="font-mono text-xs">{r.conversationId}</TableCell>
+                    <TableCell>{r.category}</TableCell>
+                    <TableCell>{r.urgency}</TableCell>
+                    <TableCell>{r.recommendedApproach}</TableCell>
+                    <TableCell>{Number.isFinite(Number(r.confidenceScore)) ? Number(r.confidenceScore) : "â€”"}</TableCell>
+                    <TableCell>{r.status}</TableCell>
+                    <TableCell>
+                      {r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "â€”"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+const AiPreparedRequestsPanel = () => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  const {
+    data: rows = [],
+    isLoading,
+    error,
+  } = useQuery<any[]>({
+    queryKey: ["admin-ai-prepared-requests"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/ai/prepared-requests"),
+    enabled: isSuperAdmin,
+  });
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>AI Prepared Requests</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>AI Prepared Requests</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+        ) : error ? (
+          <p className="text-sm text-destructive">Failed to load prepared requests.</p>
+        ) : (
+          <div className="w-full overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Resident</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Urgency</TableHead>
+                  <TableHead>Headline</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>Images</TableHead>
+                  <TableHead>Estimate</TableHead>
+                  <TableHead>Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(rows || []).map((r: any) => {
+                  const est = r.priceEstimate;
+                  const estimateText =
+                    est && Number.isFinite(Number(est.min)) && Number.isFinite(Number(est.max))
+                      ? `${Number(est.min)} - ${Number(est.max)}`
+                      : "â€”";
+
+                  return (
+                    <TableRow key={r.id}>
+                      <TableCell className="font-mono text-xs">{r.resident}</TableCell>
+                      <TableCell>{r.category}</TableCell>
+                      <TableCell>{r.urgency}</TableCell>
+                      <TableCell className="max-w-[420px] truncate">{r.headline || "—"}</TableCell>
+                      <TableCell className="max-w-[220px] truncate">{r.scope || "—"}</TableCell>
+                      <TableCell>{Number.isFinite(Number(r.imageCount)) ? Number(r.imageCount) : 0}</TableCell>
+                      <TableCell>{estimateText}</TableCell>
+                      <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "â€”"}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+const PricingRulesPanel = () => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+  const { toast } = useToast();
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    name: "",
+    category: "",
+    urgency: "",
+    minPrice: "0",
+    maxPrice: "0",
+  });
+
+  const {
+    data: rows = [],
+    isLoading,
+    error,
+  } = useQuery<any[]>({
+    queryKey: ["admin-pricing-rules"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/pricing-rules"),
+    enabled: isSuperAdmin,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (ruleData: any) =>
+      adminApiRequest("POST", "/api/admin/pricing-rules", ruleData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-pricing-rules"] });
+      setIsCreateDialogOpen(false);
+      resetForm();
+      toast({ title: "Pricing rule created successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error creating pricing rule",
+        description: error.response?.data?.error || "Failed to create pricing rule",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const resetForm = () => {
+    setFormData({
+      name: "",
+      category: "",
+      urgency: "",
+      minPrice: "0",
+      maxPrice: "0",
+    });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name.trim()) {
+      toast({
+        title: "Validation Error",
+        description: "Pricing rule name is required",
+        variant: "destructive",
+      });
+      return;
+    }
+    createMutation.mutate(formData);
+  };
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Pricing Rules</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle>Pricing Rules</CardTitle>
+          <Button onClick={() => setIsCreateDialogOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Pricing Rule
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+        ) : error ? (
+          <p className="text-sm text-destructive">Failed to load pricing rules.</p>
+        ) : (rows || []).length === 0 ? (
+          <div className="py-10 text-center">
+            <p className="text-sm text-muted-foreground">
+              No pricing rules yet. Create one to get started.
+            </p>
+            <Button
+              className="mt-4"
+              onClick={() => setIsCreateDialogOpen(true)}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Create First Rule
+            </Button>
+          </div>
+        ) : (
+          <div className="w-full overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Urgency</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>Min</TableHead>
+                  <TableHead>Max</TableHead>
+                  <TableHead>Active</TableHead>
+                  <TableHead>Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(rows || []).map((r: any) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="font-medium">{r.name}</TableCell>
+                    <TableCell>{r.category || "—"}</TableCell>
+                    <TableCell>{r.urgency || "—"}</TableCell>
+                    <TableCell className="max-w-[240px] truncate">{r.scope || "—"}</TableCell>
+                    <TableCell>{r.minPrice}</TableCell>
+                    <TableCell>{r.maxPrice}</TableCell>
+                    <TableCell>{r.isActive ? "Yes" : "No"}</TableCell>
+                    <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "â€”"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="w-[95vw] max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Create New Pricing Rule</DialogTitle>
+            <DialogDescription>
+              Add a pricing rule for a service category with a specific urgency level.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <Label className="text-sm font-medium">Rule Name *</Label>
+              <Input
+                value={formData.name}
+                onChange={(e) =>
+                  setFormData({ ...formData, name: e.target.value })
+                }
+                placeholder="e.g., Plumbing - Standard"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Category</Label>
+                <Select
+                  value={formData.category}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, category: value })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="electrician">Electrician</SelectItem>
+                    <SelectItem value="plumber">Plumber</SelectItem>
+                    <SelectItem value="carpenter">Carpenter</SelectItem>
+                    <SelectItem value="hvac_technician">HVAC Technician</SelectItem>
+                    <SelectItem value="painter">Painter</SelectItem>
+                    <SelectItem value="tiler">Tiler</SelectItem>
+                    <SelectItem value="mason">Mason</SelectItem>
+                    <SelectItem value="roofer">Roofer</SelectItem>
+                    <SelectItem value="gardener">Gardener</SelectItem>
+                    <SelectItem value="cleaner">Cleaner</SelectItem>
+                    <SelectItem value="welder">Welder</SelectItem>
+                    <SelectItem value="appliance_repair">Appliance Repair</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Urgency</Label>
+                <Select
+                  value={formData.urgency}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, urgency: value })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select urgency" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="emergency">Emergency</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Min Price</Label>
+                <Input
+                  type="number"
+                  value={formData.minPrice}
+                  onChange={(e) =>
+                    setFormData({ ...formData, minPrice: e.target.value })
+                  }
+                  placeholder="0"
+                  min="0"
+                />
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Max Price</Label>
+                <Input
+                  type="number"
+                  value={formData.maxPrice}
+                  onChange={(e) =>
+                    setFormData({ ...formData, maxPrice: e.target.value })
+                  }
+                  placeholder="0"
+                  min="0"
+                />
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsCreateDialogOpen(false);
+                  resetForm();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={createMutation.isPending}>
+                {createMutation.isPending && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                {createMutation.isPending ? "Creating..." : "Create Rule"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+    </>
+  );
+};
+
+const ProviderMatchingPanel = () => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  const {
+    data: rows = [],
+    isLoading,
+    error,
+  } = useQuery<any[]>({
+    queryKey: ["admin-provider-matching"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/providers/matching"),
+    enabled: isSuperAdmin,
+  });
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Provider Matching</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Provider Matching</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+        ) : error ? (
+          <p className="text-sm text-destructive">Failed to load provider matching settings.</p>
+        ) : (
+          <div className="w-full overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Approved</TableHead>
+                  <TableHead>Enabled</TableHead>
+                  <TableHead>Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(rows || []).map((p: any) => (
+                  <TableRow key={p.id}>
+                    <TableCell className="font-medium">{p.name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{p.email}</TableCell>
+                    <TableCell>{p.isApproved ? "Yes" : "No"}</TableCell>
+                    <TableCell>{p.matching?.isEnabled === false ? "No" : "Yes"}</TableCell>
+                    <TableCell>
+                      {p.matching?.updatedAt ? new Date(p.matching.updatedAt).toLocaleString() : "â€”"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+const AnalyticsPanel = ({ orderStats }: { orderStats: any }) => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Analytics</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+          Analytics & Insights
+        </h1>
+        <p className="text-gray-600 dark:text-gray-400">
+          Monitor orders, revenue, and platform performance metrics.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Total Orders</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{orderStats?.totalOrders || 0}</p>
+            <p className="text-xs text-muted-foreground mt-1">All orders</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">
+              â‚¦{(orderStats?.totalRevenue || 0).toLocaleString()}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">Across all orders</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Completed Orders</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{orderStats?.completedOrders || 0}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {orderStats?.totalOrders
+                ? ((((orderStats?.completedOrders || 0) / (orderStats?.totalOrders || 1)) * 100).toFixed(1))
+                : 0}
+              % completion rate
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Pending Orders</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{orderStats?.pendingOrders || 0}</p>
+            <p className="text-xs text-muted-foreground mt-1">Awaiting completion</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Order Status Distribution</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {orderStats?.byStatus ? (
+              Object.entries(orderStats.byStatus).map(([status, count]: [string, any]) => (
+                <div key={status} className="flex items-center justify-between">
+                  <p className="text-sm font-medium capitalize">{status}</p>
+                  <div className="flex items-center gap-2">
+                    <div className="w-32 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary"
+                        style={{
+                          width: `${((count / (orderStats?.totalOrders || 1)) * 100).toFixed(0)}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="text-sm text-muted-foreground">{count}</span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">No order data available</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Orders</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {orderStats?.recentOrders && orderStats.recentOrders.length > 0 ? (
+            <div className="space-y-2 text-sm">
+              {orderStats.recentOrders.map((order: any) => (
+                <div key={order.id} className="flex justify-between items-center py-2 border-b last:border-0">
+                  <div>
+                    <p className="font-medium">{order.resident || "Unknown"}</p>
+                    <p className="text-xs text-muted-foreground">{order.service || order.category}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-medium">â‚¦{(order.totalAmount || 0).toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{order.status}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No recent orders</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
 
 
 // Users Management Component
@@ -782,11 +1493,29 @@ const UsersManagement = () => {
     estateId: "",
     role: "",
   });
+  const [editingMembershipId, setEditingMembershipId] = useState<string | null>(null);
+  const [editingMembershipValues, setEditingMembershipValues] = useState({ estateId: "", role: "" });
   const [previewUser, setPreviewUser] = useState<any>(null);
 
   const { toast } = useToast();
   const { user } = useAdminAuth();
   const isSuperAdmin = user?.globalRole === "super_admin";
+
+  const updateMembershipMutation = useMutation({
+    mutationFn: ({ id, updates }: { id: string; updates: any }) =>
+      adminApiRequest("PATCH", `/api/admin/memberships/${id}`, updates),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-memberships"] });
+      // invalidate user-specific memberships if dialog open
+      if (membershipUser) {
+        const userId = membershipUser._id || membershipUser.id;
+        queryClient.invalidateQueries({ queryKey: ["admin-user-memberships", userId] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      toast({ title: "Membership updated" });
+      setEditingMembershipId(null);
+    },
+  });
 
   // Initialize view mode from localStorage estate context
   useEffect(() => {
@@ -799,7 +1528,7 @@ const UsersManagement = () => {
     }
   }, []);
 
-  // Users (unified) — array normalized for the table
+  // Users (unified) â€” array normalized for the table
   const { data: users = [], isLoading } = useQuery<any[]>({
     queryKey: [
       `${import.meta.env.VITE_API_URL}/api/admin/users/all`,
@@ -811,7 +1540,7 @@ const UsersManagement = () => {
         role: roleFilter === "all" ? undefined : roleFilter, // 'admin' | 'resident' | 'provider'
       });
       // Always return an array for the table:
-      return Array.isArray(r) ? r : (r?.items ?? []);
+      return Array.isArray(r) ? r : (r?.items || []);
     },
   });
 
@@ -853,7 +1582,7 @@ const UsersManagement = () => {
     }
   };
 
-  // Memberships query – use the correct endpoint
+  // Memberships query â€“ use the correct endpoint
   const { data: userMemberships } = useQuery({
     queryKey: ["admin-user-memberships", membershipUser?._id || membershipUser?.id],
     queryFn: () => {
@@ -865,7 +1594,7 @@ const UsersManagement = () => {
     enabled: !!membershipUser,
   });
 
-  // Toggle active/inactive – use /api/admin/users/{id}
+  // Toggle active/inactive â€“ use /api/admin/users/{id}
   const toggleUserStatusMutation = useMutation({
     mutationFn: ({ userId, isActive }: { userId: string; isActive: boolean }) =>
       adminApiRequest("PATCH", `/api/admin/users/${userId}`, { isActive }),
@@ -903,7 +1632,7 @@ const UsersManagement = () => {
     },
   });
 
-  // Reset password (admin) – calls server endpoint that may return a generated temp password
+  // Reset password (admin) â€“ calls server endpoint that may return a generated temp password
   const [showTempPasswordModal, setShowTempPasswordModal] = useState(false);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [tempPasswordUser, setTempPasswordUser] = useState<any>(null);
@@ -947,7 +1676,7 @@ const UsersManagement = () => {
     deleteUserMutation.mutate(userId);
   };
 
-  // Create user – POST to /api/admin/users
+  // Create user â€“ POST to /api/admin/users
   const createUserMutation = useMutation({
     mutationFn: (userData: any) =>
       adminApiRequest("POST", "/api/admin/users", userData),
@@ -966,7 +1695,7 @@ const UsersManagement = () => {
     },
   });
 
-  // Update user – PATCH to /api/admin/users/{id}
+  // Update user â€“ PATCH to /api/admin/users/{id}
   const updateUserMutation = useMutation({
     mutationFn: ({ userId, userData }: { userId: string; userData: any }) =>
       adminApiRequest("PATCH", `/api/admin/users/${userId}`, userData),
@@ -1432,7 +2161,7 @@ const UsersManagement = () => {
                                 setResetConfirmUserId(userId);
                                 setResetConfirmOpen(true);
                               }}
-                              disabled={(resetPasswordMutation as any).isPending ?? false}
+                              disabled={(resetPasswordMutation as any).isPending || false}
                               data-testid={`button-reset-password-${userId}`}
                             >
                               <ShieldOff className="w-4 h-4 text-yellow-600" />
@@ -1472,7 +2201,7 @@ const UsersManagement = () => {
             }
           }}
         >
-          <DialogContent className="max-w-md">
+          <DialogContent className="w-[70vw] max-w-5xl">
             <DialogHeader>
               <DialogTitle>
                 {editingUser ? "Edit User" : "Add New User"}
@@ -1599,7 +2328,7 @@ const UsersManagement = () => {
 
         {/* Estate Membership Management Dialog */}
         <Dialog open={showMemberships} onOpenChange={setShowMemberships}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="w-[70vw] max-w-5xl">
             <DialogHeader>
               <DialogTitle>
                 Manage Estate Memberships - {membershipUser?.name}
@@ -1614,35 +2343,111 @@ const UsersManagement = () => {
                 <h4 className="font-medium mb-3">Current Estate Memberships</h4>
                 <div className="space-y-2 max-h-40 overflow-y-auto">
                   {userMemberships?.map((membership: any) => (
-                    <div
-                      key={`${membership.userId}-${membership.estateId}`}
-                      className="flex items-center justify-between p-3 border rounded-lg"
-                      data-testid={`membership-${membership.estateId}`}
-                    >
-                      <div>
-                        <span className="font-medium">
-                          Estate {membership.estateId}
-                        </span>
-                        <Badge variant="secondary" className="ml-2">
-                          {membership.role}
-                        </Badge>
-                      </div>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() =>
-                          deleteMembershipMutation.mutate({
-                            userId: membership.userId,
-                            estateId: membership.estateId,
-                          })
-                        }
-                        disabled={deleteMembershipMutation.isPending}
-                        data-testid={`button-remove-membership-${membership.estateId}`}
-                      >
-                        {deleteMembershipMutation.isPending
-                          ? "Removing..."
-                          : "Remove"}
-                      </Button>
+                    <div key={`${membership.userId}-${membership.estateId}`}>
+                      {editingMembershipId === membership.id ? (
+                        <div className="flex items-center justify-between p-3 border rounded-lg">
+                          <div className="flex space-x-2 items-center">
+                            <Select
+                              value={editingMembershipValues.estateId}
+                              onValueChange={(value) =>
+                                setEditingMembershipValues({ ...editingMembershipValues, estateId: value })
+                              }
+                            >
+                              <SelectTrigger className="min-w-[200px]">
+                                <SelectValue placeholder="Select Estate" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {estates?.map((estate: any, idx: number) => {
+                                  const estateId = estate._id || estate.id || String(idx);
+                                  return (
+                                    <SelectItem key={estateId} value={estateId}>
+                                      {estate.name}
+                                    </SelectItem>
+                                  );
+                                })}
+                              </SelectContent>
+                            </Select>
+
+                            <Select
+                              value={editingMembershipValues.role}
+                              onValueChange={(value) =>
+                                setEditingMembershipValues({ ...editingMembershipValues, role: value })
+                              }
+                            >
+                              <SelectTrigger className="w-40">
+                                <SelectValue placeholder="Select Role" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="resident">Resident</SelectItem>
+                                <SelectItem value="provider">Provider</SelectItem>
+                                <SelectItem value="estate_admin">Estate Admin</SelectItem>
+                                <SelectItem value="moderator">Moderator</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="flex space-x-2">
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                updateMembershipMutation.mutate({
+                                  id: membership.id,
+                                  updates: editingMembershipValues,
+                                })
+                              }
+                              disabled={updateMembershipMutation.isPending}
+                            >
+                              {updateMembershipMutation.isPending ? "Saving..." : "Save"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setEditingMembershipId(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className="flex items-center justify-between p-3 border rounded-lg"
+                          data-testid={`membership-${membership.estateId}`}
+                        >
+                          <div>
+                            <span className="font-medium">{membership.estateName || `Estate ${membership.estateId}`}</span>
+                            <Badge variant="secondary" className="ml-2">
+                              {membership.role}
+                            </Badge>
+                          </div>
+
+                          <div className="flex space-x-2">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                setEditingMembershipId(membership.id);
+                                setEditingMembershipValues({ estateId: membership.estateId, role: membership.role });
+                              }}
+                            >
+                              Edit
+                            </Button>
+
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() =>
+                                deleteMembershipMutation.mutate({
+                                  userId: membership.userId,
+                                  estateId: membership.estateId,
+                                })
+                              }
+                              disabled={deleteMembershipMutation.isPending}
+                              data-testid={`button-remove-membership-${membership.estateId}`}
+                            >
+                              {deleteMembershipMutation.isPending ? "Removing..." : "Remove"}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                   {(!userMemberships || userMemberships.length === 0) && (
@@ -1806,7 +2611,7 @@ const UsersManagement = () => {
         </Dialog>
         {/* Confirmation dialog before performing reset */}
         <Dialog open={resetConfirmOpen} onOpenChange={(open) => setResetConfirmOpen(open)}>
-          <DialogContent className="max-w-sm">
+          <DialogContent className="w-[70vw] max-w-5xl">
             <DialogHeader>
               <DialogTitle>Confirm password reset</DialogTitle>
               <DialogDescription>
@@ -1824,7 +2629,7 @@ const UsersManagement = () => {
                   setResetConfirmUserId(null);
                   setResetConfirmUser(null);
                 }}
-                disabled={(resetPasswordMutation as any).isPending ?? false}
+                disabled={(resetPasswordMutation as any).isPending || false}
               >
                 {(resetPasswordMutation as any).isPending ? "Resetting..." : "Confirm reset"}
               </Button>
@@ -1890,6 +2695,8 @@ const ProvidersManagement = () => {
   const [previewProvider, setPreviewProvider] = useState<any>(null);
   const [previewImage, setPreviewImage] = useState<string>("");
   const [previewData, setPreviewData] = useState({
+    firstName: "",
+    lastName: "",
     name: "",
     email: "",
     phone: "",
@@ -1939,7 +2746,8 @@ const ProvidersManagement = () => {
   const providerForm = useForm<CreateProviderInput>({
     resolver: zodResolver(createProviderSchema),
     defaultValues: {
-      name: "",
+      firstName: "",
+      lastName: "",
       email: "",
       phone: "",
       password: "",
@@ -1994,17 +2802,25 @@ const ProvidersManagement = () => {
   });
   const categoryOptions =
     Array.isArray(categoriesList) && categoriesList.length > 0
-      ? categoriesList
-          .filter((c: any) => c?.key || c?.name)
-          .map((c: any) => ({
-            value: c.key || c.name,
-            label: c.name || c.key,
-          }))
+      ? Array.from(
+          new Map(
+            categoriesList
+              .filter((c: any) => c?.key || c?.name)
+              .map((c: any) => {
+                const value = c.key || c.name;
+                return [value, { value, label: c.name || c.key }];
+              }),
+          ).values(),
+        )
       : [
-      { value: "electrician", label: "Electrician" },
-      { value: "plumber", label: "Plumber" },
-      { value: "carpenter", label: "Carpenter" },
-      { value: "market_runner", label: "Market Runner" },
+      { value: "surveillance_monitoring", label: "Surveillance monitoring" },
+      { value: "cleaning_janitorial", label: "Cleaning & janitorial" },
+      { value: "catering_services", label: "Catering Services" },
+      { value: "it_support", label: "IT Support" },
+      { value: "maintenance_repair", label: "Maintenance & Repair" },
+      { value: "marketing_advertising", label: "Marketing & Advertising" },
+      { value: "home_tutors", label: "Home tutors" },
+      { value: "furniture_making", label: "Furniture making" },
     ];
   useEffect(() => {
     if (!providerRequestInitializedRef.current) {
@@ -2067,18 +2883,11 @@ const ProvidersManagement = () => {
     : [];
 
   const approveMutation = useMutation({
-    mutationFn: ({
-      providerId,
-      approved,
-    }: {
-      providerId: string;
-      approved: boolean;
-    }) =>
-      adminApiRequest(
-        "PATCH",
-        `/api/admin/providers/${providerId}/approval`,
-        { approved },
-      ),
+    // Use the unified users endpoint to toggle approval to avoid depending on
+    // an unstable providers-specific approval route. This updates the user's
+    // `isApproved` flag directly.
+    mutationFn: ({ providerId, approved }: { providerId: string; approved: boolean }) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, { isApproved: approved }),
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/providers"] });
@@ -2223,13 +3032,15 @@ const ProvidersManagement = () => {
     setPreviewProvider(provider);
     setPreviewImage(provider.avatar || "");
     setPreviewData({
-      name: provider.name || "",
-      email: provider.email || "",
-      phone: provider.phone || "",
-      company: provider.company || "",
-      categories: Array.isArray(provider.categories) ? provider.categories : [],
-      experience: provider.experience || 0,
-      description: provider.description || "",
+        firstName: provider.firstName || (provider.name ? provider.name.split(" ")[0] : ""),
+        lastName: provider.lastName || (provider.name ? provider.name.split(" ").slice(1).join(" ") : ""),
+        email: provider.email || "",
+        phone: provider.phone || "",
+        company: provider.company || "",
+        categories: Array.isArray(provider.categories) ? provider.categories : [],
+        experience: provider.experience || 0,
+        description: provider.description || "",
+        name: ""
     });
   };
 
@@ -2237,7 +3048,8 @@ const ProvidersManagement = () => {
     setEditingProvider(provider);
     setShowAddProvider(true);
     providerForm.reset({
-      name: provider.name || "",
+      firstName: provider.firstName || (provider.name ? provider.name.split(" ")[0] : ""),
+      lastName: provider.lastName || (provider.name ? provider.name.split(" ").slice(1).join(" ") : ""),
       email: provider.email || "",
       phone: provider.phone || "",
       password: "",
@@ -2480,7 +3292,7 @@ const ProvidersManagement = () => {
 
       {/* Providers Table */}
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="pt-4 px-4 pb-4">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2697,7 +3509,7 @@ const ProvidersManagement = () => {
                       {previewData.company || "Independent"}
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {previewProvider?.location || "Location not provided"} ·{" "}
+                      {previewProvider?.location || "Location not provided"} Â·{" "}
                       <a
                         href={previewData.email ? `mailto:${previewData.email}` : "#"}
                         className="text-blue-600 dark:text-blue-400"
@@ -2731,7 +3543,7 @@ const ProvidersManagement = () => {
                 <div className="rounded-xl border bg-gray-50 dark:bg-gray-800/50 p-4">
                   <p className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Experience</p>
                   <p className="text-sm text-muted-foreground">
-                    {previewData.experience || 0} years · {previewData.description || "No summary provided"}
+                    {previewData.experience || 0} years Â· {previewData.description || "No summary provided"}
                   </p>
                 </div>
               </div>
@@ -2739,11 +3551,11 @@ const ProvidersManagement = () => {
               <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Email</p>
-                  <p className="font-medium">{previewData.email || "—"}</p>
+                  <p className="font-medium">{previewData.email || "â€”"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Phone</p>
-                  <p className="font-medium">{previewData.phone || "—"}</p>
+                  <p className="font-medium">{previewData.phone || "â€”"}</p>
                 </div>
                 <div className="md:col-span-2">
                   <p className="text-xs text-muted-foreground mb-2">Categories</p>
@@ -2795,15 +3607,34 @@ const ProvidersManagement = () => {
                 <div>
                   <FormField
                     control={providerForm.control}
-                    name="name"
+                    name="firstName"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Full Name *</FormLabel>
+                        <FormLabel>First Name *</FormLabel>
                         <FormControl>
                           <Input
-                            placeholder="Enter provider name"
+                            placeholder="First name"
                             {...field}
-                            data-testid="input-provider-name"
+                            data-testid="input-provider-firstname"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <div>
+                  <FormField
+                    control={providerForm.control}
+                    name="lastName"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Last Name *</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="Last name"
+                            {...field}
+                            data-testid="input-provider-lastname"
                           />
                         </FormControl>
                         <FormMessage />
@@ -2975,7 +3806,7 @@ const ProvidersManagement = () => {
                           <PopoverContent
                             align="start"
                             sideOffset={0}
-                            className="w-full p-0"
+                            className="w-[var(--radix-popover-trigger-width)] p-0"
                           >
                             <ScrollArea className="max-h-64 sm:max-h-80 overflow-y-auto p-3">
                               <div className="space-y-2">
@@ -3076,125 +3907,31 @@ const CategoriesManagement = () => {
     tag: DEFAULT_CATEGORY_TAG,
   });
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const [iconSearch, setIconSearch] = useState("");
   const BASE_EMOJI_OPTIONS = [
-    "🔧",
-    "🧹",
-    "🛠️",
-    "⚡",
-    "🚰",
-    "🔌",
-    "📦",
-    "🧑‍🔧",
-    "🏠",
-    "🧰",
-    "🚿",
-    "✨",
-    "🧼",
-    "🧽",
-    "🪠",
-    "🪜",
-    "🔨",
-    "⛑️",
+    "🔧", "🧹", "🛠️", "⚡", "🚰", "🔌", "🔦", "🧑‍🔧", "🏠", "🧰",
+    "🚿", "✨", "🧼", "🧽", "🪣", "🪜", "🔨", "⛏️",
   ];
 
   const SERVICE_CATEGORY_EMOJI = [
-    "🛡️",
-    "🚶‍♂️",
-    "🚧",
-    "🎥",
-    "🚨",
-    "👮‍♂️",
-    "🚗",
-    "🚌",
-    "🚕",
-    "🚐",
-    "🚛",
-    "⚙️",
-    "💡",
-    "💧",
-    "🌊",
-    "🗑️",
-    "🏗️",
-    "🧾",
-    "🌳",
-    "🐜",
-    "🌬️",
-    "🔋",
-    "🪚",
-    "🔑",
-    "🎨",
-    "🔥",
-    "🧱",
-    "🏃‍♂️",
-    "🚑",
-    "🩺",
-    "🧘‍♂️",
-    "👩‍⚕️",
-    "👵",
-    "💊",
-    "👶",
-    "👩‍🍼",
-    "🚘",
-    "🌱",
-    "🏊‍♂️",
-    "🥦",
-    "🧺",
-    "🍱",
-    "🥕",
-    "🛒",
-    "🧴",
-    "👕",
-    "👔",
-    "🛋️",
-    "🐭",
-    "🚫",
-    "🐾",
-    "✂️",
-    "🐶",
-    "🐕",
-    "🦴",
-    "🎉",
-    "⚽",
-    "🎊",
-    "🏡",
-    "🏊‍♀️",
-    "🎓",
-    "📚",
-    "🏫",
-    "🎵",
-    "💃",
-    "💻",
-    "🔁",
-    "🏬",
-    "📄",
-    "💳",
-    "📥",
-    "💰",
-    "🧾",
-    "💵",
-    "📁",
-    "🪪",
-    "👨‍👩‍👧‍👦",
-    "🚙",
-    "📘",
-    "🏢",
-    "📢",
-    "📣",
-    "📯",
-    "📊",
-    "🔒",
-    "📈",
-    "🤖",
-    "📱",
-    "📨",
-    "🤝",
-    "🚚",
-    "🔍",
-    "🕒",
-    "✅",
+    "🛡️", "🚶‍♂️", "🚧", "🎥", "🚨", "👮‍♂️", "🚗", "🚌", "🚕", "🚙",
+    "🚛", "⚙️", "💡", "💧", "🌊", "🗑️", "🗺️", "🧾", "🌳", "🌾",
+    "🌬️", "📋", "🪚", "🔑", "🎨", "📥", "🧱", "🏃‍♂️", "🚑", "🩺",
+    "🧘‍♂️", "👨‍⚕️", "👨‍👩‍👧‍👦", "🚘", "🌱", "🏊‍♂️", "🥦", "🧺", "🐱", "🥕",
+    "🦴", "🎉", "⚽", "🎊", "🎬", "🏊‍♀️", "🎮", "🎵", "🎸", "🎹",
+    "📞", "🎭", "📚", "🫎", "🚙", "📅", "🏠", "💬", "🎓", "📲",
+    "🎪", "⚙️", "🔐", "🎯", "🔒", "🔓", "🎈", "🎀", "📍", "✅",
   ];
 
-  const emojiOptions = Array.from(new Set([...BASE_EMOJI_OPTIONS, ...SERVICE_CATEGORY_EMOJI]));
+  const emojiOptions = Array.from(
+    new Set([
+      ...BASE_EMOJI_OPTIONS,
+      ...SERVICE_CATEGORY_EMOJI,
+      ...EMOJI_OPTIONS.map((o) => o.value),
+    ]),
+  );
+
+  const emojiLabelMap = new Map(EMOJI_OPTIONS.map((o) => [o.value, o.label]));
 
   const { user } = useAdminAuth();
   const { toast } = useToast();
@@ -3215,8 +3952,10 @@ const CategoriesManagement = () => {
   const createCategoryMutation = useMutation({
     mutationFn: (categoryData: any) =>
       adminApiRequest("POST", "/api/admin/categories", categoryData),
-    onSuccess: () => {
+      onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
+      // Also invalidate public category lists so resident views refresh
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
       setIsCreateDialogOpen(false);
       resetForm();
       toast({ title: "Category created successfully" });
@@ -3235,6 +3974,8 @@ const CategoriesManagement = () => {
       adminApiRequest("PATCH", `/api/admin/categories/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
+      // Ensure resident/public lists refresh for updates
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
       setEditingCategory(null);
       resetForm();
       toast({ title: "Category updated successfully" });
@@ -3253,6 +3994,8 @@ const CategoriesManagement = () => {
       adminApiRequest("DELETE", `/api/admin/categories/${categoryId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/categories"] });
+      // Delete should also refresh public category lists
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
       toast({ title: "Category deleted successfully" });
     },
     onError: (error: any) => {
@@ -3553,7 +4296,7 @@ const CategoriesManagement = () => {
 
       {/* Create Category Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Create New Category</DialogTitle>
             <DialogDescription>
@@ -3563,7 +4306,7 @@ const CategoriesManagement = () => {
                 : "your estate"}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleCreateSubmit} className="space-y-4">
+          <form onSubmit={handleCreateSubmit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium">Name</label>
               <Input
@@ -3608,7 +4351,7 @@ const CategoriesManagement = () => {
                       setFormData({ ...formData, icon: e.target.value })
                     }
                     onFocus={() => setIconPickerOpen(true)}
-                    placeholder="🔧 (optional emoji icon)"
+                    placeholder="ðŸ”§ (optional emoji icon)"
                     data-testid="input-category-icon"
                   />
                 </PopoverTrigger>
@@ -3617,20 +4360,38 @@ const CategoriesManagement = () => {
                   sideOffset={6}
                   className="w-[min(360px,calc(100vw-3rem))]"
                 >
-                  <div className="grid grid-cols-6 gap-2 text-left">
-                    {emojiOptions.map((emoji, idx) => (
-                      <button
-                        key={`${emoji}-${idx}`}
-                        type="button"
-                        className="text-xl p-2 rounded hover:bg-muted"
-                        onClick={() => {
-                          setFormData({ ...formData, icon: emoji });
-                          setIconPickerOpen(false);
-                        }}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
+                  <div className="mb-2">
+                    <Input
+                      placeholder="Search icons"
+                      value={iconSearch}
+                      onChange={(e) => setIconSearch(e.target.value)}
+                      data-testid="input-icon-search"
+                    />
+                  </div>
+                  <div className="h-[200px] overflow-auto">
+                    <div className="grid grid-cols-6 gap-2 text-left p-1">
+                      {(emojiOptions
+                        .filter((val) => {
+                          const label = (emojiLabelMap.get(val) || "").toLowerCase();
+                          const q = iconSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          return label.includes(q) || val.includes(q);
+                        })
+                        .map((emoji, idx) => (
+                          <button
+                            key={`${emoji}-${idx}`}
+                            type="button"
+                            className="text-xl p-2 rounded hover:bg-muted"
+                            onClick={() => {
+                              setFormData({ ...formData, icon: emoji });
+                              setIconPickerOpen(false);
+                              setIconSearch("");
+                            }}
+                          >
+                            {emoji}
+                          </button>
+                        )))}
+                    </div>
                   </div>
                 </PopoverContent>
               </Popover>
@@ -3674,28 +4435,8 @@ const CategoriesManagement = () => {
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <label className="text-sm font-medium">Tag</label>
-              <Select
-                value={formData.tag}
-                onValueChange={(value) =>
-                  setFormData({ ...formData, tag: value })
-                }
-                data-testid="select-edit-category-tag"
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a tag" />
-                </SelectTrigger>
-                <SelectContent className="max-h-60" sideOffset={5} align="start">
-                  {CATEGORY_TAG_OPTIONS.map((tag) => (
-                    <SelectItem key={tag} value={tag}>
-                      {tag}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <DialogFooter>
+            <div className="col-span-1 sm:col-span-2">
+              <DialogFooter>
               <Button
                 type="button"
                 variant="outline"
@@ -3715,7 +4456,8 @@ const CategoriesManagement = () => {
                   ? "Creating..."
                   : "Create Category"}
               </Button>
-            </DialogFooter>
+              </DialogFooter>
+            </div>
           </form>
         </DialogContent>
       </Dialog>
@@ -3730,12 +4472,12 @@ const CategoriesManagement = () => {
           }
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Edit Category</DialogTitle>
             <DialogDescription>Update the category details</DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleEditSubmit} className="space-y-4">
+          <form onSubmit={handleEditSubmit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium">Name</label>
               <Input
@@ -3769,7 +4511,7 @@ const CategoriesManagement = () => {
                       setFormData({ ...formData, icon: e.target.value })
                     }
                     onFocus={() => setIconPickerOpen(true)}
-                    placeholder="🔧 (optional emoji icon)"
+                    placeholder="ðŸ”§ (optional emoji icon)"
                     data-testid="input-edit-category-icon"
                   />
                 </PopoverTrigger>
@@ -3778,25 +4520,44 @@ const CategoriesManagement = () => {
                   sideOffset={6}
                   className="w-[min(360px,calc(100vw-3rem))]"
                 >
-                  <div className="grid grid-cols-6 gap-2 text-left">
-                    {emojiOptions.map((emoji, idx) => (
-                      <button
-                        key={`${emoji}-${idx}`}
-                        type="button"
-                        className="text-xl p-2 rounded hover:bg-muted"
-                        onClick={() => {
-                          setFormData({ ...formData, icon: emoji });
-                          setIconPickerOpen(false);
-                        }}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
+                  <div className="mb-2">
+                    <Input
+                      placeholder="Search icons"
+                      value={iconSearch}
+                      onChange={(e) => setIconSearch(e.target.value)}
+                      data-testid="input-icon-search-edit"
+                    />
+                  </div>
+                  <div className="h-[250px] overflow-auto">
+                    <div className="grid grid-cols-6 gap-2 text-left p-1">
+                      {(emojiOptions
+                        .filter((val) => {
+                          const label = (emojiLabelMap.get(val) || "").toLowerCase();
+                          const q = iconSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          return label.includes(q) || val.includes(q);
+                        })
+                        .map((emoji, idx) => (
+                          <button
+                            key={`${emoji}-${idx}`}
+                            type="button"
+                            className="text-xl p-2 rounded hover:bg-muted"
+                            onClick={() => {
+                              setFormData({ ...formData, icon: emoji });
+                              setIconPickerOpen(false);
+                              setIconSearch("");
+                            }}
+                          >
+                            {emoji}
+                          </button>
+                        )))}
+                    </div>
                   </div>
                 </PopoverContent>
               </Popover>
             </div>
-            <DialogFooter>
+            <div className="col-span-1 sm:col-span-2">
+              <DialogFooter>
               <Button
                 type="button"
                 variant="outline"
@@ -3816,7 +4577,8 @@ const CategoriesManagement = () => {
                   ? "Updating..."
                   : "Update Category"}
               </Button>
-            </DialogFooter>
+              </DialogFooter>
+            </div>
           </form>
         </DialogContent>
       </Dialog>
@@ -4201,7 +4963,7 @@ const MarketplaceManagement = () => {
 
       {/* Create Item Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Create New Marketplace Item</DialogTitle>
             <DialogDescription>
@@ -4379,7 +5141,7 @@ const MarketplaceManagement = () => {
           }
         }}
       >
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Edit Marketplace Item</DialogTitle>
             <DialogDescription>Update the item details</DialogDescription>
@@ -4754,8 +5516,8 @@ const RecentActivity = () => {
                     className="text-xs text-muted-foreground"
                     data-testid={`activity-details-${index}`}
                   >
-                    {activity.user?.name || "System"} •{" "}
-                    {activity.details || "No details"} •{" "}
+                    {activity.user?.name || "System"} â€¢{" "}
+                    {activity.details || "No details"} â€¢{" "}
                     {activity.createdAt
                       ? new Date(activity.createdAt).toLocaleString()
                       : "Unknown time"}
@@ -4791,9 +5553,15 @@ const RecentActivity = () => {
 
 // PostgreSQL Bridge Stats Component - Shows data from resident/provider system
 const PostgreSQLBridgeStats = () => {
-  const { data: bridgeStats, isLoading } = useQuery({
+  const { data: bridgeStats, isLoading, refetch } = useQuery({
     queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/bridge/stats"],
     queryFn: () => adminApiRequest("GET", "/api/admin/bridge/stats"),
+    refetchInterval: 30_000, // Refresh every 30 seconds to ensure fresh data
+  });
+  const { data: dbHealth } = useQuery({
+    queryKey: ["/api/admin/health/database"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/health/database"),
+    enabled: false, // Only fetch on demand
   });
 
   if (isLoading) {
@@ -4861,6 +5629,16 @@ const PostgreSQLBridgeStats = () => {
           color: "bg-yellow-500",
         },
         {
+          label: "Pending Inspection",
+          value: bridgeStats.serviceRequests.pendingInspection - 0,
+          color: "bg-orange-500",
+        },
+        {
+          label: "Assigned",
+          value: bridgeStats.serviceRequests.assigned - 0,
+          color: "bg-indigo-500",
+        },
+        {
           label: "In Progress",
           value: bridgeStats.serviceRequests.inProgress,
           color: "bg-blue-500",
@@ -4887,6 +5665,19 @@ const PostgreSQLBridgeStats = () => {
         <div className="flex items-center gap-2">
           <Badge variant="secondary">PostgreSQL</Badge>
           <Badge variant="outline">Live Data</Badge>
+          {bridgeStats?.source && (
+            <Badge variant="outline" className="text-xs">
+              {bridgeStats.source.toUpperCase()} â€¢ {new Date(bridgeStats.timestamp).toLocaleTimeString()}
+            </Badge>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isLoading}
+          >
+            Refresh
+          </Button>
         </div>
       </div>
 
@@ -4931,7 +5722,7 @@ const PostgreSQLBridgeStats = () => {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               {requestStatusData.map((status, index) => (
                 <div key={index} className="text-center">
                   <div
@@ -4946,6 +5737,45 @@ const PostgreSQLBridgeStats = () => {
         </Card>
       )}
     </div>
+  );
+};
+
+const EstatePerformanceCard = () => {
+  const { data: rows = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/dashboard/estate-performance"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/dashboard/estate-performance"),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Estate Performance</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+        ) : !rows || rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No estate data available.</p>
+        ) : (
+          <div className="space-y-4">
+            {rows.map((row: any) => (
+              <div key={row.estateId} className="flex justify-between items-center">
+                <span className="text-sm font-medium">{row.name}</span>
+                <div className="flex items-center space-x-2">
+                  <div className="w-20 h-2 bg-gray-200 rounded-full">
+                    <div
+                      className="h-2 bg-green-500 rounded-full"
+                      style={{ width: `${Math.max(0, Math.min(100, Number(row.completionRate - 0)))}%` }}
+                    ></div>
+                  </div>
+                  <span className="text-xs text-muted-foreground">{Number(row.completionRate - 0)}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 };
 
@@ -4970,22 +5800,18 @@ const DashboardStats = () => {
   });
 
   const totalProviders =
-    stats?.totalProviders ?? bridgeStats?.users?.totalProviders ?? 0;
+    (stats?.totalProviders ?? 0) - (bridgeStats?.users?.totalProviders ?? 0);
   const totalResidents =
-    stats?.totalResidents ?? bridgeStats?.users?.totalResidents ?? 0;
+    (stats?.totalResidents ?? 0) - (bridgeStats?.users?.totalResidents ?? 0);
   const pendingApprovals =
-    stats?.pendingApprovals ?? bridgeStats?.users?.pendingProviders ?? 0;
+    (stats?.pendingApprovals ?? 0) - (bridgeStats?.users?.pendingProviders ?? 0);
   const totalRequests =
-    stats?.totalRequests ?? bridgeStats?.serviceRequests?.total ?? 0;
+    (stats?.totalRequests ?? 0) - (bridgeStats?.serviceRequests?.total ?? 0);
   const activeRequests =
-    stats?.activeRequests ??
-    bridgeStats?.serviceRequests?.pending ??
-    0;
-  const totalUsers =
-    (Array.isArray(allUsers) ? allUsers.length : undefined) ??
-    stats?.totalUsers ??
-    totalProviders + totalResidents;
-  const activeEstatesCount = Array.isArray(allEstates) ? allEstates.length : stats?.totalEstates ?? 0;
+    (stats?.activeRequests ?? 0) -
+    (bridgeStats?.serviceRequests?.pending ?? 0);
+  const totalUsers = stats?.totalUsers ?? 0;
+  const activeEstatesCount = Array.isArray(allEstates) ? allEstates.length : (stats?.totalEstates ?? 0);
 
   if (isLoading) {
     return (
@@ -5020,7 +5846,7 @@ const DashboardStats = () => {
     },
     {
       title: "Total Revenue",
-      value: `NGN ${(stats?.totalRevenue ?? 0).toLocaleString()}`,
+      value: `NGN ${(stats?.totalRevenue - 0).toLocaleString()}`,
       icon: DollarSign,
       change: "+0%",
     },
@@ -5074,8 +5900,8 @@ export default function AdminSuperDashboard() {
   const [location, setLocation] = useLocation();
   const activeTab = (() => {
     if (!location.startsWith("/admin-dashboard")) return "dashboard";
-    const pathPart = location.split("/")[2] ?? "dashboard";
-    return pathPart.split("?")[0].split("#")[0] || "dashboard";
+    const pathPart = location.split("/")[2] || "dashboard";
+    return String(pathPart).split("?")[0].split("#")[0] || "dashboard";
   })();
   const setActiveTab = (tab: string) => setLocation(`/admin-dashboard/${tab}`);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -5092,6 +5918,16 @@ export default function AdminSuperDashboard() {
     queryKey: ["admin-estates"],
     queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
     enabled: Boolean(user),
+  });
+  const { data: orderStats } = useQuery({
+    queryKey: ["admin-orders-analytics"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/orders/analytics/stats"),
+    enabled: isSuperAdmin,
+  });
+  const { data: categoriesList = [] } = useQuery({
+    queryKey: ["/api/admin/categories"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/categories"),
+    enabled: isSuperAdmin,
   });
   useEffect(() => {
     if (!sessionChecked || !user || selectedEstateId) return;
@@ -5347,7 +6183,7 @@ export default function AdminSuperDashboard() {
                             Received{" "}
                             {request.createdAt
                               ? new Date(request.createdAt).toLocaleString()
-                              : "—"}
+                              : "â€”"}
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
@@ -5396,7 +6232,7 @@ export default function AdminSuperDashboard() {
                 setDeclineReason("");
               }
             }}>
-              <DialogContent className="max-w-md">
+              <DialogContent className="w-[60vw] max-w-[95vw]">
                 <DialogHeader>
                   <DialogTitle>Decline provider request</DialogTitle>
                   <DialogDescription>
@@ -5405,7 +6241,7 @@ export default function AdminSuperDashboard() {
                 </DialogHeader>
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    {selectedRequestForDecline?.name || "Provider"} – {selectedRequestForDecline?.email}
+                    {selectedRequestForDecline?.name || "Provider"} â€“ {selectedRequestForDecline?.email}
                   </p>
                   <Textarea
                     value={declineReason}
@@ -5435,7 +6271,7 @@ export default function AdminSuperDashboard() {
                 setDeclineReason("");
               }
             }}>
-              <DialogContent className="max-w-md">
+              <DialogContent className="w-[60vw] max-w-[95vw]">
                 <DialogHeader>
                   <DialogTitle>Decline provider request</DialogTitle>
                   <DialogDescription>
@@ -5444,7 +6280,7 @@ export default function AdminSuperDashboard() {
                 </DialogHeader>
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    {selectedRequestForDecline?.name || "Provider"} – {selectedRequestForDecline?.email}
+                    {selectedRequestForDecline?.name || "Provider"} â€“ {selectedRequestForDecline?.email}
                   </p>
                   <Textarea
                     value={declineReason}
@@ -5492,54 +6328,7 @@ export default function AdminSuperDashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <RecentActivity />
 
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Estate Performance</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">
-                            Lekki Estate
-                          </span>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-20 h-2 bg-gray-200 rounded-full">
-                              <div className="w-16 h-2 bg-green-500 rounded-full"></div>
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              85%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">
-                            Victoria Island
-                          </span>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-20 h-2 bg-gray-200 rounded-full">
-                              <div className="w-14 h-2 bg-blue-500 rounded-full"></div>
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              72%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">
-                            Ikoyi Estate
-                          </span>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-20 h-2 bg-gray-200 rounded-full">
-                              <div className="w-12 h-2 bg-yellow-500 rounded-full"></div>
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              68%
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <EstatePerformanceCard />
                 </div>
               </div>
             )}
@@ -5547,11 +6336,16 @@ export default function AdminSuperDashboard() {
             {activeTab === "users" && <UsersManagement />}
             {activeTab === "estates" && <EstatesManagement />}
             {activeTab === "providers" && <ProvidersManagement />}
-            {activeTab === "companies" && <CompaniesManagement />}
+            {activeTab === "companies" && <CompaniesManagement categoriesList={categoriesList} />}
             {activeTab === "item-categories" && <ItemCategoriesPage />}
             {activeTab === "stores" && <StoresManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "orders" && <OrdersManagement />}
+            {activeTab === "ai-conversations" && <AiConversationsPanel />}
+            {activeTab === "ai-prepared-requests" && <AiPreparedRequestsPanel />}
+            {activeTab === "pricing-rules" && <PricingRulesPanel />}
+            {activeTab === "provider-matching" && <ProviderMatchingPanel />}
+            {activeTab === "analytics" && <AnalyticsPanel orderStats={orderStats} />}
             {["requests", "artisanRequests"].includes(activeTab) && (
               <ArtisanRequestsPanel
                 selectedEstateId={selectedEstateId}
@@ -5976,7 +6770,7 @@ const EstatesManagement = () => {
           resetForm();
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>
               {editingEstate ? "Edit Estate" : "Create New Estate"}
@@ -6334,7 +7128,7 @@ const OrdersManagement = () => {
                     Total Revenue
                   </p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                    ₦{orderStats.totalRevenue?.toLocaleString()}
+                    â‚¦{orderStats.totalRevenue?.toLocaleString()}
                   </p>
                 </div>
               </div>
@@ -6366,7 +7160,7 @@ const OrdersManagement = () => {
                     Avg Order Value
                   </p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                    ₦{orderStats.avgOrderValue?.toFixed(0)}
+                    â‚¦{orderStats.avgOrderValue?.toFixed(0)}
                   </p>
                 </div>
               </div>
@@ -6450,7 +7244,7 @@ const OrdersManagement = () => {
             </div>
 
             <div>
-              <Label htmlFor="min-price">Min Price (₦)</Label>
+              <Label htmlFor="min-price">Min Price (â‚¦)</Label>
               <Input
                 id="min-price"
                 type="number"
@@ -6542,7 +7336,7 @@ const OrdersManagement = () => {
                         {order.vendor?.name || "Unknown"}
                       </td>
                       <td className="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
-                        ₦{order.total.toLocaleString()}
+                        â‚¦{order.total.toLocaleString()}
                       </td>
                       <td className="px-6 py-4">
                         <span
@@ -6690,7 +7484,7 @@ const OrdersManagement = () => {
                 <div>
                   <Label>Total Amount</Label>
                   <p className="text-sm font-medium">
-                    ₦{selectedOrder.total.toLocaleString()}
+                    â‚¦{selectedOrder.total.toLocaleString()}
                   </p>
                 </div>
                 <div>
@@ -6717,7 +7511,7 @@ const OrdersManagement = () => {
                         </p>
                       </div>
                       <p className="font-medium">
-                        ₦{(item.price * item.quantity).toLocaleString()}
+                        â‚¦{(item.price * item.quantity).toLocaleString()}
                       </p>
                     </div>
                   ))}
@@ -6896,7 +7690,7 @@ const OrdersManagement = () => {
                 />
               </div>
               <div>
-                <Label htmlFor="refund-amount">Refund Amount (₦)</Label>
+                <Label htmlFor="refund-amount">Refund Amount (â‚¦)</Label>
                 <Input
                   id="refund-amount"
                   type="number"
@@ -6940,27 +7734,282 @@ const OrdersManagement = () => {
 };
 
 // Companies Management Component
-const CompaniesManagement = () => {
+const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }) => {
   const { toast } = useToast();
   const [showAddCompany, setShowAddCompany] = useState(false);
+  const [showViewCompany, setShowViewCompany] = useState(false);
+  const [showEditCompany, setShowEditCompany] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [selectedCompany, setSelectedCompany] = useState<any>(null);
   const [form, setForm] = useState({
     name: "",
     description: "",
     contactEmail: "",
     phone: "",
+    isActive: true,
+    // Business Details
+    businessAddress: "",
+    businessCity: "",
+    businessState: "",
+    businessZipCode: "",
+    businessCountry: "",
+    businessType: "",
+    // Registration & Compliance
+    businessRegNumber: "",
+    businessTaxId: "",
+    // Bank Details
+    bankAccountName: "",
+    bankName: "",
+    bankAccountNumber: "",
+    bankRoutingNumber: "",
+    details: [] as Array<{ key: string; value: string }>,
   });
+  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
 
-  const { data: companies = [], isLoading } = useQuery({
+  const FIELD_LABELS: Record<string, string> = {
+    bankName: "Bank name",
+    accountNumber: "Account number",
+    routingNumber: "Routing number",
+    swiftCode: "SWIFT code",
+    accountName: "Account name",
+    notes: "Notes",
+    taxId: "Tax ID",
+    industry: "Industry",
+    businessType: "Business type",
+    yearEstablished: "Year established",
+    registrationNumber: "Registration number",
+    lga: "LGA",
+    city: "City",
+    state: "State",
+    country: "Country",
+    coordinates: "Coordinates",
+    latitude: "Latitude",
+    longitude: "Longitude",
+  };
+
+  function friendlyLabel(k: string) {
+    return FIELD_LABELS[k] || k.replace(/([A-Z])/g, " $1").replace(/[_-]/g, " ").replace(/^./, (s) => s.toUpperCase());
+  }
+
+  const [location, setLocation] = useLocation();
+  const { data: companies = [], isLoading, refetch } = useQuery({
     queryKey: ["admin-companies"],
     queryFn: () => adminApiRequest("GET", "/api/admin/companies"),
+    staleTime: 30_000, // 30 seconds
+    refetchInterval: 60_000, // Refetch every 60 seconds
   });
+  const companyMembersCompanyId = (() => {
+    const segments = location.split("/").filter(Boolean);
+    if (
+      segments[0] === "admin-dashboard" &&
+      segments[1] === "companies" &&
+      segments[2] === "members"
+    ) {
+      return segments[3] || null;
+    }
+    return null;
+  })();
+  const isCompanyMembersPage = Boolean(companyMembersCompanyId);
+  const selectedCompanyForMembers =
+    companyMembersCompanyId && Array.isArray(companies)
+      ? companies.find((company: any) => (company.id || company._id) === companyMembersCompanyId)
+      : null;
+  const goToCompanies = () => setLocation("/admin-dashboard/companies");
+  const goToCompanyMembers = (companyId: string) =>
+    setLocation(`/admin-dashboard/companies/members/${companyId}`);
+  const companyMatchesProvider = (provider: any, company: any) => {
+    if (!provider || !company) return false;
+    const providerCompany = String(provider.company || "").trim().toLowerCase();
+    const companyName = String(company.name || "").trim().toLowerCase();
+    const companyId = String(company.id || company._id || "").trim().toLowerCase();
+    return providerCompany === companyName || providerCompany === companyId;
+  };
+  const { data: companyProvidersRaw = [] } = useQuery({
+    queryKey: ["/api/admin/users/all", { role: "provider", companyId: companyMembersCompanyId }],
+    queryFn: () => adminApiRequest("GET", "/api/admin/users/all", { role: "provider" }),
+    enabled: isCompanyMembersPage,
+  });
+  const { data: companyProviderRequests = [] } = useQuery({
+    queryKey: ["admin/provider-requests", companyMembersCompanyId],
+    queryFn: () => adminApiRequest("GET", "/api/admin/provider-requests"),
+    enabled: isCompanyMembersPage,
+  });
+  const { data: companyServiceRequests = [] } = useQuery({
+    queryKey: ["/api/admin/bridge/service-requests", companyMembersCompanyId],
+    queryFn: () => adminApiRequest("GET", "/api/admin/bridge/service-requests"),
+    enabled: isCompanyMembersPage,
+  });
+  const companyProviders = Array.isArray(companyProvidersRaw) && selectedCompanyForMembers
+    ? companyProvidersRaw.filter((provider: any) => companyMatchesProvider(provider, selectedCompanyForMembers))
+    : [];
+  const companyProviderIds = new Set(
+    companyProviders.map((provider: any) => provider.id || provider._id),
+  );
+  const providerLookup = new Map(
+    companyProviders.map((provider: any) => [provider.id || provider._id, provider]),
+  );
+  const companyRequests = Array.isArray(companyServiceRequests)
+    ? companyServiceRequests.filter((req: any) =>
+        companyProviderIds.has(req.providerId || req.provider_id),
+      )
+    : [];
+  const pendingProviderRequests = Array.isArray(companyProviderRequests) && selectedCompanyForMembers
+    ? companyProviderRequests.filter((req: any) => {
+        const companyName = String(selectedCompanyForMembers.name || "").toLowerCase();
+        return String(req.company || "").toLowerCase() === companyName;
+      })
+    : [];
+  const availableProviders = Array.isArray(companyProvidersRaw) && selectedCompanyForMembers
+    ? companyProvidersRaw.filter((provider: any) => !companyMatchesProvider(provider, selectedCompanyForMembers))
+    : [];
+  const updateProviderApprovalMutation = useMutation({
+    mutationFn: ({ providerId, approved }: { providerId: string; approved: boolean }) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, { isApproved: approved }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["admin/provider-requests"] });
+      toast({ title: "Provider updated" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to update provider",
+        description: error.response?.data?.error || "Unable to update provider.",
+        variant: "destructive",
+      });
+    },
+  });
+  const assignProviderToCompanyMutation = useMutation({
+    mutationFn: (providerId: string) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, {
+        company: selectedCompanyForMembers?.name || "",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      toast({ title: "Provider assigned to company" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to assign provider",
+        description: error.response?.data?.error || "Unable to assign provider.",
+        variant: "destructive",
+      });
+    },
+  });
+  const removeProviderFromCompanyMutation = useMutation({
+    mutationFn: (providerId: string) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, {
+        company: "",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      toast({ title: "Provider removed from company" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to remove provider",
+        description: error.response?.data?.error || "Unable to remove provider.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const assignCategoriesToProviderMutation = useMutation({
+    mutationFn: ({ providerId, categories }: { providerId: string; categories: string[] }) =>
+      adminApiRequest("PATCH", `/api/admin/users/${providerId}`, {
+        categories: categories,
+      }),
+    onSuccess: () => {
+      // Invalidate all related queries to ensure changes reflect across the app
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+      // Invalidate any company-related queries that might cache provider data
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      // Invalidate store-related queries
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/stores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/marketplace"] });
+      // Invalidate provider requests queries
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/provider-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["provider-requests"] });
+      // Invalidate service requests that might reference providers
+      queryClient.invalidateQueries({ queryKey: ["/api/service-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/service-requests"] });
+      toast({ title: "Categories assigned successfully" });
+      setShowCategoryDialog(false);
+      setSelectedProviderForCategory(null);
+      setSelectedCategories([]);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to assign categories",
+        description: error.response?.data?.error || "Unable to assign categories.",
+        variant: "destructive",
+      });
+    },
+  });
+  const assignServiceRequestMutation = useMutation({
+    mutationFn: ({ requestId, providerId }: { requestId: string; providerId: string }) =>
+      adminApiRequest("POST", `/api/admin/service-requests/${requestId}/assign`, { providerId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/service-requests"] });
+      toast({ title: "Service request assigned" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to assign request",
+        description: error.response?.data?.message || "Unable to assign request.",
+        variant: "destructive",
+      });
+    },
+  });
+  const [companyTaskForm, setCompanyTaskForm] = useState({
+    title: "",
+    description: "",
+    assigneeId: "",
+    priority: "medium",
+    status: "open",
+    dueDate: "",
+  });
+  const [companyTasks, setCompanyTasks] = useState<any[]>([]);
+  useEffect(() => {
+    if (!companyMembersCompanyId) return;
+    const key = `company-members:${companyMembersCompanyId}:tasks`;
+    const saved = window.localStorage.getItem(key);
+    setCompanyTasks(saved ? JSON.parse(saved) : []);
+  }, [companyMembersCompanyId]);
+  useEffect(() => {
+    if (!companyMembersCompanyId) return;
+    const key = `company-members:${companyMembersCompanyId}:tasks`;
+    window.localStorage.setItem(key, JSON.stringify(companyTasks));
+  }, [companyTasks, companyMembersCompanyId]);
 
   const createCompanyMutation = useMutation({
     mutationFn: (payload: any) =>
       adminApiRequest("POST", "/api/admin/companies", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
-      setForm({ name: "", description: "", contactEmail: "", phone: "" });
+      setForm({
+        name: "",
+        description: "",
+        contactEmail: "",
+        phone: "",
+        isActive: true,
+        businessAddress: "",
+        businessCity: "",
+        businessState: "",
+        businessZipCode: "",
+        businessCountry: "",
+        businessType: "",
+        businessRegNumber: "",
+        businessTaxId: "",
+        bankAccountName: "",
+        bankName: "",
+        bankAccountNumber: "",
+        bankRoutingNumber: "",
+        details: [],
+      });
       setShowAddCompany(false);
       toast({ title: "Company created successfully" });
     },
@@ -6973,13 +8022,1045 @@ const CompaniesManagement = () => {
     },
   });
 
+  const updateCompanyMutation = useMutation({
+    mutationFn: (payload: any) =>
+      adminApiRequest("PUT", `/api/admin/companies/${selectedCompany.id}`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
+      setForm({
+        name: "",
+        description: "",
+        contactEmail: "",
+        phone: "",
+        isActive: true,
+        businessAddress: "",
+        businessCity: "",
+        businessState: "",
+        businessZipCode: "",
+        businessCountry: "",
+        businessType: "",
+        businessRegNumber: "",
+        businessTaxId: "",
+        bankAccountName: "",
+        bankName: "",
+        bankAccountNumber: "",
+        bankRoutingNumber: "",
+        details: [],
+      });
+      setSelectedCompany(null);
+      setShowEditCompany(false);
+      toast({ title: "Company updated successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error updating company",
+        description: error.response?.data?.error || "Failed to update company",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteCompanyMutation = useMutation({
+    mutationFn: () =>
+      adminApiRequest("DELETE", `/api/admin/companies/${selectedCompany.id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
+      setSelectedCompany(null);
+      setShowDeleteConfirm(false);
+      toast({ title: "Company deleted successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error deleting company",
+        description: error.response?.data?.error || "Failed to delete company",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleSubmit = () => {
     if (!form.name.trim()) {
       toast({ title: "Name is required", variant: "destructive" });
       return;
     }
-    createCompanyMutation.mutate(form);
+    const payload: any = {
+      name: form.name,
+      description: form.description,
+      contactEmail: form.contactEmail,
+      phone: form.phone,
+      isActive: !!form.isActive,
+      // Business Details
+      businessAddress: form.businessAddress,
+      businessCity: form.businessCity,
+      businessState: form.businessState,
+      businessZipCode: form.businessZipCode,
+      businessCountry: form.businessCountry,
+      businessType: form.businessType,
+      // Registration & Compliance
+      businessRegNumber: form.businessRegNumber,
+      businessTaxId: form.businessTaxId,
+      // Bank Details
+      bankAccountName: form.bankAccountName,
+      bankName: form.bankName,
+      bankAccountNumber: form.bankAccountNumber,
+      bankRoutingNumber: form.bankRoutingNumber,
+    };
+    createCompanyMutation.mutate(payload);
   };
+
+  const handleUpdate = () => {
+    if (!form.name.trim()) {
+      toast({ title: "Name is required", variant: "destructive" });
+      return;
+    }
+    
+    // Build businessDetails object with all values
+    const businessDetailsObj: any = {};
+    if (form.businessAddress) businessDetailsObj.address = form.businessAddress;
+    if (form.businessCity) businessDetailsObj.city = form.businessCity;
+    if (form.businessState) businessDetailsObj.state = form.businessState;
+    if (form.businessZipCode) businessDetailsObj.zipCode = form.businessZipCode;
+    if (form.businessCountry) businessDetailsObj.country = form.businessCountry;
+    if (form.businessType) businessDetailsObj.type = form.businessType;
+    if (form.businessRegNumber) businessDetailsObj.registrationNumber = form.businessRegNumber;
+    if (form.businessTaxId) businessDetailsObj.taxId = form.businessTaxId;
+
+    // Build bankDetails object with all values
+    const bankDetailsObj: any = {};
+    if (form.bankAccountName) bankDetailsObj.accountName = form.bankAccountName;
+    if (form.bankName) bankDetailsObj.bankName = form.bankName;
+    if (form.bankAccountNumber) bankDetailsObj.accountNumber = form.bankAccountNumber;
+    if (form.bankRoutingNumber) bankDetailsObj.routingNumber = form.bankRoutingNumber;
+
+    const payload: any = {
+      name: form.name,
+      description: form.description,
+      contactEmail: form.contactEmail,
+      phone: form.phone,
+      isActive: !!form.isActive,
+      // Always include businessDetails and bankDetails to replace old data
+      businessDetails: businessDetailsObj,
+      bankDetails: bankDetailsObj,
+    };
+
+    // Handle old-style details array if present
+    if (Array.isArray(form.details) && form.details.length > 0) {
+      const obj: any = {};
+      form.details.forEach((entry: any) => {
+        if (entry.key) {
+          try {
+            obj[entry.key] = JSON.parse(entry.value);
+          } catch {
+            obj[entry.key] = entry.value;
+          }
+        }
+      });
+      payload.details = obj;
+    }
+
+    console.log("handleUpdate payload:", JSON.stringify(payload, null, 2));
+    updateCompanyMutation.mutate(payload);
+  };
+
+  const handleViewCompany = (company: any) => {
+    setSelectedCompany(company);
+    setShowViewCompany(true);
+  };
+
+  const handleEditCompany = (company: any) => {
+    setSelectedCompany(company);
+    
+    // Extract business details from nested object
+    const businessDetails = company.businessDetails || {};
+    const bankDetails = company.bankDetails || {};
+    
+    setForm({
+      name: company.name || "",
+      description: company.description || "",
+      contactEmail: company.contactEmail || "",
+      phone: company.phone || "",
+      isActive: company.isActive ?? true,
+      businessAddress: businessDetails.address || "",
+      businessCity: businessDetails.city || "",
+      businessState: businessDetails.state || "",
+      businessZipCode: businessDetails.zipCode || "",
+      businessCountry: businessDetails.country || "",
+      businessType: businessDetails.type || "",
+      businessRegNumber: businessDetails.registrationNumber || "",
+      businessTaxId: businessDetails.taxId || "",
+      bankAccountName: bankDetails.accountName || "",
+      bankName: bankDetails.bankName || "",
+      bankAccountNumber: bankDetails.accountNumber || "",
+      bankRoutingNumber: bankDetails.routingNumber || "",
+      details: company.details
+        ? Object.entries(company.details).map(([k, v]) => ({ key: k, value: typeof v === "object" ? JSON.stringify(v) : String(v) }))
+        : [],
+    });
+    setShowEditCompany(true);
+  };
+
+  const handleDeleteCompany = (company: any) => {
+    setSelectedCompany(company);
+    setShowDeleteConfirm(true);
+  };
+
+  const resetAddForm = () => {
+    setForm({
+      name: "",
+      description: "",
+      contactEmail: "",
+      phone: "",
+      isActive: true,
+      businessAddress: "",
+      businessCity: "",
+      businessState: "",
+      businessZipCode: "",
+      businessCountry: "",
+      businessType: "",
+      businessRegNumber: "",
+      businessTaxId: "",
+      bankAccountName: "",
+      bankName: "",
+      bankAccountNumber: "",
+      bankRoutingNumber: "",
+      details: [],
+    });
+    setShowAddCompany(false);
+  };
+
+  const resetEditForm = () => {
+    setForm({
+      name: "",
+      description: "",
+      contactEmail: "",
+      phone: "",
+      isActive: true,
+      businessAddress: "",
+      businessCity: "",
+      businessState: "",
+      businessZipCode: "",
+      businessCountry: "",
+      businessType: "",
+      businessRegNumber: "",
+      businessTaxId: "",
+      bankAccountName: "",
+      bankName: "",
+      bankAccountNumber: "",
+      bankRoutingNumber: "",
+      details: [],
+    });
+    setSelectedCompany(null);
+    setShowEditCompany(false);
+  };
+
+  const totalProviders = companyProviders.length;
+  const approvedProviders = companyProviders.filter((p: any) => p.isApproved).length;
+  const pendingApprovalsCount = pendingProviderRequests.length;
+  const avgRating =
+    totalProviders > 0
+      ? (
+          companyProviders.reduce((acc: number, p: any) => acc + Number(p.rating || 0), 0) /
+          totalProviders
+        ).toFixed(1)
+      : "0.0";
+  const openCompanyRequests = companyRequests.filter((req: any) => {
+    const status = String(req.status || "").toLowerCase();
+    return status !== "completed" && status !== "cancelled";
+  });
+  const maintenanceRequests = companyRequests.filter((req: any) => {
+    const category = String(req.category || "").toLowerCase();
+    return category.includes("maintenance");
+  });
+  const activityEvents = companyRequests
+    .slice()
+    .sort((a: any, b: any) => {
+      const aTime = new Date(a.createdAt || a.created_at || 0).getTime();
+      const bTime = new Date(b.createdAt || b.created_at || 0).getTime();
+      return bTime - aTime;
+    })
+    .slice(0, 6);
+  const unassignedRequests = Array.isArray(companyServiceRequests)
+    ? companyServiceRequests.filter((req: any) => !req.providerId && !req.provider_id)
+    : [];
+
+  // Helper function to safely display emoji
+  const safeEmoji = (emoji: string | null | undefined): string => {
+    if (!emoji) return "";
+    // Check if emoji is valid by testing if it's a proper character
+    const cleaned = emoji.trim();
+    if (cleaned.length === 0) return "";
+    // Return only single emoji or valid characters
+    return /^[\p{Emoji}]+$/u.test(cleaned) ? cleaned : "";
+  };
+
+  const [serviceAssignment, setServiceAssignment] = useState({
+    requestId: "",
+    providerId: "",
+  });
+  const [selectedProviderToAdd, setSelectedProviderToAdd] = useState("");
+  const [showCompanyActions, setShowCompanyActions] = useState(false);
+  const [showCategoryDialog, setShowCategoryDialog] = useState(false);
+  const [selectedProviderForCategory, setSelectedProviderForCategory] = useState<any>(null);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [providersViewMode, setProvidersViewMode] = useState<"table" | "card">("table");
+  const handleAddCompanyTask = () => {
+    if (!companyTaskForm.title.trim() || !companyTaskForm.assigneeId) {
+      toast({
+        title: "Task title and assignee required",
+        variant: "destructive",
+      });
+      return;
+    }
+    const newTask = {
+      id: crypto.randomUUID(),
+      title: companyTaskForm.title.trim(),
+      description: companyTaskForm.description.trim(),
+      assigneeId: companyTaskForm.assigneeId,
+      priority: companyTaskForm.priority,
+      status: companyTaskForm.status,
+      dueDate: companyTaskForm.dueDate,
+      createdAt: new Date().toISOString(),
+    };
+    setCompanyTasks((prev) => [newTask, ...prev]);
+    setCompanyTaskForm({
+      title: "",
+      description: "",
+      assigneeId: "",
+      priority: "medium",
+      status: "open",
+      dueDate: "",
+    });
+  };
+  const handleAssignServiceRequest = () => {
+    if (!serviceAssignment.requestId || !serviceAssignment.providerId) {
+      toast({
+        title: "Select request and provider",
+        variant: "destructive",
+      });
+      return;
+    }
+    assignServiceRequestMutation.mutate({
+      requestId: serviceAssignment.requestId,
+      providerId: serviceAssignment.providerId,
+    });
+    setServiceAssignment({ requestId: "", providerId: "" });
+  };
+
+  if (isCompanyMembersPage) {
+    if (!selectedCompanyForMembers) {
+      return (
+        <div className="space-y-4">
+          <Button variant="outline" onClick={goToCompanies}>
+            <ChevronLeft className="w-4 h-4 mr-2" />
+            Back to Companies
+          </Button>
+          <Card>
+            <CardContent className="p-6 text-sm text-muted-foreground">
+              Company not found. Return to companies list and try again.
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <Button variant="ghost" className="px-0" onClick={goToCompanies}>
+              <ChevronLeft className="w-4 h-4 mr-2" />
+              Back to Companies
+            </Button>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+              {selectedCompanyForMembers.name} Members
+            </h1>
+            <p className="text-gray-600 dark:text-gray-400">
+              Manage providers, approvals, and assignments for this company.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] })}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setLocation(`/admin-dashboard/stores?companyId=${companyMembersCompanyId}`)}
+            >
+              <Store className="w-4 h-4 mr-2" />
+              Manage Stores
+            </Button>
+            <Button onClick={() => setShowCompanyActions(true)}>
+              <ClipboardList className="w-4 h-4 mr-2" />
+              Manage Actions
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">Total Providers</div>
+              <div className="text-2xl font-semibold">{totalProviders}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">Approved Providers</div>
+              <div className="text-2xl font-semibold">{approvedProviders}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">Pending Approvals</div>
+              <div className="text-2xl font-semibold">{pendingApprovalsCount}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">Average Rating</div>
+              <div className="text-2xl font-semibold">{avgRating}</div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Company Providers</CardTitle>
+                  <CardDescription>Active providers assigned to this company.</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">{providersViewMode === "table" ? "Table" : "Cards"}</span>
+                  <button
+                    onClick={() => setProvidersViewMode(providersViewMode === "table" ? "card" : "table")}
+                    className="relative inline-flex h-6 w-11 items-center rounded-full bg-muted hover:bg-muted/80 transition-colors"
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        providersViewMode === "card" ? "translate-x-6" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                {providersViewMode === "table" ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Provider</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Rating</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Categories</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {companyProviders.length > 0 ? (
+                        companyProviders.map((provider: any) => {
+                          const providerId = provider.id || provider._id;
+                          const rating = provider.rating ? Number(provider.rating).toFixed(1) : "N/A";
+                          return (
+                            <TableRow key={providerId}>
+                              <TableCell className="font-medium">{provider.name || provider.email}</TableCell>
+                              <TableCell>{provider.email}</TableCell>
+                              <TableCell>{rating}</TableCell>
+                              <TableCell>
+                                <Badge variant={provider.isApproved ? "default" : "secondary"}>
+                                  {provider.isApproved ? "Approved" : "Pending"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-wrap gap-1">
+                                  {provider.categories && provider.categories.length > 0 ? (
+                                    provider.categories.slice(0, 3).map((categoryId: string) => {
+                                      const category = categoriesList.find((c: any) => c.id === categoryId || c._id === categoryId || c.key === categoryId);
+                                      const emoji = safeEmoji(category?.emoji);
+                                      return (
+                                        <Badge key={categoryId} variant="outline" className="text-xs">
+                                          {category ? `${emoji} ${category.name}`.trim() : categoryId}
+                                        </Badge>
+                                      );
+                                    })
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground">None</span>
+                                  )}
+                                  {provider.categories && provider.categories.length > 3 && (
+                                    <Badge variant="secondary" className="text-xs">
+                                      +{provider.categories.length - 3}
+                                    </Badge>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex justify-end gap-2 flex-wrap">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      updateProviderApprovalMutation.mutate({
+                                        providerId,
+                                        approved: !provider.isApproved,
+                                      })
+                                    }
+                                  >
+                                    {provider.isApproved ? "Revoke" : "Approve"}
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setSelectedProviderForCategory(provider);
+                                      setSelectedCategories(provider.categories || []);
+                                      setShowCategoryDialog(true);
+                                    }}
+                                  >
+                                    Categories
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => removeProviderFromCompanyMutation.mutate(providerId)}
+                                  >
+                                    Remove
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                            No providers assigned yet.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 p-4">
+                    {companyProviders.length > 0 ? (
+                      companyProviders.map((provider: any) => {
+                        const providerId = provider.id || provider._id;
+                        const rating = provider.rating ? Number(provider.rating).toFixed(1) : "N/A";
+                        return (
+                          <div key={providerId} className="border rounded-lg p-4 space-y-3 hover:bg-muted/50 transition-colors">
+                            <div className="space-y-1">
+                              <div className="font-semibold text-sm">{provider.name || provider.email}</div>
+                              <div className="text-xs text-muted-foreground">{provider.email}</div>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium">Rating:</span>
+                                <span className="text-sm font-semibold">{rating}</span>
+                              </div>
+                              <Badge variant={provider.isApproved ? "default" : "secondary"} className="text-xs">
+                                {provider.isApproved ? "Approved" : "Pending"}
+                              </Badge>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-xs font-medium text-muted-foreground">Categories</div>
+                              <div className="flex flex-wrap gap-1">
+                                {provider.categories && provider.categories.length > 0 ? (
+                                  provider.categories.slice(0, 2).map((categoryId: string) => {
+                                    const category = categoriesList.find((c: any) => c.id === categoryId || c._id === categoryId || c.key === categoryId);
+                                    const emoji = safeEmoji(category?.emoji);
+                                    return (
+                                      <Badge key={categoryId} variant="outline" className="text-xs">
+                                        {category ? `${emoji} ${category.name}`.trim() : categoryId}
+                                      </Badge>
+                                    );
+                                  })
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">None</span>
+                                )}
+                                {provider.categories && provider.categories.length > 2 && (
+                                  <Badge variant="secondary" className="text-xs">
+                                    +{provider.categories.length - 2}
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex gap-2 pt-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1 text-xs h-8"
+                                onClick={() =>
+                                  updateProviderApprovalMutation.mutate({
+                                    providerId,
+                                    approved: !provider.isApproved,
+                                  })
+                                }
+                              >
+                                {provider.isApproved ? "Revoke" : "Approve"}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1 text-xs h-8"
+                                onClick={() => {
+                                  setSelectedProviderForCategory(provider);
+                                  setSelectedCategories(provider.categories || []);
+                                  setShowCategoryDialog(true);
+                                }}
+                              >
+                                Categories
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-xs h-8"
+                                onClick={() => removeProviderFromCompanyMutation.mutate(providerId)}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="col-span-2 py-8 text-center text-sm text-muted-foreground">
+                        No providers assigned yet.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Service Requests</CardTitle>
+                <CardDescription>Requests assigned to this companyâ€™s providers.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <Badge variant="outline">Active: {openCompanyRequests.length}</Badge>
+                  <Badge variant="outline">Maintenance: {maintenanceRequests.length}</Badge>
+                </div>
+                {openCompanyRequests.length > 0 ? (
+                  openCompanyRequests.slice(0, 6).map((req: any) => (
+                    <div key={req.id} className="flex items-center justify-between rounded-lg border border-border p-3">
+                      <div>
+                        <div className="font-medium">{req.category || "Service Request"}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {req.description || "No description"}
+                        </div>
+                      </div>
+                      <Badge variant="outline">{req.status || "pending"}</Badge>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No active requests yet.</div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Provider Activity</CardTitle>
+                <CardDescription>Recent activity and ratings from residents.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {activityEvents.length > 0 ? (
+                  activityEvents.map((req: any) => {
+                    const providerId = req.providerId || req.provider_id;
+                    const provider = providerLookup.get(providerId);
+                    return (
+                      <div key={req.id} className="rounded-lg border border-border p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="font-medium">
+                            {provider?.name || provider?.email || "Assigned provider"}
+                          </div>
+                          <Badge variant="outline">{req.status || "pending"}</Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {req.category || "Service request"} - Rating {provider?.rating ?? "N/A"}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-sm text-muted-foreground">No recent activity yet.</div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Actions Hub</CardTitle>
+                <CardDescription>Open approvals, assignments, and tasks in one place.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3">
+                  <div className="flex items-center justify-between rounded-lg border border-border p-3 text-sm">
+                    <span>Pending approvals</span>
+                    <Badge variant="outline">{pendingApprovalsCount}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border border-border p-3 text-sm">
+                    <span>Unassigned requests</span>
+                    <Badge variant="outline">{unassignedRequests.length}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border border-border p-3 text-sm">
+                    <span>Open tasks</span>
+                    <Badge variant="outline">{companyTasks.length}</Badge>
+                  </div>
+                </div>
+                <Button className="w-full" onClick={() => setShowCompanyActions(true)}>
+                  Open Actions
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+        <Dialog open={showCompanyActions} onOpenChange={setShowCompanyActions}>
+          <DialogContent className="w-[70vw] max-w-5xl max-h-[90vh] overflow-auto">
+            <DialogHeader>
+              <DialogTitle>Company Actions</DialogTitle>
+              <DialogDescription>
+                Approvals, assignments, and task management for {selectedCompanyForMembers.name}.
+              </DialogDescription>
+            </DialogHeader>
+            <Tabs defaultValue="approvals">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="approvals">Approvals</TabsTrigger>
+                <TabsTrigger value="add-provider">Add Provider</TabsTrigger>
+                <TabsTrigger value="requests">Requests</TabsTrigger>
+                <TabsTrigger value="tasks">Tasks</TabsTrigger>
+              </TabsList>
+              <TabsContent value="approvals" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Pending Approvals</CardTitle>
+                    <CardDescription>Provider requests waiting for approval.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {pendingProviderRequests.length > 0 ? (
+                      pendingProviderRequests.map((req: any) => (
+                        <div key={req.id} className="rounded-lg border border-border p-3">
+                          <div className="font-medium">{req.name || req.email}</div>
+                          <div className="text-xs text-muted-foreground">{req.email}</div>
+                          <Button
+                            size="sm"
+                            className="mt-3"
+                            onClick={() =>
+                              updateProviderApprovalMutation.mutate({
+                                providerId: req.providerId,
+                                approved: true,
+                              })
+                            }
+                            disabled={!req.providerId}
+                          >
+                            Approve Provider
+                          </Button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-muted-foreground">No pending approvals.</div>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+              <TabsContent value="add-provider" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Add Provider</CardTitle>
+                    <CardDescription>Assign an existing provider to this company.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <Select value={selectedProviderToAdd} onValueChange={setSelectedProviderToAdd}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableProviders.length > 0 ? (
+                          availableProviders.map((provider: any) => (
+                            <SelectItem key={provider.id || provider._id} value={provider.id || provider._id}>
+                              {provider.name || provider.email}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No available providers
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      className="w-full"
+                      onClick={() => {
+                        if (!selectedProviderToAdd) {
+                          toast({ title: "Select a provider", variant: "destructive" });
+                          return;
+                        }
+                        assignProviderToCompanyMutation.mutate(selectedProviderToAdd);
+                        setSelectedProviderToAdd("");
+                      }}
+                      disabled={assignProviderToCompanyMutation.isPending}
+                    >
+                      Add Provider
+                    </Button>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+              <TabsContent value="requests" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Assign Service Request</CardTitle>
+                    <CardDescription>Allocate open requests to a provider.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <Select
+                      value={serviceAssignment.requestId}
+                      onValueChange={(value) => setServiceAssignment((prev) => ({ ...prev, requestId: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select request" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {unassignedRequests.length > 0 ? (
+                          unassignedRequests.map((req: any) => (
+                            <SelectItem key={req.id} value={req.id}>
+                              {req.category || "Service request"}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No unassigned requests
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={serviceAssignment.providerId}
+                      onValueChange={(value) => setServiceAssignment((prev) => ({ ...prev, providerId: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {companyProviders.length > 0 ? (
+                          companyProviders.map((provider: any) => (
+                            <SelectItem key={provider.id || provider._id} value={provider.id || provider._id}>
+                              {provider.name || provider.email}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No providers available
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <Button className="w-full" onClick={handleAssignServiceRequest}>
+                      Assign Request
+                    </Button>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+              <TabsContent value="tasks" className="mt-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Task Allocation</CardTitle>
+                    <CardDescription>Assign internal tasks and track progress.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <Input
+                      placeholder="Task title"
+                      value={companyTaskForm.title}
+                      onChange={(e) => setCompanyTaskForm((prev) => ({ ...prev, title: e.target.value }))}
+                    />
+                    <Textarea
+                      placeholder="Task description"
+                      value={companyTaskForm.description}
+                      onChange={(e) => setCompanyTaskForm((prev) => ({ ...prev, description: e.target.value }))}
+                      rows={3}
+                    />
+                    <Select
+                      value={companyTaskForm.assigneeId}
+                      onValueChange={(value) => setCompanyTaskForm((prev) => ({ ...prev, assigneeId: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Assign to provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {companyProviders.length > 0 ? (
+                          companyProviders.map((provider: any) => (
+                            <SelectItem key={provider.id || provider._id} value={provider.id || provider._id}>
+                              {provider.name || provider.email}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No providers available
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Select
+                        value={companyTaskForm.priority}
+                        onValueChange={(value) => setCompanyTaskForm((prev) => ({ ...prev, priority: value }))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Priority" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="low">Low</SelectItem>
+                          <SelectItem value="medium">Medium</SelectItem>
+                          <SelectItem value="high">High</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={companyTaskForm.status}
+                        onValueChange={(value) => setCompanyTaskForm((prev) => ({ ...prev, status: value }))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="open">Open</SelectItem>
+                          <SelectItem value="in_progress">In Progress</SelectItem>
+                          <SelectItem value="done">Done</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Input
+                      type="date"
+                      value={companyTaskForm.dueDate}
+                      onChange={(e) => setCompanyTaskForm((prev) => ({ ...prev, dueDate: e.target.value }))}
+                    />
+                    <Button onClick={handleAddCompanyTask}>Add Task</Button>
+                    <div className="space-y-2">
+                      {companyTasks.length > 0 ? (
+                        companyTasks.map((task) => (
+                          <div key={task.id} className="rounded-lg border border-border p-3">
+                            <div className="font-medium">{task.title}</div>
+                            <div className="text-xs text-muted-foreground">{task.description || "No description"}</div>
+                            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                              <Badge variant="outline">{task.priority}</Badge>
+                              <Badge variant="outline">{task.status}</Badge>
+                              {task.dueDate ? <Badge variant="outline">Due {task.dueDate}</Badge> : null}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-sm text-muted-foreground">No tasks assigned yet.</div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+          </DialogContent>
+        </Dialog>
+
+        {/* Category Assignment Dialog */}
+        <Dialog open={showCategoryDialog} onOpenChange={setShowCategoryDialog}>
+          <DialogContent className="max-w-3xl w-[60vw]">
+            <DialogHeader>
+              <DialogTitle>Assign Service Categories</DialogTitle>
+              <DialogDescription>
+                Select service categories for {selectedProviderForCategory?.name || selectedProviderForCategory?.email}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              {selectedProviderForCategory?.categories && selectedProviderForCategory.categories.length > 0 && (
+                <div className="bg-muted p-3 rounded-lg">
+                  <div className="text-sm font-medium mb-2">Currently Assigned Categories:</div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedProviderForCategory.categories.map((categoryId: string) => {
+                      const category = categoriesList.find((c: any) => 
+                        c.id === categoryId || c._id === categoryId || c.key === categoryId
+                      );
+                      const emoji = safeEmoji(category?.emoji);
+                      return (
+                        <Badge key={categoryId} variant="outline" className="text-xs">
+                          {category ? `${emoji} ${category.name}`.trim() : categoryId}
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-3">
+                {categoriesList.length > 0 ? (
+                  categoriesList.map((category: any) => (
+                    <div key={category.id || category._id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`category-${category.id || category._id}`}
+                        checked={selectedCategories.includes(category.id) || selectedCategories.includes(category._id) || selectedCategories.includes(category.key)}
+                        onCheckedChange={(checked) => {
+                          const categoryId = category.id || category._id;
+                          if (checked) {
+                            setSelectedCategories([...selectedCategories, categoryId]);
+                          } else {
+                            setSelectedCategories(selectedCategories.filter((c) => c !== categoryId && c !== category._id && c !== category.key));
+                          }
+                        }}
+                      />
+                      <label
+                        htmlFor={`category-${category.id || category._id}`}
+                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                      >
+                        {safeEmoji(category.emoji)} {category.name}
+                      </label>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No categories available.</div>
+                )}
+              </div>
+            </div>
+            <DialogFooter className="flex items-center justify-between">
+              <Button 
+                variant="destructive" 
+                onClick={() => {
+                  if (selectedProviderForCategory) {
+                    const providerId = selectedProviderForCategory.id || selectedProviderForCategory._id;
+                    assignCategoriesToProviderMutation.mutate({
+                      providerId,
+                      categories: [],
+                    });
+                  }
+                }}
+                disabled={assignCategoriesToProviderMutation.isPending || selectedCategories.length === 0}
+              >
+                Clear All Categories
+              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setShowCategoryDialog(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (selectedProviderForCategory) {
+                      const providerId = selectedProviderForCategory.id || selectedProviderForCategory._id;
+                      assignCategoriesToProviderMutation.mutate({
+                        providerId,
+                        categories: selectedCategories,
+                      });
+                    }
+                  }}
+                  disabled={assignCategoriesToProviderMutation.isPending}
+                >
+                  {assignCategoriesToProviderMutation.isPending ? "Saving..." : "Save Categories"}
+                </Button>
+              </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -6992,57 +9073,571 @@ const CompaniesManagement = () => {
             Manage provider companies and assign them to users.
           </p>
         </div>
-        <Button onClick={() => setShowAddCompany(true)} data-testid="button-open-add-company">
-          <Plus className="w-4 h-4 mr-2" />
-          Add Company
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => refetch()} disabled={isLoading} data-testid="button-refresh-companies">
+            <RefreshCw className="w-4 h-4" />
+          </Button>
+          <Button onClick={() => setShowAddCompany(true)} data-testid="button-open-add-company">
+            <Plus className="w-4 h-4 mr-2" />
+            Add Company
+          </Button>
+        </div>
       </div>
 
-      <Dialog open={showAddCompany} onOpenChange={setShowAddCompany}>
-        <DialogContent>
+      {/* Add Company Dialog */}
+      <Dialog open={showAddCompany} onOpenChange={(open) => {
+        if (!open) resetAddForm();
+        else setShowAddCompany(true);
+      }}>
+        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Add Company</DialogTitle>
             <DialogDescription>Create a new provider company.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <Input
-              placeholder="Company Name *"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              data-testid="input-company-name"
-            />
-            <Input
-              placeholder="Contact Email"
-              value={form.contactEmail}
-              onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
-              data-testid="input-company-email"
-            />
-            <Input
-              placeholder="Phone"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              data-testid="input-company-phone"
-            />
-            <Textarea
-              placeholder="Description"
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={3}
-              data-testid="textarea-company-description"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Input
+                placeholder="Company Name *"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                data-testid="input-company-name"
+              />
+            </div>
+            <div>
+              <Input
+                placeholder="Contact Email"
+                value={form.contactEmail}
+                onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
+                data-testid="input-company-email"
+              />
+            </div>
+            <div>
+              <Input
+                placeholder="Phone"
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                data-testid="input-company-phone"
+              />
+            </div>
+            <div className="col-span-1 sm:col-span-2 lg:col-span-3">
+              <Textarea
+                placeholder="Description"
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                rows={3}
+                data-testid="textarea-company-description"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <Checkbox
+                id="company-active-add"
+                checked={!!form.isActive}
+                onCheckedChange={(checked: any) => setForm({ ...form, isActive: !!checked })}
+              />
+              <Label htmlFor="company-active-add" className="text-sm">Active</Label>
+            </div>
+
+            {/* Business Registration Accordions */}
+            <div className="col-span-1 sm:col-span-2 lg:col-span-3">
+              <Accordion type="single" collapsible className="w-full">
+                {/* Business Details Section */}
+                <AccordionItem value="business-details">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Business Details</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Business Address</Label>
+                      <Input
+                        placeholder="Street address"
+                        value={form.businessAddress || ""}
+                        onChange={(e) => setForm({ ...form, businessAddress: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-business-address"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">City</Label>
+                        <Input
+                          placeholder="City"
+                          value={form.businessCity || ""}
+                          onChange={(e) => setForm({ ...form, businessCity: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-business-city"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium">State/Province</Label>
+                        <Input
+                          placeholder="State/Province"
+                          value={form.businessState || ""}
+                          onChange={(e) => setForm({ ...form, businessState: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-business-state"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">ZIP Code</Label>
+                        <Input
+                          placeholder="ZIP/Postal code"
+                          value={form.businessZipCode || ""}
+                          onChange={(e) => setForm({ ...form, businessZipCode: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-business-zipcode"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium">Country</Label>
+                        <Input
+                          placeholder="Country"
+                          value={form.businessCountry || ""}
+                          onChange={(e) => setForm({ ...form, businessCountry: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-business-country"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Business Type</Label>
+                      <Select value={form.businessType || ""} onValueChange={(value) => setForm({ ...form, businessType: value })}>
+                        <SelectTrigger className="w-full mt-1" data-testid="select-business-type">
+                          <SelectValue placeholder="Select a business type" />
+                        </SelectTrigger>
+                        <SelectContent className="w-full">
+                          {businessTypes.map((type) => (
+                            <SelectItem key={type} value={type}>
+                              {type}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* Registration & Compliance Section */}
+                <AccordionItem value="registration-compliance">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Registration & Compliance</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Business Registration Number</Label>
+                      <Input
+                        placeholder="CAC/Registration number"
+                        value={form.businessRegNumber || ""}
+                        onChange={(e) => setForm({ ...form, businessRegNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-business-reg-number"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Tax ID / NIN</Label>
+                      <Input
+                        placeholder="Tax ID / NIN"
+                        value={form.businessTaxId || ""}
+                        onChange={(e) => setForm({ ...form, businessTaxId: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-business-tax-id"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* Bank Details Section */}
+                <AccordionItem value="bank-details">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Bank Details</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Account Holder Name</Label>
+                      <Input
+                        placeholder="Account holder name"
+                        value={form.bankAccountName || ""}
+                        onChange={(e) => setForm({ ...form, bankAccountName: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-bank-account-name"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Bank Name</Label>
+                      <Input
+                        placeholder="Bank name"
+                        value={form.bankName || ""}
+                        onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-bank-name"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Account Number</Label>
+                      <Input
+                        placeholder="Account number"
+                        value={form.bankAccountNumber || ""}
+                        onChange={(e) => setForm({ ...form, bankAccountNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-bank-account-number"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Routing Number / Code</Label>
+                      <Input
+                        placeholder="Routing/Sort code"
+                        value={form.bankRoutingNumber || ""}
+                        onChange={(e) => setForm({ ...form, bankRoutingNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-bank-routing"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </div>
           </div>
           <DialogFooter className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setShowAddCompany(false)}>
+            <Button variant="outline" onClick={resetAddForm}>
               Cancel
             </Button>
             <Button
-              onClick={() => {
-                handleSubmit();
-              }}
+              onClick={handleSubmit}
               disabled={createCompanyMutation.isPending}
               data-testid="button-create-company"
             >
               {createCompanyMutation.isPending ? "Saving..." : "Save Company"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Company Dialog */}
+      <Dialog open={showViewCompany} onOpenChange={setShowViewCompany}>
+        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>Company Details</DialogTitle>
+          </DialogHeader>
+          {selectedCompany && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-start">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Name</Label>
+                  <p className="font-semibold text-sm">{selectedCompany.name}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Contact Email</Label>
+                  <p className="text-sm">{selectedCompany.contactEmail || "â€”"}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Phone</Label>
+                  <p className="text-sm">{selectedCompany.phone || "â€”"}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Submitted At</Label>
+                  <p className="text-sm">{formatDate(selectedCompany.submittedAt || selectedCompany.details?.submittedAt)}</p>
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Description</Label>
+                <p className="text-sm">{selectedCompany.description || "â€”"}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Provider</Label>
+                <p className="text-sm">{selectedCompany.providerName || selectedCompany.provider_id || "â€”"}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Active</Label>
+                <div>
+                  <Badge variant={selectedCompany.isActive ? "default" : "outline"} className="text-sm">
+                    {typeof selectedCompany.isActive !== "undefined" ? (selectedCompany.isActive ? "Active" : "Inactive") : "â€”"}
+                  </Badge>
+                </div>
+              </div>
+              <div>
+                <DetailsView data={selectedCompany.details} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Created</Label>
+                  <p className="text-sm">{formatDate(selectedCompany.createdAt)}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Updated</Label>
+                  <p className="text-sm">{formatDate(selectedCompany.updatedAt)}</p>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowViewCompany(false)}>
+              Close
+            </Button>
+            <Button onClick={() => {
+              setShowViewCompany(false);
+              handleEditCompany(selectedCompany);
+            }}>
+              <Edit className="w-4 h-4 mr-2" />
+              Edit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Company Dialog */}
+      <Dialog open={showEditCompany} onOpenChange={(open) => {
+        if (!open) resetEditForm();
+        else setShowEditCompany(true);
+      }}>
+        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Company</DialogTitle>
+            <DialogDescription>Update company information.</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label className="text-xs">Company Name</Label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                data-testid="input-edit-company-name"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Enter the legal or commonly used company name.</p>
+            </div>
+            <div>
+              <Label className="text-xs">Contact Email</Label>
+              <Input
+                value={form.contactEmail}
+                onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
+                data-testid="input-edit-company-email"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Public email used for enquiries (e.g., info@company.com).</p>
+            </div>
+            <div>
+              <Label className="text-xs">Phone</Label>
+              <Input
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                data-testid="input-edit-company-phone"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Primary contact number including country code if applicable.</p>
+            </div>
+            <div className="col-span-1 sm:col-span-2 lg:col-span-3">
+              <Label className="text-xs">Description</Label>
+              <Textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                rows={3}
+                data-testid="textarea-edit-company-description"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Short description about the company and services offered.</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <Checkbox
+                id="company-active"
+                checked={!!form.isActive}
+                onCheckedChange={(checked: any) => setForm({ ...form, isActive: !!checked })}
+              />
+              <Label htmlFor="company-active" className="text-sm">Active</Label>
+            </div>
+
+            {/* Business Registration Accordions */}
+            <div className="col-span-1 sm:col-span-2 lg:col-span-3">
+              <Accordion type="single" collapsible className="w-full">
+                {/* Business Details Section */}
+                <AccordionItem value="business-details">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Business Details</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Business Address</Label>
+                      <Input
+                        placeholder="Street address"
+                        value={form.businessAddress || ""}
+                        onChange={(e) => setForm({ ...form, businessAddress: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-business-address"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">City</Label>
+                        <Input
+                          placeholder="City"
+                          value={form.businessCity || ""}
+                          onChange={(e) => setForm({ ...form, businessCity: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-edit-business-city"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium">State/Province</Label>
+                        <Input
+                          placeholder="State/Province"
+                          value={form.businessState || ""}
+                          onChange={(e) => setForm({ ...form, businessState: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-edit-business-state"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">ZIP Code</Label>
+                        <Input
+                          placeholder="ZIP/Postal code"
+                          value={form.businessZipCode || ""}
+                          onChange={(e) => setForm({ ...form, businessZipCode: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-edit-business-zipcode"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium">Country</Label>
+                        <Input
+                          placeholder="Country"
+                          value={form.businessCountry || ""}
+                          onChange={(e) => setForm({ ...form, businessCountry: e.target.value })}
+                          className="mt-1"
+                          data-testid="input-edit-business-country"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Business Type</Label>
+                      <Select value={form.businessType || ""} onValueChange={(value) => setForm({ ...form, businessType: value })}>
+                        <SelectTrigger className="w-full mt-1" data-testid="select-edit-business-type">
+                          <SelectValue placeholder="Select a business type" />
+                        </SelectTrigger>
+                        <SelectContent className="w-full">
+                          {businessTypes.map((type) => (
+                            <SelectItem key={type} value={type}>
+                              {type}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* Registration & Compliance Section */}
+                <AccordionItem value="registration-compliance">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Registration & Compliance</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Business Registration Number</Label>
+                      <Input
+                        placeholder="CAC/Registration number"
+                        value={form.businessRegNumber || ""}
+                        onChange={(e) => setForm({ ...form, businessRegNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-business-reg-number"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Tax ID / NIN</Label>
+                      <Input
+                        placeholder="Tax ID / NIN"
+                        value={form.businessTaxId || ""}
+                        onChange={(e) => setForm({ ...form, businessTaxId: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-business-tax-id"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* Bank Details Section */}
+                <AccordionItem value="bank-details">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="font-medium">Bank Details</span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-4">
+                    <div>
+                      <Label className="text-sm font-medium">Account Holder Name</Label>
+                      <Input
+                        placeholder="Account holder name"
+                        value={form.bankAccountName || ""}
+                        onChange={(e) => setForm({ ...form, bankAccountName: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-bank-account-name"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Bank Name</Label>
+                      <Input
+                        placeholder="Bank name"
+                        value={form.bankName || ""}
+                        onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-bank-name"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Account Number</Label>
+                      <Input
+                        placeholder="Account number"
+                        value={form.bankAccountNumber || ""}
+                        onChange={(e) => setForm({ ...form, bankAccountNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-bank-account-number"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">Routing Number / Code</Label>
+                      <Input
+                        placeholder="Routing/Sort code"
+                        value={form.bankRoutingNumber || ""}
+                        onChange={(e) => setForm({ ...form, bankRoutingNumber: e.target.value })}
+                        className="mt-1"
+                        data-testid="input-edit-bank-routing"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </div>
+          </div>
+          <DialogFooter className="flex justify-end gap-2">
+            <Button variant="outline" onClick={resetEditForm}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleUpdate}
+              disabled={updateCompanyMutation.isPending}
+              data-testid="button-update-company"
+            >
+              {updateCompanyMutation.isPending ? "Saving..." : "Update Company"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>Delete Company</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <strong>{selectedCompany?.name}</strong>? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteCompanyMutation.mutate()}
+              disabled={deleteCompanyMutation.isPending}
+              data-testid="button-confirm-delete-company"
+            >
+              {deleteCompanyMutation.isPending ? "Deleting..." : "Delete Company"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -7073,14 +9668,56 @@ const CompaniesManagement = () => {
                       <th className="px-4 py-2">Name</th>
                       <th className="px-4 py-2">Contact</th>
                       <th className="px-4 py-2">Phone</th>
+                      <th className="px-4 py-2 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {companies.map((company: any) => (
-                      <tr key={company.id} className="border-t border-border">
+                      <tr key={company.id} className="border-t border-border hover:bg-gray-50 dark:hover:bg-gray-900/50">
                         <td className="px-4 py-3 font-medium">{company.name}</td>
-                        <td className="px-4 py-3">{company.contactEmail || "—"}</td>
-                        <td className="px-4 py-3">{company.phone || "—"}</td>
+                        <td className="px-4 py-3">{company.contactEmail || "â€”"}</td>
+                        <td className="px-4 py-3">{company.phone || "â€”"}</td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex gap-2 justify-end">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleViewCompany(company)}
+                              data-testid={`button-view-company-${company.id}`}
+                              title="View details"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => goToCompanyMembers(company.id)}
+                              data-testid={`button-company-members-${company.id}`}
+                              title="Manage members"
+                            >
+                              <Users className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditCompany(company)}
+                              data-testid={`button-edit-company-${company.id}`}
+                              title="Edit company"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteCompany(company)}
+                              data-testid={`button-delete-company-${company.id}`}
+                              title="Delete company"
+                              className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -7097,10 +9734,11 @@ const CompaniesManagement = () => {
 // Stores Management Component
 const StoresManagement = () => {
     const [location, setLocation] = useLocation();
+  const [locationPath, locationQuery] = location.split("?");
+  const storeCompanyId = new URLSearchParams(locationQuery || "").get("companyId");
     const [search, setSearch] = useState("");
     const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
     const [selectedStore, setSelectedStore] = useState<any>(null);
-    const [showMembersDialog, setShowMembersDialog] = useState(false);
     const [selectedOwnerId, setSelectedOwnerId] = useState("");
     const [formData, setFormData] = useState({
       name: "",
@@ -7109,22 +9747,59 @@ const StoresManagement = () => {
     phone: "",
     email: "",
   });
+    // When creating/editing store: assignment can be 'global' or an estate id
+    const [selectedStoreAssignment, setSelectedStoreAssignment] = useState<string | null>("global");
+    // UI: tab to toggle between global stores and estate-specific stores
+    const [storeTab, setStoreTab] = useState<"global" | "estate">("global");
+    const [selectedEstateFilter, setSelectedEstateFilter] = useState<string | null>(null);
+
+    // Fetch estates to populate estate selector when in 'estate' tab
+    const { data: estatesForFilter = [] } = useQuery({
+      queryKey: ["/api/admin/estates/list-for-stores"],
+      queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
+    });
+
+    const { data: companies = [] } = useQuery({
+      queryKey: ["admin-companies"],
+      queryFn: () => adminApiRequest("GET", "/api/admin/companies"),
+    });
 
   const { user } = useAdminAuth();
   const { toast } = useToast();
 
     const { data: stores, isLoading } = useQuery({
-      queryKey: ["/api/admin/stores", { search }],
+      queryKey: ["/api/admin/stores", { search, companyId: storeCompanyId }],
       queryFn: () => {
         const params = new URLSearchParams();
         if (search) params.append("search", search);
-      const queryString = params.toString();
-      return adminApiRequest(
-        "GET",
+        if (storeCompanyId) params.append("companyId", storeCompanyId);
+        const queryString = params.toString();
+        return adminApiRequest(
+          "GET",
           `/api/admin/stores${queryString ? "?" + queryString : ""}`,
         );
       },
     });
+
+    const storeCompany = storeCompanyId && Array.isArray(companies)
+      ? companies.find((company: any) => String(company.id || company._id) === String(storeCompanyId))
+      : null;
+    const scopedStores = storeCompanyId && Array.isArray(stores)
+      ? stores.filter((store: any) => String(store.companyId || store.company_id) === String(storeCompanyId))
+      : stores;
+
+    // derive filtered stores according to selected tab
+    const filteredStores = Array.isArray(scopedStores)
+      ? scopedStores.filter((s: any) => {
+          if (storeTab === "global") return !s.estateId && !s.estate_id;
+          // estate tab: filter by selectedEstateFilter (if set), else show none
+          if (storeTab === "estate") {
+            if (!selectedEstateFilter) return false;
+            return String(s.estateId || s.estate_id || "") === String(selectedEstateFilter);
+          }
+          return true;
+        })
+      : [];
     const inventoryStoreId = (() => {
       const segments = location.split("/").filter(Boolean);
       if (
@@ -7136,13 +9811,30 @@ const StoresManagement = () => {
       }
       return null;
     })();
+    const storeMembersStoreId = (() => {
+      const segments = location.split("/").filter(Boolean);
+      if (
+        segments[0] === "admin-dashboard" &&
+        segments[1] === "stores" &&
+        segments[2] === "members"
+      ) {
+        return segments[3] || null;
+      }
+      return null;
+    })();
+    const storeMembersStore =
+      storeMembersStoreId && Array.isArray(stores)
+        ? stores.find((store: any) => (store._id || store.id) === storeMembersStoreId)
+        : null;
     const inventoryStore =
       inventoryStoreId && Array.isArray(stores)
         ? stores.find((store: any) => (store._id || store.id) === inventoryStoreId)
         : null;
     const isInventoryPage = Boolean(inventoryStoreId);
+    const isStoreMembersPage = Boolean(storeMembersStoreId);
     const [inventoryView, setInventoryView] = useState<"card" | "table">("table");
     const goToStores = () => setLocation("/admin-dashboard/stores");
+    const goToStoreMembers = (storeId: string) => setLocation(`/admin-dashboard/stores/members/${storeId}`);
 
   const { data: storeProviders } = useQuery({
     queryKey: ["/api/admin/store-owner-providers"],
@@ -7151,6 +9843,18 @@ const StoresManagement = () => {
         role: "provider",
       }),
   });
+
+  const companyMatchesProvider = (provider: any, company: any) => {
+    if (!provider || !company) return false;
+    const providerCompany = String(provider.company || "").trim().toLowerCase();
+    const companyName = String(company.name || "").trim().toLowerCase();
+    const companyId = String(company.id || company._id || "").trim().toLowerCase();
+    return providerCompany === companyName || providerCompany === companyId;
+  };
+
+  const scopedStoreProviders = Array.isArray(storeProviders)
+    ? (storeCompany ? storeProviders.filter((provider: any) => companyMatchesProvider(provider, storeCompany)) : storeProviders)
+    : [];
 
   const isStoreOwnerProvider = (p: any) => {
     if (!p) return false;
@@ -7167,8 +9871,8 @@ const StoresManagement = () => {
 
   // Auto-fill phone/email when a store owner is selected
   useEffect(() => {
-    if (!selectedOwnerId || !Array.isArray(storeProviders)) return;
-    const owner = storeProviders.find(
+    if (!selectedOwnerId || !Array.isArray(scopedStoreProviders)) return;
+    const owner = scopedStoreProviders.find(
       (p: any) => (p.id || p._id) === selectedOwnerId && isStoreOwnerProvider(p),
     );
     if (!owner) return;
@@ -7202,6 +9906,7 @@ const StoresManagement = () => {
       setIsCreateDialogOpen(false);
       setFormData({ name: "", description: "", location: "", phone: "", email: "" });
       setSelectedOwnerId("");
+      setSelectedStoreAssignment("global");
       toast({ title: variables.id ? "Store updated successfully" : "Store created successfully" });
     },
     onError: (error: any) => {
@@ -7224,19 +9929,138 @@ const StoresManagement = () => {
           : [],
       enabled: !!inventoryStoreId,
     });
+    const { data: storeMembers = [], isLoading: isStoreMembersLoading } = useQuery({
+      queryKey: ["/api/admin/stores", storeMembersStoreId, "members"],
+      queryFn: () =>
+        storeMembersStoreId
+          ? adminApiRequest("GET", `/api/admin/stores/${storeMembersStoreId}/members`)
+          : [],
+      enabled: !!storeMembersStoreId,
+    });
+    const { data: storeMemberInventory = [] } = useQuery({
+      queryKey: ["/api/admin/marketplace", { storeId: storeMembersStoreId, view: "members" }],
+      queryFn: () =>
+        storeMembersStoreId
+          ? adminApiRequest("GET", "/api/admin/marketplace", {
+              storeId: storeMembersStoreId,
+            })
+          : [],
+      enabled: !!storeMembersStoreId,
+    });
+    const { data: storeOrdersResponse } = useQuery({
+      queryKey: ["/api/admin/orders", { storeId: storeMembersStoreId }],
+      queryFn: () =>
+        adminApiRequest("GET", "/api/admin/orders", {
+          limit: 50,
+        }),
+      enabled: !!storeMembersStoreId,
+    });
+    const [newStoreMember, setNewStoreMember] = useState({
+      userId: "",
+      role: "member",
+      canManageItems: true,
+      canManageOrders: true,
+      isActive: true,
+    });
+    const addStoreMemberMutation = useMutation({
+      mutationFn: (payload: typeof newStoreMember) =>
+        adminApiRequest("POST", `/api/admin/stores/${storeMembersStoreId}/members`, payload),
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["/api/admin/stores", storeMembersStoreId, "members"],
+        });
+        setNewStoreMember({
+          userId: "",
+          role: "member",
+          canManageItems: true,
+          canManageOrders: true,
+          isActive: true,
+        });
+        toast({ title: "Store member added" });
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Failed to add member",
+          description: error.response?.data?.message || "Unable to add member.",
+          variant: "destructive",
+        });
+      },
+    });
+    const updateStoreMemberMutation = useMutation({
+      mutationFn: ({ id, updates }: { id: string; updates: any }) =>
+        adminApiRequest(
+          "PATCH",
+          `/api/admin/stores/${storeMembersStoreId}/members/${id}`,
+          updates,
+        ),
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["/api/admin/stores", storeMembersStoreId, "members"],
+        });
+        toast({ title: "Member updated" });
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Failed to update member",
+          description: error.response?.data?.message || "Unable to update member.",
+          variant: "destructive",
+        });
+      },
+    });
+    const removeStoreMemberMutation = useMutation({
+      mutationFn: (memberId: string) =>
+        adminApiRequest(
+          "DELETE",
+          `/api/admin/stores/${storeMembersStoreId}/members/${memberId}`,
+        ),
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["/api/admin/stores", storeMembersStoreId, "members"],
+        });
+        toast({ title: "Member removed" });
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Failed to remove member",
+          description: error.response?.data?.message || "Unable to remove member.",
+          variant: "destructive",
+        });
+      },
+    });
+    const [memberTasks, setMemberTasks] = useState<any[]>([]);
+    const [memberTaskForm, setMemberTaskForm] = useState({
+      title: "",
+      description: "",
+      assigneeId: "",
+      priority: "medium",
+      status: "open",
+      dueDate: "",
+    });
+    useEffect(() => {
+      if (!storeMembersStoreId) return;
+      const key = `store-members:${storeMembersStoreId}:tasks`;
+      const saved = window.localStorage.getItem(key);
+      setMemberTasks(saved ? JSON.parse(saved) : []);
+    }, [storeMembersStoreId]);
+    useEffect(() => {
+      if (!storeMembersStoreId) return;
+      const key = `store-members:${storeMembersStoreId}:tasks`;
+      window.localStorage.setItem(key, JSON.stringify(memberTasks));
+    }, [memberTasks, storeMembersStoreId]);
 
     const inventoryForm = useForm({
       defaultValues: {
         name: "",
-        price: 0,
-        stock: 0,
+        price: "",
+        stock: "",
         category: "",
         description: "",
         vendorId: "",
-        image: "",
+        images: [] as string[],
       },
     });
-    const [inventoryImagePreview, setInventoryImagePreview] = useState<string>("");
+    const inventoryImageInputRef = useRef<HTMLInputElement | null>(null);
+    const [inventoryImagePreview, setInventoryImagePreview] = useState<string[]>([]);
     const inventoryEditForm = useForm({
       defaultValues: {
         name: "",
@@ -7248,8 +10072,13 @@ const StoresManagement = () => {
       },
     });
     const [inventoryEditPreview, setInventoryEditPreview] = useState<string>("");
+    const [inventoryEditImages, setInventoryEditImages] = useState<string[]>([]);
+    const [editImageIndex, setEditImageIndex] = useState<number>(0);
     const [inventoryEditingItem, setInventoryEditingItem] = useState<any | null>(null);
     const [deletingInventoryId, setDeletingInventoryId] = useState<string | null>(null);
+    const [isAddInventoryModalOpen, setIsAddInventoryModalOpen] = useState<boolean>(false);
+    const [viewInventoryItem, setViewInventoryItem] = useState<any | null>(null);
+    const [viewImageIndex, setViewImageIndex] = useState<number>(0);
 
     const getPrimaryImage = useCallback((item?: any) => {
       if (!item) return "";
@@ -7260,6 +10089,14 @@ const StoresManagement = () => {
         return item.image;
       }
       return "";
+    }, []);
+    const getGalleryImages = useCallback((item?: any) => {
+      if (!item) return [];
+      if (Array.isArray(item.images) && item.images.length > 0) {
+        return item.images.filter(Boolean);
+      }
+      if (item.image) return [item.image];
+      return [];
     }, []);
 
     const { data: itemCategories = [] } = useQuery({
@@ -7285,19 +10122,23 @@ const StoresManagement = () => {
           image: "",
         });
         setInventoryEditPreview("");
+        setInventoryEditImages([]);
+        setEditImageIndex(0);
         return;
       }
       const primaryImage = getPrimaryImage(inventoryEditingItem);
       inventoryEditForm.reset({
         name: inventoryEditingItem.name || "",
         price: Number(inventoryEditingItem.price || 0),
-        stock: Number(inventoryEditingItem.stock ?? 0),
+        stock: Number(inventoryEditingItem.stock - 0),
         description: inventoryEditingItem.description || "",
         category: inventoryEditingItem.category || itemCategories?.[0]?.name || "",
         image: primaryImage,
       });
       setInventoryEditPreview(primaryImage);
-    }, [inventoryEditingItem, itemCategories, getPrimaryImage, isInventoryPage]);
+      setInventoryEditImages(getGalleryImages(inventoryEditingItem));
+      setEditImageIndex(0);
+    }, [inventoryEditingItem, itemCategories, getPrimaryImage, getGalleryImages, isInventoryPage]);
 
     const createInventoryMutation = useMutation({
       mutationFn: (payload: any) =>
@@ -7305,7 +10146,7 @@ const StoresManagement = () => {
       onSuccess: () => {
         refetchInventory();
         inventoryForm.reset();
-        setInventoryImagePreview("");
+        setInventoryImagePreview([]);
         toast({ title: "Inventory item added" });
       },
       onError: (error: any) => {
@@ -7319,6 +10160,8 @@ const StoresManagement = () => {
     const closeInventoryEditDialog = useCallback(() => {
       setInventoryEditingItem(null);
       setInventoryEditPreview("");
+      setInventoryEditImages([]);
+      setEditImageIndex(0);
       inventoryEditForm.reset({
         name: "",
         price: 0,
@@ -7391,23 +10234,576 @@ const StoresManagement = () => {
       });
       return;
     }
-    const eligible = Array.isArray(storeProviders)
-      ? storeProviders.filter((p: any) => isStoreOwnerProvider(p))
+    const eligible = Array.isArray(scopedStoreProviders)
+      ? scopedStoreProviders.filter((p: any) => isStoreOwnerProvider(p))
       : [];
     if (!selectedOwnerId) {
-      toast({ title: "Select a store owner", description: "Assign a provider with the store_owner category.", variant: "destructive" });
+      toast({ title: "Select a store owner", description: "Assign a provider with the store owner category.", variant: "destructive" });
       return;
     }
     const owner = eligible.find((p: any) => (p.id || p._id) === selectedOwnerId);
     if (!owner) {
-      toast({ title: "Invalid store owner", description: "Provider must have the store_owner category.", variant: "destructive" });
+      toast({ title: "Invalid store owner", description: "Provider must have the store owner category.", variant: "destructive" });
       return;
     }
-    const payload = { ...formData, ownerId: selectedOwnerId };
     const storeId = selectedStore?._id || selectedStore?.id;
+    const payload: any = { ...formData, ownerId: selectedOwnerId };
+    const storeCompanyIdValue = storeCompanyId || selectedStore?.companyId || selectedStore?.company_id;
+    if (storeCompanyIdValue) {
+      payload.companyId = storeCompanyIdValue;
+    }
+    // include estate assignment when set; for edits, explicitly clear with null when switching to global
+    if (selectedStoreAssignment && selectedStoreAssignment !== "global") {
+      payload.estateId = selectedStoreAssignment;
+    } else if (storeId) {
+      // editing an existing store and user chose global: clear estate assignment
+      payload.estateId = null;
+    }
     createStoreMutation.mutate({ payload, id: storeId });
   };
 
+
+  if (isStoreMembersPage) {
+    const memberRows = Array.isArray(storeMembers) ? storeMembers : [];
+    const storeMembersCompanyId = storeMembersStore?.companyId || storeMembersStore?.company_id || "";
+    const storeMembersCompany = storeMembersCompanyId && Array.isArray(companies)
+      ? companies.find((company: any) => String(company.id || company._id) === String(storeMembersCompanyId))
+      : null;
+    const providerList = Array.isArray(scopedStoreProviders)
+      ? (storeMembersCompany ? scopedStoreProviders.filter((provider: any) => companyMatchesProvider(provider, storeMembersCompany)) : scopedStoreProviders)
+      : [];
+    const storeOwnerId = storeMembersStore?.ownerId || storeMembersStore?.owner_id || "";
+    const storeOwnerUser = providerList.find(
+      (provider: any) => String(provider.id || provider._id) === String(storeOwnerId),
+    );
+    const storeOwnerEligible = !!storeOwnerUser && isStoreOwnerProvider(storeOwnerUser);
+    const membersWithOwner = storeOwnerId && storeOwnerEligible && !memberRows.some(
+      (member: any) => String(member.userId || member.user?.id || "") === String(storeOwnerId),
+    )
+      ? [
+          {
+            id: `owner-${storeOwnerId}`,
+            userId: storeOwnerId,
+            role: "owner",
+            canManageItems: true,
+            canManageOrders: true,
+            isActive: true,
+            user: storeOwnerUser
+              ? {
+                  id: storeOwnerUser.id || storeOwnerUser._id,
+                  name: storeOwnerUser.name,
+                  email: storeOwnerUser.email,
+                  phone: storeOwnerUser.phone,
+                  role: storeOwnerUser.role,
+                  isActive: storeOwnerUser.isActive,
+                }
+              : undefined,
+            isStoreOwner: true,
+          },
+          ...memberRows,
+        ]
+      : memberRows.map((member: any) => ({
+          ...member,
+          isStoreOwner:
+            storeOwnerEligible &&
+            String(member.userId || member.user?.id || "") === String(storeOwnerId),
+        }));
+    const availableProviders = providerList.filter((provider: any) => {
+      const providerId = provider.id || provider._id;
+      return !memberRows.some((member: any) => (member.userId || member.user?.id) === providerId);
+    });
+    const orders = Array.isArray(storeOrdersResponse?.data) ? storeOrdersResponse.data : [];
+    const storeOrders = orders.filter(
+      (order: any) =>
+        String(order.storeId || order.store_id || "") === String(storeMembersStoreId),
+    );
+    const inventoryActivityItems = Array.isArray(storeMemberInventory) ? storeMemberInventory : [];
+    const activityEvents = [
+      ...storeOrders.map((order: any) => ({
+        id: `order-${order.id}`,
+        type: "order",
+        title: `Order ${String(order.id || "").slice(-6)}`,
+        meta: `${order.status || "Pending"}`,
+        amount: `${order.currency || "NGN"} ${Number(order.total || 0).toLocaleString()}`,
+        createdAt: order.createdAt || order.created_at,
+      })),
+      ...inventoryActivityItems.map((item: any) => ({
+        id: `inventory-${item.id}`,
+        type: "inventory",
+        title: item.name || "Inventory update",
+        meta: item.updatedAt ? "Updated" : "Added",
+        amount: `${item.currency || "NGN"} ${Number(item.price || 0).toLocaleString()}`,
+        createdAt: item.updatedAt || item.createdAt,
+      })),
+    ].sort((a, b) => {
+      const left = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const right = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return right - left;
+    });
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Button variant="ghost" size="sm" className="px-0" onClick={goToStores}>
+              <ChevronLeft className="w-4 h-4 mr-1" />
+              Back to Stores
+            </Button>
+            <span>/ Stores</span>
+            {storeMembersStore?.name ? <span>/ {storeMembersStore.name}</span> : null}
+            <span>/ Members</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {storeMembersStoreId && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setLocation(`/admin-dashboard/stores/inventory/${storeMembersStoreId}`)}
+              >
+                View Inventory
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Total Members</p>
+              <p className="text-2xl font-semibold">{memberRows.length}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Active Members</p>
+              <p className="text-2xl font-semibold">
+                {memberRows.filter((m: any) => m.isActive !== false).length}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Open Tasks</p>
+              <p className="text-2xl font-semibold">
+                {memberTasks.filter((t) => t.status !== "done").length}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Recent Orders</p>
+              <p className="text-2xl font-semibold">{storeOrders.length}</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle>Store Members</CardTitle>
+                  <CardDescription>Manage access, roles, and permissions for this store.</CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-3 md:grid-cols-[2fr_1fr_1fr_1fr_auto]">
+                <div>
+                  <Label className="text-xs font-medium">Member</Label>
+                  <Select
+                    value={newStoreMember.userId}
+                    onValueChange={(value) => setNewStoreMember((prev) => ({ ...prev, userId: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select provider" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableProviders.length > 0 ? (
+                        availableProviders.map((provider: any) => (
+                          <SelectItem key={provider.id || provider._id} value={provider.id || provider._id}>
+                            {provider.name} ({provider.email})
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <SelectItem value="none" disabled>
+                          All providers already assigned
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-medium">Role</Label>
+                  <Select
+                    value={newStoreMember.role}
+                    onValueChange={(value) => setNewStoreMember((prev) => ({ ...prev, role: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="owner">Owner</SelectItem>
+                      <SelectItem value="manager">Manager</SelectItem>
+                      <SelectItem value="member">Member</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={newStoreMember.canManageItems}
+                    onCheckedChange={(checked) =>
+                      setNewStoreMember((prev) => ({
+                        ...prev,
+                        canManageItems: checked === true,
+                      }))
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">Items</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={newStoreMember.canManageOrders}
+                    onCheckedChange={(checked) =>
+                      setNewStoreMember((prev) => ({
+                        ...prev,
+                        canManageOrders: checked === true,
+                      }))
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">Orders</span>
+                </div>
+                <div className="flex items-center">
+                  <Button
+                    disabled={!newStoreMember.userId || addStoreMemberMutation.isPending}
+                    onClick={() => addStoreMemberMutation.mutate(newStoreMember)}
+                  >
+                    {addStoreMemberMutation.isPending ? "Adding..." : "Add"}
+                  </Button>
+                </div>
+              </div>
+
+              {isStoreMembersLoading ? (
+                <div className="text-sm text-muted-foreground">Loading members...</div>
+              ) : memberRows.length === 0 ? (
+                <div className="rounded border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  No members assigned to this store yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50">
+                      <tr className="text-left">
+                        <th className="px-4 py-2 font-medium">Member</th>
+                        <th className="px-4 py-2 font-medium">Role</th>
+                        <th className="px-4 py-2 font-medium">Permissions</th>
+                        <th className="px-4 py-2 font-medium">Status</th>
+                        <th className="px-4 py-2 font-medium text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {membersWithOwner.map((member: any) => {
+                        const memberId = member.id;
+                        const userInfo = member.user || {};
+                        const isStoreOwner = member.isStoreOwner;
+                        return (
+                          <tr key={memberId} className="border-t border-border">
+                            <td className="px-4 py-3">
+                              <div className="font-medium">{userInfo.name || "Unknown"}</div>
+                              <div className="text-xs text-muted-foreground">{userInfo.email}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              {isStoreOwner ? (
+                                <Badge variant="default">Store owner</Badge>
+                              ) : (
+                                <Select
+                                  value={member.role}
+                                  onValueChange={(value) =>
+                                    updateStoreMemberMutation.mutate({
+                                      id: memberId,
+                                      updates: { role: value },
+                                    })
+                                  }
+                                >
+                                  <SelectTrigger className="h-8">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="owner">Owner</SelectItem>
+                                    <SelectItem value="manager">Manager</SelectItem>
+                                    <SelectItem value="member">Member</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-2">
+                                  <Checkbox
+                                    checked={member.canManageItems}
+                                    onCheckedChange={(checked) =>
+                                      updateStoreMemberMutation.mutate({
+                                        id: memberId,
+                                        updates: { canManageItems: checked === true },
+                                      })
+                                    }
+                                    disabled={isStoreOwner}
+                                  />
+                                  <span className="text-xs text-muted-foreground">Items</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Checkbox
+                                    checked={member.canManageOrders}
+                                    onCheckedChange={(checked) =>
+                                      updateStoreMemberMutation.mutate({
+                                        id: memberId,
+                                        updates: { canManageOrders: checked === true },
+                                      })
+                                    }
+                                    disabled={isStoreOwner}
+                                  />
+                                  <span className="text-xs text-muted-foreground">Orders</span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <Badge variant={member.isActive ? "default" : "secondary"}>
+                                {member.isActive ? "Active" : "Inactive"}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() =>
+                                    updateStoreMemberMutation.mutate({
+                                      id: memberId,
+                                      updates: { isActive: !member.isActive },
+                                    })
+                                  }
+                                  disabled={isStoreOwner}
+                                >
+                                  {member.isActive ? "Disable" : "Enable"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => removeStoreMemberMutation.mutate(memberId)}
+                                  disabled={isStoreOwner}
+                                >
+                                  Remove
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Activity Feed</CardTitle>
+                <CardDescription>Recent activity tied to this store.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {activityEvents.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No recent activity found.</p>
+                ) : (
+                  activityEvents.slice(0, 8).map((event) => (
+                    <div key={event.id} className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">{event.title}</p>
+                        <p className="text-xs text-muted-foreground">{event.meta}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-medium">{event.amount}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {event.createdAt ? new Date(event.createdAt).toLocaleString() : "â€”"}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Task Allocation</CardTitle>
+                <CardDescription>Assign tasks and track their progress.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Task title</Label>
+                  <Input
+                    value={memberTaskForm.title}
+                    onChange={(e) => setMemberTaskForm((prev) => ({ ...prev, title: e.target.value }))}
+                    placeholder="e.g. Update item listings"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Description</Label>
+                  <Textarea
+                    rows={3}
+                    value={memberTaskForm.description}
+                    onChange={(e) => setMemberTaskForm((prev) => ({ ...prev, description: e.target.value }))}
+                    placeholder="Describe the task details"
+                  />
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <Label className="text-xs font-medium">Assign to</Label>
+                    <Select
+                      value={memberTaskForm.assigneeId}
+                      onValueChange={(value) => setMemberTaskForm((prev) => ({ ...prev, assigneeId: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select member" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {memberRows.map((member: any) => (
+                          <SelectItem key={member.id} value={member.id}>
+                            {member.user?.name || "Member"}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium">Priority</Label>
+                    <Select
+                      value={memberTaskForm.priority}
+                      onValueChange={(value) => setMemberTaskForm((prev) => ({ ...prev, priority: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Priority" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="low">Low</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="high">High</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <Label className="text-xs font-medium">Due date</Label>
+                    <Input
+                      type="date"
+                      value={memberTaskForm.dueDate}
+                      onChange={(e) => setMemberTaskForm((prev) => ({ ...prev, dueDate: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium">Status</Label>
+                    <Select
+                      value={memberTaskForm.status}
+                      onValueChange={(value) => setMemberTaskForm((prev) => ({ ...prev, status: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="open">Open</SelectItem>
+                        <SelectItem value="in_progress">In Progress</SelectItem>
+                        <SelectItem value="done">Done</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <Button
+                  className="w-full"
+                  onClick={() => {
+                    if (!memberTaskForm.title || !memberTaskForm.assigneeId) {
+                      toast({
+                        title: "Missing task details",
+                        description: "Provide a title and assignee before creating a task.",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+                    const newTask = {
+                      id: `${Date.now()}`,
+                      ...memberTaskForm,
+                      createdAt: new Date().toISOString(),
+                    };
+                    setMemberTasks((prev) => [newTask, ...prev]);
+                    setMemberTaskForm({
+                      title: "",
+                      description: "",
+                      assigneeId: "",
+                      priority: "medium",
+                      status: "open",
+                      dueDate: "",
+                    });
+                  }}
+                >
+                  Assign Task
+                </Button>
+
+                <div className="space-y-3 pt-2">
+                  {memberTasks.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No tasks assigned yet.</p>
+                  ) : (
+                    memberTasks.map((task) => {
+                      const assignee = memberRows.find((m: any) => m.id === task.assigneeId);
+                      return (
+                        <div key={task.id} className="rounded border p-3 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-medium">{task.title}</p>
+                            <Badge variant={task.status === "done" ? "default" : "secondary"}>
+                              {task.status.replace("_", " ")}
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{task.description}</p>
+                          <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>{assignee?.user?.name || "Unassigned"}</span>
+                            <span>{task.dueDate || "No due date"}</span>
+                          </div>
+                          <div className="flex justify-end gap-2 pt-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setMemberTasks((prev) =>
+                                  prev.map((item) =>
+                                    item.id === task.id
+                                      ? { ...item, status: item.status === "done" ? "open" : "done" }
+                                      : item,
+                                  ),
+                                );
+                              }}
+                            >
+                              {task.status === "done" ? "Reopen" : "Mark done"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => setMemberTasks((prev) => prev.filter((item) => item.id !== task.id))}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isInventoryPage) {
     const hasInventoryItems = Array.isArray(inventoryItems) && inventoryItems.length > 0;
@@ -7477,7 +10873,7 @@ const StoresManagement = () => {
           </CardHeader>
           <CardContent>
             <TooltipProvider>
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="lg:col-span-2 space-y-4">
                 {hasInventoryItems ? (
                   inventoryView === "table" ? (
@@ -7510,10 +10906,10 @@ const StoresManagement = () => {
                                     </div>
                                   </div>
                                 </td>
-                                <td className="px-4 py-3">{item.category || "—"}</td>
+                                <td className="px-4 py-3">{item.category || "â€”"}</td>
                                 <td className="px-4 py-3">
                                   <div className="font-medium">{formatPrice(item)}</div>
-                                  <div className="text-xs text-muted-foreground">Stock: {item.stock ?? 0}</div>
+                                  <div className="text-xs text-muted-foreground">Stock: {item.stock - 0}</div>
                                 </td>
                                 <td className="px-4 py-3">
                                   <Badge variant={item.isActive ? "default" : "secondary"}>
@@ -7522,6 +10918,21 @@ const StoresManagement = () => {
                                 </td>
                                 <td className="px-4 py-3">
                                   <div className="flex items-center justify-end gap-2">
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          onClick={() => {
+                                            setViewInventoryItem(item);
+                                            setViewImageIndex(0);
+                                          }}
+                                        >
+                                          <Eye className="w-4 h-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>View item</TooltipContent>
+                                    </Tooltip>
                                     <Tooltip>
                                       <TooltipTrigger asChild>
                                         <Button
@@ -7579,13 +10990,28 @@ const StoresManagement = () => {
                               </div>
                               <div className="flex items-center justify-between text-sm">
                                 <span className="font-medium">{formatPrice(item)}</span>
-                                <span className="text-muted-foreground">Stock: {item.stock ?? 0}</span>
+                                <span className="text-muted-foreground">Stock: {item.stock - 0}</span>
                               </div>
                               <div className="flex items-center justify-between">
                                 <Badge variant={item.isActive ? "default" : "secondary"}>
                                   {item.isActive ? "Active" : "Inactive"}
                                 </Badge>
                                 <div className="flex items-center gap-2">
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() => {
+                                          setViewInventoryItem(item);
+                                          setViewImageIndex(0);
+                                        }}
+                                      >
+                                        <Eye className="w-4 h-4" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>View item</TooltipContent>
+                                  </Tooltip>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <Button
@@ -7630,182 +11056,19 @@ const StoresManagement = () => {
                 )}
               </div>
 
-              <Card className="lg:col-span-1 w-full">
-                <CardHeader>
-                  <CardTitle className="text-base">Add Item</CardTitle>
-                  <CardDescription>Add a product to this store.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Form {...inventoryForm}>
-                    <form
-                      className="flex flex-col space-y-3"
-                      onSubmit={inventoryForm.handleSubmit((values) => {
-                        if (!inventoryStoreId) {
-                          toast({
-                            title: "Select a store",
-                            description: "Return to store management and pick a store first.",
-                            variant: "destructive",
-                          });
-                          return;
-                        }
-                        const payloadImage = values.image ? values.image : "";
-                        createInventoryMutation.mutate({
-                          name: values.name,
-                          description: values.description,
-                          category: values.category,
-                          price: Number(values.price) || 0,
-                          stock: Number(values.stock) || 0,
-                          vendorId: inventoryStore?.ownerId || undefined,
-                          storeId: inventoryStoreId,
-                          estateId: inventoryStore?.estateId || undefined,
-                          currency: "NGN",
-                          images: payloadImage ? [payloadImage] : [],
-                        });
-                      })}
-                    >
-                      <FormItem>
-                        <FormLabel>Item Image</FormLabel>
-                        <FormControl>
-                          <div className="space-y-2">
-                            {inventoryImagePreview && (
-                              <img
-                                src={inventoryImagePreview}
-                                alt="Preview"
-                                className="w-full h-32 object-cover rounded border"
-                              />
-                            )}
-                            <Input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (!file) return;
-                                const reader = new FileReader();
-                                reader.onload = () => {
-                                  const result = reader.result as string;
-                                  setInventoryImagePreview(result);
-                                  inventoryForm.setValue("image", result);
-                                };
-                                reader.readAsDataURL(file);
-                              }}
-                            />
-                          </div>
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                      <FormField
-                        control={inventoryForm.control}
-                        name="name"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Name</FormLabel>
-                            <FormControl>
-                              <Input placeholder="Item name" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={inventoryForm.control}
-                        name="description"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Description</FormLabel>
-                            <FormControl>
-                              <Textarea rows={3} placeholder="What is this item?" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <div className="grid grid-cols-2 gap-3">
-                        <FormField
-                          control={inventoryForm.control}
-                          name="price"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Price (NGN)</FormLabel>
-                              <FormControl>
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  {...field}
-                                  onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={inventoryForm.control}
-                          name="stock"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Stock</FormLabel>
-                              <FormControl>
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  {...field}
-                                  onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-                        <FormField
-                          control={inventoryForm.control}
-                          name="category"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Category</FormLabel>
-                              <Select
-                                value={field.value}
-                                onValueChange={(val) => field.onChange(val)}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue placeholder="Select category" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
-                                    itemCategories
-                                      .filter((c: any) => c.isActive !== false)
-                                      .map((cat: any) => (
-                                        <SelectItem key={cat.id} value={cat.name}>
-                                          {cat.emoji ? `${cat.emoji} ` : ""}
-                                          {cat.name}
-                                        </SelectItem>
-                                      ))
-                                  ) : (
-                                    <SelectItem value="__none" disabled>
-                                      No categories. Create one first.
-                                    </SelectItem>
-                                  )}
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      <div className="pt-2">
-                        <Button
-                          type="submit"
-                          className="w-full"
-                          disabled={createInventoryMutation.isPending}
-                          data-testid="btn-add-inventory-item"
-                        >
-                          {createInventoryMutation.isPending ? "Saving..." : "Add Item"}
-                        </Button>
-                      </div>
-                    </form>
-                  </Form>
-                </CardContent>
-              </Card>
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-muted-foreground">
+                  {inventoryStoreId ? "Add products to manage your store inventory" : "Select a store to add items"}
+                </div>
+                <Button
+                  onClick={() => setIsAddInventoryModalOpen(true)}
+                  disabled={!inventoryStoreId}
+                  data-testid="button-create-marketplace-item"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Item
+                </Button>
+              </div>
               </div>
             </TooltipProvider>
           </CardContent>
@@ -7818,14 +11081,14 @@ const StoresManagement = () => {
             }
           }}
         >
-          <DialogContent className="max-w-lg">
+          <DialogContent className="w-[70vw] max-w-5xl">
             <DialogHeader>
               <DialogTitle>Edit Inventory Item</DialogTitle>
               <DialogDescription>Update the product details shown to residents.</DialogDescription>
             </DialogHeader>
             <Form {...inventoryEditForm}>
               <form
-                className="space-y-4"
+                className="grid gap-6 md:grid-cols-[1.2fr_1fr]"
                 onSubmit={inventoryEditForm.handleSubmit((values) => {
                   const itemId = inventoryEditingItem?._id || inventoryEditingItem?.id;
                   if (!itemId) {
@@ -7843,25 +11106,128 @@ const StoresManagement = () => {
                     category: values.category,
                     price: Number(values.price) || 0,
                     stock: Number(values.stock) || 0,
-                    images: values.image ? [values.image] : [],
+                    images:
+                      inventoryEditImages.length > 0
+                        ? inventoryEditImages
+                        : values.image
+                          ? [values.image]
+                          : [],
                   });
                 })}
               >
-                <FormField
-                  control={inventoryEditForm.control}
-                  name="image"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Item Image</FormLabel>
-                      <FormControl>
-                        <div className="space-y-2">
-                          {inventoryEditPreview ? (
-                            <img
-                              src={inventoryEditPreview}
-                              alt="Preview"
-                              className="w-full h-32 rounded border object-cover"
-                            />
-                          ) : null}
+                <div className="space-y-3">
+                  <div className="relative overflow-hidden rounded-lg border bg-muted/20">
+                    {(() => {
+                      const gallery =
+                        inventoryEditImages.length > 0
+                          ? inventoryEditImages
+                          : inventoryEditPreview
+                            ? [inventoryEditPreview]
+                            : [];
+                      if (gallery.length === 0) {
+                        return (
+                          <div className="flex h-72 items-center justify-center text-sm text-muted-foreground">
+                            No image
+                          </div>
+                        );
+                      }
+                      const current = gallery[Math.min(editImageIndex, gallery.length - 1)];
+                      return (
+                        <div className="relative">
+                          <img
+                            src={current}
+                            alt="Preview"
+                            className="w-full h-72 object-cover"
+                          />
+                          {gallery.length > 1 && (
+                            <div className="absolute inset-0 flex items-center justify-between px-3">
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="bg-white/70 backdrop-blur"
+                                type="button"
+                                onClick={() =>
+                                  setEditImageIndex((prev) =>
+                                    prev === 0 ? gallery.length - 1 : prev - 1,
+                                  )
+                                }
+                              >
+                                <ChevronLeft className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="bg-white/70 backdrop-blur"
+                                type="button"
+                                onClick={() =>
+                                  setEditImageIndex((prev) =>
+                                    prev === gallery.length - 1 ? 0 : prev + 1,
+                                  )
+                                }
+                              >
+                                <ChevronRight className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  {(inventoryEditImages.length > 1 ||
+                    (inventoryEditPreview && inventoryEditImages.length === 0)) && (
+                    <div className="flex gap-2 overflow-auto">
+                      {(inventoryEditImages.length > 0
+                        ? inventoryEditImages
+                        : inventoryEditPreview
+                          ? [inventoryEditPreview]
+                          : []
+                      ).map((img, idx) => (
+                        <div key={`${img}-${idx}`} className="relative group">
+                          <button
+                            type="button"
+                            className={`h-16 w-20 rounded border ${
+                              editImageIndex === idx ? "ring-2 ring-primary" : "border-muted"
+                            } overflow-hidden`}
+                            onClick={() => setEditImageIndex(idx)}
+                          >
+                            <img src={img} alt="" className="h-full w-full object-cover" />
+                          </button>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="destructive"
+                            className="absolute -right-2 -top-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={() => {
+                              const next = (inventoryEditImages.length > 0
+                                ? inventoryEditImages
+                                : inventoryEditPreview
+                                  ? [inventoryEditPreview]
+                                  : []
+                              ).filter((_, i) => i !== idx);
+                              setInventoryEditImages(next);
+                              setInventoryEditPreview(next[0] || "");
+                              setEditImageIndex((current) =>
+                                Math.max(0, Math.min(current, next.length - 1)),
+                              );
+                              inventoryEditForm.setValue(
+                                "image",
+                                next[0] ? next[0] : "",
+                              );
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="image"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Item Image</FormLabel>
+                        <FormControl>
                           <Input
                             type="file"
                             accept="image/*"
@@ -7869,134 +11235,530 @@ const StoresManagement = () => {
                               const file = e.target.files?.[0];
                               if (!file) return;
                               const reader = new FileReader();
-                              reader.onload = () => {
-                                const result = reader.result as string;
-                                setInventoryEditPreview(result);
-                                field.onChange(result);
-                              };
-                              reader.readAsDataURL(file);
-                            }}
-                          />
-                        </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={inventoryEditForm.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Name</FormLabel>
-                      <FormControl>
-                        <Input placeholder="Item name" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={inventoryEditForm.control}
-                  name="description"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Description</FormLabel>
-                      <FormControl>
-                        <Textarea rows={3} placeholder="Describe this item" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <div className="grid grid-cols-2 gap-3">
-                  <FormField
-                    control={inventoryEditForm.control}
-                    name="price"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Price (NGN)</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            {...field}
-                            onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={inventoryEditForm.control}
-                    name="stock"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Stock</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            min="0"
-                            {...field}
-                            onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
-                          />
+                            reader.onload = () => {
+                              const result = reader.result as string;
+                              const nextImages = [
+                                result,
+                                ...inventoryEditImages.filter((img) => img !== result),
+                              ];
+                              setInventoryEditPreview(result);
+                              setInventoryEditImages(nextImages);
+                              setEditImageIndex(0);
+                              field.onChange(result);
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
                 </div>
-                <FormField
-                  control={inventoryEditForm.control}
-                  name="category"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Category</FormLabel>
-                      <Select value={field.value} onValueChange={(val) => field.onChange(val)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
-                            itemCategories
-                              .filter((c: any) => c.isActive !== false)
-                              .map((cat: any) => (
-                                <SelectItem key={cat.id} value={cat.name}>
-                                  {cat.emoji ? `${cat.emoji} ` : ""}
-                                  {cat.name}
-                                </SelectItem>
-                              ))
-                          ) : (
-                            <SelectItem value="__none" disabled>
-                              No categories. Create one first.
-                            </SelectItem>
-                          )}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <div className="flex justify-end gap-2 pt-2">
+                <div className="space-y-4">
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Item name" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Description</FormLabel>
+                        <FormControl>
+                          <Textarea rows={4} placeholder="Describe this item" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField
+                      control={inventoryEditForm.control}
+                      name="price"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Price (NGN)</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              {...field}
+                              onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={inventoryEditForm.control}
+                      name="stock"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Stock</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="0"
+                              {...field}
+                              onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                  <FormField
+                    control={inventoryEditForm.control}
+                    name="category"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Category</FormLabel>
+                        <Select value={field.value} onValueChange={(val) => field.onChange(val)}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select category" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
+                              itemCategories
+                                .filter((c: any) => c.isActive !== false)
+                                .map((cat: any) => (
+                                  <SelectItem key={cat.id} value={cat.name}>
+                                    {cat.emoji ? `${cat.emoji} ` : ""}
+                                    {cat.name}
+                                  </SelectItem>
+                                ))
+                            ) : (
+                              <SelectItem value="__none" disabled>
+                                No categories. Create one first.
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={closeInventoryEditDialog}
+                      disabled={updateInventoryMutation.isPending}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={updateInventoryMutation.isPending}>
+                      {updateInventoryMutation.isPending && (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      )}
+                      Save changes
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            </Form>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={isAddInventoryModalOpen} onOpenChange={setIsAddInventoryModalOpen}>
+          <DialogContent className="w-[60vw] max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Add Inventory Item</DialogTitle>
+              <DialogDescription>Add a new product to this store.</DialogDescription>
+            </DialogHeader>
+            <Form {...inventoryForm}>
+              <form
+                className="grid gap-6 md:grid-cols-[1.1fr_1.4fr]"
+                onSubmit={inventoryForm.handleSubmit((values) => {
+                  const images = Array.isArray(values.images) ? values.images : [];
+                  if (images.length === 0) {
+                    toast({
+                      title: "Add at least one image",
+                      description: "Upload 1â€“6 images before adding the item.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  if (images.length > 6) {
+                    toast({
+                      title: "Too many images",
+                      description: "Maximum is 6 images per item.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  if (!inventoryStoreId) {
+                    toast({
+                      title: "Select a store",
+                      description: "Return to store management and pick a store first.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  createInventoryMutation.mutate({
+                    name: values.name,
+                    description: values.description,
+                    category: values.category,
+                    price: Number(values.price) || 0,
+                    stock: Number(values.stock) || 0,
+                    vendorId: inventoryStore?.ownerId || undefined,
+                    storeId: inventoryStoreId,
+                    estateId: inventoryStore?.estateId || undefined,
+                    currency: "NGN",
+                    images,
+                  });
+                  setIsAddInventoryModalOpen(false);
+                  inventoryForm.reset();
+                  setInventoryImagePreview([]);
+                })}
+              >
+                <div className="space-y-4">
+                  <FormItem>
+                    <FormLabel>Item Image</FormLabel>
+                    <FormControl>
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted-foreground">
+                          Upload 1â€“6 images. {Math.max(0, 6 - inventoryImagePreview.length)} remaining.
+                        </p>
+                        {inventoryImagePreview.length > 0 && (
+                          <div className="grid grid-cols-2 gap-2">
+                            {inventoryImagePreview.map((src, index) => (
+                              <div key={`${src}-${index}`} className="relative group">
+                                <img
+                                  src={src}
+                                  alt={`Preview ${index + 1}`}
+                                  className="h-28 w-full rounded border object-cover"
+                                />
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="destructive"
+                                  className="absolute right-1 top-1 h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  onClick={() => {
+                                    const next = inventoryImagePreview.filter((_, i) => i !== index);
+                                    setInventoryImagePreview(next);
+                                    inventoryForm.setValue("images", next);
+                                  }}
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <Input
+                          ref={inventoryImageInputRef}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(e) => {
+                            const files = Array.from(e.target.files || []);
+                            if (files.length === 0) return;
+                            Promise.all(
+                              files.map(
+                                (file) =>
+                                  new Promise<string>((resolve) => {
+                                    const reader = new FileReader();
+                                    reader.onload = () => resolve(reader.result as string);
+                                    reader.readAsDataURL(file);
+                                  }),
+                              ),
+                            ).then((results) => {
+                              const maxImages = 6;
+                              const combined = [...inventoryImagePreview, ...results];
+                              const trimmed = combined.slice(0, maxImages);
+                              if (combined.length > maxImages) {
+                                toast({
+                                  title: "Image limit reached",
+                                  description: "Only the first 6 images were kept.",
+                                  variant: "destructive",
+                                });
+                              }
+                              const next = trimmed;
+                              setInventoryImagePreview(next);
+                              inventoryForm.setValue("images", next);
+                              if (inventoryImageInputRef.current) {
+                                inventoryImageInputRef.current.value = "";
+                              }
+                            });
+                          }}
+                        />
+                        {inventoryImagePreview.length > 0 && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => inventoryImageInputRef.current?.click()}
+                          >
+                            Upload more images
+                          </Button>
+                        )}
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                </div>
+                <div className="space-y-4">
+                  <FormField
+                    control={inventoryForm.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Item name" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={inventoryForm.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Description</FormLabel>
+                        <FormControl>
+                          <Textarea rows={4} placeholder="What is this item?" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField
+                      control={inventoryForm.control}
+                      name="price"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Price (NGN)</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              {...field}
+                              onChange={(e) => field.onChange(e.target.value)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={inventoryForm.control}
+                      name="stock"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Stock</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="0"
+                              {...field}
+                              onChange={(e) => field.onChange(e.target.value)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                  <FormField
+                    control={inventoryForm.control}
+                    name="category"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Category</FormLabel>
+                        <Select
+                          value={field.value}
+                          onValueChange={(val) => field.onChange(val)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select category" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Array.isArray(itemCategories) && itemCategories.length > 0 ? (
+                              itemCategories
+                                .filter((c: any) => c.isActive !== false)
+                                .map((cat: any) => (
+                                  <SelectItem key={cat.id} value={cat.name}>
+                                    {cat.emoji ? `${cat.emoji} ` : ""}
+                                    {cat.name}
+                                  </SelectItem>
+                                ))
+                            ) : (
+                              <SelectItem value="__none" disabled>
+                                No categories. Create one first.
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <div className="md:col-span-2 flex gap-2 pt-2">
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={closeInventoryEditDialog}
-                    disabled={updateInventoryMutation.isPending}
+                    className="flex-1"
+                    onClick={() => {
+                      setIsAddInventoryModalOpen(false);
+                      inventoryForm.reset();
+                      setInventoryImagePreview([]);
+                    }}
                   >
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={updateInventoryMutation.isPending}>
-                    {updateInventoryMutation.isPending && (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    )}
-                    Save changes
+                  <Button
+                    type="submit"
+                    className="flex-1"
+                    disabled={createInventoryMutation.isPending}
+                    data-testid="btn-add-inventory-item"
+                  >
+                    {createInventoryMutation.isPending ? "Saving..." : "Add Item"}
                   </Button>
                 </div>
               </form>
             </Form>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={!!viewInventoryItem}
+          onOpenChange={(open) => {
+            if (!open) {
+              setViewInventoryItem(null);
+              setViewImageIndex(0);
+            }
+          }}
+        >
+          <DialogContent className="w-[70vw] max-w-5xl">
+            <DialogHeader>
+              <DialogTitle>{viewInventoryItem?.name || "Inventory Item"}</DialogTitle>
+              <DialogDescription>
+                Quick view of this inventory item with images and key details.
+              </DialogDescription>
+            </DialogHeader>
+            {viewInventoryItem && (
+              <div className="grid gap-6 md:grid-cols-[1.2fr_1fr]">
+                <div className="space-y-3">
+                  <div className="relative overflow-hidden rounded-lg border bg-muted/20">
+                    {getGalleryImages(viewInventoryItem).length > 0 ? (
+                      <div className="relative">
+                        <img
+                          src={getGalleryImages(viewInventoryItem)[viewImageIndex] || ""}
+                          alt={viewInventoryItem.name || "Inventory image"}
+                          className="w-full h-72 object-cover"
+                        />
+                        {getGalleryImages(viewInventoryItem).length > 1 && (
+                          <div className="absolute inset-0 flex items-center justify-between px-3">
+                            <Button
+                              size="icon"
+                              variant="outline"
+                              className="bg-white/70 backdrop-blur"
+                              onClick={() =>
+                                setViewImageIndex((prev) =>
+                                  prev === 0
+                                    ? getGalleryImages(viewInventoryItem).length - 1
+                                    : prev - 1,
+                                )
+                              }
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="outline"
+                              className="bg-white/70 backdrop-blur"
+                              onClick={() =>
+                                setViewImageIndex((prev) =>
+                                  prev === getGalleryImages(viewInventoryItem).length - 1
+                                    ? 0
+                                    : prev + 1,
+                                )
+                              }
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex h-72 items-center justify-center text-sm text-muted-foreground">
+                        No images
+                      </div>
+                    )}
+                  </div>
+                  {getGalleryImages(viewInventoryItem).length > 1 && (
+                    <div className="flex gap-2 overflow-auto">
+                      {getGalleryImages(viewInventoryItem).map((img: string, idx: number) => (
+                        <button
+                          key={`${img}-${idx}`}
+                          type="button"
+                          className={`h-16 w-20 rounded border ${
+                            viewImageIndex === idx ? "ring-2 ring-primary" : "border-muted"
+                          } overflow-hidden`}
+                          onClick={() => setViewImageIndex(idx)}
+                        >
+                          <img src={img} alt="" className="h-full w-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">{viewInventoryItem.name}</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {viewInventoryItem.description || "No description provided."}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded border p-3">
+                      <p className="text-xs text-muted-foreground">Price</p>
+                      <p className="text-lg font-semibold">{formatPrice(viewInventoryItem)}</p>
+                    </div>
+                    <div className="rounded border p-3">
+                      <p className="text-xs text-muted-foreground">Stock</p>
+                      <p className="text-lg font-semibold">{viewInventoryItem.stock - 0}</p>
+                    </div>
+                    <div className="rounded border p-3">
+                      <p className="text-xs text-muted-foreground">Category</p>
+                      <p className="text-sm font-medium">{viewInventoryItem.category || "â€”"}</p>
+                    </div>
+                    <div className="rounded border p-3">
+                      <p className="text-xs text-muted-foreground">Status</p>
+                      <Badge variant={viewInventoryItem.isActive ? "default" : "secondary"}>
+                        {viewInventoryItem.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div className="rounded border p-3">
+                    <p className="text-xs text-muted-foreground mb-1">ID</p>
+                    <p className="text-sm font-mono break-all">
+                      {viewInventoryItem._id || viewInventoryItem.id || "â€”"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       </div>
@@ -8010,12 +11772,40 @@ const StoresManagement = () => {
           <div className="flex items-center justify-between">
             <CardTitle>Stores Management</CardTitle>
             <Button
-              onClick={() => setIsCreateDialogOpen(true)}
+              onClick={() => {
+                // prepare new store form
+                setSelectedStore(null);
+                setFormData({ name: "", description: "", location: "", phone: "", email: "" });
+                setSelectedOwnerId("");
+                setSelectedStoreAssignment(storeTab === "estate" && selectedEstateFilter ? selectedEstateFilter : "global");
+                setIsCreateDialogOpen(true);
+              }}
               data-testid="button-create-store"
             >
               <Plus className="w-4 h-4 mr-2" />
               Create Store
             </Button>
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <Button size="sm" variant={storeTab === "global" ? "default" : "outline"} onClick={() => setStoreTab("global")}>Global Stores</Button>
+            <div className="flex items-center">
+              <Button size="sm" variant={storeTab === "estate" ? "default" : "outline"} onClick={() => setStoreTab("estate")}>Estate Stores</Button>
+              {storeTab === "estate" && (
+                <div className="ml-3">
+                  <Select value={selectedEstateFilter || "all"} onValueChange={(v) => setSelectedEstateFilter(v === "all" ? null : v)}>
+                    <SelectTrigger className="min-w-[180px]">
+                      <SelectValue placeholder="Select estate" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Estates</SelectItem>
+                      {Array.isArray(estatesForFilter) && estatesForFilter.map((e: any) => (
+                        <SelectItem key={e.id || e._id} value={e.id || e._id}>{e.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -8034,15 +11824,15 @@ const StoresManagement = () => {
           </div>
 
           {/* Stores Table */}
-          {isLoading ? (
+                {isLoading ? (
             <div className="text-center py-8">
               <p className="text-gray-600 dark:text-gray-400">Loading stores...</p>
             </div>
-          ) : !stores || stores.length === 0 ? (
+          ) : !filteredStores || filteredStores.length === 0 ? (
             <div className="text-center py-8">
               <Store className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600 dark:text-gray-400">
-                No stores found. Create your first store to get started.
+                    <p className="text-gray-600 dark:text-gray-400">
+                No stores found for the selected view. Create your first store to get started.
               </p>
             </div>
           ) : (
@@ -8068,7 +11858,7 @@ const StoresManagement = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
-                  {stores.map((store: any) => (
+                  {filteredStores.map((store: any) => (
                     <tr key={store._id || store.id}>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
@@ -8089,8 +11879,8 @@ const StoresManagement = () => {
                         {store.location}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                        <div>{store.phone || "—"}</div>
-                        <div>{store.email || "—"}</div>
+                        <div>{store.phone || "â€”"}</div>
+                        <div>{store.email || "â€”"}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <Badge
@@ -8104,10 +11894,7 @@ const StoresManagement = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => {
-                            setSelectedStore(store);
-                            setShowMembersDialog(true);
-                          }}
+                          onClick={() => goToStoreMembers(String(store._id || store.id))}
                           data-testid={`button-view-store-${store._id || store.id}`}
                         >
                           <Users className="w-4 h-4 mr-1" />
@@ -8141,6 +11928,9 @@ const StoresManagement = () => {
                               email: store.email || "",
                             });
                             setSelectedOwnerId(store.ownerId || "");
+                            setSelectedStoreAssignment(
+                              (store.estateId || store.estate_id) ? (store.estateId || store.estate_id) : "global"
+                            );
                           }}
                           data-testid={`button-edit-store-${store._id || store.id}`}
                         >
@@ -8170,38 +11960,43 @@ const StoresManagement = () => {
 
       {/* Create Store Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent>
+        <DialogContent className="w-[60vw] max-w-[60vw]">
           <DialogHeader>
             <DialogTitle>{selectedStore ? "Edit Store" : "Create New Store"}</DialogTitle>
             <DialogDescription className="sr-only">
               {selectedStore ? "Update store details" : "Add a new store to the platform"}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="store-name">Store Name *</Label>
-              <Input
-                id="store-name"
-                value={formData.name}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, name: e.target.value }))
-                }
-                placeholder="Enter store name"
-                data-testid="input-store-name"
-              />
+          <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+            {/* First Row: Store Name and Location */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="store-name">Store Name *</Label>
+                <Input
+                  id="store-name"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, name: e.target.value }))
+                  }
+                  placeholder="Enter store name"
+                  data-testid="input-store-name"
+                />
+              </div>
+              <div>
+                <Label htmlFor="store-location">Location *</Label>
+                <Input
+                  id="store-location"
+                  value={formData.location}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, location: e.target.value }))
+                  }
+                  placeholder="Enter store location"
+                  data-testid="input-store-location"
+                />
+              </div>
             </div>
-            <div>
-              <Label htmlFor="store-location">Location *</Label>
-              <Input
-                id="store-location"
-                value={formData.location}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, location: e.target.value }))
-                }
-                placeholder="Enter store location"
-                data-testid="input-store-location"
-              />
-            </div>
+
+            {/* Full Width: Description */}
             <div>
               <Label htmlFor="store-description">Description</Label>
               <Textarea
@@ -8215,8 +12010,10 @@ const StoresManagement = () => {
                 data-testid="textarea-store-description"
               />
             </div>
+
+            {/* Full Width: Store Owner */}
             <div>
-              <Label htmlFor="store-owner">Store Owner (provider with store_owner category)</Label>
+              <Label htmlFor="store-owner">Store Owner (provider with store owner category)</Label>
               <Select
                 value={selectedOwnerId}
                 onValueChange={setSelectedOwnerId}
@@ -8238,40 +12035,63 @@ const StoresManagement = () => {
                       })
                   ) : (
                     <SelectItem value="none" disabled>
-                      No eligible store owners (need category "store_owner")
+                      No eligible store owners (need category "store owner")
                     </SelectItem>
                   )}
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label htmlFor="store-phone">Phone</Label>
-              <Input
-                id="store-phone"
-                value={formData.phone}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, phone: e.target.value }))
-                }
-                readOnly
-                className="bg-muted/50 cursor-not-allowed"
-                placeholder="+234..."
-                data-testid="input-store-phone"
-              />
+
+            {/* Second Row: Phone and Email */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="store-phone">Phone</Label>
+                <Input
+                  id="store-phone"
+                  value={formData.phone}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, phone: e.target.value }))
+                  }
+                  readOnly
+                  className="bg-muted/50 cursor-not-allowed"
+                  placeholder="+234..."
+                  data-testid="input-store-phone"
+                />
+              </div>
+              <div>
+                <Label htmlFor="store-email">Email</Label>
+                <Input
+                  id="store-email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, email: e.target.value }))
+                  }
+                  readOnly
+                  className="bg-muted/50 cursor-not-allowed"
+                  placeholder="store@example.com"
+                  data-testid="input-store-email"
+                />
+              </div>
             </div>
+
+            {/* Full Width: Assign To */}
             <div>
-              <Label htmlFor="store-email">Email</Label>
-              <Input
-                id="store-email"
-                type="email"
-                value={formData.email}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, email: e.target.value }))
-                }
-                readOnly
-                className="bg-muted/50 cursor-not-allowed"
-                placeholder="store@example.com"
-                data-testid="input-store-email"
-              />
+              <Label htmlFor="store-assignment">Assign To</Label>
+              <Select
+                value={selectedStoreAssignment || "global"}
+                onValueChange={(v) => setSelectedStoreAssignment(v)}
+              >
+                <SelectTrigger id="store-assignment">
+                  <SelectValue placeholder="Assign store" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Global (no estate)</SelectItem>
+                  {Array.isArray(estatesForFilter) && estatesForFilter.map((e: any) => (
+                    <SelectItem key={e.id || e._id} value={e.id || e._id}>{e.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <DialogFooter>
@@ -8299,29 +12119,6 @@ const StoresManagement = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Store Members Dialog - Coming Soon */}
-      <Dialog open={showMembersDialog} onOpenChange={setShowMembersDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Store Members - {selectedStore?.name}</DialogTitle>
-            <DialogDescription className="sr-only">
-              View or manage members assigned to this store.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="text-center py-8">
-            <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-600 dark:text-gray-400 mb-4">
-              Store member management functionality is being set up.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              You'll be able to allocate providers to stores and manage their permissions here.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button onClick={() => setShowMembersDialog(false)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
     </div>
   );
@@ -8382,29 +12179,36 @@ const ItemCategoriesPage = () => {
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div className="w-full mb-4 sm:mb-0">
+        <CardHeader className="p-0">
+          <div className="relative w-full">
             <img
               src="https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1600&q=80"
               alt="Service categories illustration"
-              className="w-full h-44 object-cover rounded-lg shadow-sm"
+              className="w-full h-44 sm:h-56 object-cover rounded-lg shadow-sm"
             />
+
+            <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-transparent to-transparent rounded-lg"></div>
+
+            <div className="absolute inset-0 flex items-center justify-between px-6">
+              <div className="text-white">
+                <CardTitle className="text-white">Item Categories</CardTitle>
+                <CardDescription className="text-white/90">Manage marketplace item categories.</CardDescription>
+              </div>
+              <div>
+                <Button
+                  onClick={() => {
+                    setEditing(null);
+                    categoryForm.reset({ name: "", description: "", emoji: "", isActive: true });
+                    setShowModal(true);
+                  }}
+                >
+                  + New Category
+                </Button>
+              </div>
+            </div>
           </div>
-          <div>
-            <CardTitle>Item Categories</CardTitle>
-            <CardDescription>Manage marketplace item categories.</CardDescription>
-          </div>
-          <Button
-            onClick={() => {
-              setEditing(null);
-              categoryForm.reset({ name: "", description: "", emoji: "", isActive: true });
-              setShowModal(true);
-            }}
-          >
-            + New Category
-          </Button>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="pt-4 px-4 pb-4">
           <Table>
             <TableHeader>
               <TableRow>
@@ -8473,7 +12277,7 @@ const ItemCategoriesPage = () => {
       </Card>
 
       <Dialog open={showModal} onOpenChange={setShowModal}>
-        <DialogContent>
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit Category" : "Create Category"}</DialogTitle>
             <DialogDescription>
@@ -8483,7 +12287,13 @@ const ItemCategoriesPage = () => {
           <Form {...categoryForm}>
             <form
               className="space-y-4"
-              onSubmit={categoryForm.handleSubmit((values) => upsertCategoryMutation.mutate(values))}
+              onSubmit={categoryForm.handleSubmit((values) => {
+                if (!values.name || !String(values.name).trim()) {
+                  toast({ title: "Name is required", variant: "destructive" });
+                  return;
+                }
+                upsertCategoryMutation.mutate(values);
+              })}
             >
               <FormField
                 control={categoryForm.control}
@@ -8504,19 +12314,11 @@ const ItemCategoriesPage = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Emoji Icon</FormLabel>
-                    <Select value={field.value} onValueChange={(val) => field.onChange(val)}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select an emoji" />
-                      </SelectTrigger>
-                      <SelectContent className="max-h-64">
-                        {EMOJI_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            <span className="mr-2">{opt.value}</span>
-                            <span>{opt.label}</span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <EmojiCombobox
+                      value={field.value}
+                      onChange={(v) => field.onChange(v)}
+                      placeholder="Type to search or pick an emoji"
+                    />
                     <FormMessage />
                   </FormItem>
                 )}
@@ -8540,7 +12342,12 @@ const ItemCategoriesPage = () => {
                 render={({ field }) => (
                   <FormItem className="flex items-center space-x-2">
                     <FormControl>
-                      <Checkbox checked={field.value} onCheckedChange={(v) => field.onChange(Boolean(v))} />
+                      <Checkbox
+                        className="h-6 w-6"
+                        indicatorClassName="h-5 w-5"
+                        checked={field.value}
+                        onCheckedChange={(v) => field.onChange(Boolean(v))}
+                      />
                     </FormControl>
                     <FormLabel className="mb-0">Active</FormLabel>
                   </FormItem>
@@ -8561,3 +12368,4 @@ const ItemCategoriesPage = () => {
     </div>
   );
 };
+

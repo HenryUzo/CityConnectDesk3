@@ -4,7 +4,7 @@ import type { AiDiagnosis } from "../schema";
 
 export async function diagnose(input: DiagnosisInput & { model?: string }): Promise<AiDiagnosis> {
   const client = getOpenAI();
-  const model = input.model || process.env.OPENAI_DIAGNOSIS_MODEL || "gpt-4o-mini";
+  const model = input.model || process.env.OPENAI_DIAGNOSIS_MODEL || "gpt-5.2-codex";
   const prompt = `Resident repair request details:\nCategory: ${input.category}\nUrgency: ${input.urgency ?? "not specified"}\nDescription: ${input.description}\nSpecial instructions: ${input.specialInstructions || "None"}.`;
 
   const resp = await client.responses.create({

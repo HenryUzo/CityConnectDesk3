@@ -5,6 +5,9 @@ import session from "express-session";
 import { storage } from "./storage";
 import { User as SelectUser } from "@shared/schema";
 import { hashPassword, comparePasswords } from "./auth-utils";
+import { db } from "./db";
+import { estates, memberships } from "@shared/schema";
+import { eq } from "drizzle-orm";
 
 declare global {
   namespace Express {
@@ -40,7 +43,11 @@ export function setupAuth(app: Express) {
           ? await storage.getUserByAccessCode(normalized)
           : await storage.getUserByUsername(normalized);
 
-        if (!user || !(await comparePasswords(password, user.password))) {
+        if (!user) {
+          return done(null, false);
+        }
+
+        if (!isAccessCode && !(await comparePasswords(password, user.password))) {
           return done(null, false);
         }
 
@@ -64,11 +71,62 @@ export function setupAuth(app: Express) {
 
   app.post("/api/register", async (req, res, next) => {
     try {
-  const { username, password, name, email, phone } = req.body || {};
+  const { username, password, name, email, phone, inviteCode, estateId } = req.body || {};
   if (!username || !password) {
     return res.status(400).json({
       message: "Username and password are required",
     });
+  }
+
+  const trimmedInvite = typeof inviteCode === "string" ? inviteCode.trim() : "";
+  const trimmedEstateId = typeof estateId === "string" ? estateId.trim() : "";
+  if (trimmedInvite && trimmedEstateId) {
+    return res.status(400).json({
+      message: "Provide either an access code or select an estate",
+    });
+  }
+
+  let resolvedEstateId: string | null = null;
+  if (trimmedInvite) {
+    const [estate] = await db
+      .select({
+        id: estates.id,
+        accessType: estates.accessType,
+      })
+      .from(estates)
+      .where(eq(estates.accessCode, trimmedInvite))
+      .limit(1);
+
+    if (!estate) {
+      return res.status(400).json({ message: "Invalid access code" });
+    }
+
+    const accessType = (estate.accessType || "").toLowerCase();
+    if (accessType && accessType !== "open" && accessType !== "code") {
+      return res.status(400).json({ message: "Access code not allowed for this estate" });
+    }
+
+    resolvedEstateId = estate.id;
+  } else if (trimmedEstateId) {
+    const [estate] = await db
+      .select({
+        id: estates.id,
+        accessType: estates.accessType,
+      })
+      .from(estates)
+      .where(eq(estates.id, trimmedEstateId))
+      .limit(1);
+
+    if (!estate) {
+      return res.status(400).json({ message: "Estate not found" });
+    }
+
+    const accessType = (estate.accessType || "").toLowerCase();
+    if (accessType && accessType !== "open" && accessType !== "code") {
+      return res.status(400).json({ message: "Estate does not allow open registration" });
+    }
+
+    resolvedEstateId = estate.id;
   }
 
   const existingUser = await storage.getUserByUsername(username);
@@ -86,6 +144,17 @@ export function setupAuth(app: Express) {
     isActive: true,
     isApproved: true,
   } as any);
+
+  if (resolvedEstateId) {
+    await db.insert(memberships).values({
+      userId: user.id,
+      estateId: resolvedEstateId,
+      role: "resident",
+      isPrimary: true,
+      isActive: true,
+      status: "active",
+    });
+  }
 
       req.login(user, (err) => {
         if (err) return next(err);

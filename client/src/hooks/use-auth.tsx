@@ -15,6 +15,7 @@ type AuthContextType = {
   loginMutation: UseMutationResult<SelectUser, Error, LoginData>;
   logoutMutation: UseMutationResult<void, Error, void>;
   registerMutation: UseMutationResult<SelectUser, Error, InsertUser>;
+  refreshUser: () => Promise<SelectUser | null>;
 };
 
 type LoginData = {
@@ -38,7 +39,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // On admin routes, we disable this query entirely.
   const isPublicRegistrationRoute =
     typeof window !== "undefined" &&
-    window.location.pathname === "/company-registration";
+    (window.location.pathname === "/company-registration" ||
+      window.location.pathname.startsWith("/auth") ||
+      window.location.pathname.startsWith("/register"));
 
   const {
     data: user,
@@ -75,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const registerMutation = useMutation({
     mutationFn: async (credentials: InsertUser) => {
       // Optional: validate on client (keeps your original import in use)
-      insertUserSchema.parse(credentials);
+      insertUserSchema.passthrough().parse(credentials);
       const res = await apiRequest("POST", "/api/register", credentials);
       return (await res.json()) as SelectUser;
     },
@@ -107,6 +110,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
   });
 
+  const refreshUser = async () => {
+    const res = await apiRequest("GET", "/api/user");
+    const nextUser = (await res.json()) as SelectUser;
+    queryClient.setQueryData(["/api/user"], nextUser);
+    return nextUser ?? null;
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -116,6 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loginMutation,
         logoutMutation,
         registerMutation,
+        refreshUser,
       }}
     >
       {children}

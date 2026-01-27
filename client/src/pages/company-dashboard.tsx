@@ -286,7 +286,8 @@ export default function CompanyDashboard() {
   const providerForm = useForm<CreateProviderInput>({
     resolver: zodResolver(createProviderSchema),
     defaultValues: {
-      name: "",
+      firstName: "",
+      lastName: "",
       email: "",
       phone: "",
       password: generatePassword(),
@@ -709,7 +710,7 @@ export default function CompanyDashboard() {
       </main>
 
       <Dialog open={showProviderModal} onOpenChange={setShowProviderModal}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="w-[60vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Create a service provider</DialogTitle>
             <DialogDescription>
@@ -722,12 +723,25 @@ export default function CompanyDashboard() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <FormField
                   control={providerForm.control}
-                  name="name"
+                  name="firstName"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Full Name</FormLabel>
+                      <FormLabel>First Name</FormLabel>
                       <FormControl>
-                        <Input placeholder="Provider's name" {...field} />
+                        <Input placeholder="First name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={providerForm.control}
+                  name="lastName"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Last Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Last name" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

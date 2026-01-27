@@ -4,6 +4,7 @@ import {
   handlePaystackWebhook,
   PaystackVerifyResult,
 } from "../server/paystackHandlers";
+import { TransactionStatus } from "@prisma/client";
 
 const createStorageMocks = () => ({
   getTransactionByReference: vi.fn(),
@@ -22,7 +23,7 @@ describe("handlePaystackVerify", () => {
     storage.getTransactionByReference.mockResolvedValue({
       id: "tx1",
       amount: "1000",
-      status: "pending",
+      status: TransactionStatus.PENDING,
       meta: {},
       serviceRequestId: "req1",
     });
@@ -52,7 +53,7 @@ describe("handlePaystackVerify", () => {
     storage.getTransactionByReference.mockResolvedValue({
       id: "tx1",
       amount: "1000",
-      status: "completed",
+      status: TransactionStatus.COMPLETED,
       meta: {},
       serviceRequestId: "req1",
     });
@@ -72,7 +73,7 @@ describe("handlePaystackVerify", () => {
     storage.getTransactionByReference.mockResolvedValue({
       id: "tx1",
       amount: "1000",
-      status: "pending",
+      status: TransactionStatus.PENDING,
       meta: {},
       serviceRequestId: "req1",
     });
@@ -134,7 +135,7 @@ describe("handlePaystackWebhook", () => {
     storage.getTransactionByReference.mockResolvedValue({
       id: "tx1",
       amount: "1000",
-      status: "pending",
+      status: TransactionStatus.PENDING,
       meta: {},
       serviceRequestId: "req1",
     });
@@ -168,7 +169,7 @@ describe("handlePaystackWebhook", () => {
     storage.getTransactionByReference.mockResolvedValue({
       id: "tx1",
       amount: "1000",
-      status: "pending",
+      status: TransactionStatus.PENDING,
       meta: {},
       serviceRequestId: "req1",
     });

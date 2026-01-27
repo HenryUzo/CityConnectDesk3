@@ -629,7 +629,7 @@ export default function ProviderDashboard() {
                         Create Store
                       </Button>
                     </DialogTrigger>
-                    <DialogContent className="sm:max-w-md">
+                    <DialogContent className="w-[60vw] max-w-[95vw]">
                       <DialogHeader>
                         <DialogTitle>Create New Store</DialogTitle>
                       </DialogHeader>

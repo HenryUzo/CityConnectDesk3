@@ -14,12 +14,16 @@ import {
   wallets,
   memberships,
   transactions,
+  estates,
+  notifications,
   type User,
   type InsertUser,
   type ServiceRequest,
   type InsertServiceRequest,
   type Company,
   type InsertCompany,
+  type Notification,
+  type InsertNotification,
   type ProviderRequest,
   type InsertProviderRequest,
   type RequestMessage,
@@ -79,9 +83,9 @@ function mapPrismaUser(user: PrismaUser & { providerCompany?: { name?: string | 
   const sharedRole = normalizeSharedRole(user.globalRole);
   return {
     id: user.id,
-    firstName: null,
-    lastName: null,
-    name: user.name ?? user.email,
+    firstName: (user as any).firstName ?? null,
+    lastName: (user as any).lastName ?? null,
+    name: (user.name || [ (user as any).firstName, (user as any).lastName ].filter(Boolean).join(" ")) || user.email,
     email: user.email,
     phone: user.phone ?? "",
     password: user.passwordHash,
@@ -223,12 +227,21 @@ export interface IStorage {
   getUserStats(): Promise<any>;
   getCompanies(): Promise<Company[]>;
   createCompany(company: InsertCompany): Promise<Company>;
+  updateCompany(id: string, company: Partial<InsertCompany>): Promise<Company | undefined>;
+  deleteCompany(id: string): Promise<boolean>;
   createProviderRequest(request: InsertProviderRequest): Promise<ProviderRequest>;
   getProviderRequests(): Promise<ProviderRequest[]>;
   deleteUser(userId: string): Promise<boolean>;
   deleteProviderRequestByProviderId(providerId: string): Promise<void>;
   getProviderRequestById(requestId: string): Promise<ProviderRequest | null>;
   deleteProviderRequest(requestId: string): Promise<void>;
+  createNotification(input: InsertNotification): Promise<Notification>;
+  listNotificationsForUser(
+    userId: string,
+    options?: { limit?: number; offset?: number },
+  ): Promise<Notification[]>;
+  markNotificationRead(userId: string, notificationId: string): Promise<Notification | undefined>;
+  markAllNotificationsRead(userId: string): Promise<{ updated: number }>;
   getPostgresIdFromMongoId(entityType: string, mongoId: string): Promise<string | null>;
   createAuditLog(entry: InsertAuditLog): Promise<AuditLog>;
   getOrders(params?: OrdersQueryParams): Promise<OrdersListResult>;
@@ -267,39 +280,55 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUser(id: string): Promise<User | undefined> {
-    const user = await prisma.user.findUnique({
-      where: { id },
-      include: includeProviderCompany,
-    });
-    return this.mapUser(user);
+    // Fetch from Drizzle (source of truth), not Prisma
+    // This ensures we always get the correct role data
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+    return user as User | undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
     const normalized = (username || "").trim();
-    let user = await prisma.user.findUnique({
-      where: { email: normalized },
-      include: includeProviderCompany,
-    });
-    if (!user) {
-      user = await prisma.user.findFirst({
-        where: { name: normalized },
-        include: includeProviderCompany,
-      });
-    }
-    return this.mapUser(user);
+    // Fetch from Drizzle (source of truth), not Prisma
+    // Try email first
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, normalized))
+      .limit(1);
+    if (user) return user as User;
+    
+    // If not found by email, try by name
+    const byName = await db
+      .select()
+      .from(users)
+      .where(eq(users.name, normalized))
+      .limit(1);
+    return byName[0] as User | undefined;
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    const user = await prisma.user.findUnique({
-      where: { email },
-      include: includeProviderCompany,
-    });
-    return this.mapUser(user);
+    // Fetch from Drizzle (source of truth), not Prisma
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    return user as User | undefined;
   }
 
   async getUserByAccessCode(accessCode: string): Promise<User | undefined> {
-    // Prisma User model currently does not expose accessCode, so return undefined.
-    return undefined;
+    const normalized = (accessCode || "").trim();
+    if (!normalized) return undefined;
+    const [row] = await db
+      .select()
+      .from(users)
+      .where(eq(users.accessCode, normalized))
+      .limit(1);
+    return row as any;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
@@ -309,6 +338,22 @@ export class DatabaseStorage implements IStorage {
       .returning();
     
     // Mirror the user in Prisma so wallet FK works
+    // Map Drizzle role (e.g., "super_admin") to Prisma enum (e.g., "SUPER_ADMIN")
+    const mapRoleToPrisma = (role: any) => {
+      if (!role) return "RESIDENT";
+      const lower = String(role).toLowerCase();
+      const map: Record<string, any> = {
+        "resident": "RESIDENT",
+        "provider": "PROVIDER",
+        "admin": "ADMIN",
+        "super_admin": "SUPER_ADMIN",
+        "estate_admin": "ESTATE_ADMIN",
+        "moderator": "MODERATOR",
+        "support": "SUPPORT",
+      };
+      return map[lower] || "RESIDENT";
+    };
+    
     try {
       await prisma.user.upsert({
         where: { id: user.id },
@@ -316,7 +361,7 @@ export class DatabaseStorage implements IStorage {
           email: user.email,
           name: user.name,
           passwordHash: user.password,
-          globalRole: (user.globalRole as string | undefined)?.toUpperCase() as any,
+          globalRole: mapRoleToPrisma(user.globalRole),
           isApproved: user.isApproved,
           isActive: user.isActive,
         },
@@ -325,7 +370,7 @@ export class DatabaseStorage implements IStorage {
           email: user.email,
           name: user.name,
           passwordHash: user.password,
-          globalRole: (user.globalRole as string | undefined)?.toUpperCase() as any,
+          globalRole: mapRoleToPrisma(user.globalRole),
           isApproved: user.isApproved,
           isActive: user.isActive,
         },
@@ -348,6 +393,42 @@ export class DatabaseStorage implements IStorage {
       .set({ ...updates, updatedAt: new Date() })
       .where(eq(users.id, id))
       .returning();
+    
+    // Keep Prisma in sync with Drizzle
+    if (user) {
+      try {
+        // Map Drizzle role (e.g., "super_admin") to Prisma enum (e.g., "SUPER_ADMIN")
+        const mapRoleToPrisma = (role: any) => {
+          if (!role) return "RESIDENT";
+          const lower = String(role).toLowerCase();
+          const map: Record<string, any> = {
+            "resident": "RESIDENT",
+            "provider": "PROVIDER",
+            "admin": "ADMIN",
+            "super_admin": "SUPER_ADMIN",
+            "estate_admin": "ESTATE_ADMIN",
+            "moderator": "MODERATOR",
+            "support": "SUPPORT",
+          };
+          return map[lower] || "RESIDENT";
+        };
+        
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            email: user.email,
+            name: user.name,
+            passwordHash: user.password,
+            globalRole: mapRoleToPrisma(user.globalRole),
+            isApproved: user.isApproved,
+            isActive: user.isActive,
+          },
+        });
+      } catch (error) {
+        console.warn("Failed to sync user update to Prisma:", (error as Error).message);
+      }
+    }
+    
     return user || undefined;
   }
 
@@ -461,7 +542,7 @@ export class DatabaseStorage implements IStorage {
   // --- UPDATE request status ---
   async updateRequestStatus(
     requestId: string,
-    status: "pending" | "assigned" | "in_progress" | "completed" | "cancelled",
+    status: "pending" | "pending_inspection" | "assigned" | "in_progress" | "completed" | "cancelled",
     closeReason?: string
   ) {
     const patch: any = { status, updatedAt: new Date() };
@@ -848,14 +929,39 @@ export class DatabaseStorage implements IStorage {
       .set({ isApproved: true, updatedAt: new Date() })
       .where(eq(users.id, providerId))
       .returning();
+    
+    // Keep Prisma in sync with Drizzle
+    if (provider) {
+      try {
+        await prisma.user.update({
+          where: { id: provider.id },
+          data: {
+            isApproved: true,
+          },
+        });
+      } catch (error) {
+        console.warn("Failed to sync provider approval to Prisma:", (error as Error).message);
+      }
+    }
+    
     return provider || undefined;
   }
 
   async deleteUser(userId: string): Promise<boolean> {
+    // Delete from Drizzle users table
     const deleted = await db
       .delete(users)
       .where(eq(users.id, userId))
       .returning();
+    
+    // Also delete from Prisma User table to keep both in sync
+    try {
+      await prisma.user.delete({ where: { id: userId } });
+    } catch (error) {
+      // User might not exist in Prisma, which is fine
+      console.warn("User not found in Prisma during delete:", userId);
+    }
+    
     return deleted.length > 0;
   }
 
@@ -880,10 +986,22 @@ export class DatabaseStorage implements IStorage {
     const [totalResidents] = await db.select({ count: count() }).from(users).where(eq(users.role, "resident"));
     const [totalProviders] = await db.select({ count: count() }).from(users).where(eq(users.role, "provider"));
     const [totalRequests] = await db.select({ count: count() }).from(serviceRequests);
-    const [activeRequests] = await db.select({ count: count() }).from(serviceRequests).where(eq(serviceRequests.status, "pending"));
+    // Active requests = any request not completed/cancelled
+    const [activeRequests] = await db
+      .select({ count: count() })
+      .from(serviceRequests)
+      .where(sql`${serviceRequests.status} not in ('completed','cancelled')`);
     const [pendingApprovals] = await db.select({ count: count() }).from(users).where(
       and(eq(users.role, "provider"), eq(users.isApproved, false))
     );
+
+    const [totalEstates] = await db.select({ count: count() }).from(estates);
+    const [revenueRow] = await db
+      .select({ total: sum(transactions.amount) })
+      .from(transactions)
+      .where(eq(transactions.status, "completed"));
+
+    const totalRevenue = Number(revenueRow?.total ?? 0);
 
     return {
       totalUsers: totalUsers.count,
@@ -891,18 +1009,60 @@ export class DatabaseStorage implements IStorage {
       totalProviders: totalProviders.count,
       totalRequests: totalRequests.count,
       activeRequests: activeRequests.count,
-      pendingApprovals: pendingApprovals.count
+      pendingApprovals: pendingApprovals.count,
+      totalEstates: totalEstates.count,
+      totalRevenue,
     };
   }
 
   async getCompanies(): Promise<Company[]> {
-    const list = await db.select().from(companies).orderBy(desc(companies.createdAt));
-    return list;
+    try {
+      console.log("Storage: Getting companies from database...");
+      const list = await db
+        .select()
+        .from(companies)
+        .orderBy(desc(companies.createdAt));
+
+      console.log("Storage: Retrieved", list.length, "companies");
+      return list as any;
+    } catch (error) {
+      console.error("Storage: Error in getCompanies:", error);
+      console.error("Storage: Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        code: (error as any)?.code,
+        detail: (error as any)?.detail,
+      });
+      throw error;
+    }
   }
 
   async createCompany(company: InsertCompany): Promise<Company> {
-    const [row] = await db.insert(companies).values(company).returning();
-    return row;
+    const [row] = await db
+      .insert(companies)
+      .values(company)
+      .returning();
+    return row as any;
+  }
+
+  async updateCompany(id: string, company: Partial<InsertCompany>): Promise<Company | undefined> {
+    console.log("Storage: Updating company", id);
+    console.log("Storage: Update payload:", JSON.stringify(company, null, 2));
+    
+    const [row] = await db
+      .update(companies)
+      .set(company)
+      .where(eq(companies.id, id))
+      .returning();
+    
+    console.log("Storage: Updated company result:", JSON.stringify(row, null, 2));
+    return row as any;
+  }
+
+  async deleteCompany(id: string): Promise<boolean> {
+    const result = await db
+      .delete(companies)
+      .where(eq(companies.id, id));
+    return true;
   }
 
   async createProviderRequest(
@@ -918,6 +1078,51 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return row;
+  }
+
+  async createNotification(input: InsertNotification): Promise<Notification> {
+    const [row] = await db
+      .insert(notifications)
+      .values(input)
+      .returning();
+    return row as any;
+  }
+
+  async listNotificationsForUser(
+    userId: string,
+    options: { limit?: number; offset?: number } = {},
+  ): Promise<Notification[]> {
+    const limit = Math.max(1, options.limit ?? 50);
+    const offset = Math.max(0, options.offset ?? 0);
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit)
+      .offset(offset);
+    return rows as any;
+  }
+
+  async markNotificationRead(
+    userId: string,
+    notificationId: string,
+  ): Promise<Notification | undefined> {
+    const [row] = await db
+      .update(notifications)
+      .set({ isRead: true })
+      .where(and(eq(notifications.id, notificationId), eq(notifications.userId, userId)))
+      .returning();
+    return row as any;
+  }
+
+  async markAllNotificationsRead(userId: string): Promise<{ updated: number }> {
+    const rows = await db
+      .update(notifications)
+      .set({ isRead: true })
+      .where(eq(notifications.userId, userId))
+      .returning();
+    return { updated: rows.length };
   }
 
   async createAuditLog(entry: InsertAuditLog): Promise<AuditLog> {
