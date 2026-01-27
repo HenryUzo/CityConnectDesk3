@@ -4,13 +4,13 @@
  * Used in storage.ts and sync scripts
  */
 
-export function mapRoleToPrismaEnum(drizzleRole) {
+export function mapRoleToPrismaEnum(drizzleRole: string | undefined | null): string {
   if (!drizzleRole) return "RESIDENT";
   
-  const lower = String(drizzleRole).toLowerCase();
+  const lower = drizzleRole.toLowerCase();
   
   // Map snake_case Drizzle roles to UPPER_CASE Prisma enums
-  const roleMap = {
+  const roleMap: Record<string, string> = {
     "resident": "RESIDENT",
     "provider": "PROVIDER",
     "admin": "ADMIN",
