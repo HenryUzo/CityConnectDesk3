@@ -71,7 +71,19 @@ export function setupAuth(app: Express) {
 
   app.post("/api/register", async (req, res, next) => {
     try {
-  const { username, password, name, email, phone, inviteCode, estateId } = req.body || {};
+  const {
+    username,
+    password,
+    name,
+    email,
+    phone,
+    inviteCode,
+    estateId,
+    role,
+    companyId,
+    newCompanyName,
+    newCompanyDescription,
+  } = req.body || {};
   if (!username || !password) {
     return res.status(400).json({
       message: "Username and password are required",
@@ -135,15 +147,34 @@ export function setupAuth(app: Express) {
   }
 
   const passwordHash = await hashPassword(password);
+  const normalizedRole = role === "provider" ? "provider" : "resident";
   const user = await storage.createUser({
     name: name ?? email ?? username,
     email: email ?? username,
     phone: phone ?? "",
     password: passwordHash,
-    role: "resident",
+    role: normalizedRole,
     isActive: true,
-    isApproved: true,
+    isApproved: normalizedRole !== "provider",
   } as any);
+
+  if (normalizedRole === "provider") {
+    if (typeof newCompanyName === "string" && newCompanyName.trim()) {
+      const createdCompany = await storage.createCompany({
+        name: newCompanyName.trim(),
+        description: typeof newCompanyDescription === "string" ? newCompanyDescription.trim() : undefined,
+        contactEmail: email ?? undefined,
+        phone: phone ?? undefined,
+        providerId: user.id,
+        submittedAt: new Date(),
+        isActive: false,
+        details: {},
+      } as any);
+      await storage.updateUser(user.id, { company: createdCompany.id } as any);
+    } else if (typeof companyId === "string" && companyId.trim()) {
+      await storage.updateUser(user.id, { company: companyId.trim() } as any);
+    }
+  }
 
   if (resolvedEstateId) {
     await db.insert(memberships).values({

@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getQueryFn } from "@/lib/queryClient";
+import { apiRequest, getQueryFn, queryClient } from "@/lib/queryClient";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,12 +11,14 @@ import {
   ChevronDown,
   ChevronRight,
   Dice4,
+  Edit3,
   Eye,
   EyeOff,
   MoreVertical,
+  Trash2,
 } from "lucide-react";
 import { AreaChart, ResponsiveContainer, Area } from "recharts";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -52,6 +54,7 @@ import {
 } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import {
   createProviderSchema,
   type CreateProviderInput,
@@ -87,6 +90,38 @@ type RecentTransaction = {
   amount: number;
   status: string;
   month: string;
+};
+
+type CompanyStaff = {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  isApproved?: boolean | null;
+  isActive?: boolean | null;
+  company?: string | null;
+};
+
+type CompanyStore = {
+  id: string;
+  name: string;
+  location: string;
+  description?: string | null;
+  ownerId?: string | null;
+  companyId?: string | null;
+  createdAt?: string | null;
+};
+
+type InventoryItem = {
+  id: string;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  price?: number | string | null;
+  stock?: number | null;
+  images?: string[] | null;
+  isActive?: boolean | null;
+  createdAt?: string | null;
 };
 
 const FALLBACK_TRANSACTIONS: RecentTransaction[] = [
@@ -176,6 +211,33 @@ const generatePassword = () => {
 };
 
 export default function CompanyDashboard() {
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
+  const { data: providerCompany, isLoading: isLoadingCompany } = useQuery({
+    queryKey: ["/api/provider/company"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/provider/company");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (isLoadingCompany) return;
+    if (providerCompany && providerCompany.isActive === false) {
+      toast({
+        title: "Company pending approval",
+        description: "Your company is awaiting verification by an admin.",
+      });
+      setLocation("/provider");
+    }
+  }, [providerCompany, isLoadingCompany, setLocation, toast]);
+
+  if (providerCompany && providerCompany.isActive === false) {
+    return null;
+  }
+
   const { data, isLoading, error } = useQuery<BusinessOverview>({
     queryKey: ["/api/business/overview"],
     queryFn: getQueryFn<BusinessOverview>({ on401: "returnNull" }),
@@ -197,9 +259,46 @@ export default function CompanyDashboard() {
     queryFn: getQueryFn<Category[]>({ on401: "throw" }),
   });
 
-  const { data: companies = [], isLoading: companiesLoading } = useQuery<Company[]>({
+  const { data: companies = [] } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
     queryFn: getQueryFn<Company[]>({ on401: "throw" }),
+  });
+
+  const { data: companyStaff = [], isLoading: companyStaffLoading } = useQuery<CompanyStaff[]>({
+    queryKey: ["/api/company/staff"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/company/staff");
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: Boolean(providerCompany?.id),
+  });
+
+  const [showStoreModal, setShowStoreModal] = useState(false);
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [activeStore, setActiveStore] = useState<CompanyStore | null>(null);
+  const [selectedStoreId, setSelectedStoreId] = useState("");
+  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
+
+  const { data: companyStores = [], isLoading: companyStoresLoading } = useQuery<CompanyStore[]>({
+    queryKey: ["/api/company/stores"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/company/stores");
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: Boolean(providerCompany?.id),
+  });
+
+  const { data: inventoryItems = [], isLoading: inventoryLoading } = useQuery<InventoryItem[]>({
+    queryKey: ["/api/company/stores", selectedStoreId, "inventory"],
+    queryFn: async () => {
+      if (!selectedStoreId) return [];
+      const res = await apiRequest("GET", `/api/company/stores/${selectedStoreId}/inventory`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: Boolean(selectedStoreId),
   });
 
   const serviceCategoryOptions = useMemo(() => {
@@ -208,11 +307,13 @@ export default function CompanyDashboard() {
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }, [serviceCategories]);
 
-  const companyOptions = useMemo(() => {
-    return [...companies]
-      .filter((company) => company.isActive !== false)
-      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-  }, [companies]);
+  const staffById = useMemo(() => {
+    const map = new Map<string, CompanyStaff>();
+    companyStaff.forEach((staff) => {
+      if (staff?.id) map.set(staff.id, staff);
+    });
+    return map;
+  }, [companyStaff]);
 
   const categoryNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -228,9 +329,10 @@ export default function CompanyDashboard() {
   const [searchTerm, setSearchTerm] = useState("");
   const [exportAll, setExportAll] = useState(false);
 
-  const firstCompanyName = companies[0]?.name ?? "Ray";
+  const companyDisplayName = providerCompany?.name || companies[0]?.name || "Ray";
+  const firstCompanyName = companyDisplayName ?? "Ray";
   const greetingName = firstCompanyName ? firstCompanyName.split(" ")[0] : "John";
-  const marketplaceName = companies[0]?.name
+  const marketplaceName = companyDisplayName
     ? `${firstCompanyName}'s Marketplace`
     : "Ray's Marketplace";
 
@@ -299,18 +401,299 @@ export default function CompanyDashboard() {
     },
   });
 
+  const storeFormSchema = z.object({
+    name: z.string().min(1, "Store name is required"),
+    location: z.string().min(1, "Location is required"),
+    description: z.string().optional().default(""),
+    ownerId: z.string().min(1, "Owner is required"),
+    phone: z.string().optional().default(""),
+    email: z.string().optional().default(""),
+  });
+
+  const storeForm = useForm<z.infer<typeof storeFormSchema>>({
+    resolver: zodResolver(storeFormSchema),
+    defaultValues: {
+      name: "",
+      location: "",
+      description: "",
+      ownerId: "",
+      phone: "",
+      email: "",
+    },
+  });
+
+  const assignMemberSchema = z.object({
+    userId: z.string().min(1, "Select a staff member"),
+    role: z.enum(["owner", "manager", "member"]).default("member"),
+    canManageItems: z.boolean().default(true),
+    canManageOrders: z.boolean().default(true),
+  });
+
+  const assignMemberForm = useForm<z.infer<typeof assignMemberSchema>>({
+    resolver: zodResolver(assignMemberSchema),
+    defaultValues: {
+      userId: "",
+      role: "member",
+      canManageItems: true,
+      canManageOrders: true,
+    },
+  });
+
   const [passwordVisible, setPasswordVisible] = useState(true);
 
-  const { toast } = useToast();
-  const onProviderSubmit = providerForm.handleSubmit(async (values) => {
-    toast({
-      title: "Provider request submitted",
-      description:
-        "An administrator will review and approve the service provider shortly.",
-    });
-    setShowProviderModal(false);
-    providerForm.reset();
+  const inventoryFormSchema = z.object({
+    name: z.string().min(1, "Item name is required"),
+    category: z.string().min(1, "Category is required"),
+    price: z.preprocess((value) => Number(value), z.number().nonnegative()),
+    stock: z.preprocess((value) => Number(value), z.number().int().nonnegative()),
+    description: z.string().optional().default(""),
+    images: z.string().optional().default(""),
   });
+
+  const inventoryForm = useForm<z.infer<typeof inventoryFormSchema>>({
+    resolver: zodResolver(inventoryFormSchema),
+    defaultValues: {
+      name: "",
+      category: "",
+      price: 0,
+      stock: 0,
+      description: "",
+      images: "",
+    },
+  });
+
+  useEffect(() => {
+    if (providerCompany?.id) {
+      providerForm.setValue("company", providerCompany.id);
+    }
+  }, [providerCompany, providerForm]);
+
+  useEffect(() => {
+    if (!selectedStoreId && companyStores.length > 0) {
+      setSelectedStoreId(companyStores[0]?.id || "");
+    }
+  }, [companyStores, selectedStoreId]);
+
+  const onProviderSubmit = providerForm.handleSubmit(async (values) => {
+    if (!providerCompany?.id) {
+      toast({
+        title: "Company required",
+        description: "Create or join a company before inviting staff.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const payload = {
+        ...values,
+        company: providerCompany.id,
+        isApproved: false,
+      };
+      const res = await apiRequest("POST", "/api/admin/providers", payload);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || body?.error || "Unable to invite provider");
+      }
+
+      toast({
+        title: "Invite sent",
+        description: "The provider has been added and is awaiting approval.",
+      });
+      setShowProviderModal(false);
+      providerForm.reset({
+        firstName: "",
+        lastName: "",
+        email: "",
+        phone: "",
+        password: generatePassword(),
+        company: providerCompany.id,
+        categories: [],
+        experience: 0,
+        description: "",
+        isApproved: false,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/company/staff"] });
+    } catch (error: any) {
+      toast({
+        title: "Invite failed",
+        description: error?.message || "Unable to invite the provider right now.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  const onStoreSubmit = storeForm.handleSubmit(async (values) => {
+    try {
+      const res = await apiRequest("POST", "/api/company/stores", values);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || body?.error || "Unable to create store");
+      }
+      toast({
+        title: "Store created",
+        description: "Your store is ready to start listing inventory.",
+      });
+      setShowStoreModal(false);
+      storeForm.reset();
+      queryClient.invalidateQueries({ queryKey: ["/api/company/stores"] });
+    } catch (error: any) {
+      toast({
+        title: "Store creation failed",
+        description: error?.message || "Unable to create store right now.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  const onAssignSubmit = assignMemberForm.handleSubmit(async (values) => {
+    if (!activeStore?.id) return;
+    try {
+      const res = await apiRequest(
+        "POST",
+        `/api/company/stores/${activeStore.id}/members`,
+        values,
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || body?.error || "Unable to assign staff");
+      }
+      toast({
+        title: "Staff assigned",
+        description: "The team member can now manage this store.",
+      });
+      setShowAssignModal(false);
+      assignMemberForm.reset();
+    } catch (error: any) {
+      toast({
+        title: "Assignment failed",
+        description: error?.message || "Unable to assign staff right now.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  const onInventorySubmit = inventoryForm.handleSubmit(async (values) => {
+    if (!selectedStoreId) {
+      toast({
+        title: "Select a store",
+        description: "Choose a store before adding inventory.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const images = values.images
+      ? values.images
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [];
+
+    try {
+      if (editingItem?.id) {
+        const res = await apiRequest(
+          "PATCH",
+          `/api/company/stores/${selectedStoreId}/inventory/${editingItem.id}`,
+          {
+            name: values.name,
+            category: values.category,
+            price: values.price,
+            stock: values.stock,
+            description: values.description,
+            images,
+          },
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body?.message || body?.error || "Unable to update item");
+        }
+        toast({
+          title: "Item updated",
+          description: "Inventory item updated successfully.",
+        });
+      } else {
+        const res = await apiRequest(
+          "POST",
+          `/api/company/stores/${selectedStoreId}/inventory`,
+          {
+            name: values.name,
+            category: values.category,
+            price: values.price,
+            stock: values.stock,
+            description: values.description,
+            images,
+          },
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body?.message || body?.error || "Unable to add item");
+        }
+        toast({
+          title: "Item added",
+          description: "Inventory item added to your store.",
+        });
+      }
+
+      setEditingItem(null);
+      inventoryForm.reset({
+        name: "",
+        category: "",
+        price: 0,
+        stock: 0,
+        description: "",
+        images: "",
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/company/stores", selectedStoreId, "inventory"],
+      });
+    } catch (error: any) {
+      toast({
+        title: "Inventory update failed",
+        description: error?.message || "Unable to save this item right now.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  const handleEditItem = (item: InventoryItem) => {
+    setEditingItem(item);
+    inventoryForm.reset({
+      name: item.name || "",
+      category: item.category || "",
+      price: Number(item.price || 0),
+      stock: Number(item.stock || 0),
+      description: item.description || "",
+      images: Array.isArray(item.images) ? item.images.join(", ") : "",
+    });
+  };
+
+  const handleDeleteItem = async (item: InventoryItem) => {
+    if (!selectedStoreId || !item.id) return;
+    try {
+      const res = await apiRequest(
+        "DELETE",
+        `/api/company/stores/${selectedStoreId}/inventory/${item.id}`,
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || body?.error || "Unable to delete item");
+      }
+      toast({
+        title: "Item removed",
+        description: "The item has been removed from inventory.",
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/company/stores", selectedStoreId, "inventory"],
+      });
+    } catch (error: any) {
+      toast({
+        title: "Delete failed",
+        description: error?.message || "Unable to delete item right now.",
+        variant: "destructive",
+      });
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -706,8 +1089,569 @@ export default function CompanyDashboard() {
               )}
             </CardContent>
           </Card>
-        </section>
-      </main>
+          </section>
+          <section className="grid gap-6 lg:grid-cols-[1.6fr,1fr]">
+            <Card className="shadow-lg border border-slate-100">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-base text-slate-900">Stores</CardTitle>
+                  <p className="text-xs text-slate-500">
+                    Create stores, assign owners, and jump into inventory.
+                  </p>
+                </div>
+                <Button onClick={() => setShowStoreModal(true)} size="sm">
+                  Create Store
+                </Button>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                      <tr>
+                        <th className="px-4 py-3">Store</th>
+                        <th className="px-4 py-3">Location</th>
+                        <th className="px-4 py-3">Owner</th>
+                        <th className="px-4 py-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {companyStoresLoading ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-6 text-center text-xs text-slate-400">
+                            Loading stores...
+                          </td>
+                        </tr>
+                      ) : companyStores.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-6 text-center text-xs text-slate-400">
+                            No stores yet. Create your first store to get started.
+                          </td>
+                        </tr>
+                      ) : (
+                        companyStores.map((store) => {
+                          const ownerName = store.ownerId
+                            ? staffById.get(store.ownerId)?.name ||
+                              staffById.get(store.ownerId)?.email ||
+                              "Assigned"
+                            : "Unassigned";
+                          return (
+                            <tr key={store.id} className="border-t border-slate-100 text-slate-600">
+                              <td className="px-4 py-4">
+                                <div>
+                                  <p className="font-semibold text-slate-900">{store.name}</p>
+                                  <p className="text-[0.7rem] text-slate-400">
+                                    {store.description || "No description"}
+                                  </p>
+                                </div>
+                              </td>
+                              <td className="px-4 py-4">{store.location}</td>
+                              <td className="px-4 py-4">{ownerName}</td>
+                              <td className="px-4 py-4">
+                                <div className="flex items-center justify-end gap-2">
+                                  <Link href={`/provider/stores/${store.id}/items`}>
+                                    <Button variant="outline" size="sm">
+                                      Inventory
+                                    </Button>
+                                  </Link>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      setActiveStore(store);
+                                      setShowAssignModal(true);
+                                    }}
+                                  >
+                                    Assign Staff
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-lg border border-slate-100">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-base text-slate-900">Team Members</CardTitle>
+                  <p className="text-xs text-slate-500">
+                    Manage staff and invite new providers to your company.
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => setShowProviderModal(true)}>
+                  Invite Staff
+                </Button>
+              </CardHeader>
+              <CardContent className="pt-0 space-y-3">
+                {companyStaffLoading ? (
+                  <p className="text-sm text-slate-500">Loading team...</p>
+                ) : companyStaff.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    No staff members yet. Invite providers to build your team.
+                  </p>
+                ) : (
+                  companyStaff.slice(0, 6).map((staff) => (
+                    <div
+                      key={staff.id}
+                      className="flex items-center justify-between rounded-xl border border-slate-100 bg-white px-4 py-3"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">
+                          {staff.name || staff.email || "Unnamed provider"}
+                        </p>
+                        <p className="text-[0.7rem] text-slate-400">{staff.email || staff.phone}</p>
+                      </div>
+                      <Badge variant={staff.isApproved ? "default" : "secondary"}>
+                        {staff.isApproved ? "Approved" : "Pending"}
+                      </Badge>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
+          </section>
+          <section className="grid gap-6 lg:grid-cols-[1.6fr,1fr]">
+            <Card className="shadow-lg border border-slate-100">
+              <CardHeader className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base text-slate-900">Inventory</CardTitle>
+                    <p className="text-xs text-slate-500">
+                      Review items for the selected store and update details.
+                    </p>
+                  </div>
+                  <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
+                    <SelectTrigger className="min-w-[200px]">
+                      <SelectValue placeholder="Select store" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {companyStores.map((store) => (
+                        <SelectItem key={store.id} value={store.id}>
+                          {store.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                      <tr>
+                        <th className="px-4 py-3">Item</th>
+                        <th className="px-4 py-3">Category</th>
+                        <th className="px-4 py-3">Price</th>
+                        <th className="px-4 py-3">Stock</th>
+                        <th className="px-4 py-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inventoryLoading ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-6 text-center text-xs text-slate-400">
+                            Loading inventory...
+                          </td>
+                        </tr>
+                      ) : !selectedStoreId ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-6 text-center text-xs text-slate-400">
+                            Select a store to view its inventory.
+                          </td>
+                        </tr>
+                      ) : inventoryItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-6 text-center text-xs text-slate-400">
+                            No items yet. Add your first product on the right.
+                          </td>
+                        </tr>
+                      ) : (
+                        inventoryItems.map((item) => (
+                          <tr key={item.id} className="border-t border-slate-100 text-slate-600">
+                            <td className="px-4 py-4">
+                              <div>
+                                <p className="font-semibold text-slate-900">{item.name}</p>
+                                <p className="text-[0.7rem] text-slate-400">
+                                  {item.description || "No description"}
+                                </p>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4">{item.category || "Uncategorized"}</td>
+                            <td className="px-4 py-4">{formatCurrency(Number(item.price || 0))}</td>
+                            <td className="px-4 py-4">{item.stock ?? 0}</td>
+                            <td className="px-4 py-4">
+                              <div className="flex items-center justify-end gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleEditItem(item)}
+                                >
+                                  <Edit3 className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteItem(item)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-rose-500" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-lg border border-slate-100">
+              <CardHeader>
+                <CardTitle className="text-base text-slate-900">
+                  {editingItem ? "Update inventory item" : "Add inventory item"}
+                </CardTitle>
+                <p className="text-xs text-slate-500">
+                  Keep pricing and stock updated for residents.
+                </p>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <Form {...inventoryForm}>
+                  <form className="space-y-4" onSubmit={onInventorySubmit}>
+                    <FormField
+                      control={inventoryForm.control}
+                      name="name"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Item name</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Item name" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={inventoryForm.control}
+                      name="category"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Category</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Category" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <FormField
+                        control={inventoryForm.control}
+                        name="price"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Price (NGN)</FormLabel>
+                            <FormControl>
+                              <Input type="number" min="0" step="0.01" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={inventoryForm.control}
+                        name="stock"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Stock</FormLabel>
+                            <FormControl>
+                              <Input type="number" min="0" step="1" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    <FormField
+                      control={inventoryForm.control}
+                      name="images"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Images (comma separated URLs)</FormLabel>
+                          <FormControl>
+                            <Input placeholder="https://..., https://..." {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={inventoryForm.control}
+                      name="description"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Description</FormLabel>
+                          <FormControl>
+                            <Textarea placeholder="Short description" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <div className="flex items-center justify-between">
+                      {editingItem ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            setEditingItem(null);
+                            inventoryForm.reset({
+                              name: "",
+                              category: "",
+                              price: 0,
+                              stock: 0,
+                              description: "",
+                              images: "",
+                            });
+                          }}
+                        >
+                          Cancel edit
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-slate-400">
+                          Add at least one item to publish your catalog.
+                        </span>
+                      )}
+                      <Button type="submit" disabled={!selectedStoreId}>
+                        {editingItem ? "Save changes" : "Add item"}
+                      </Button>
+                    </div>
+                  </form>
+                </Form>
+              </CardContent>
+            </Card>
+          </section>
+        </main>
+
+      <Dialog open={showStoreModal} onOpenChange={setShowStoreModal}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Create store</DialogTitle>
+            <DialogDescription>
+              Add a new store under {providerCompany?.name || "your company"}.
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...storeForm}>
+            <form className="space-y-4" onSubmit={onStoreSubmit}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <FormField
+                  control={storeForm.control}
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Store name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Store name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={storeForm.control}
+                  name="location"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Location</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Location" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <FormField
+                control={storeForm.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Textarea placeholder="Describe this store" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <FormField
+                  control={storeForm.control}
+                  name="ownerId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Store owner</FormLabel>
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select owner" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {companyStaff.map((staff) => (
+                            <SelectItem key={staff.id} value={staff.id}>
+                              {staff.name || staff.email || staff.id}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={storeForm.control}
+                  name="phone"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Phone</FormLabel>
+                      <FormControl>
+                        <Input placeholder="+234..." {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <FormField
+                control={storeForm.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email</FormLabel>
+                    <FormControl>
+                      <Input placeholder="store@email.com" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowStoreModal(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit">Create Store</Button>
+              </div>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showAssignModal} onOpenChange={setShowAssignModal}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Assign staff</DialogTitle>
+            <DialogDescription>
+              {activeStore?.name ? `Assign team members to ${activeStore.name}.` : "Assign team members."}
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...assignMemberForm}>
+            <form className="space-y-4" onSubmit={onAssignSubmit}>
+              <FormField
+                control={assignMemberForm.control}
+                name="userId"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Staff member</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select staff" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {companyStaff.map((staff) => (
+                          <SelectItem key={staff.id} value={staff.id}>
+                            {staff.name || staff.email || staff.id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={assignMemberForm.control}
+                name="role"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Role</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select role" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="owner">Owner</SelectItem>
+                        <SelectItem value="manager">Manager</SelectItem>
+                        <SelectItem value="member">Member</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField
+                  control={assignMemberForm.control}
+                  name="canManageItems"
+                  render={({ field }) => (
+                    <FormItem className="flex items-center gap-2">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={(value) => field.onChange(Boolean(value))}
+                        />
+                      </FormControl>
+                      <FormLabel className="text-sm">Manage inventory</FormLabel>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={assignMemberForm.control}
+                  name="canManageOrders"
+                  render={({ field }) => (
+                    <FormItem className="flex items-center gap-2">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={(value) => field.onChange(Boolean(value))}
+                        />
+                      </FormControl>
+                      <FormLabel className="text-sm">Manage orders</FormLabel>
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowAssignModal(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={!activeStore}>
+                  Assign
+                </Button>
+              </div>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showProviderModal} onOpenChange={setShowProviderModal}>
         <DialogContent className="w-[60vw] max-w-[95vw]">
@@ -761,34 +1705,21 @@ export default function CompanyDashboard() {
                   )}
                 />
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <FormField
-                  control={providerForm.control}
-                  name="phone"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Phone number</FormLabel>
-                      <FormControl>
-                        <Input placeholder="+234 ..." {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={providerForm.control}
-                  name="company"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Company</FormLabel>
-                      <FormControl>
-                        <Input placeholder="Company name" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField
+                    control={providerForm.control}
+                    name="phone"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Phone number</FormLabel>
+                        <FormControl>
+                          <Input placeholder="+234 ..." {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
               <FormField
                 control={providerForm.control}
                 name="categories"
@@ -874,54 +1805,26 @@ export default function CompanyDashboard() {
                       </FormItem>
                     )}
                   />
-                  <FormField
-                    control={providerForm.control}
-                    name="company"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Company</FormLabel>
-                        <FormControl>
-                          <Select
-                            onValueChange={field.onChange}
-                            value={field.value || ""}
-                            disabled={companiesLoading}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue
-                                placeholder={
-                                  companiesLoading
-                                    ? "Loading companies..."
-                                    : "Select company"
-                                }
+                    <FormField
+                      control={providerForm.control}
+                      name="company"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Company</FormLabel>
+                          <FormControl>
+                            <div className="space-y-2">
+                              <Input
+                                placeholder="Company name"
+                                value={providerCompany?.name || ""}
+                                readOnly
                               />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="independent">
-                                Independent
-                              </SelectItem>
-                              {companyOptions.length === 0 ? (
-                                <SelectItem value="" disabled>
-                                  {companiesLoading
-                                    ? "Loading companies..."
-                                    : "No companies available"}
-                                </SelectItem>
-                              ) : (
-                                companyOptions.map((company) => (
-                                  <SelectItem
-                                    key={company.id}
-                                    value={company.name || company.id}
-                                  >
-                                    {company.name || company.id}
-                                  </SelectItem>
-                                ))
-                              )}
-                            </SelectContent>
-                          </Select>
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                              <Input type="hidden" {...field} />
+                            </div>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <FormField
@@ -1052,7 +1955,9 @@ export default function CompanyDashboard() {
                   >
                     Cancel
                   </Button>
-                  <Button type="submit">Create Provider</Button>
+                  <Button type="submit" disabled={!providerCompany?.id}>
+                    Create Provider
+                  </Button>
                 </div>
               </div>
             </form>

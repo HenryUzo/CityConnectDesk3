@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
@@ -53,9 +54,23 @@ const providerRegisterSchema = z.object({
   email: z.string().email("Invalid email address"),
   phone: z.string().min(10, "Phone number must be at least 10 digits"),
   password: z.string().min(6, "Password must be at least 6 characters"),
-  company: z.string().min(1, "Select a company"),
+  companyMode: z.enum(["existing", "new"]),
+  companyId: z.string().optional(),
+  newCompanyName: z.string().optional(),
+  newCompanyDescription: z.string().optional(),
   experience: z.number().min(0, "Experience must be 0 or greater"),
-});
+}).refine(
+  (data) => {
+    if (data.companyMode === "existing") {
+      return Boolean(data.companyId && data.companyId.trim().length > 0);
+    }
+    return Boolean(data.newCompanyName && data.newCompanyName.trim().length > 0);
+  },
+  {
+    message: "Select a company or enter a new company name",
+    path: ["companyId"],
+  }
+);
 
 const residentLoginSchema = z.object({
   email: z.string().optional(),
@@ -136,7 +151,10 @@ export default function AuthPage() {
       email: "",
       phone: "",
       password: "",
-      company: "",
+      companyMode: "existing",
+      companyId: "",
+      newCompanyName: "",
+      newCompanyDescription: "",
       experience: 0,
     },
   });
@@ -171,17 +189,24 @@ export default function AuthPage() {
       authMode === "register" &&
       userType === "provider" &&
       companies.length > 0 &&
-      !providerRegisterForm.getValues("company")
+      providerRegisterForm.getValues("companyMode") === "existing" &&
+      !providerRegisterForm.getValues("companyId")
     ) {
       const defaultCompany = companies[0].name || companies[0].id;
       if (defaultCompany) {
-        providerRegisterForm.setValue("company", defaultCompany);
+        providerRegisterForm.setValue("companyId", companies[0].id || defaultCompany);
       }
+    }
+  }, [authMode, userType, companies, providerRegisterForm]);
+  useEffect(() => {
+    if (authMode === "register" && userType === "provider" && companies.length === 0) {
+      providerRegisterForm.setValue("companyMode", "new");
     }
   }, [authMode, userType, companies, providerRegisterForm]);
 
   const inviteCodeValue = residentRegisterForm.watch("inviteCode");
   const estateSelectionDisabled = Boolean(inviteCodeValue && inviteCodeValue.trim().length > 0);
+  const providerCompanyMode = providerRegisterForm.watch("companyMode");
 
   // Redirect if already logged in - after all hooks are declared
   useEffect(() => {
@@ -251,13 +276,18 @@ export default function AuthPage() {
   const onRegister = async (data: any) => {
     try {
       if (userType === "provider") {
+        const companyMode = data.companyMode === "new" ? "new" : "existing";
         const payload = {
           firstName: data.firstName,
           lastName: data.lastName,
           name: [data.firstName, data.lastName].filter(Boolean).join(" ").trim(),
           email: data.email,
           phone: data.phone,
-          company: data.company || "",
+          companyMode,
+          company: companyMode === "existing" ? data.companyId || "" : data.newCompanyName || "",
+          companyId: companyMode === "existing" ? data.companyId || "" : "",
+          newCompanyName: companyMode === "new" ? data.newCompanyName || "" : "",
+          newCompanyDescription: companyMode === "new" ? data.newCompanyDescription || "" : "",
           experience: Number.isFinite(Number(data.experience)) ? Number(data.experience) : 0,
           password: data.password,
         };
@@ -892,45 +922,24 @@ export default function AuthPage() {
                           />
                           <FormField
                             control={providerRegisterForm.control}
-                            name="company"
+                            name="companyMode"
                             render={({ field }) => (
                               <FormItem className="space-y-1.5 sm:space-y-2">
                                 <FormLabel className="text-sm sm:text-base font-medium">Company</FormLabel>
                                 <FormControl>
                                   <Select
                                     onValueChange={field.onChange}
-                                    value={field.value || undefined}
-                                    disabled={isCompaniesLoading}
+                                    value={field.value}
                                   >
                                     <SelectTrigger
                                       className="h-11 sm:h-12 text-base"
-                                      data-testid="select-company"
+                                      data-testid="select-company-mode"
                                     >
-                                      <SelectValue
-                                        placeholder={
-                                          isCompaniesLoading
-                                            ? "Loading companies..."
-                                            : "Select your company"
-                                        }
-                                      />
+                                      <SelectValue placeholder="Choose company option" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                      {companies.length === 0 ? (
-                                        <SelectItem value="placeholder" disabled>
-                                          {isCompaniesLoading
-                                            ? "Loading companies..."
-                                            : "No companies available"}
-                                        </SelectItem>
-                                      ) : (
-                                        companies.map((company) => (
-                                          <SelectItem
-                                            key={company.id}
-                                            value={company.name || company.id}
-                                          >
-                                            {company.name || company.id}
-                                          </SelectItem>
-                                        ))
-                                      )}
+                                      <SelectItem value="existing">Join an existing company</SelectItem>
+                                      <SelectItem value="new">Create a new company</SelectItem>
                                     </SelectContent>
                                   </Select>
                                 </FormControl>
@@ -938,6 +947,95 @@ export default function AuthPage() {
                               </FormItem>
                             )}
                           />
+                          {providerCompanyMode === "existing" ? (
+                            <FormField
+                              control={providerRegisterForm.control}
+                              name="companyId"
+                              render={({ field }) => (
+                                <FormItem className="space-y-1.5 sm:space-y-2">
+                                  <FormLabel className="text-sm sm:text-base font-medium">Select Company</FormLabel>
+                                  <FormControl>
+                                    <Select
+                                      onValueChange={field.onChange}
+                                      value={field.value || undefined}
+                                      disabled={isCompaniesLoading}
+                                    >
+                                      <SelectTrigger
+                                        className="h-11 sm:h-12 text-base"
+                                        data-testid="select-company"
+                                      >
+                                        <SelectValue
+                                          placeholder={
+                                            isCompaniesLoading
+                                              ? "Loading companies..."
+                                              : "Select your company"
+                                          }
+                                        />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {companies.length === 0 ? (
+                                          <SelectItem value="placeholder" disabled>
+                                            {isCompaniesLoading
+                                              ? "Loading companies..."
+                                              : "No companies available"}
+                                          </SelectItem>
+                                        ) : (
+                                          companies.map((company) => (
+                                            <SelectItem
+                                              key={company.id}
+                                              value={company.id}
+                                            >
+                                              {company.name || company.id}
+                                            </SelectItem>
+                                          ))
+                                        )}
+                                      </SelectContent>
+                                    </Select>
+                                  </FormControl>
+                                  <FormMessage className="text-xs sm:text-sm" />
+                                </FormItem>
+                              )}
+                            />
+                          ) : (
+                            <>
+                              <FormField
+                                control={providerRegisterForm.control}
+                                name="newCompanyName"
+                                render={({ field }) => (
+                                  <FormItem className="space-y-1.5 sm:space-y-2">
+                                    <FormLabel className="text-sm sm:text-base font-medium">New Company Name</FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        {...field}
+                                        className="h-11 sm:h-12 text-base"
+                                        placeholder="Enter company name"
+                                        data-testid="input-new-company-name"
+                                      />
+                                    </FormControl>
+                                    <FormMessage className="text-xs sm:text-sm" />
+                                  </FormItem>
+                                )}
+                              />
+                              <FormField
+                                control={providerRegisterForm.control}
+                                name="newCompanyDescription"
+                                render={({ field }) => (
+                                  <FormItem className="space-y-1.5 sm:space-y-2">
+                                    <FormLabel className="text-sm sm:text-base font-medium">Company Description (optional)</FormLabel>
+                                    <FormControl>
+                                      <Textarea
+                                        {...field}
+                                        className="min-h-[96px] text-base"
+                                        placeholder="Tell us about your company"
+                                        data-testid="input-new-company-description"
+                                      />
+                                    </FormControl>
+                                    <FormMessage className="text-xs sm:text-sm" />
+                                  </FormItem>
+                                )}
+                              />
+                            </>
+                          )}
                           <FormField
                             control={providerRegisterForm.control}
                             name="experience"

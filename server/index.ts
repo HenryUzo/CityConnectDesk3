@@ -211,6 +211,13 @@ async function ensureEstatesColumns() {
   `);
 }
 
+async function ensureStoresColumns() {
+  await db.execute(sql`
+    ALTER TABLE stores
+      ADD COLUMN IF NOT EXISTS company_id varchar;
+  `);
+}
+
 // Ensure minimal users table exists so schema guard ALTERs can run.
 async function ensureUsersTable() {
   await db.execute(sql`
@@ -235,7 +242,7 @@ async function ensureCompaniesTable() {
       description text,
       contact_email text,
       phone text,
-      is_active boolean NOT NULL DEFAULT true,
+      is_active boolean NOT NULL DEFAULT false,
       created_at timestamp DEFAULT now(),
       updated_at timestamp DEFAULT now()
     );
@@ -249,6 +256,15 @@ async function ensureCompaniesTable() {
     ADD COLUMN IF NOT EXISTS bank_details jsonb,
     ADD COLUMN IF NOT EXISTS location_details jsonb,
     ADD COLUMN IF NOT EXISTS submitted_at timestamp;
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE companies
+      ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT false;
+  `);
+  await db.execute(sql`
+    ALTER TABLE companies
+      ALTER COLUMN is_active SET DEFAULT false;
   `);
 }
 
@@ -424,6 +440,7 @@ let bootPromise = (async () => {
     await ensureUsersTable();
     await ensureUsersColumns();
     await ensureEstatesColumns();
+    await ensureStoresColumns();
     await ensureCompaniesTable();
     await ensureNotificationsTable();
     await ensureProviderRequestsTable();

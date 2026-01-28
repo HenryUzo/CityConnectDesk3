@@ -5,6 +5,7 @@
   useRef,
   createContext,
   useContext,
+  type FC,
   ReactNode,
 } from "react";
 import { useLocation, Link } from "wouter";
@@ -2254,14 +2255,14 @@ const UsersManagement = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="independent">Independent</SelectItem>
-                    {Array.isArray(companies) &&
-                      companies
-                        .filter((company: any) => !!company?.name)
-                        .map((company: any) => (
-                          <SelectItem key={company.id} value={company.name}>
-                            {company.name}
-                          </SelectItem>
-                        ))}
+                      {Array.isArray(companies) &&
+                        companies
+                          .filter((company: any) => !!company?.name)
+                          .map((company: any) => (
+                            <SelectItem key={company.id} value={company.id}>
+                              {company.name}
+                            </SelectItem>
+                          ))}
                   </SelectContent>
                 </Select>
               )}
@@ -3725,12 +3726,12 @@ const ProvidersManagement = () => {
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="independent">Independent</SelectItem>
-                            {companyOptions.map((company: any) => (
-                              <SelectItem key={company.id || company._id || company.name} value={company.name}>
-                                {company.name}
-                              </SelectItem>
-                            ))}
+                              <SelectItem value="independent">Independent</SelectItem>
+                              {companyOptions.map((company: any) => (
+                                <SelectItem key={company.id || company._id || company.name} value={company.id || company._id}>
+                                  {company.name}
+                                </SelectItem>
+                              ))}
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -7746,7 +7747,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
     description: "",
     contactEmail: "",
     phone: "",
-    isActive: true,
+    isActive: false,
     // Business Details
     businessAddress: "",
     businessCity: "",
@@ -7798,6 +7799,11 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
     staleTime: 30_000, // 30 seconds
     refetchInterval: 60_000, // Refetch every 60 seconds
   });
+  const { data: pendingCompanies = [], isLoading: isPendingCompaniesLoading } = useQuery({
+    queryKey: ["admin-companies-pending"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/companies", { pending: true }),
+    staleTime: 15_000,
+  });
   const companyMembersCompanyId = (() => {
     const segments = location.split("/").filter(Boolean);
     if (
@@ -7809,7 +7815,19 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
     }
     return null;
   })();
+  const companyStoresCompanyId = (() => {
+    const segments = location.split("/").filter(Boolean);
+    if (
+      segments[0] === "admin-dashboard" &&
+      segments[1] === "companies" &&
+      segments[2] === "stores"
+    ) {
+      return segments[3] || null;
+    }
+    return null;
+  })();
   const isCompanyMembersPage = Boolean(companyMembersCompanyId);
+  const isCompanyStoresPage = Boolean(companyStoresCompanyId);
   const selectedCompanyForMembers =
     companyMembersCompanyId && Array.isArray(companies)
       ? companies.find((company: any) => (company.id || company._id) === companyMembersCompanyId)
@@ -7819,10 +7837,17 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
     setLocation(`/admin-dashboard/companies/members/${companyId}`);
   const companyMatchesProvider = (provider: any, company: any) => {
     if (!provider || !company) return false;
-    const providerCompany = String(provider.company || "").trim().toLowerCase();
+    // Get company value from provider (try multiple field names)
+    const providerCompanyValue = provider.company || provider.companyId || provider.company_id;
+    if (!providerCompanyValue) return false;
+    // If it's an object, extract the id
+    const providerCompanyId = typeof providerCompanyValue === 'object'
+      ? (providerCompanyValue.id || providerCompanyValue._id)
+      : providerCompanyValue;
+    const providerCompanyStr = String(providerCompanyId || "").trim().toLowerCase();
     const companyName = String(company.name || "").trim().toLowerCase();
     const companyId = String(company.id || company._id || "").trim().toLowerCase();
-    return providerCompany === companyName || providerCompany === companyId;
+    return providerCompanyStr === companyName || providerCompanyStr === companyId;
   };
   const { data: companyProvidersRaw = [] } = useQuery({
     queryKey: ["/api/admin/users/all", { role: "provider", companyId: companyMembersCompanyId }],
@@ -7856,7 +7881,9 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
   const pendingProviderRequests = Array.isArray(companyProviderRequests) && selectedCompanyForMembers
     ? companyProviderRequests.filter((req: any) => {
         const companyName = String(selectedCompanyForMembers.name || "").toLowerCase();
-        return String(req.company || "").toLowerCase() === companyName;
+        const companyId = String(selectedCompanyForMembers.id || selectedCompanyForMembers._id || "").toLowerCase();
+        const reqCompany = String(req.company || "").toLowerCase();
+        return reqCompany === companyName || reqCompany === companyId;
       })
     : [];
   const availableProviders = Array.isArray(companyProvidersRaw) && selectedCompanyForMembers
@@ -7881,7 +7908,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
   const assignProviderToCompanyMutation = useMutation({
     mutationFn: (providerId: string) =>
       adminApiRequest("PATCH", `/api/admin/users/${providerId}`, {
-        company: selectedCompanyForMembers?.name || "",
+        company: String(selectedCompanyForMembers?.id || selectedCompanyForMembers?._id || ""),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
@@ -7995,7 +8022,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
         description: "",
         contactEmail: "",
         phone: "",
-        isActive: true,
+        isActive: false,
         businessAddress: "",
         businessCity: "",
         businessState: "",
@@ -8032,7 +8059,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
         description: "",
         contactEmail: "",
         phone: "",
-        isActive: true,
+        isActive: false,
         businessAddress: "",
         businessCity: "",
         businessState: "",
@@ -8055,6 +8082,23 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
       toast({
         title: "Error updating company",
         description: error.response?.data?.error || "Failed to update company",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const verifyCompanyMutation = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      adminApiRequest("PATCH", `/api/admin/companies/${id}`, { isActive }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-companies"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-companies-pending"] });
+      toast({ title: "Company verification updated" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to update company",
+        description: error.response?.data?.error || "Unable to update company.",
         variant: "destructive",
       });
     },
@@ -8385,7 +8429,10 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
             </Button>
             <Button
               variant="outline"
-              onClick={() => setLocation(`/admin-dashboard/stores?companyId=${companyMembersCompanyId}`)}
+              onClick={() => {
+                if (!companyMembersCompanyId) return;
+                setLocation(`/admin-dashboard/companies/stores/${encodeURIComponent(String(companyMembersCompanyId))}`);
+              }}
             >
               <Store className="w-4 h-4 mr-2" />
               Manage Stores
@@ -9062,6 +9109,31 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
     );
   }
 
+  if (isCompanyStoresPage) {
+    const companyId = String(companyStoresCompanyId);
+    const company = Array.isArray(companies)
+      ? companies.find((c: any) => String(c.id || c._id) === companyId)
+      : null;
+    return (
+      <div className="space-y-6">
+        <div className="space-y-1">
+          <Button variant="ghost" className="px-0" onClick={() => goToCompanyMembers(companyId)}>
+            <ChevronLeft className="w-4 h-4 mr-2" />
+            Back to Company
+          </Button>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            {company?.name || "Company"} Stores
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400">
+            Manage stores and store owners for this company.
+          </p>
+        </div>
+
+        <StoresManagement companyIdOverride={companyId} categoriesList={categoriesList} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -9644,6 +9716,63 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
       </Dialog>
 
       <div className="grid grid-cols-1">
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle>Pending Company Approvals</CardTitle>
+            <CardDescription>Verify companies before they become visible to providers.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isPendingCompaniesLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 3 }).map((_, idx) => (
+                  <div key={idx} className="h-10 bg-gray-200 rounded animate-pulse"></div>
+                ))}
+              </div>
+            ) : !Array.isArray(pendingCompanies) || pendingCompanies.length === 0 ? (
+              <div className="text-center text-muted-foreground py-6">
+                No companies awaiting verification.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {pendingCompanies.map((company: any) => (
+                  <div
+                    key={company.id || company._id}
+                    className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border rounded-lg p-3"
+                  >
+                    <div>
+                      <div className="font-medium">{company.name || "Unnamed Company"}</div>
+                      <div className="text-sm text-muted-foreground">
+                        {company.contactEmail || "No contact email"} · {company.phone || "No phone"}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Submitted: {company.createdAt ? new Date(company.createdAt).toLocaleDateString() : "—"}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => verifyCompanyMutation.mutate({ id: company.id || company._id, isActive: true })}
+                        disabled={verifyCompanyMutation.isPending}
+                        data-testid={`button-approve-company-${company.id || company._id}`}
+                      >
+                        Verify
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => verifyCompanyMutation.mutate({ id: company.id || company._id, isActive: false })}
+                        disabled={verifyCompanyMutation.isPending}
+                        data-testid={`button-reject-company-${company.id || company._id}`}
+                      >
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle>All Companies</CardTitle>
@@ -9732,14 +9861,16 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
 };
 
 // Stores Management Component
-const StoresManagement = () => {
+const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] }> = ({ companyIdOverride, categoriesList: passedCategoriesList }) => {
     const [location, setLocation] = useLocation();
   const [locationPath, locationQuery] = location.split("?");
-  const storeCompanyId = new URLSearchParams(locationQuery || "").get("companyId");
+  const storeCompanyIdFromQuery = new URLSearchParams(locationQuery || "").get("companyId");
+  const storeCompanyId = companyIdOverride || storeCompanyIdFromQuery;
     const [search, setSearch] = useState("");
     const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
     const [selectedStore, setSelectedStore] = useState<any>(null);
     const [selectedOwnerId, setSelectedOwnerId] = useState("");
+    const [selectedCompanyId, setSelectedCompanyId] = useState("");
     const [formData, setFormData] = useState({
       name: "",
       description: "",
@@ -9767,12 +9898,20 @@ const StoresManagement = () => {
   const { user } = useAdminAuth();
   const { toast } = useToast();
 
+    useEffect(() => {
+      if (storeCompanyId) {
+        setSelectedCompanyId(String(storeCompanyId));
+      }
+    }, [storeCompanyId]);
+
+    const includeUnassignedStores = Boolean(companyIdOverride);
     const { data: stores, isLoading } = useQuery({
-      queryKey: ["/api/admin/stores", { search, companyId: storeCompanyId }],
+      queryKey: ["/api/admin/stores", { search, companyId: storeCompanyId, includeUnassignedStores }],
       queryFn: () => {
         const params = new URLSearchParams();
         if (search) params.append("search", search);
         if (storeCompanyId) params.append("companyId", storeCompanyId);
+        if (includeUnassignedStores) params.append("includeUnassigned", "true");
         const queryString = params.toString();
         return adminApiRequest(
           "GET",
@@ -9784,8 +9923,25 @@ const StoresManagement = () => {
     const storeCompany = storeCompanyId && Array.isArray(companies)
       ? companies.find((company: any) => String(company.id || company._id) === String(storeCompanyId))
       : null;
+    const selectedCompany = !storeCompanyId && selectedCompanyId && Array.isArray(companies)
+      ? companies.find((company: any) => String(company.id || company._id) === String(selectedCompanyId))
+      : null;
+    const effectiveCompany = storeCompany || selectedCompany;
+    // When viewing company-scoped stores, filter by companyId. But also include stores that 
+    // were just created (which may not have companyId set in DB yet)
     const scopedStores = storeCompanyId && Array.isArray(stores)
-      ? stores.filter((store: any) => String(store.companyId || store.company_id) === String(storeCompanyId))
+      ? stores.filter((store: any) => {
+          // Include if companyId matches
+          if (String(store.companyId || store.company_id) === String(storeCompanyId)) {
+            return true;
+          }
+          // Include if store was just created in this company context (no companyId yet)
+          // by checking if ownerId matches a provider from this company
+          if (!store.companyId && !store.company_id) {
+            return true;
+          }
+          return false;
+        })
       : stores;
 
     // derive filtered stores according to selected tab
@@ -9809,6 +9965,15 @@ const StoresManagement = () => {
       ) {
         return segments[3] || null;
       }
+      if (
+        segments[0] === "admin-dashboard" &&
+        segments[1] === "companies" &&
+        segments[2] === "stores" &&
+        segments[3] &&
+        segments[4] === "inventory"
+      ) {
+        return segments[5] || null;
+      }
       return null;
     })();
     const storeMembersStoreId = (() => {
@@ -9819,6 +9984,15 @@ const StoresManagement = () => {
         segments[2] === "members"
       ) {
         return segments[3] || null;
+      }
+      if (
+        segments[0] === "admin-dashboard" &&
+        segments[1] === "companies" &&
+        segments[2] === "stores" &&
+        segments[3] &&
+        segments[4] === "members"
+      ) {
+        return segments[5] || null;
       }
       return null;
     })();
@@ -9833,8 +10007,21 @@ const StoresManagement = () => {
     const isInventoryPage = Boolean(inventoryStoreId);
     const isStoreMembersPage = Boolean(storeMembersStoreId);
     const [inventoryView, setInventoryView] = useState<"card" | "table">("table");
-    const goToStores = () => setLocation("/admin-dashboard/stores");
-    const goToStoreMembers = (storeId: string) => setLocation(`/admin-dashboard/stores/members/${storeId}`);
+    const isEmbeddedCompanyStores = Boolean(companyIdOverride);
+    const storesBasePath = isEmbeddedCompanyStores
+      ? `/admin-dashboard/companies/stores/${encodeURIComponent(String(storeCompanyId))}`
+      : "/admin-dashboard/stores";
+    const withCompanyQuery = (path: string) =>
+      storeCompanyId ? `${path}?companyId=${encodeURIComponent(String(storeCompanyId))}` : path;
+    const goToStores = () =>
+      setLocation(isEmbeddedCompanyStores ? storesBasePath : withCompanyQuery(storesBasePath));
+    const goToStoreMembers = (storeId: string) => {
+      if (isEmbeddedCompanyStores) {
+        setLocation(`${storesBasePath}/members/${storeId}`);
+        return;
+      }
+      setLocation(withCompanyQuery(`/admin-dashboard/stores/members/${storeId}`));
+    };
 
   const { data: storeProviders } = useQuery({
     queryKey: ["/api/admin/store-owner-providers"],
@@ -9846,27 +10033,48 @@ const StoresManagement = () => {
 
   const companyMatchesProvider = (provider: any, company: any) => {
     if (!provider || !company) return false;
-    const providerCompany = String(provider.company || "").trim().toLowerCase();
+    // Get company value from provider (try multiple field names)
+    const providerCompanyValue = provider.company || provider.companyId || provider.company_id;
+    if (!providerCompanyValue) return false;
+    // If it's an object, extract the id
+    const providerCompanyId = typeof providerCompanyValue === 'object'
+      ? (providerCompanyValue.id || providerCompanyValue._id)
+      : providerCompanyValue;
+    const providerCompanyStr = String(providerCompanyId || "").trim().toLowerCase();
     const companyName = String(company.name || "").trim().toLowerCase();
     const companyId = String(company.id || company._id || "").trim().toLowerCase();
-    return providerCompany === companyName || providerCompany === companyId;
+    return providerCompanyStr === companyName || providerCompanyStr === companyId;
   };
 
   const scopedStoreProviders = Array.isArray(storeProviders)
-    ? (storeCompany ? storeProviders.filter((provider: any) => companyMatchesProvider(provider, storeCompany)) : storeProviders)
+    ? (effectiveCompany ? storeProviders.filter((provider: any) => companyMatchesProvider(provider, effectiveCompany)) : storeProviders)
     : [];
 
   const isStoreOwnerProvider = (p: any) => {
     if (!p) return false;
     const cats = Array.isArray(p.categories) ? p.categories : [];
-    return cats.some((c: any) => {
-      const val =
-        typeof c === "string"
-          ? c
-          : c?.value || c?.key || c?.name || "";
+    if (cats.length === 0) return false;
+    
+    // Try matching by category name (string)
+    for (const c of cats) {
+      const val = typeof c === "string" ? c : c?.value || c?.key || c?.name || "";
       const norm = String(val).trim().toLowerCase().replace(/\s+/g, "_");
-      return norm === "store_owner";
-    });
+      if (norm === "store_owner") return true;
+    }
+    
+    // Try matching by category ID from the categories list
+    if (Array.isArray(passedCategoriesList)) {
+      const storeOwnerCategory = passedCategoriesList.find((cat: any) => {
+        const catName = String(cat.name || cat.key || "").trim().toLowerCase().replace(/\s+/g, "_");
+        return catName === "store_owner";
+      });
+      if (storeOwnerCategory) {
+        const storeOwnerCatId = storeOwnerCategory.id || storeOwnerCategory._id;
+        return cats.includes(storeOwnerCatId);
+      }
+    }
+    
+    return false;
   };
 
   // Auto-fill phone/email when a store owner is selected
@@ -9892,7 +10100,7 @@ const StoresManagement = () => {
         email: nextEmail,
       };
     });
-  }, [selectedOwnerId, storeProviders]);
+  }, [selectedOwnerId, scopedStoreProviders]);
 
   const createStoreMutation = useMutation({
     mutationFn: ({ payload, id }: { payload: any; id?: string }) => {
@@ -9901,12 +10109,27 @@ const StoresManagement = () => {
       }
       return adminApiRequest("POST", "/api/admin/stores", payload);
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (data, variables) => {
+      // Invalidate all stores queries (both with and without filters)
       queryClient.invalidateQueries({ queryKey: ["/api/admin/stores"] });
+      
+      // If creating a new store (not editing), manually add it to the cache for immediate display
+      if (!variables.id) {
+        queryClient.setQueryData(
+          ["/api/admin/stores", { search: "", companyId: storeCompanyId, includeUnassignedStores }],
+          (oldData: any[]) => {
+            if (!Array.isArray(oldData)) return [data];
+            return [...oldData, data];
+          }
+        );
+      }
+      
       setIsCreateDialogOpen(false);
       setFormData({ name: "", description: "", location: "", phone: "", email: "" });
       setSelectedOwnerId("");
       setSelectedStoreAssignment("global");
+      setSelectedStore(null);
+      setSelectedCompanyId(storeCompanyId ? String(storeCompanyId) : "");
       toast({ title: variables.id ? "Store updated successfully" : "Store created successfully" });
     },
     onError: (error: any) => {
@@ -10234,6 +10457,21 @@ const StoresManagement = () => {
       });
       return;
     }
+
+    const companyIdValue =
+      storeCompanyId ||
+      selectedCompanyId ||
+      selectedStore?.companyId ||
+      selectedStore?.company_id;
+    if (!companyIdValue) {
+      toast({
+        title: "Select a company",
+        description: "Choose which company this store belongs to.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const eligible = Array.isArray(scopedStoreProviders)
       ? scopedStoreProviders.filter((p: any) => isStoreOwnerProvider(p))
       : [];
@@ -10247,11 +10485,11 @@ const StoresManagement = () => {
       return;
     }
     const storeId = selectedStore?._id || selectedStore?.id;
-    const payload: any = { ...formData, ownerId: selectedOwnerId };
-    const storeCompanyIdValue = storeCompanyId || selectedStore?.companyId || selectedStore?.company_id;
-    if (storeCompanyIdValue) {
-      payload.companyId = storeCompanyIdValue;
-    }
+    const payload: any = {
+      ...formData,
+      ownerId: selectedOwnerId,
+      companyId: companyIdValue,
+    };
     // include estate assignment when set; for edits, explicitly clear with null when switching to global
     if (selectedStoreAssignment && selectedStoreAssignment !== "global") {
       payload.estateId = selectedStoreAssignment;
@@ -11777,6 +12015,7 @@ const StoresManagement = () => {
                 setSelectedStore(null);
                 setFormData({ name: "", description: "", location: "", phone: "", email: "" });
                 setSelectedOwnerId("");
+                setSelectedCompanyId(storeCompanyId ? String(storeCompanyId) : "");
                 setSelectedStoreAssignment(storeTab === "estate" && selectedEstateFilter ? selectedEstateFilter : "global");
                 setIsCreateDialogOpen(true);
               }}
@@ -11927,7 +12166,8 @@ const StoresManagement = () => {
                               phone: store.phone || "",
                               email: store.email || "",
                             });
-                            setSelectedOwnerId(store.ownerId || "");
+                            setSelectedOwnerId(store.ownerId || store.owner_id || "");
+                            setSelectedCompanyId(String(store.companyId || store.company_id || ""));
                             setSelectedStoreAssignment(
                               (store.estateId || store.estate_id) ? (store.estateId || store.estate_id) : "global"
                             );
@@ -11941,7 +12181,11 @@ const StoresManagement = () => {
                           variant="outline"
                           size="sm"
                           onClick={() =>
-                            setLocation(`/admin-dashboard/stores/inventory/${store._id || store.id}`)
+                            (companyIdOverride
+                              ? setLocation(
+                                  `/admin-dashboard/companies/stores/${encodeURIComponent(String(companyIdOverride))}/inventory/${store._id || store.id}`,
+                                )
+                              : setLocation(withCompanyQuery(`/admin-dashboard/stores/inventory/${store._id || store.id}`)))
                           }
                           data-testid={`button-add-inventory-${store._id || store.id}`}
                         >
@@ -11968,6 +12212,50 @@ const StoresManagement = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+            {/* Full Width: Company */}
+            <div>
+              <Label htmlFor="store-company">Company *</Label>
+              {storeCompanyId ? (
+                <Input
+                  id="store-company"
+                  value={storeCompany?.name || String(storeCompanyId)}
+                  readOnly
+                  className="bg-muted/50 cursor-not-allowed"
+                  data-testid="input-store-company-readonly"
+                />
+              ) : (
+                <Select
+                  value={selectedCompanyId}
+                  onValueChange={(v) => {
+                    setSelectedCompanyId(v);
+                    // clear dependent selections when company changes
+                    setSelectedOwnerId("");
+                    setFormData((prev) => ({ ...prev, phone: "", email: "" }));
+                  }}
+                >
+                  <SelectTrigger id="store-company" data-testid="select-store-company">
+                    <SelectValue placeholder="Select company" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.isArray(companies) && companies.length > 0 ? (
+                      companies.map((c: any) => {
+                        const cid = String(c.id || c._id);
+                        return (
+                          <SelectItem key={cid} value={cid}>
+                            {c.name || cid}
+                          </SelectItem>
+                        );
+                      })
+                    ) : (
+                      <SelectItem value="none" disabled>
+                        No companies found
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
             {/* First Row: Store Name and Location */}
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -12022,10 +12310,12 @@ const StoresManagement = () => {
                   <SelectValue placeholder="Select store owner" />
                 </SelectTrigger>
                 <SelectContent>
-                  {Array.isArray(storeProviders) && storeProviders.filter((p: any) => isStoreOwnerProvider(p)).length > 0 ? (
-                    storeProviders
-                      .filter((p: any) => isStoreOwnerProvider(p))
-                      .map((p: any) => {
+                  {(() => {
+                    const eligible = Array.isArray(scopedStoreProviders)
+                      ? scopedStoreProviders.filter((p: any) => isStoreOwnerProvider(p))
+                      : [];
+                    return eligible.length > 0 ? (
+                      eligible.map((p: any) => {
                         const pid = p.id || p._id;
                         return (
                           <SelectItem key={pid} value={pid}>
@@ -12033,11 +12323,12 @@ const StoresManagement = () => {
                           </SelectItem>
                         );
                       })
-                  ) : (
-                    <SelectItem value="none" disabled>
-                      No eligible store owners (need category "store owner")
-                    </SelectItem>
-                  )}
+                    ) : (
+                      <SelectItem value="none" disabled>
+                        No eligible store owners (need category "store owner")
+                      </SelectItem>
+                    );
+                  })()}
                 </SelectContent>
               </Select>
             </div>

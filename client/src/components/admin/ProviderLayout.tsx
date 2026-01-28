@@ -17,6 +17,8 @@ import {
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Badge } from "@/components/ui/badge";
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 
 interface ProviderLayoutProps {
   children: React.ReactNode;
@@ -33,10 +35,23 @@ const navLinks = [
 export function ProviderLayout({ children, title }: ProviderLayoutProps) {
   const [location] = useLocation();
   const { user, logoutMutation } = useAuth();
+  const { data: providerCompany } = useQuery({
+    queryKey: ["/api/provider/company"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/provider/company");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: user?.role === "provider",
+    staleTime: 30_000,
+  });
 
   const handleLogout = async () => {
     await logoutMutation.mutateAsync();
   };
+
+  const hasCompany = Boolean(providerCompany && (providerCompany as any).id);
+  const companyApproved = Boolean(providerCompany?.isActive);
 
   return (
     <TooltipProvider>
@@ -100,11 +115,31 @@ export function ProviderLayout({ children, title }: ProviderLayoutProps) {
                     </span>
                   </div>
                 </div>
-                <Link href="/company-registration">
-                  <Button variant="secondary" size="sm">
-                    Register as Company
+                {!hasCompany && (
+                  <Link href="/company-registration">
+                    <Button variant="secondary" size="sm" data-testid="button-register-company">
+                      Register as Company
+                    </Button>
+                  </Link>
+                )}
+                {hasCompany && companyApproved && (
+                  <Link href="/company-dashboard">
+                    <Button variant="secondary" size="sm" data-testid="button-go-to-company">
+                      Go to Company
+                    </Button>
+                  </Link>
+                )}
+                {hasCompany && !companyApproved && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-50"
+                    disabled
+                    data-testid="button-company-awaiting"
+                  >
+                    Awaiting Review
                   </Button>
-                </Link>
+                )}
             </div>
           </header>
           <main className="grid flex-1 items-start gap-4 p-4 sm:px-6 sm:py-0 md:gap-8">
