@@ -28,6 +28,7 @@ import {
   orders,
   storeMembers,
   notifications,
+  storeEstates,
 } from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
@@ -2689,7 +2690,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       name: z.string().min(1, "Store name is required"),
       location: z.string().min(1, "Location is required"),
       description: z.string().optional().default(""),
-      ownerId: z.string().min(1, "Owner is required"),
       phone: z.string().optional().default(""),
       email: z.string().optional().default(""),
       estateId: z.string().optional(),
@@ -2730,22 +2730,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         const parsed = companyStoreSchema.parse(req.body);
-        const companyId = String(company.id || "").trim();
-        const companyName = String(company.name || "").trim();
-        const ownerMatches = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(
-            and(
-              eq(users.id, parsed.ownerId),
-              or(eq(users.company, companyId), eq(users.company, companyName)),
-            ),
-          )
-          .limit(1 as any);
-
-        if (!ownerMatches.length) {
-          return res.status(400).json({ message: "Owner must belong to your company" });
-        }
 
         const [created] = await db
           .insert(stores)
@@ -2753,7 +2737,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             name: parsed.name,
             location: parsed.location,
             description: parsed.description,
-            ownerId: parsed.ownerId,
+            ownerId: userId,
             companyId: company.id,
             phone: parsed.phone,
             email: parsed.email,
@@ -2766,7 +2750,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .insert(storeMembers)
             .values({
               storeId: created.id,
-              userId: parsed.ownerId,
+              userId,
               role: "owner",
               canManageItems: true,
               canManageOrders: true,
@@ -2782,7 +2766,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const storeMemberSchema = z.object({
       userId: z.string().min(1, "User is required"),
-      role: z.enum(["owner", "manager", "member"]).optional(),
+      role: z.enum(["manager", "member"]).optional(),
       canManageItems: z.boolean().optional(),
       canManageOrders: z.boolean().optional(),
     });
@@ -2830,14 +2814,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "User not in your company" });
         }
 
+        const role = parsed.role ?? "member";
+        const canManageItems = parsed.canManageItems ?? role === "manager";
+        const canManageOrders = parsed.canManageOrders ?? true;
+
         const [created] = await db
           .insert(storeMembers)
           .values({
             storeId,
             userId: parsed.userId,
-            role: parsed.role ?? "member",
-            canManageItems: parsed.canManageItems ?? true,
-            canManageOrders: parsed.canManageOrders ?? true,
+            role,
+            canManageItems,
+            canManageOrders,
           })
           .returning();
 
@@ -2871,6 +2859,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!store || store.companyId !== company.id) {
           return res.status(403).json({ message: "Store not in your company" });
         }
+        if (store.approvalStatus === "pending") {
+          return res.status(403).json({
+            message: "Store awaiting approval. Inventory access is disabled until approved.",
+          });
+        }
+        if (store.approvalStatus === "rejected") {
+          return res.status(403).json({
+            message: "Store was rejected. Inventory access is disabled.",
+          });
+        }
 
         const rows = await db
           .select()
@@ -2903,6 +2901,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!store || store.companyId !== company.id) {
           return res.status(403).json({ message: "Store not in your company" });
         }
+        if (store.approvalStatus === "pending") {
+          return res.status(403).json({
+            message: "Store awaiting approval. Items can be added once approved.",
+          });
+        }
+        if (store.approvalStatus === "rejected") {
+          return res.status(403).json({
+            message: "Store was rejected. Items cannot be added.",
+          });
+        }
 
         const [membership] = await db
           .select({
@@ -2923,6 +2931,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(401).json({ message: "Unauthorized" });
         }
 
+        const [storeEstate] = await db
+          .select()
+          .from(storeEstates)
+          .where(eq(storeEstates.storeId, storeId))
+          .limit(1 as any);
+        if (!storeEstate) {
+          return res.status(403).json({
+            message: "No estates allocated to this store yet.",
+          });
+        }
+
         const parsed = companyInventoryCreateSchema.parse({
           ...req.body,
           storeId,
@@ -2933,7 +2952,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .values({
             vendorId: parsed.vendorId || userId,
             storeId: parsed.storeId,
-            estateId: parsed.estateId,
+            estateId: storeEstate.estateId,
             name: parsed.name,
             description: parsed.description,
             price: parsed.price as any,
@@ -2975,6 +2994,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           if (!store || store.companyId !== company.id) {
             return res.status(403).json({ message: "Store not in your company" });
+          }
+          if (store.approvalStatus === "pending") {
+            return res.status(403).json({
+              message: "Store awaiting approval. Items cannot be removed yet.",
+            });
+          }
+          if (store.approvalStatus === "rejected") {
+            return res.status(403).json({
+              message: "Store was rejected. Items cannot be removed.",
+            });
+          }
+          if (store.approvalStatus === "pending") {
+            return res.status(403).json({
+              message: "Store awaiting approval. Items can be updated once approved.",
+            });
+          }
+          if (store.approvalStatus === "rejected") {
+            return res.status(403).json({
+              message: "Store was rejected. Items cannot be updated.",
+            });
           }
 
           const [membership] = await db
@@ -3075,22 +3114,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Public categories endpoint - allow unauthenticated access for client-side lists.
   // Be defensive: if the DB query fails, return an empty list instead of a 500.
-  app.get("/api/categories", async (req, res, next) => {
-    try {
-      const { scope } = req.query as { scope?: string };
-      let query = db.select().from(categories);
+    app.get("/api/categories", async (req, res, next) => {
+      try {
+        const { scope } = req.query as { scope?: string };
+        let query = db.select().from(categories);
       if (scope && scope !== "all" && (scope === "global" || scope === "estate")) {
         query = query.where(eq(categories.scope, scope as "global" | "estate"));
       }
 
       const rows = await query.orderBy(desc(categories.createdAt));
-      return res.json(rows);
-    } catch (error: any) {
-      // Log and return a safe fallback so the front-end can use local defaults.
-      console.error("/api/categories error:", error?.message || error);
-      return res.json([]);
-    }
-  });
+        return res.json(rows);
+      } catch (error: any) {
+        // Log and return a safe fallback so the front-end can use local defaults.
+        console.error("/api/categories error:", error?.message || error);
+        return res.json([]);
+      }
+    });
+
+    // Public item categories endpoint for inventory forms.
+    app.get("/api/item-categories", async (req, res, next) => {
+      try {
+        const rows = await db
+          .select()
+          .from(itemCategories)
+          .where(eq(itemCategories.isActive, true))
+          .orderBy(desc(itemCategories.createdAt));
+        return res.json(rows);
+      } catch (error: any) {
+        console.error("/api/item-categories error:", error?.message || error);
+        return res.json([]);
+      }
+    });
 
   // Simple Server-Sent Events endpoint for lightweight broadcasts (categories updates)
   // Clients can open an EventSource to receive category change notifications.
@@ -3707,6 +3761,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
           updatedAt: stores.updatedAt,
         });
       
+      // Automatically add store owner as a member with full permissions
+      if (created.ownerId) {
+        try {
+          await db.insert(storeMembers).values({
+            storeId: created.id,
+            userId: created.ownerId,
+            role: "owner",
+            canManageItems: true,
+            canManageOrders: true,
+            isActive: true
+          }).onConflictDoNothing();
+        } catch (error) {
+          // Log error but don't fail the response
+          console.error("Failed to add store owner to members:", error);
+        }
+      }
+      
       res.status(201).json(created);
     } catch (error) {
       next(error);
@@ -3721,11 +3792,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { id } = req.params;
       const updates = StoreSchema.partial().parse(req.body);
+      const approvalPatch = z
+        .object({ isApproved: z.boolean().optional() })
+        .partial()
+        .safeParse(req.body);
       
       const updateData: any = {
         ...updates,
         updatedAt: new Date(),
       };
+      if (approvalPatch.success && approvalPatch.data.isApproved !== undefined) {
+        const adminId = req.auth?.userId ?? req.user?.id;
+        if (approvalPatch.data.isApproved) {
+          updateData.approvalStatus = "approved";
+          updateData.approvedBy = adminId;
+          updateData.approvedAt = new Date();
+        } else {
+          updateData.approvalStatus = "rejected";
+          updateData.approvedBy = adminId;
+          updateData.approvedAt = new Date();
+        }
+      }
 
       const [updated] = await db
         .update(stores)
@@ -3826,6 +3913,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (existing.length > 0) {
         return res.status(409).json({ message: "Member already assigned to this store" });
       }
+      if ((parsed.role || "").toLowerCase() === "owner") {
+        const ownerExists = await db
+          .select({ id: storeMembers.id })
+          .from(storeMembers)
+          .where(and(eq(storeMembers.storeId, storeId), eq(storeMembers.role, "owner")))
+          .limit(1);
+        if (ownerExists.length > 0) {
+          return res.status(409).json({ message: "Store already has an owner" });
+        }
+      }
 
       const [created] = await db
         .insert(storeMembers)
@@ -3853,6 +3950,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { storeId, memberId } = req.params;
       const updates = StoreMemberSchema.partial().parse(req.body);
+      if ((updates.role || "").toLowerCase() === "owner") {
+        const ownerExists = await db
+          .select({ id: storeMembers.id })
+          .from(storeMembers)
+          .where(
+            and(
+              eq(storeMembers.storeId, storeId),
+              eq(storeMembers.role, "owner"),
+              sql`${storeMembers.id} <> ${memberId}`,
+            ),
+          )
+          .limit(1);
+        if (ownerExists.length > 0) {
+          return res.status(409).json({ message: "Store already has an owner" });
+        }
+      }
 
       const [updated] = await db
         .update(storeMembers)
