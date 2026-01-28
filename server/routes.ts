@@ -86,6 +86,48 @@ const isAdminOrSuper = (req: Express["request"]) => {
   return sessionOk || jwtOk;
 };
 
+const resolveCompanyForUser = async (userId?: string | null) => {
+  if (!userId) return null;
+  const user = await storage.getUser(userId).catch(() => undefined);
+  const companyValue = String(user?.company || "").trim();
+
+  if (companyValue) {
+    const [byId] = await db
+      .select()
+      .from(companies)
+      .where(eq(companies.id, companyValue))
+      .limit(1 as any);
+    if (byId) return byId;
+
+    const [byName] = await db
+      .select()
+      .from(companies)
+      .where(eq(companies.name, companyValue))
+      .limit(1 as any);
+    if (byName) return byName;
+  }
+
+  const [byOwner] = await db
+    .select()
+    .from(companies)
+    .where(eq(companies.providerId, userId))
+    .limit(1 as any);
+  if (byOwner) return byOwner;
+
+  return null;
+};
+
+const resolveCompanyAccess = async (req: Express["request"]) => {
+  const userId = req.auth?.userId ?? req.user?.id;
+  if (!userId) {
+    return { userId: null, company: null, isOwner: false };
+  }
+
+  const company = await resolveCompanyForUser(userId);
+  const isOwner = Boolean(company && company.providerId === userId);
+  return { userId, company, isOwner };
+};
+
 // Accept flexible inputs, normalize output types
 const CreateServiceRequest = insertServiceRequestSchema.extend({
   preferredTime: z
@@ -2069,8 +2111,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/providers", async (req, res, next) => {
     try {
-      const isAdmin = req.isAuthenticated() && (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
-      if (!isAdmin) {
+      const userId = req.auth?.userId ?? req.user?.id;
+      const isAdmin = isAdminOrSuper(req);
+      const companyForUser = isAdmin ? null : await resolveCompanyForUser(userId);
+      if (!isAdmin && !companyForUser) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -2086,6 +2130,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const hashedPassword = await hashPassword(parsed.password);
       const combinedName = (parsed.name || `${parsed.firstName} ${parsed.lastName}`).trim();
+      const normalizedCompany = parsed.company || (companyForUser?.id ? String(companyForUser.id) : "");
+      if (!isAdmin && companyForUser) {
+        const companyId = String(companyForUser.id || "");
+        const companyName = String(companyForUser.name || "");
+        if (normalizedCompany !== companyId && normalizedCompany !== companyName) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+      }
+
       const provider = await storage.createUser({
         firstName: parsed.firstName,
         lastName: parsed.lastName,
@@ -2094,10 +2147,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         phone: parsed.phone || "",
         password: hashedPassword,
         role: "provider",
-        company: parsed.company,
+        company: normalizedCompany,
         categories: parsed.categories,
         experience: parsed.experience,
-        isApproved: parsed.isApproved ?? true,
+        isApproved: isAdmin ? (parsed.isApproved ?? true) : false,
         metadata: parsed.description ? { description: parsed.description } : undefined,
       } as any);
 
@@ -2409,17 +2462,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Business overview data for company dashboard
-  app.get("/api/business/overview", async (req, res, next) => {
-    try {
-      if (!isAdminOrSuper(req)) {
-        return res.status(401).json({ message: "Unauthorized" });
+    app.get("/api/business/overview", requireAuth, async (req, res, next) => {
+      try {
+        const userId = req.auth?.userId ?? req.user?.id;
+        const isAdmin = isAdminOrSuper(req);
+      const queryCompanyValue = (req.query.company || req.query.business || "").toString().trim();
+
+      const companyForUser = await resolveCompanyForUser(userId);
+      let companyScope = companyForUser;
+
+      if (isAdmin && queryCompanyValue) {
+        const [byId] = await db
+          .select()
+          .from(companies)
+          .where(eq(companies.id, queryCompanyValue))
+          .limit(1 as any);
+        const [byName] = !byId
+          ? await db
+              .select()
+              .from(companies)
+              .where(eq(companies.name, queryCompanyValue))
+              .limit(1 as any)
+          : [null];
+        companyScope = byId || byName || null;
       }
 
-      const businessName = (req.query.company || req.query.business || "").toString();
+      const isOwner = Boolean(companyScope && companyScope.providerId === userId);
+      const isTeamMember = Boolean(
+        companyScope &&
+          companyForUser &&
+          String(companyForUser.id || "").trim() === String(companyScope.id || "").trim(),
+      );
+
+      if (!isAdmin && (!companyScope || (!isOwner && !isTeamMember))) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      if (!isAdmin && companyScope && companyScope.isActive === false) {
+        return res.status(403).json({ message: "Company pending approval" });
+      }
+
+      const companyId = companyScope ? String(companyScope.id || "").trim() : "";
+      const companyName = companyScope ? String(companyScope.name || "").trim() : "";
+      const companyMatchers: any[] = [];
+      if (companyId) companyMatchers.push(eq(users.company, companyId));
+      if (companyName) companyMatchers.push(eq(users.company, companyName));
+
       const providerConditions = [
         eq(users.role, "provider"),
-        ...(businessName ? [eq(users.company, businessName)] : []),
+        ...(companyMatchers.length > 0 ? [or(...companyMatchers)] : []),
       ];
+
+      const businessName = companyName || companyId || queryCompanyValue;
 
       const [
         [providerCount],
@@ -2435,7 +2528,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(
             and(
               eq(serviceRequests.status, "pending"),
-              ...(businessName ? [eq(users.company, businessName)] : []),
+              ...(companyMatchers.length > 0 ? [or(...companyMatchers)] : []),
             ),
           ),
         db
@@ -2544,10 +2637,441 @@ export async function registerRoutes(app: Express): Promise<Server> {
         recentActivity: normalizedActivities,
         latestTransactions: normalizedLatestTransactions,
       });
-    } catch (error) {
-      next(error);
-    }
-  });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    // Company-facing endpoints (owner + staff access)
+    app.get("/api/company/staff", requireAuth, async (req, res, next) => {
+      try {
+        const { company } = await resolveCompanyAccess(req);
+        if (!company) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (company.isActive === false) {
+          return res.status(403).json({ message: "Company pending approval" });
+        }
+
+        const companyId = String(company.id || "").trim();
+        const companyName = String(company.name || "").trim();
+        const matchers = [];
+        if (companyId) matchers.push(eq(users.company, companyId));
+        if (companyName) matchers.push(eq(users.company, companyName));
+
+        const rows = await db
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            phone: users.phone,
+            role: users.role,
+            isApproved: users.isApproved,
+            isActive: users.isActive,
+            company: users.company,
+          })
+          .from(users)
+          .where(
+            and(
+              eq(users.role, "provider" as any),
+              ...(matchers.length ? [or(...matchers)] : []),
+            ),
+          )
+          .orderBy(asc(users.name));
+
+        res.json(rows);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    const companyStoreSchema = z.object({
+      name: z.string().min(1, "Store name is required"),
+      location: z.string().min(1, "Location is required"),
+      description: z.string().optional().default(""),
+      ownerId: z.string().min(1, "Owner is required"),
+      phone: z.string().optional().default(""),
+      email: z.string().optional().default(""),
+      estateId: z.string().optional(),
+    });
+
+    app.get("/api/company/stores", requireAuth, async (req, res, next) => {
+      try {
+        const { company } = await resolveCompanyAccess(req);
+        if (!company) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (company.isActive === false) {
+          return res.status(403).json({ message: "Company pending approval" });
+        }
+
+        const rows = await db
+          .select()
+          .from(stores)
+          .where(eq(stores.companyId, company.id))
+          .orderBy(desc(stores.createdAt));
+        res.json(rows);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/company/stores", requireAuth, async (req, res, next) => {
+      try {
+        const { userId, company, isOwner } = await resolveCompanyAccess(req);
+        if (!company || !userId) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (!isOwner) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+        if (company.isActive === false) {
+          return res.status(403).json({ message: "Company pending approval" });
+        }
+
+        const parsed = companyStoreSchema.parse(req.body);
+        const companyId = String(company.id || "").trim();
+        const companyName = String(company.name || "").trim();
+        const ownerMatches = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            and(
+              eq(users.id, parsed.ownerId),
+              or(eq(users.company, companyId), eq(users.company, companyName)),
+            ),
+          )
+          .limit(1 as any);
+
+        if (!ownerMatches.length) {
+          return res.status(400).json({ message: "Owner must belong to your company" });
+        }
+
+        const [created] = await db
+          .insert(stores)
+          .values({
+            name: parsed.name,
+            location: parsed.location,
+            description: parsed.description,
+            ownerId: parsed.ownerId,
+            companyId: company.id,
+            phone: parsed.phone,
+            email: parsed.email,
+            estateId: parsed.estateId,
+          })
+          .returning();
+
+        if (created?.id) {
+          await db
+            .insert(storeMembers)
+            .values({
+              storeId: created.id,
+              userId: parsed.ownerId,
+              role: "owner",
+              canManageItems: true,
+              canManageOrders: true,
+            })
+            .catch(() => undefined);
+        }
+
+        res.status(201).json(created);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    const storeMemberSchema = z.object({
+      userId: z.string().min(1, "User is required"),
+      role: z.enum(["owner", "manager", "member"]).optional(),
+      canManageItems: z.boolean().optional(),
+      canManageOrders: z.boolean().optional(),
+    });
+
+    app.post("/api/company/stores/:storeId/members", requireAuth, async (req, res, next) => {
+      try {
+        const { userId, company, isOwner } = await resolveCompanyAccess(req);
+        if (!company || !userId) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (!isOwner) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+        if (company.isActive === false) {
+          return res.status(403).json({ message: "Company pending approval" });
+        }
+
+        const { storeId } = req.params;
+        const parsed = storeMemberSchema.parse(req.body);
+
+        const [store] = await db
+          .select()
+          .from(stores)
+          .where(eq(stores.id, storeId))
+          .limit(1 as any);
+
+        if (!store || store.companyId !== company.id) {
+          return res.status(403).json({ message: "Store not in your company" });
+        }
+
+        const companyId = String(company.id || "").trim();
+        const companyName = String(company.name || "").trim();
+        const [memberUser] = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            and(
+              eq(users.id, parsed.userId),
+              or(eq(users.company, companyId), eq(users.company, companyName)),
+            ),
+          )
+          .limit(1 as any);
+
+        if (!memberUser) {
+          return res.status(400).json({ message: "User not in your company" });
+        }
+
+        const [created] = await db
+          .insert(storeMembers)
+          .values({
+            storeId,
+            userId: parsed.userId,
+            role: parsed.role ?? "member",
+            canManageItems: parsed.canManageItems ?? true,
+            canManageOrders: parsed.canManageOrders ?? true,
+          })
+          .returning();
+
+        res.status(201).json(created);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    const companyInventoryCreateSchema = createMarketplaceItemSchema.extend({
+      storeId: z.string().min(1, "Store ID is required"),
+    });
+
+    app.get("/api/company/stores/:storeId/inventory", requireAuth, async (req, res, next) => {
+      try {
+        const { userId, company } = await resolveCompanyAccess(req);
+        if (!company || !userId) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (company.isActive === false) {
+          return res.status(403).json({ message: "Company pending approval" });
+        }
+
+        const { storeId } = req.params;
+        const [store] = await db
+          .select()
+          .from(stores)
+          .where(eq(stores.id, storeId))
+          .limit(1 as any);
+
+        if (!store || store.companyId !== company.id) {
+          return res.status(403).json({ message: "Store not in your company" });
+        }
+
+        const rows = await db
+          .select()
+          .from(marketplaceItems)
+          .where(eq(marketplaceItems.storeId, storeId))
+          .orderBy(desc(marketplaceItems.createdAt));
+        res.json(rows);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/company/stores/:storeId/inventory", requireAuth, async (req, res, next) => {
+      try {
+        const { userId, company, isOwner } = await resolveCompanyAccess(req);
+        if (!company || !userId) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (company.isActive === false) {
+          return res.status(403).json({ message: "Company pending approval" });
+        }
+
+        const { storeId } = req.params;
+        const [store] = await db
+          .select()
+          .from(stores)
+          .where(eq(stores.id, storeId))
+          .limit(1 as any);
+
+        if (!store || store.companyId !== company.id) {
+          return res.status(403).json({ message: "Store not in your company" });
+        }
+
+        const [membership] = await db
+          .select({
+            canManageItems: storeMembers.canManageItems,
+            isActive: storeMembers.isActive,
+          })
+          .from(storeMembers)
+          .where(
+            and(
+              eq(storeMembers.storeId, storeId),
+              eq(storeMembers.userId, userId),
+              eq(storeMembers.isActive, true),
+            ),
+          )
+          .limit(1 as any);
+
+        if (!isOwner && !membership?.canManageItems) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const parsed = companyInventoryCreateSchema.parse({
+          ...req.body,
+          storeId,
+        });
+
+        const [created] = await db
+          .insert(marketplaceItems)
+          .values({
+            vendorId: parsed.vendorId || userId,
+            storeId: parsed.storeId,
+            estateId: parsed.estateId,
+            name: parsed.name,
+            description: parsed.description,
+            price: parsed.price as any,
+            currency: parsed.currency,
+            category: parsed.category,
+            subcategory: parsed.subcategory,
+            stock: parsed.stock as any,
+            images: parsed.images,
+            unitOfMeasure: parsed.unitOfMeasure,
+            isActive: parsed.isActive ?? true,
+          })
+          .returning();
+
+        res.status(201).json(created);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.patch(
+      "/api/company/stores/:storeId/inventory/:itemId",
+      requireAuth,
+      async (req, res, next) => {
+        try {
+          const { userId, company, isOwner } = await resolveCompanyAccess(req);
+          if (!company || !userId) {
+            return res.status(403).json({ message: "No company found for user" });
+          }
+          if (company.isActive === false) {
+            return res.status(403).json({ message: "Company pending approval" });
+          }
+
+          const { storeId, itemId } = req.params;
+          const [store] = await db
+            .select()
+            .from(stores)
+            .where(eq(stores.id, storeId))
+            .limit(1 as any);
+
+          if (!store || store.companyId !== company.id) {
+            return res.status(403).json({ message: "Store not in your company" });
+          }
+
+          const [membership] = await db
+            .select({
+              canManageItems: storeMembers.canManageItems,
+              isActive: storeMembers.isActive,
+            })
+            .from(storeMembers)
+            .where(
+              and(
+                eq(storeMembers.storeId, storeId),
+                eq(storeMembers.userId, userId),
+                eq(storeMembers.isActive, true),
+              ),
+            )
+            .limit(1 as any);
+
+          if (!isOwner && !membership?.canManageItems) {
+            return res.status(401).json({ message: "Unauthorized" });
+          }
+
+          const updates = updateMarketplaceItemSchema.partial().parse(req.body);
+          const [updated] = await db
+            .update(marketplaceItems)
+            .set({ ...updates, updatedAt: new Date() })
+            .where(eq(marketplaceItems.id, itemId))
+            .returning();
+
+          if (!updated) {
+            return res.status(404).json({ message: "Marketplace item not found" });
+          }
+
+          res.json(updated);
+        } catch (error) {
+          next(error);
+        }
+      },
+    );
+
+    app.delete(
+      "/api/company/stores/:storeId/inventory/:itemId",
+      requireAuth,
+      async (req, res, next) => {
+        try {
+          const { userId, company, isOwner } = await resolveCompanyAccess(req);
+          if (!company || !userId) {
+            return res.status(403).json({ message: "No company found for user" });
+          }
+          if (company.isActive === false) {
+            return res.status(403).json({ message: "Company pending approval" });
+          }
+
+          const { storeId, itemId } = req.params;
+          const [store] = await db
+            .select()
+            .from(stores)
+            .where(eq(stores.id, storeId))
+            .limit(1 as any);
+
+          if (!store || store.companyId !== company.id) {
+            return res.status(403).json({ message: "Store not in your company" });
+          }
+
+          const [membership] = await db
+            .select({
+              canManageItems: storeMembers.canManageItems,
+              isActive: storeMembers.isActive,
+            })
+            .from(storeMembers)
+            .where(
+              and(
+                eq(storeMembers.storeId, storeId),
+                eq(storeMembers.userId, userId),
+                eq(storeMembers.isActive, true),
+              ),
+            )
+            .limit(1 as any);
+
+          if (!isOwner && !membership?.canManageItems) {
+            return res.status(401).json({ message: "Unauthorized" });
+          }
+
+          const deleted = await db
+            .delete(marketplaceItems)
+            .where(eq(marketplaceItems.id, itemId))
+            .returning();
+
+          if (!deleted || deleted.length === 0) {
+            return res.status(404).json({ message: "Marketplace item not found" });
+          }
+
+          res.json({ success: true, item: deleted[0] });
+        } catch (error) {
+          next(error);
+        }
+      },
+    );
 
   // Public categories endpoint - allow unauthenticated access for client-side lists.
   // Be defensive: if the DB query fails, return an empty list instead of a 500.
@@ -2613,10 +3137,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const isPublic =
         String(req.query.public || "") === "true" ||
         String(req.query.public || "") === "1";
-      const isAuthenticated = req.isAuthenticated();
+      const isAdmin = isAdminOrSuper(req);
 
       let query = db.select().from(companies);
-      if (!isAuthenticated || isPublic) {
+      if (!isAdmin || isPublic) {
         query = query.where(eq(companies.isActive, true));
       }
 
@@ -3112,7 +3636,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const { search, companyId } = req.query;
+      const { search, companyId, includeUnassigned } = req.query;
       let query = db.select().from(stores);
 
       if (typeof search === "string" && search.trim().length > 0) {
@@ -3127,7 +3651,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
       }
 
-      if (typeof companyId === "string" && companyId.trim().length > 0) {
+      const companyFilter = typeof companyId === "string" && companyId.trim().length > 0;
+      const allowUnassigned = String(includeUnassigned || "").toLowerCase() === "true";
+      if (companyFilter && !allowUnassigned) {
         query = query.where(eq(stores.companyId, companyId.trim()));
       }
 
@@ -3145,21 +3671,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const parsed = StoreSchema.parse(req.body);
+      const insertData: any = {
+        name: parsed.name,
+        description: parsed.description,
+        location: parsed.location,
+        phone: parsed.phone,
+        email: parsed.email,
+        ownerId: parsed.ownerId,
+        estateId: parsed.estateId,
+        companyId: parsed.companyId,
+        isActive: parsed.isActive ?? true,
+      };
+      
       const [created] = await db
         .insert(stores)
-        .values({
-          name: parsed.name,
-          description: parsed.description,
-          location: parsed.location,
-          phone: parsed.phone,
-          email: parsed.email,
-          ownerId: parsed.ownerId,
-          estateId: parsed.estateId,
-          companyId: parsed.companyId,
-          isActive: parsed.isActive ?? true,
-        })
-        .returning();
-
+        .values(insertData)
+        .returning({
+          id: stores.id,
+          estateId: stores.estateId,
+          ownerId: stores.ownerId,
+          companyId: stores.companyId,
+          name: stores.name,
+          description: stores.description,
+          location: stores.location,
+          latitude: stores.latitude,
+          longitude: stores.longitude,
+          phone: stores.phone,
+          email: stores.email,
+          logo: stores.logo,
+          approvalStatus: stores.approvalStatus,
+          approvedBy: stores.approvedBy,
+          approvedAt: stores.approvedAt,
+          isActive: stores.isActive,
+          createdAt: stores.createdAt,
+          updatedAt: stores.updatedAt,
+        });
+      
       res.status(201).json(created);
     } catch (error) {
       next(error);
@@ -3174,15 +3721,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { id } = req.params;
       const updates = StoreSchema.partial().parse(req.body);
+      
+      const updateData: any = {
+        ...updates,
+        updatedAt: new Date(),
+      };
 
       const [updated] = await db
         .update(stores)
-        .set({
-          ...updates,
-          updatedAt: new Date(),
-        })
+        .set(updateData)
         .where(eq(stores.id, id))
-        .returning();
+        .returning({
+          id: stores.id,
+          estateId: stores.estateId,
+          ownerId: stores.ownerId,
+          companyId: stores.companyId,
+          name: stores.name,
+          description: stores.description,
+          location: stores.location,
+          latitude: stores.latitude,
+          longitude: stores.longitude,
+          phone: stores.phone,
+          email: stores.email,
+          logo: stores.logo,
+          approvalStatus: stores.approvalStatus,
+          approvedBy: stores.approvedBy,
+          approvedAt: stores.approvedAt,
+          isActive: stores.isActive,
+          createdAt: stores.createdAt,
+          updatedAt: stores.updatedAt,
+        });
 
       if (!updated) {
         return res.status(404).json({ message: "Store not found" });
@@ -3438,10 +4006,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
-      console.log("Fetching companies...");
-      const companies = await storage.getCompanies();
-      console.log("Companies fetched successfully:", companies.length);
-      res.json(companies);
+      const pendingOnly =
+        String(req.query.pending || "") === "true" ||
+        String(req.query.pending || "") === "1";
+      const query = db
+        .select()
+        .from(companies)
+        .where(pendingOnly ? eq(companies.isActive, false) : undefined)
+        .orderBy(desc(companies.createdAt));
+      const rows = await query;
+      res.json(rows);
     } catch (error) {
       console.error("Error in GET /api/admin/companies:", error);
       console.error("Error message:", error instanceof Error ? error.message : String(error));
@@ -3506,7 +4080,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         description,
         contactEmail,
         phone,
-        isActive: isActive !== false,
+        isActive: isActive === true,
         businessDetails: businessDetailsObj,
         bankDetails: bankDetailsObj,
         details: {}, // Ensure details is initialized
@@ -3578,6 +4152,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.patch("/api/admin/companies/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const payload = z
+        .object({
+          isActive: z.boolean(),
+        })
+        .parse(req.body || {});
+
+      const [updated] = await db
+        .update(companies)
+        .set({ isActive: payload.isActive, updatedAt: new Date() })
+        .where(eq(companies.id, id))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+
+      if (updated.providerId && payload.isActive === true) {
+        const notification = await storage.createNotification({
+          userId: updated.providerId,
+          title: "Company Approved",
+          message: `Your company "${updated.name}" has been verified and is now visible on the platform.`,
+          type: "info",
+          metadata: { kind: "company_approved", companyId: updated.id },
+        });
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        io?.to(`user-${updated.providerId}`).emit("notification:new", notification);
+      }
+
+      await storage.createAuditLog({
+        actorId: req.user?.id ?? "system",
+        action: payload.isActive ? "approve_company" : "reject_company",
+        target: "company",
+        targetId: updated.id,
+        meta: {
+          companyName: updated.name,
+          providerId: updated.providerId,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent") ?? "",
+      });
+
+      res.json(updated);
+    } catch (error) {
+      if ((error as any)?.issues) {
+        return res.status(400).json({
+          message: "Validation error",
+          details: (error as any).issues,
+        });
+      }
+      next(error);
+    }
+  });
+
   // GET single company with structured fields
   app.get("/api/admin/companies/:id", async (req, res, next) => {
     try {
@@ -3631,22 +4265,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const passwordToUse = parsed.password?.trim() || randomBytes(8).toString("hex");
       const hashedPassword = await hashPassword(passwordToUse);
 
-      const combinedName = (parsed.name || `${parsed.firstName} ${parsed.lastName}`).trim();
-      const user = await storage.createUser({
-        firstName: parsed.firstName,
-        lastName: parsed.lastName,
+        const combinedName = (parsed.name || `${parsed.firstName} ${parsed.lastName}`).trim();
+        const wantsNewCompany =
+          parsed.companyMode === "new" && typeof parsed.newCompanyName === "string" && parsed.newCompanyName.trim();
+        let resolvedCompanyId = (parsed.companyId || parsed.company || "").trim();
+
+        const user = await storage.createUser({
+          firstName: parsed.firstName,
+          lastName: parsed.lastName,
+          name: combinedName,
+          email: parsed.email,
+          phone: parsed.phone || "",
+          password: hashedPassword,
+          role: "provider",
+          company: wantsNewCompany ? "" : resolvedCompanyId,
+          categories: parsed.categories,
+          experience: parsed.experience,
+          isApproved: false,
+          metadata: parsed.description ? { description: parsed.description } : undefined,
+        } as any);
+
+        if (wantsNewCompany) {
+          const createdCompany = await storage.createCompany({
+            name: parsed.newCompanyName!.trim(),
+            description: parsed.newCompanyDescription?.trim(),
+            contactEmail: parsed.email,
+            phone: parsed.phone || "",
+            providerId: user.id,
+            submittedAt: new Date(),
+            isActive: false,
+            details: {},
+          } as any);
+          resolvedCompanyId = createdCompany.id;
+        }
+        if (resolvedCompanyId) {
+          await storage.updateUser(user.id, { company: resolvedCompanyId } as any);
+        }
+      const created = await storage.createProviderRequest({
+        ...parsed,
         name: combinedName,
-        email: parsed.email,
-        phone: parsed.phone || "",
-        password: hashedPassword,
-        role: "provider",
-        company: parsed.company,
-        categories: parsed.categories,
-        experience: parsed.experience,
-        isApproved: false,
-        metadata: parsed.description ? { description: parsed.description } : undefined,
-      } as any);
-      const created = await storage.createProviderRequest({ ...parsed, name: combinedName, providerId: user.id });
+        providerId: user.id,
+        company: resolvedCompanyId || parsed.company,
+      });
       await storage.createAuditLog({
         actorId: user.id,
         action: "create_provider_request",

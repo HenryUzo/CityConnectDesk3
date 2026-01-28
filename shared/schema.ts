@@ -433,7 +433,7 @@ export const companies = pgTable("companies", {
   bankDetails: jsonb("bank_details"),
   locationDetails: jsonb("location_details"),
   submittedAt: timestamp("submitted_at"),
-  isActive: boolean("is_active").notNull().default(true),
+  isActive: boolean("is_active").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

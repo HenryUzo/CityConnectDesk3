@@ -13,6 +13,9 @@ import AuthPage from "@/pages/auth-page";
 import WaitingRoom from "@/pages/waiting-room";
 import NotificationsPage from "@/pages/notifications";
 import ProviderDashboard from "@/pages/provider-dashboard";
+import ProviderJobs from "@/pages/provider-jobs";
+import ProviderStores from "@/pages/provider-stores";
+import ProviderMarketplace from "@/pages/provider-marketplace";
 import ProviderCompanyRegistration from "@/pages/provider-company-registration";
 import CompanyDashboard from "@/pages/company-dashboard";
 import ProviderStoreItems from "@/pages/provider-store-items";
@@ -52,6 +55,9 @@ function Router() {
       <Route path="/company-dashboard" component={CompanyDashboard} />
       <Route path="/company-dashboard/:rest*" component={CompanyDashboard} />
       <ProtectedRoute path="/provider" component={ProviderDashboard} />
+      <ProtectedRoute path="/provider/jobs" component={ProviderJobs} />
+      <ProtectedRoute path="/provider-store-items" component={ProviderStores} />
+      <ProtectedRoute path="/provider/marketplace" component={ProviderMarketplace} />
       <ProtectedRoute path="/provider/stores/:storeId/items" component={ProviderStoreItems} />
       <ProtectedRoute path="/admin" component={AdminDashboard} />
       <ProtectedRoute path="/admin/ai/conversations" component={AdminAiConversationsPage} />
@@ -74,6 +80,21 @@ function Router() {
         </AdminAuthProvider>
       </Route>
       <Route path="/admin-dashboard/companies/members/:companyId">
+        <AdminAuthProvider>
+          <AdminSuperDashboard />
+        </AdminAuthProvider>
+      </Route>
+      <Route path="/admin-dashboard/companies/stores/:companyId/inventory/:storeId">
+        <AdminAuthProvider>
+          <AdminSuperDashboard />
+        </AdminAuthProvider>
+      </Route>
+      <Route path="/admin-dashboard/companies/stores/:companyId/members/:storeId">
+        <AdminAuthProvider>
+          <AdminSuperDashboard />
+        </AdminAuthProvider>
+      </Route>
+      <Route path="/admin-dashboard/companies/stores/:companyId">
         <AdminAuthProvider>
           <AdminSuperDashboard />
         </AdminAuthProvider>

@@ -46,9 +46,25 @@ export function setupJWTAuth(app: Express) {
         phone: z.string().optional(),
         inviteCode: z.string().optional(),
         estateId: z.string().optional(),
+        role: z.enum(["resident", "provider"]).optional(),
+        companyId: z.string().optional(),
+        newCompanyName: z.string().optional(),
+        newCompanyDescription: z.string().optional(),
       });
 
-      const { username, password, name, email, phone, inviteCode, estateId } = schema.parse(req.body);
+      const {
+        username,
+        password,
+        name,
+        email,
+        phone,
+        inviteCode,
+        estateId,
+        role,
+        companyId,
+        newCompanyName,
+        newCompanyDescription,
+      } = schema.parse(req.body);
 
       const trimmedInvite = inviteCode?.trim() || "";
       const trimmedEstateId = estateId?.trim() || "";
@@ -98,15 +114,39 @@ export function setupJWTAuth(app: Express) {
         return res.status(400).json({ message: "Username already exists" });
       }
 
+      const normalizedRole = role === "provider" ? "provider" : "resident";
       const user = await storage.createUser({
         name: name ?? email ?? username,
         email: email,
         phone: phone ?? "",
         password: await hashPassword(password),
-        role: "resident",
+        role: normalizedRole,
         isActive: true,
-        isApproved: true,
+        isApproved: normalizedRole !== "provider",
       } as any);
+
+      if (normalizedRole === "provider") {
+        if (newCompanyName && newCompanyName.trim()) {
+          const createdCompany = await db
+            .insert(companies)
+            .values({
+              name: newCompanyName.trim(),
+              description: newCompanyDescription?.trim(),
+              contactEmail: email,
+              phone: phone ?? undefined,
+              providerId: user.id,
+              submittedAt: new Date(),
+              isActive: false,
+            })
+            .returning()
+            .then((rows) => rows[0]);
+          if (createdCompany) {
+            await storage.updateUser(user.id, { company: createdCompany.id } as any);
+          }
+        } else if (companyId && companyId.trim()) {
+          await storage.updateUser(user.id, { company: companyId.trim() } as any);
+        }
+      }
 
       if (resolvedEstateId) {
         await db.insert(memberships).values({

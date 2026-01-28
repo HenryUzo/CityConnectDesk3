@@ -273,6 +273,23 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  private async ensureCompanyId(value: unknown): Promise<string | undefined> {
+    if (value === undefined) return undefined;
+    const normalized = String(value ?? "").trim();
+    if (!normalized) return "";
+    const [company] = await db
+      .select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.id, normalized))
+      .limit(1);
+    if (!company) {
+      const error = new Error("company must be a valid company id");
+      (error as any).status = 400;
+      throw error;
+    }
+    return normalized;
+  }
+
   private async mapUser(user: PrismaUser | null): Promise<User | undefined> {
     if (!user) return undefined;
     const mapped = mapPrismaUser(user);
@@ -332,6 +349,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
+    if (insertUser.company !== undefined) {
+      insertUser.company = await this.ensureCompanyId(insertUser.company);
+    }
     const [user] = await db
       .insert(users)
       .values(insertUser)
@@ -388,6 +408,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    if (updates.company !== undefined) {
+      updates.company = await this.ensureCompanyId(updates.company);
+    }
     const [user] = await db
       .update(users)
       .set({ ...updates, updatedAt: new Date() })

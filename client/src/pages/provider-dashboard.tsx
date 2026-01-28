@@ -80,26 +80,41 @@ export default function ProviderDashboard() {
     estateId: "",
   });
 
+  // Show loading while user info loads
+  if (!user) {
+    return (
+      <ProviderLayout title="Loading...">
+        <div className="flex items-center justify-center py-20">
+          <p className="text-gray-500">Loading your profile...</p>
+        </div>
+      </ProviderLayout>
+    );
+  }
+
   const { data: availableRequests = [] } = useQuery<ServiceRequest[]>({
     queryKey: ["/api/service-requests", { status: "available" }],
-    queryFn: () =>
-      apiRequest("GET", "/api/service-requests?status=available").then((res) =>
-        res.json()
-      ),
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/service-requests?status=available");
+      return res.json() as Promise<ServiceRequest[]>;
+    },
   });
 
   const { data: myRequests = [] } = useQuery<ServiceRequest[]>({
     queryKey: ["/api/service-requests"],
-    queryFn: () =>
-      apiRequest("GET", "/api/service-requests").then((res) => res.json()),
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/service-requests");
+      return res.json() as Promise<ServiceRequest[]>;
+    },
   });
 
   const { data: myStores = [], isLoading: isLoadingStores } = useQuery<
     ProviderStore[]
   >({
     queryKey: ["/api/provider/stores"],
-    queryFn: () =>
-      apiRequest("GET", "/api/provider/stores").then((res) => res.json()),
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/provider/stores");
+      return res.json() as Promise<ProviderStore[]>;
+    },
   });
 
   const acceptJobMutation = useMutation<Response, Error, string>({
@@ -234,12 +249,16 @@ export default function ProviderDashboard() {
       <div className="space-y-8">
         {/* Header */}
         <div className="mb-8">
-          <p className="text-muted-foreground">
-            {user?.serviceCategory
-              ?.replace("_", " ")
-              .replace(/\b\w/g, (l: string) => l.toUpperCase())}{" "}
-            •{user?.isApproved ? " Approved Provider" : " Pending Approval"}
-          </p>
+          {user?.serviceCategory ? (
+            <p className="text-muted-foreground">
+              {user.serviceCategory
+                .replace("_", " ")
+                .replace(/\b\w/g, (l: string) => l.toUpperCase())}{" "}
+              •{user.isApproved ? " Approved Provider" : " Pending Approval"}
+            </p>
+          ) : (
+            <p className="text-muted-foreground">Welcome to your dashboard</p>
+          )}
         </div>
         {/* Stats Cards */}
         <div className="grid md:grid-cols-4 gap-6 mb-8">

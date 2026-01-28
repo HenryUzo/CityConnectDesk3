@@ -4,6 +4,7 @@ import {
   stores, 
   storeMembers, 
   marketplaceItems, 
+  companies,
   users,
   memberships,
   storeEstates,
@@ -18,6 +19,46 @@ const router = Router();
 
 // Apply authentication middleware to all provider routes
 router.use(requireProvider);
+
+// GET /api/provider/company - Get the provider's company status
+router.get("/company", async (req: any, res) => {
+  try {
+    const providerId = req.auth?.userId;
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const provider = await storage.getUser(providerId);
+    const companyId = String(provider?.company || "").trim();
+    if (!companyId) {
+      return res.json(null);
+    }
+
+    let company = await db
+      .select()
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .limit(1)
+      .then((rows) => rows[0]);
+
+    if (!company) {
+      company = await db
+        .select()
+        .from(companies)
+        .where(eq(companies.name, companyId))
+        .limit(1)
+        .then((rows) => rows[0]);
+    }
+
+    if (!company) {
+      return res.status(404).json({ error: "Company not found" });
+    }
+
+    res.json(company);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Middleware to verify provider has access to a store
 const verifyStoreAccess = async (req: any, res: any, next: any) => {
@@ -459,7 +500,12 @@ router.post("/company-registration", async (req: any, res) => {
       contactEmail: validated.contactEmail,
       phone: validated.phone,
       details: detailsPayload,
+      isActive: false,
+      providerId,
+      submittedAt: new Date(),
     });
+
+    await storage.updateUser(providerId, { company: createdCompany.id } as any);
 
     res.status(201).json(createdCompany);
   } catch (error: any) {
