@@ -24,6 +24,10 @@ import AdminSuperDashboard from "@/pages/admin-super-dashboard";
 import AdminAiConversationsPage from "@/pages/admin-ai-conversations";
 import AdminAiPreparedRequestsPage from "@/pages/admin-ai-prepared-requests";
 import AdminProviderMatchingPage from "@/pages/admin-provider-matching";
+import CompanyStores from "@/pages/company-stores";
+import CompanyInventory from "@/pages/company-inventory";
+import CompanyTasks from "@/pages/company-tasks";
+import ProviderTasks from "@/pages/provider-tasks";
 import BookArtisan from "@/pages/book-artisan";
 import ServiceCategories from "@/pages/service-categories";
 import BookMarketRun from "@/pages/book-market-run";
@@ -54,8 +58,12 @@ function Router() {
       <Route path="/company-registration" component={ProviderCompanyRegistration} />
       <Route path="/company-dashboard" component={CompanyDashboard} />
       <Route path="/company-dashboard/:rest*" component={CompanyDashboard} />
+      <ProtectedRoute path="/company/stores" component={CompanyStores} />
+      <ProtectedRoute path="/company/inventory" component={CompanyInventory} />
+      <ProtectedRoute path="/company/tasks" component={CompanyTasks} />
       <ProtectedRoute path="/provider" component={ProviderDashboard} />
       <ProtectedRoute path="/provider-dashboard" component={ProviderDashboard} />
+      <ProtectedRoute path="/provider/tasks" component={ProviderTasks} />
       <ProtectedRoute path="/provider/jobs" component={ProviderJobs} />
       <ProtectedRoute path="/provider-store-items" component={ProviderStores} />
       <ProtectedRoute path="/provider/marketplace" component={ProviderMarketplace} />

@@ -298,10 +298,22 @@ router.post("/stores/:id/items", verifyStoreAccess, async (req: any, res) => {
     if (!approvedStore) return;
 
     // Get first allocated estate for this store
-    const [storeEstate] = await db.select()
+    let [storeEstate] = await db.select()
       .from(storeEstates)
       .where(eq(storeEstates.storeId, storeId))
       .limit(1);
+
+    if (!storeEstate && approvedStore?.estateId) {
+      const allocatedBy = approvedStore.ownerId || providerId;
+      await db.insert(storeEstates)
+        .values({
+          storeId,
+          estateId: approvedStore.estateId,
+          allocatedBy,
+        })
+        .onConflictDoNothing();
+      storeEstate = { storeId, estateId: approvedStore.estateId } as typeof storeEstates.$inferSelect;
+    }
 
     if (!storeEstate) {
       return res.status(403).json({ 

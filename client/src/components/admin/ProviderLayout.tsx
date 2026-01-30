@@ -6,6 +6,7 @@ import {
   Package,
   LayoutDashboard,
   Building,
+  CheckCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +29,7 @@ interface ProviderLayoutProps {
 const navLinks = [
   { href: "/provider-dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/provider/jobs", icon: Briefcase, label: "My Jobs" },
+  { href: "/provider/tasks", icon: CheckCircle, label: "My Tasks" },
   { href: "/provider-store-items", icon: Store, label: "My Stores" },
   { href: "/provider/marketplace", icon: Package, label: "Marketplace" },
 ];

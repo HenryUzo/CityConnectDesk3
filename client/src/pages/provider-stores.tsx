@@ -26,6 +26,8 @@ interface ProviderStore {
   phone?: string;
   email?: string;
   isActive?: boolean;
+  approvalStatus?: string;
+  membership?: { role?: string; canManageItems?: boolean; canManageOrders?: boolean };
   itemCount?: number;
   createdAt?: string;
 }
@@ -109,11 +111,26 @@ export default function ProviderStores() {
                             {store.location}
                           </div>
                         </div>
-                        {store.isActive && (
-                          <Badge variant="default" className="bg-green-600">
-                            Active
+                        <div className="flex flex-col items-end gap-2">
+                          <Badge
+                            variant={
+                              store.approvalStatus === "approved" ? "default" : "secondary"
+                            }
+                          >
+                            {store.approvalStatus === "approved"
+                              ? "Approved"
+                              : store.approvalStatus === "rejected"
+                                ? "Rejected"
+                                : "Pending Approval"}
                           </Badge>
-                        )}
+                          <Badge variant="outline">
+                            {store.membership?.role === "owner"
+                              ? "Owner"
+                              : store.membership?.role === "manager"
+                                ? "Manager"
+                                : "Staff"}
+                          </Badge>
+                        </div>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
@@ -126,12 +143,25 @@ export default function ProviderStores() {
                           {store.itemCount || 0} Item{(store.itemCount || 0) !== 1 ? "s" : ""}
                         </span>
                       </div>
-                      <Link href={`/provider/stores/${store.id}/items`}>
-                        <Button className="w-full" variant="default">
-                          Manage Items
+                      {store.approvalStatus === "approved" ? (
+                        <Link href={`/provider/stores/${store.id}/items`}>
+                          <Button
+                            className="w-full"
+                            variant="default"
+                            disabled={store.membership?.canManageItems === false}
+                          >
+                            {store.membership?.canManageItems === false
+                              ? "View Items"
+                              : "Manage Items"}
+                            <ArrowRight className="w-4 h-4 ml-2" />
+                          </Button>
+                        </Link>
+                      ) : (
+                        <Button className="w-full" variant="default" disabled>
+                          Pending Approval
                           <ArrowRight className="w-4 h-4 ml-2" />
                         </Button>
-                      </Link>
+                      )}
                     </CardContent>
                   </Card>
                 ))}

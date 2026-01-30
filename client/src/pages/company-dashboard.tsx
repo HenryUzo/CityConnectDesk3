@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, getQueryFn, queryClient } from "@/lib/queryClient";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -10,12 +10,16 @@ import {
   Bell,
   ChevronDown,
   ChevronRight,
+  CheckCircle,
   Dice4,
   Edit3,
   Eye,
   EyeOff,
   MoreVertical,
   Trash2,
+  Store,
+  Package,
+  Users,
 } from "lucide-react";
 import { AreaChart, ResponsiveContainer, Area } from "recharts";
 import { Link, useLocation } from "wouter";
@@ -92,6 +96,13 @@ type RecentTransaction = {
   month: string;
 };
 
+type ItemCategory = {
+  id: string;
+  name?: string | null;
+  emoji?: string | null;
+  isActive?: boolean | null;
+};
+
 type CompanyStaff = {
   id: string;
   name?: string | null;
@@ -109,6 +120,7 @@ type CompanyStore = {
   description?: string | null;
   ownerId?: string | null;
   companyId?: string | null;
+  approvalStatus?: string | null;
   createdAt?: string | null;
 };
 
@@ -264,6 +276,11 @@ export default function CompanyDashboard() {
     queryFn: getQueryFn<Company[]>({ on401: "throw" }),
   });
 
+  const { data: itemCategories = [] } = useQuery<ItemCategory[]>({
+    queryKey: ["/api/item-categories"],
+    queryFn: getQueryFn<ItemCategory[]>({ on401: "throw" }),
+  });
+
   const { data: companyStaff = [], isLoading: companyStaffLoading } = useQuery<CompanyStaff[]>({
     queryKey: ["/api/company/staff"],
     queryFn: async () => {
@@ -306,6 +323,12 @@ export default function CompanyDashboard() {
       .filter((category) => category.isActive !== false)
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }, [serviceCategories]);
+
+  const itemCategoryOptions = useMemo(() => {
+    return [...itemCategories]
+      .filter((category) => category.isActive !== false)
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [itemCategories]);
 
   const staffById = useMemo(() => {
     const map = new Map<string, CompanyStaff>();
@@ -405,7 +428,6 @@ export default function CompanyDashboard() {
     name: z.string().min(1, "Store name is required"),
     location: z.string().min(1, "Location is required"),
     description: z.string().optional().default(""),
-    ownerId: z.string().min(1, "Owner is required"),
     phone: z.string().optional().default(""),
     email: z.string().optional().default(""),
   });
@@ -416,7 +438,6 @@ export default function CompanyDashboard() {
       name: "",
       location: "",
       description: "",
-      ownerId: "",
       phone: "",
       email: "",
     },
@@ -424,8 +445,8 @@ export default function CompanyDashboard() {
 
   const assignMemberSchema = z.object({
     userId: z.string().min(1, "Select a staff member"),
-    role: z.enum(["owner", "manager", "member"]).default("member"),
-    canManageItems: z.boolean().default(true),
+    role: z.enum(["manager", "member"]).default("member"),
+    canManageItems: z.boolean().default(false),
     canManageOrders: z.boolean().default(true),
   });
 
@@ -434,7 +455,7 @@ export default function CompanyDashboard() {
     defaultValues: {
       userId: "",
       role: "member",
-      canManageItems: true,
+      canManageItems: false,
       canManageOrders: true,
     },
   });
@@ -447,7 +468,6 @@ export default function CompanyDashboard() {
     price: z.preprocess((value) => Number(value), z.number().nonnegative()),
     stock: z.preprocess((value) => Number(value), z.number().int().nonnegative()),
     description: z.string().optional().default(""),
-    images: z.string().optional().default(""),
   });
 
   const inventoryForm = useForm<z.infer<typeof inventoryFormSchema>>({
@@ -458,9 +478,11 @@ export default function CompanyDashboard() {
       price: 0,
       stock: 0,
       description: "",
-      images: "",
     },
   });
+
+  const [inventoryImages, setInventoryImages] = useState<string[]>([]);
+  const inventoryImageInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (providerCompany?.id) {
@@ -468,11 +490,41 @@ export default function CompanyDashboard() {
     }
   }, [providerCompany, providerForm]);
 
+  const assignRole = assignMemberForm.watch("role");
+  useEffect(() => {
+    if (assignRole === "manager") {
+      assignMemberForm.setValue("canManageItems", true);
+      assignMemberForm.setValue("canManageOrders", true);
+    } else {
+      assignMemberForm.setValue("canManageItems", false);
+      assignMemberForm.setValue("canManageOrders", true);
+    }
+  }, [assignRole, assignMemberForm]);
+
   useEffect(() => {
     if (!selectedStoreId && companyStores.length > 0) {
       setSelectedStoreId(companyStores[0]?.id || "");
     }
   }, [companyStores, selectedStoreId]);
+
+  useEffect(() => {
+    setEditingItem(null);
+    setInventoryImages([]);
+    inventoryForm.reset({
+      name: "",
+      category: "",
+      price: 0,
+      stock: 0,
+      description: "",
+    });
+  }, [selectedStoreId, inventoryForm]);
+
+  const selectedStore = useMemo(
+    () => companyStores.find((store) => store.id === selectedStoreId),
+    [companyStores, selectedStoreId],
+  );
+  const selectedStoreApproval = (selectedStore?.approvalStatus || "pending").toLowerCase();
+  const isSelectedStoreApproved = selectedStoreApproval === "approved";
 
   const onProviderSubmit = providerForm.handleSubmit(async (values) => {
     if (!providerCompany?.id) {
@@ -532,7 +584,8 @@ export default function CompanyDashboard() {
       }
       toast({
         title: "Store created",
-        description: "Your store is ready to start listing inventory.",
+        description:
+          "Store created. An admin will review it before inventory can be listed.",
       });
       setShowStoreModal(false);
       storeForm.reset();
@@ -583,12 +636,7 @@ export default function CompanyDashboard() {
       return;
     }
 
-    const images = values.images
-      ? values.images
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean)
-      : [];
+    const images = inventoryImages;
 
     try {
       if (editingItem?.id) {
@@ -636,13 +684,13 @@ export default function CompanyDashboard() {
       }
 
       setEditingItem(null);
+      setInventoryImages([]);
       inventoryForm.reset({
         name: "",
         category: "",
         price: 0,
         stock: 0,
         description: "",
-        images: "",
       });
       queryClient.invalidateQueries({
         queryKey: ["/api/company/stores", selectedStoreId, "inventory"],
@@ -664,8 +712,8 @@ export default function CompanyDashboard() {
       price: Number(item.price || 0),
       stock: Number(item.stock || 0),
       description: item.description || "",
-      images: Array.isArray(item.images) ? item.images.join(", ") : "",
     });
+    setInventoryImages(Array.isArray(item.images) ? item.images : []);
   };
 
   const handleDeleteItem = async (item: InventoryItem) => {
@@ -692,6 +740,29 @@ export default function CompanyDashboard() {
         description: error?.message || "Unable to delete item right now.",
         variant: "destructive",
       });
+    }
+  };
+
+  const handleInventoryFiles = async (files: FileList | null) => {
+    if (!files) return;
+    const remaining = Math.max(0, 6 - inventoryImages.length);
+    const picked = Array.from(files).slice(0, remaining);
+    const reads = picked.map(
+      (file) =>
+        new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("Failed to read image"));
+          reader.readAsDataURL(file);
+        }),
+    );
+    try {
+      const results = await Promise.all(reads);
+      setInventoryImages((prev) => [...prev, ...results].slice(0, 6));
+    } finally {
+      if (inventoryImageInputRef.current) {
+        inventoryImageInputRef.current.value = "";
+      }
     }
   };
 
@@ -731,13 +802,6 @@ export default function CompanyDashboard() {
       </nav>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-        <section className="space-y-1">
-          <p className="text-lg font-semibold text-slate-900">Hi {greetingName}</p>
-          <p className="text-sm text-slate-500">
-            Here is a brief overview of the activities on {marketplaceName}
-          </p>
-        </section>
-
         {error && (
           <div className="rounded-2xl border border-rose-100 bg-rose-50/70 px-4 py-3 text-sm text-rose-600">
             Unable to load marketplace overview. Please try again shortly.
@@ -1090,349 +1154,97 @@ export default function CompanyDashboard() {
             </CardContent>
           </Card>
           </section>
-          <section className="grid gap-6 lg:grid-cols-[1.6fr,1fr]">
-            <Card className="shadow-lg border border-slate-100">
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle className="text-base text-slate-900">Stores</CardTitle>
-                  <p className="text-xs text-slate-500">
-                    Create stores, assign owners, and jump into inventory.
+          {/* Quick Links Section */}
+          <section className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            <Link href="/company/stores">
+              <Card className="hover:shadow-lg transition-all cursor-pointer h-full">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Store className="h-5 w-5 text-blue-500" />
+                    Store Management
+                  </CardTitle>
+                  <p className="text-xs text-slate-500 mt-2">
+                    Create stores and assign staff members
                   </p>
-                </div>
-                <Button onClick={() => setShowStoreModal(true)} size="sm">
-                  Create Store
-                </Button>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
-                      <tr>
-                        <th className="px-4 py-3">Store</th>
-                        <th className="px-4 py-3">Location</th>
-                        <th className="px-4 py-3">Owner</th>
-                        <th className="px-4 py-3 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {companyStoresLoading ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-xs text-slate-400">
-                            Loading stores...
-                          </td>
-                        </tr>
-                      ) : companyStores.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-xs text-slate-400">
-                            No stores yet. Create your first store to get started.
-                          </td>
-                        </tr>
-                      ) : (
-                        companyStores.map((store) => {
-                          const ownerName = store.ownerId
-                            ? staffById.get(store.ownerId)?.name ||
-                              staffById.get(store.ownerId)?.email ||
-                              "Assigned"
-                            : "Unassigned";
-                          return (
-                            <tr key={store.id} className="border-t border-slate-100 text-slate-600">
-                              <td className="px-4 py-4">
-                                <div>
-                                  <p className="font-semibold text-slate-900">{store.name}</p>
-                                  <p className="text-[0.7rem] text-slate-400">
-                                    {store.description || "No description"}
-                                  </p>
-                                </div>
-                              </td>
-                              <td className="px-4 py-4">{store.location}</td>
-                              <td className="px-4 py-4">{ownerName}</td>
-                              <td className="px-4 py-4">
-                                <div className="flex items-center justify-end gap-2">
-                                  <Link href={`/provider/stores/${store.id}/items`}>
-                                    <Button variant="outline" size="sm">
-                                      Inventory
-                                    </Button>
-                                  </Link>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => {
-                                      setActiveStore(store);
-                                      setShowAssignModal(true);
-                                    }}
-                                  >
-                                    Assign Staff
-                                  </Button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="shadow-lg border border-slate-100">
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle className="text-base text-slate-900">Team Members</CardTitle>
-                  <p className="text-xs text-slate-500">
-                    Manage staff and invite new providers to your company.
-                  </p>
-                </div>
-                <Button variant="outline" size="sm" onClick={() => setShowProviderModal(true)}>
-                  Invite Staff
-                </Button>
-              </CardHeader>
-              <CardContent className="pt-0 space-y-3">
-                {companyStaffLoading ? (
-                  <p className="text-sm text-slate-500">Loading team...</p>
-                ) : companyStaff.length === 0 ? (
-                  <p className="text-sm text-slate-500">
-                    No staff members yet. Invite providers to build your team.
-                  </p>
-                ) : (
-                  companyStaff.slice(0, 6).map((staff) => (
-                    <div
-                      key={staff.id}
-                      className="flex items-center justify-between rounded-xl border border-slate-100 bg-white px-4 py-3"
-                    >
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">
-                          {staff.name || staff.email || "Unnamed provider"}
-                        </p>
-                        <p className="text-[0.7rem] text-slate-400">{staff.email || staff.phone}</p>
-                      </div>
-                      <Badge variant={staff.isApproved ? "default" : "secondary"}>
-                        {staff.isApproved ? "Approved" : "Pending"}
-                      </Badge>
-                    </div>
-                  ))
-                )}
-              </CardContent>
-            </Card>
-          </section>
-          <section className="grid gap-6 lg:grid-cols-[1.6fr,1fr]">
-            <Card className="shadow-lg border border-slate-100">
-              <CardHeader className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-base text-slate-900">Inventory</CardTitle>
-                    <p className="text-xs text-slate-500">
-                      Review items for the selected store and update details.
-                    </p>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-600">
+                      {companyStores.length} stores
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
                   </div>
-                  <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
-                    <SelectTrigger className="min-w-[200px]">
-                      <SelectValue placeholder="Select store" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {companyStores.map((store) => (
-                        <SelectItem key={store.id} value={store.id}>
-                          {store.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
-                      <tr>
-                        <th className="px-4 py-3">Item</th>
-                        <th className="px-4 py-3">Category</th>
-                        <th className="px-4 py-3">Price</th>
-                        <th className="px-4 py-3">Stock</th>
-                        <th className="px-4 py-3 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {inventoryLoading ? (
-                        <tr>
-                          <td colSpan={5} className="px-4 py-6 text-center text-xs text-slate-400">
-                            Loading inventory...
-                          </td>
-                        </tr>
-                      ) : !selectedStoreId ? (
-                        <tr>
-                          <td colSpan={5} className="px-4 py-6 text-center text-xs text-slate-400">
-                            Select a store to view its inventory.
-                          </td>
-                        </tr>
-                      ) : inventoryItems.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="px-4 py-6 text-center text-xs text-slate-400">
-                            No items yet. Add your first product on the right.
-                          </td>
-                        </tr>
-                      ) : (
-                        inventoryItems.map((item) => (
-                          <tr key={item.id} className="border-t border-slate-100 text-slate-600">
-                            <td className="px-4 py-4">
-                              <div>
-                                <p className="font-semibold text-slate-900">{item.name}</p>
-                                <p className="text-[0.7rem] text-slate-400">
-                                  {item.description || "No description"}
-                                </p>
-                              </div>
-                            </td>
-                            <td className="px-4 py-4">{item.category || "Uncategorized"}</td>
-                            <td className="px-4 py-4">{formatCurrency(Number(item.price || 0))}</td>
-                            <td className="px-4 py-4">{item.stock ?? 0}</td>
-                            <td className="px-4 py-4">
-                              <div className="flex items-center justify-end gap-2">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleEditItem(item)}
-                                >
-                                  <Edit3 className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleDeleteItem(item)}
-                                >
-                                  <Trash2 className="h-4 w-4 text-rose-500" />
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            </Link>
 
-            <Card className="shadow-lg border border-slate-100">
+            <Link href="/company/inventory">
+              <Card className="hover:shadow-lg transition-all cursor-pointer h-full">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Package className="h-5 w-5 text-emerald-500" />
+                    Inventory
+                  </CardTitle>
+                  <p className="text-xs text-slate-500 mt-2">
+                    Manage products and stock levels
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-600">
+                      {inventoryItems.length} items
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+
+            <Link href="/company/tasks">
+              <Card className="hover:shadow-lg transition-all cursor-pointer h-full">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <CheckCircle className="h-5 w-5 text-orange-500" />
+                    Tasks
+                  </CardTitle>
+                  <p className="text-xs text-slate-500 mt-2">
+                    Assign tasks to providers and track progress
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-600">
+                      View tasks
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+
+            <Card className="hover:shadow-lg transition-all">
               <CardHeader>
-                <CardTitle className="text-base text-slate-900">
-                  {editingItem ? "Update inventory item" : "Add inventory item"}
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5 text-purple-500" />
+                  Team
                 </CardTitle>
-                <p className="text-xs text-slate-500">
-                  Keep pricing and stock updated for residents.
+                <p className="text-xs text-slate-500 mt-2">
+                  Invite and manage team members
                 </p>
               </CardHeader>
-              <CardContent className="pt-0">
-                <Form {...inventoryForm}>
-                  <form className="space-y-4" onSubmit={onInventorySubmit}>
-                    <FormField
-                      control={inventoryForm.control}
-                      name="name"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Item name</FormLabel>
-                          <FormControl>
-                            <Input placeholder="Item name" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={inventoryForm.control}
-                      name="category"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Category</FormLabel>
-                          <FormControl>
-                            <Input placeholder="Category" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <FormField
-                        control={inventoryForm.control}
-                        name="price"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Price (NGN)</FormLabel>
-                            <FormControl>
-                              <Input type="number" min="0" step="0.01" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={inventoryForm.control}
-                        name="stock"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Stock</FormLabel>
-                            <FormControl>
-                              <Input type="number" min="0" step="1" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </div>
-                    <FormField
-                      control={inventoryForm.control}
-                      name="images"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Images (comma separated URLs)</FormLabel>
-                          <FormControl>
-                            <Input placeholder="https://..., https://..." {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={inventoryForm.control}
-                      name="description"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Description</FormLabel>
-                          <FormControl>
-                            <Textarea placeholder="Short description" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <div className="flex items-center justify-between">
-                      {editingItem ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => {
-                            setEditingItem(null);
-                            inventoryForm.reset({
-                              name: "",
-                              category: "",
-                              price: 0,
-                              stock: 0,
-                              description: "",
-                              images: "",
-                            });
-                          }}
-                        >
-                          Cancel edit
-                        </Button>
-                      ) : (
-                        <span className="text-xs text-slate-400">
-                          Add at least one item to publish your catalog.
-                        </span>
-                      )}
-                      <Button type="submit" disabled={!selectedStoreId}>
-                        {editingItem ? "Save changes" : "Add item"}
-                      </Button>
-                    </div>
-                  </form>
-                </Form>
+              <CardContent>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-slate-600">
+                    {companyStaff.length} members
+                  </span>
+                  <Button 
+                    size="sm" 
+                    variant="outline"
+                    onClick={() => setShowProviderModal(true)}
+                  >
+                    Invite
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </section>
@@ -1490,30 +1302,12 @@ export default function CompanyDashboard() {
                 )}
               />
               <div className="grid gap-4 sm:grid-cols-2">
-                <FormField
-                  control={storeForm.control}
-                  name="ownerId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Store owner</FormLabel>
-                      <Select value={field.value} onValueChange={field.onChange}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select owner" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {companyStaff.map((staff) => (
-                            <SelectItem key={staff.id} value={staff.id}>
-                              {staff.name || staff.email || staff.id}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <div className="space-y-2">
+                  <FormLabel>Store owner</FormLabel>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                    You (company owner)
+                  </div>
+                </div>
                 <FormField
                   control={storeForm.control}
                   name="phone"
@@ -1599,9 +1393,8 @@ export default function CompanyDashboard() {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="owner">Owner</SelectItem>
                         <SelectItem value="manager">Manager</SelectItem>
-                        <SelectItem value="member">Member</SelectItem>
+                        <SelectItem value="member">Staff</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />

@@ -2835,6 +2835,176 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     });
 
+    app.get("/api/stores/:storeId/members", requireAuth, async (req, res, next) => {
+      try {
+        const userId = req.auth?.userId;
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const { storeId } = req.params;
+        const [ownerMembership] = await db
+          .select({ id: storeMembers.id })
+          .from(storeMembers)
+          .where(
+            and(
+              eq(storeMembers.storeId, storeId),
+              eq(storeMembers.userId, userId),
+              eq(storeMembers.role, "owner"),
+              eq(storeMembers.isActive, true),
+            ),
+          )
+          .limit(1 as any);
+
+        if (!ownerMembership) {
+          return res.status(403).json({ message: "Only the store owner can view members" });
+        }
+
+        const rows = await db
+          .select({
+            member: storeMembers,
+            user: users,
+          })
+          .from(storeMembers)
+          .innerJoin(users, eq(storeMembers.userId, users.id))
+          .where(eq(storeMembers.storeId, storeId))
+          .orderBy(desc(storeMembers.createdAt));
+
+        res.json(
+          rows.map(({ member, user }) => ({
+            ...member,
+            user: {
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              phone: user.phone,
+              role: user.role,
+              isActive: user.isActive,
+            },
+          })),
+        );
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    const transferOwnershipSchema = z.object({
+      newOwnerId: z.string().min(1, "New owner is required"),
+    });
+
+    app.patch("/api/stores/:storeId/transfer-ownership", requireAuth, async (req, res, next) => {
+      try {
+        const userId = req.auth?.userId;
+        if (!userId) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const { storeId } = req.params;
+        const { newOwnerId } = transferOwnershipSchema.parse(req.body);
+        if (newOwnerId === userId) {
+          return res.status(400).json({ message: "New owner must be different from current owner" });
+        }
+
+        const [store] = await db
+          .select()
+          .from(stores)
+          .where(eq(stores.id, storeId))
+          .limit(1 as any);
+
+        if (!store) {
+          return res.status(404).json({ message: "Store not found" });
+        }
+
+        const isOwner =
+          store.ownerId === userId ||
+          !!(await db
+            .select({ id: storeMembers.id })
+            .from(storeMembers)
+            .where(
+              and(
+                eq(storeMembers.storeId, storeId),
+                eq(storeMembers.userId, userId),
+                eq(storeMembers.role, "owner"),
+                eq(storeMembers.isActive, true),
+              ),
+            )
+            .limit(1 as any))
+            .then((rows) => rows[0]);
+
+        if (!isOwner) {
+          return res.status(403).json({ message: "Only the store owner can transfer ownership" });
+        }
+
+        const [managerMember] = await db
+          .select({ id: storeMembers.id })
+          .from(storeMembers)
+          .where(
+            and(
+              eq(storeMembers.storeId, storeId),
+              eq(storeMembers.userId, newOwnerId),
+              eq(storeMembers.role, "manager"),
+              eq(storeMembers.isActive, true),
+            ),
+          )
+          .limit(1 as any);
+
+        if (!managerMember) {
+          return res.status(400).json({ message: "New owner must be a current manager" });
+        }
+
+        const oldOwnerId = store.ownerId || userId;
+
+        await db.transaction(async (tx) => {
+          await tx
+            .update(storeMembers)
+            .set({
+              role: "manager",
+              canManageItems: true,
+              canManageOrders: true,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(storeMembers.storeId, storeId),
+                eq(storeMembers.userId, oldOwnerId),
+              ),
+            );
+
+          await tx
+            .update(storeMembers)
+            .set({
+              role: "owner",
+              canManageItems: true,
+              canManageOrders: true,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(storeMembers.storeId, storeId),
+                eq(storeMembers.userId, newOwnerId),
+              ),
+            );
+
+          await tx
+            .update(stores)
+            .set({
+              ownerId: newOwnerId,
+              updatedAt: new Date(),
+            })
+            .where(eq(stores.id, storeId));
+        });
+
+        res.json({
+          success: true,
+          storeId,
+          oldOwnerId,
+          newOwnerId,
+        });
+      } catch (error) {
+        next(error);
+      }
+    });
+
     const companyInventoryCreateSchema = createMarketplaceItemSchema.extend({
       storeId: z.string().min(1, "Store ID is required"),
     });
@@ -2931,11 +3101,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(401).json({ message: "Unauthorized" });
         }
 
-        const [storeEstate] = await db
+        let [storeEstate] = await db
           .select()
           .from(storeEstates)
           .where(eq(storeEstates.storeId, storeId))
           .limit(1 as any);
+        if (!storeEstate && store.estateId) {
+          const allocatedBy = req.auth?.userId ?? req.user?.id ?? store.ownerId;
+          await db
+            .insert(storeEstates)
+            .values({
+              storeId,
+              estateId: store.estateId,
+              allocatedBy,
+            })
+            .onConflictDoNothing();
+          storeEstate = { storeId, estateId: store.estateId } as typeof storeEstates.$inferSelect;
+        }
         if (!storeEstate) {
           return res.status(403).json({
             message: "No estates allocated to this store yet.",
@@ -3679,7 +3861,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     phone: z.string().optional(),
     email: z.string().email().optional(),
     ownerId: z.string().min(1, "Owner is required"),
-    estateId: z.string().optional(),
+    estateId: z.string().nullable().optional(),
     companyId: z.string().optional(),
     isActive: z.boolean().optional(),
   });
@@ -3732,7 +3914,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         phone: parsed.phone,
         email: parsed.email,
         ownerId: parsed.ownerId,
-        estateId: parsed.estateId,
+        estateId: parsed.estateId ?? null,
         companyId: parsed.companyId,
         isActive: parsed.isActive ?? true,
       };
@@ -3776,6 +3958,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Log error but don't fail the response
           console.error("Failed to add store owner to members:", error);
         }
+      }
+
+      if (parsed.estateId) {
+        const allocatedBy = req.auth?.userId ?? req.user?.id ?? created.ownerId;
+        await db
+          .insert(storeEstates)
+          .values({
+            storeId: created.id,
+            estateId: parsed.estateId,
+            allocatedBy,
+          })
+          .onConflictDoNothing();
       }
       
       res.status(201).json(created);
@@ -3841,6 +4035,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!updated) {
         return res.status(404).json({ message: "Store not found" });
+      }
+
+      if (updates.estateId !== undefined) {
+        await db.delete(storeEstates).where(eq(storeEstates.storeId, id));
+        if (updates.estateId) {
+          const allocatedBy = req.auth?.userId ?? req.user?.id ?? updated.ownerId;
+          await db
+            .insert(storeEstates)
+            .values({
+              storeId: id,
+              estateId: updates.estateId,
+              allocatedBy,
+            })
+            .onConflictDoNothing();
+        }
       }
 
       res.json(updated);
