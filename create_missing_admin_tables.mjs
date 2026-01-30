@@ -85,6 +85,20 @@ async function createMissingTables() {
     `);
     console.log("store_members table created");
 
+    console.log("\nCreating store_estates table...");
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_estates (
+        id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        store_id VARCHAR(36) NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+        estate_id VARCHAR(36) NOT NULL REFERENCES estates(id) ON DELETE CASCADE,
+        allocated_by VARCHAR(36) NOT NULL REFERENCES users(id),
+        allocated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (store_id, estate_id)
+      );
+    `);
+    console.log("store_estates table created");
+
 // Create indexes
     console.log("\n📝 Creating indexes...");
     await client.query(`
@@ -95,6 +109,9 @@ async function createMissingTables() {
       CREATE INDEX IF NOT EXISTS idx_provider_matching_settings_provider_id ON provider_matching_settings(provider_id);
       CREATE INDEX IF NOT EXISTS idx_store_members_store_id ON store_members(store_id);
       CREATE INDEX IF NOT EXISTS idx_store_members_user_id ON store_members(user_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_store_owner_per_store ON store_members(store_id) WHERE role = 'owner';
+      CREATE INDEX IF NOT EXISTS idx_store_estates_store_id ON store_estates(store_id);
+      CREATE INDEX IF NOT EXISTS idx_store_estates_estate_id ON store_estates(estate_id);
     `);
     console.log("✓ Indexes created");
 
@@ -105,6 +122,7 @@ async function createMissingTables() {
       "pricing_rules",
       "provider_matching_settings",
       "store_members",
+      "store_estates",
     ];
 
     for (const table of tables) {

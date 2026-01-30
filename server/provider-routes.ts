@@ -76,7 +76,7 @@ const verifyStoreAccess = async (req: any, res: any, next: any) => {
       providerId = null as any;
     }
 
-    const [membership] = await db.select()
+    let [membership] = await db.select()
       .from(storeMembers)
       .where(
         and(
@@ -85,6 +85,36 @@ const verifyStoreAccess = async (req: any, res: any, next: any) => {
           eq(storeMembers.isActive, true)
         )
       );
+
+    // If no membership found, check if provider is the store owner and auto-add them
+    if (!membership && providerId) {
+      const [store] = await db.select()
+        .from(stores)
+        .where(eq(stores.id, storeId));
+
+      if (store && store.ownerId === providerId) {
+        // Auto-add store owner as member with full permissions
+        await db.insert(storeMembers).values({
+          storeId: storeId,
+          userId: providerId,
+          role: "owner",
+          canManageItems: true,
+          canManageOrders: true,
+          isActive: true
+        }).onConflictDoNothing();
+
+        // Fetch the newly created (or existing) membership
+        [membership] = await db.select()
+          .from(storeMembers)
+          .where(
+            and(
+              eq(storeMembers.storeId, storeId),
+              eq(storeMembers.userId, providerId),
+              eq(storeMembers.isActive, true)
+            )
+          );
+      }
+    }
 
     if (!membership) {
       return res.status(403).json({ error: "Access denied. You are not a member of this store." });
@@ -95,6 +125,29 @@ const verifyStoreAccess = async (req: any, res: any, next: any) => {
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+};
+
+const ensureStoreApproved = async (storeId: string, res: any) => {
+  const [store] = await db.select().from(stores).where(eq(stores.id, storeId));
+  if (!store) {
+    res.status(404).json({ error: "Store not found" });
+    return null;
+  }
+  if (store.approvalStatus === "pending") {
+    res.status(403).json({
+      error: "Store not approved",
+      message: "Your store is awaiting admin approval. Please try again later.",
+    });
+    return null;
+  }
+  if (store.approvalStatus === "rejected") {
+    res.status(403).json({
+      error: "Store rejected",
+      message: "Your store has been rejected. Please contact support.",
+    });
+    return null;
+  }
+  return store;
 };
 
 // GET /api/provider/stores - Get all stores I'm a member of
@@ -196,6 +249,8 @@ router.get("/stores/:id/items", verifyStoreAccess, async (req: any, res) => {
   try {
     const storeId = req.params.id;
     const { search, category, isActive } = req.query;
+    const approvedStore = await ensureStoreApproved(storeId, res);
+    if (!approvedStore) return;
 
     let conditions = [eq(marketplaceItems.storeId, storeId)];
     
@@ -239,35 +294,26 @@ router.post("/stores/:id/items", verifyStoreAccess, async (req: any, res) => {
       return res.status(403).json({ error: "You don't have permission to manage items for this store" });
     }
 
-    // Get store and check approval status
-    const [store] = await db.select()
-      .from(stores)
-      .where(eq(stores.id, storeId));
-
-    if (!store) {
-      return res.status(404).json({ error: "Store not found" });
-    }
-
-    // Block item creation for pending or rejected stores
-    if (store.approvalStatus === 'pending') {
-      return res.status(403).json({ 
-        error: "Cannot add items to pending stores",
-        message: "Your store is awaiting admin approval. Items can be added once approved."
-      });
-    }
-
-    if (store.approvalStatus === 'rejected') {
-      return res.status(403).json({ 
-        error: "Cannot add items to rejected stores",
-        message: "Your store has been rejected. Please contact admin for details."
-      });
-    }
+    const approvedStore = await ensureStoreApproved(storeId, res);
+    if (!approvedStore) return;
 
     // Get first allocated estate for this store
-    const [storeEstate] = await db.select()
+    let [storeEstate] = await db.select()
       .from(storeEstates)
       .where(eq(storeEstates.storeId, storeId))
       .limit(1);
+
+    if (!storeEstate && approvedStore?.estateId) {
+      const allocatedBy = approvedStore.ownerId || providerId;
+      await db.insert(storeEstates)
+        .values({
+          storeId,
+          estateId: approvedStore.estateId,
+          allocatedBy,
+        })
+        .onConflictDoNothing();
+      storeEstate = { storeId, estateId: approvedStore.estateId } as typeof storeEstates.$inferSelect;
+    }
 
     if (!storeEstate) {
       return res.status(403).json({ 
@@ -322,6 +368,8 @@ router.patch("/stores/:storeId/items/:itemId", verifyStoreAccess, async (req: an
   try {
     const { storeId, itemId } = req.params;
     const membership = req.storeMembership;
+    const approvedStore = await ensureStoreApproved(storeId, res);
+    if (!approvedStore) return;
 
     // Check if provider has permission to manage items
     if (!membership.canManageItems) {
@@ -391,6 +439,8 @@ router.delete("/stores/:storeId/items/:itemId", verifyStoreAccess, async (req: a
   try {
     const { storeId, itemId } = req.params;
     const membership = req.storeMembership;
+    const approvedStore = await ensureStoreApproved(storeId, res);
+    if (!approvedStore) return;
 
     // Check if provider has permission to manage items
     if (!membership.canManageItems) {

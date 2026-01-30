@@ -94,16 +94,26 @@ export default function ProviderDashboard() {
   const { data: availableRequests = [] } = useQuery<ServiceRequest[]>({
     queryKey: ["/api/service-requests", { status: "available" }],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/service-requests?status=available");
-      return res.json() as Promise<ServiceRequest[]>;
+      try {
+        const res = await apiRequest("GET", "/api/service-requests?status=available");
+        return res.json() as Promise<ServiceRequest[]>;
+      } catch (error) {
+        console.error("Error fetching available requests:", error);
+        return [];
+      }
     },
   });
 
   const { data: myRequests = [] } = useQuery<ServiceRequest[]>({
     queryKey: ["/api/service-requests"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/service-requests");
-      return res.json() as Promise<ServiceRequest[]>;
+      try {
+        const res = await apiRequest("GET", "/api/service-requests");
+        return res.json() as Promise<ServiceRequest[]>;
+      } catch (error) {
+        console.error("Error fetching my requests:", error);
+        return [];
+      }
     },
   });
 
@@ -112,8 +122,13 @@ export default function ProviderDashboard() {
   >({
     queryKey: ["/api/provider/stores"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/provider/stores");
-      return res.json() as Promise<ProviderStore[]>;
+      try {
+        const res = await apiRequest("GET", "/api/provider/stores");
+        return res.json() as Promise<ProviderStore[]>;
+      } catch (error) {
+        console.error("Error fetching provider stores:", error);
+        return [];
+      }
     },
   });
 
@@ -363,8 +378,14 @@ export default function ProviderDashboard() {
                 </TabsTrigger>
                 <TabsTrigger value="stores" data-testid="tab-my-stores">
                   <Store className="w-4 h-4 mr-1" />
-                  My Stores ({myStores.length})
+                  My Stores ({Array.isArray(myStores) ? myStores.length : 0})
                 </TabsTrigger>
+                <Link href="/provider/tasks">
+                  <TabsTrigger value="tasks" data-testid="tab-my-tasks">
+                    <CheckCircle className="w-4 h-4 mr-1" />
+                    My Tasks
+                  </TabsTrigger>
+                </Link>
               </TabsList>
             </CardHeader>
 

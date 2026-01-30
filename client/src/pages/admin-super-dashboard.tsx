@@ -10050,38 +10050,11 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
     ? (effectiveCompany ? storeProviders.filter((provider: any) => companyMatchesProvider(provider, effectiveCompany)) : storeProviders)
     : [];
 
-  const isStoreOwnerProvider = (p: any) => {
-    if (!p) return false;
-    const cats = Array.isArray(p.categories) ? p.categories : [];
-    if (cats.length === 0) return false;
-    
-    // Try matching by category name (string)
-    for (const c of cats) {
-      const val = typeof c === "string" ? c : c?.value || c?.key || c?.name || "";
-      const norm = String(val).trim().toLowerCase().replace(/\s+/g, "_");
-      if (norm === "store_owner") return true;
-    }
-    
-    // Try matching by category ID from the categories list
-    if (Array.isArray(passedCategoriesList)) {
-      const storeOwnerCategory = passedCategoriesList.find((cat: any) => {
-        const catName = String(cat.name || cat.key || "").trim().toLowerCase().replace(/\s+/g, "_");
-        return catName === "store_owner";
-      });
-      if (storeOwnerCategory) {
-        const storeOwnerCatId = storeOwnerCategory.id || storeOwnerCategory._id;
-        return cats.includes(storeOwnerCatId);
-      }
-    }
-    
-    return false;
-  };
-
   // Auto-fill phone/email when a store owner is selected
   useEffect(() => {
     if (!selectedOwnerId || !Array.isArray(scopedStoreProviders)) return;
     const owner = scopedStoreProviders.find(
-      (p: any) => (p.id || p._id) === selectedOwnerId && isStoreOwnerProvider(p),
+      (p: any) => (p.id || p._id) === selectedOwnerId,
     );
     if (!owner) return;
 
@@ -10472,22 +10445,15 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
       return;
     }
 
-    const eligible = Array.isArray(scopedStoreProviders)
-      ? scopedStoreProviders.filter((p: any) => isStoreOwnerProvider(p))
-      : [];
-    if (!selectedOwnerId) {
-      toast({ title: "Select a store owner", description: "Assign a provider with the store owner category.", variant: "destructive" });
-      return;
-    }
-    const owner = eligible.find((p: any) => (p.id || p._id) === selectedOwnerId);
-    if (!owner) {
-      toast({ title: "Invalid store owner", description: "Provider must have the store owner category.", variant: "destructive" });
-      return;
-    }
     const storeId = selectedStore?._id || selectedStore?.id;
+    const resolvedOwnerId = selectedOwnerId || selectedStore?.ownerId || selectedStore?.owner_id;
+    if (!resolvedOwnerId) {
+      toast({ title: "Select a store owner", description: "Assign a provider as the store owner.", variant: "destructive" });
+      return;
+    }
     const payload: any = {
       ...formData,
-      ownerId: selectedOwnerId,
+      ownerId: resolvedOwnerId,
       companyId: companyIdValue,
     };
     // include estate assignment when set; for edits, explicitly clear with null when switching to global
@@ -10514,7 +10480,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
     const storeOwnerUser = providerList.find(
       (provider: any) => String(provider.id || provider._id) === String(storeOwnerId),
     );
-    const storeOwnerEligible = !!storeOwnerUser && isStoreOwnerProvider(storeOwnerUser);
+    const storeOwnerEligible = !!storeOwnerUser;
     const membersWithOwner = storeOwnerId && storeOwnerEligible && !memberRows.some(
       (member: any) => String(member.userId || member.user?.id || "") === String(storeOwnerId),
     )
@@ -12097,8 +12063,16 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                   </tr>
                 </thead>
                 <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
-                  {filteredStores.map((store: any) => (
-                    <tr key={store._id || store.id}>
+                  {filteredStores.map((store: any) => {
+                    const storeId = String(store._id || store.id);
+                    const approvalStatus = String(store.approvalStatus || "pending").toLowerCase();
+                    const isApproved = approvalStatus === "approved";
+                    const ownerMatch = Array.isArray(scopedStoreProviders)
+                      ? scopedStoreProviders.find((p: any) => String(p.id || p._id) === String(store.ownerId || store.owner_id))
+                      : null;
+                    const ownerLabel = ownerMatch?.name || ownerMatch?.email || store.ownerId || store.owner_id || "Unassigned";
+                    return (
+                    <tr key={storeId}>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
                           <Store className="w-5 h-5 text-gray-400 mr-3" />
@@ -12111,6 +12085,9 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                                 {store.description}
                               </div>
                             )}
+                            <div className="text-xs text-gray-400">
+                              Owner: {ownerLabel}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -12122,12 +12099,17 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                         <div>{store.email || "â€”"}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <Badge
-                          variant={store.isActive ? "default" : "secondary"}
-                          data-testid={`badge-store-status-${store._id || store.id}`}
-                        >
-                          {store.isActive ? "Active" : "Inactive"}
-                        </Badge>
+                        <div className="flex flex-col gap-2">
+                          <Badge
+                            variant={isApproved ? "default" : "secondary"}
+                            data-testid={`badge-store-status-${storeId}`}
+                          >
+                            {isApproved ? "Approved" : approvalStatus === "rejected" ? "Rejected" : "Pending"}
+                          </Badge>
+                          <Badge variant={store.isActive ? "default" : "secondary"}>
+                            {store.isActive ? "Active" : "Inactive"}
+                          </Badge>
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2 flex items-center">
                         <Button
@@ -12178,6 +12160,32 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                           Edit
                         </Button>
                         <Button
+                          variant={isApproved ? "outline" : "default"}
+                          size="sm"
+                          onClick={() =>
+                            createStoreMutation.mutate({
+                              id: storeId,
+                              payload: { isApproved: true },
+                            })
+                          }
+                          disabled={isApproved}
+                        >
+                          Approve
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            createStoreMutation.mutate({
+                              id: storeId,
+                              payload: { isApproved: false },
+                            })
+                          }
+                          disabled={approvalStatus === "rejected"}
+                        >
+                          Reject
+                        </Button>
+                        <Button
                           variant="outline"
                           size="sm"
                           onClick={() =>
@@ -12194,7 +12202,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                         </Button>
                       </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
@@ -12301,7 +12309,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
 
             {/* Full Width: Store Owner */}
             <div>
-              <Label htmlFor="store-owner">Store Owner (provider with store owner category)</Label>
+              <Label htmlFor="store-owner">Store Owner</Label>
               <Select
                 value={selectedOwnerId}
                 onValueChange={setSelectedOwnerId}
@@ -12312,7 +12320,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                 <SelectContent>
                   {(() => {
                     const eligible = Array.isArray(scopedStoreProviders)
-                      ? scopedStoreProviders.filter((p: any) => isStoreOwnerProvider(p))
+                      ? scopedStoreProviders
                       : [];
                     return eligible.length > 0 ? (
                       eligible.map((p: any) => {
@@ -12325,7 +12333,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                       })
                     ) : (
                       <SelectItem value="none" disabled>
-                        No eligible store owners (need category "store owner")
+                        No providers available
                       </SelectItem>
                     );
                   })()}
