@@ -250,7 +250,10 @@ export const AdminAPI = {
       category?: string;
       residentId?: string;
       providerId?: string;
+      estateId?: string;
     }) => adminFetch("/api/admin/bridge/service-requests", { query: params }),
+    updateServiceRequest: (id: string, data: any) =>
+      adminFetch(`/api/service-requests/${id}`, { method: "PATCH", json: data }),
     getUsers: (params?: { role?: string; search?: string; status?: string }) =>
       adminFetch("/api/admin/bridge/users", { query: params }),
     getStats: () => adminFetch("/api/admin/bridge/stats"),

@@ -91,6 +91,7 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Accordion,
@@ -116,6 +117,7 @@ import {
   Eye,
   FileBarChart,
   Globe,
+  GripVertical,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -709,6 +711,7 @@ const AdminSidebar = ({
   if (isSuperAdmin) {
     menuItems.push(
       { id: "ai-conversations", label: "AI Conversations", icon: MessageSquare },
+      { id: "ai-conversation-flow", label: "AI Conversation Flow", icon: Settings },
       { id: "ai-prepared-requests", label: "AI Prepared Requests", icon: MessageSquare },
       { id: "pricing-rules", label: "Pricing Rules", icon: Tags },
       { id: "provider-matching", label: "Provider Matching", icon: UserCheck },
@@ -732,6 +735,7 @@ const AdminSidebar = ({
         transform transition-transform duration-300 ease-in-out
         ${isMobileOpen ? "translate-x-0" : "-translate-x-full"}
         lg:translate-x-0 lg:relative lg:z-0
+        flex flex-col overflow-hidden
       `}
       >
         {/* Header */}
@@ -994,6 +998,529 @@ const AiPreparedRequestsPanel = () => {
         )}
       </CardContent>
     </Card>
+  );
+};
+
+// AI Conversation Flow Settings Panel
+interface AiFlowSetting {
+  id: string;
+  categoryKey: string;
+  categoryName: string;
+  isEnabled: boolean;
+  displayOrder: number;
+  emoji: string | null;
+  description: string | null;
+  initialMessage: string | null;
+  followUpSteps: any[] | null;
+  confidenceThreshold: string | null;
+  visualsHelpful: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const AiConversationFlowPanel = () => {
+  const { user } = useAdminAuth();
+  const isSuperAdmin = user?.globalRole === "super_admin";
+  const { toast } = useToast();
+  
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<AiFlowSetting | null>(null);
+  const [formData, setFormData] = useState({
+    categoryKey: "",
+    categoryName: "",
+    emoji: "",
+    description: "",
+    initialMessage: "",
+    followUpSteps: [] as string[],
+    confidenceThreshold: "0.7",
+    visualsHelpful: true,
+  });
+
+  const {
+    data: settings = [],
+    isLoading,
+    error,
+    refetch,
+  } = useQuery<AiFlowSetting[]>({
+    queryKey: ["admin-ai-conversation-flow"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/ai-conversation-flow"),
+    enabled: isSuperAdmin,
+  });
+
+  const seedMutation = useMutation({
+    mutationFn: () =>
+      adminApiRequest("POST", "/api/admin/ai-conversation-flow/seed"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-ai-conversation-flow"] });
+      toast({ title: "Default categories seeded successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error seeding categories",
+        description: error.response?.data?.message || "Failed to seed categories",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: any) =>
+      adminApiRequest("POST", "/api/admin/ai-conversation-flow", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-ai-conversation-flow"] });
+      setIsCreateDialogOpen(false);
+      resetForm();
+      toast({ title: "Category created successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error creating category",
+        description: error.response?.data?.message || "Failed to create category",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
+      adminApiRequest("PATCH", `/api/admin/ai-conversation-flow/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-ai-conversation-flow"] });
+      setEditingItem(null);
+      resetForm();
+      toast({ title: "Category updated successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error updating category",
+        description: error.response?.data?.message || "Failed to update category",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) =>
+      adminApiRequest("DELETE", `/api/admin/ai-conversation-flow/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-ai-conversation-flow"] });
+      toast({ title: "Category deleted successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error deleting category",
+        description: error.response?.data?.message || "Failed to delete category",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const toggleEnabledMutation = useMutation({
+    mutationFn: ({ id, isEnabled }: { id: string; isEnabled: boolean }) =>
+      adminApiRequest("PATCH", `/api/admin/ai-conversation-flow/${id}`, { isEnabled }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-ai-conversation-flow"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error updating category",
+        description: error.response?.data?.message || "Failed to update category",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const reorderMutation = useMutation({
+    mutationFn: (orderedIds: string[]) =>
+      adminApiRequest("PUT", "/api/admin/ai-conversation-flow/reorder", { orderedIds }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-ai-conversation-flow"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error reordering categories",
+        description: error.response?.data?.message || "Failed to reorder categories",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const resetForm = () => {
+    setFormData({
+      categoryKey: "",
+      categoryName: "",
+      emoji: "",
+      description: "",
+      initialMessage: "",
+      followUpSteps: [],
+      confidenceThreshold: "0.7",
+      visualsHelpful: true,
+    });
+  };
+
+  const handleEdit = (item: AiFlowSetting) => {
+    setEditingItem(item);
+    setFormData({
+      categoryKey: item.categoryKey,
+      categoryName: item.categoryName,
+      emoji: item.emoji || "",
+      description: item.description || "",
+      initialMessage: item.initialMessage || "",
+      followUpSteps: item.followUpSteps || [],
+      confidenceThreshold: item.confidenceThreshold || "0.7",
+      visualsHelpful: item.visualsHelpful,
+    });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload = {
+      ...formData,
+      followUpSteps: formData.followUpSteps.length > 0 ? formData.followUpSteps : null,
+    };
+
+    if (editingItem) {
+      updateMutation.mutate({ id: editingItem.id, data: payload });
+    } else {
+      createMutation.mutate(payload);
+    }
+  };
+
+  const handleMoveUp = (index: number) => {
+    if (index <= 0) return;
+    const newOrder = [...settings];
+    [newOrder[index - 1], newOrder[index]] = [newOrder[index], newOrder[index - 1]];
+    reorderMutation.mutate(newOrder.map((s) => s.id));
+  };
+
+  const handleMoveDown = (index: number) => {
+    if (index >= settings.length - 1) return;
+    const newOrder = [...settings];
+    [newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]];
+    reorderMutation.mutate(newOrder.map((s) => s.id));
+  };
+
+  if (!isSuperAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>AI Conversation Flow</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Super admin access required.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle>AI Conversation Flow Settings</CardTitle>
+              <CardDescription>
+                Manage categories displayed on the resident dashboard and customize AI conversations for each category.
+              </CardDescription>
+            </div>
+            <div className="flex gap-2">
+              {settings.length === 0 && (
+                <Button 
+                  variant="outline" 
+                  onClick={() => seedMutation.mutate()}
+                  disabled={seedMutation.isPending}
+                >
+                  {seedMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Seed Default Categories
+                </Button>
+              )}
+              <Button onClick={() => setIsCreateDialogOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Category
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          ) : error ? (
+            <p className="text-sm text-destructive">Failed to load AI conversation flow settings.</p>
+          ) : settings.length === 0 ? (
+            <div className="py-10 text-center">
+              <p className="text-sm text-muted-foreground">
+                No categories configured yet. Seed default categories or create one manually.
+              </p>
+              <div className="mt-4 flex justify-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => seedMutation.mutate()}
+                  disabled={seedMutation.isPending}
+                >
+                  {seedMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Seed Default Categories
+                </Button>
+                <Button onClick={() => setIsCreateDialogOpen(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Category
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="w-full overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-12">Order</TableHead>
+                    <TableHead>Emoji</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Key</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Enabled</TableHead>
+                    <TableHead>Visuals</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {settings.map((item, index) => (
+                    <TableRow key={item.id} className={!item.isEnabled ? "opacity-50" : ""}>
+                      <TableCell>
+                        <div className="flex items-center gap-1">
+                          <span className="text-sm text-muted-foreground w-6">{item.displayOrder}</span>
+                          <div className="flex flex-col gap-0.5">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-5 w-5 p-0"
+                              onClick={() => handleMoveUp(index)}
+                              disabled={index === 0}
+                            >
+                              <ChevronDown className="h-3 w-3 rotate-180" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-5 w-5 p-0"
+                              onClick={() => handleMoveDown(index)}
+                              disabled={index === settings.length - 1}
+                            >
+                              <ChevronDown className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-xl">{item.emoji || "📋"}</TableCell>
+                      <TableCell className="font-medium">{item.categoryName}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground font-mono">{item.categoryKey}</TableCell>
+                      <TableCell className="max-w-[200px] truncate text-sm text-muted-foreground">
+                        {item.description || "—"}
+                      </TableCell>
+                      <TableCell>
+                        <Switch
+                          checked={item.isEnabled}
+                          onCheckedChange={(checked) =>
+                            toggleEnabledMutation.mutate({ id: item.id, isEnabled: checked })
+                          }
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={item.visualsHelpful ? "default" : "secondary"}>
+                          {item.visualsHelpful ? "Yes" : "No"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleEdit(item)}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Edit category</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    if (confirm(`Delete "${item.categoryName}"?`)) {
+                                      deleteMutation.mutate(item.id);
+                                    }
+                                  }}
+                                >
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Delete category</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Create/Edit Dialog */}
+      <Dialog
+        open={isCreateDialogOpen || !!editingItem}
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsCreateDialogOpen(false);
+            setEditingItem(null);
+            resetForm();
+          }
+        }}
+      >
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editingItem ? "Edit Category" : "Create New Category"}
+            </DialogTitle>
+            <DialogDescription>
+              Configure how this category appears on the resident dashboard and customize the AI conversation flow.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Category Key *</Label>
+                <Input
+                  value={formData.categoryKey}
+                  onChange={(e) =>
+                    setFormData({ ...formData, categoryKey: e.target.value.toLowerCase().replace(/\s+/g, "_") })
+                  }
+                  placeholder="e.g., plumber, electrician"
+                  required
+                  disabled={!!editingItem}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Unique identifier (lowercase, underscores)
+                </p>
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Category Name *</Label>
+                <Input
+                  value={formData.categoryName}
+                  onChange={(e) =>
+                    setFormData({ ...formData, categoryName: e.target.value })
+                  }
+                  placeholder="e.g., Plumber, Electrician"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Emoji</Label>
+                <Input
+                  value={formData.emoji}
+                  onChange={(e) =>
+                    setFormData({ ...formData, emoji: e.target.value })
+                  }
+                  placeholder="e.g., 🔧, ⚡"
+                />
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Confidence Threshold</Label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="1"
+                  value={formData.confidenceThreshold}
+                  onChange={(e) =>
+                    setFormData({ ...formData, confidenceThreshold: e.target.value })
+                  }
+                  placeholder="0.7"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  AI confidence needed before proceeding (0-1)
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium">Description</Label>
+              <Input
+                value={formData.description}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
+                placeholder="Brief description for this category"
+              />
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium">Initial Message</Label>
+              <Textarea
+                value={formData.initialMessage}
+                onChange={(e) =>
+                  setFormData({ ...formData, initialMessage: e.target.value })
+                }
+                placeholder="The first message CityBuddy shows when this category is selected..."
+                rows={3}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Leave empty to use AI-generated greeting
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Switch
+                id="visualsHelpful"
+                checked={formData.visualsHelpful}
+                onCheckedChange={(checked) =>
+                  setFormData({ ...formData, visualsHelpful: checked })
+                }
+              />
+              <Label htmlFor="visualsHelpful" className="text-sm font-medium">
+                Visuals Helpful (prompt user for photos)
+              </Label>
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsCreateDialogOpen(false);
+                  setEditingItem(null);
+                  resetForm();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={createMutation.isPending || updateMutation.isPending}
+              >
+                {(createMutation.isPending || updateMutation.isPending) && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                {editingItem ? "Update Category" : "Create Category"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 };
 
@@ -1501,6 +2028,7 @@ const UsersManagement = () => {
   const { toast } = useToast();
   const { user } = useAdminAuth();
   const isSuperAdmin = user?.globalRole === "super_admin";
+  const [, setLocation] = useLocation();
 
   const updateMembershipMutation = useMutation({
     mutationFn: ({ id, updates }: { id: string; updates: any }) =>
@@ -1515,6 +2043,24 @@ const UsersManagement = () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users/all"] });
       toast({ title: "Membership updated" });
       setEditingMembershipId(null);
+    },
+  });
+
+  const impersonateUserMutation = useMutation({
+    mutationFn: (userId: string) => adminApiRequest("POST", `/api/admin/impersonate/${userId}`),
+    onSuccess: () => {
+      toast({
+        title: "Impersonation started",
+        description: "You are now impersonating this user.",
+      });
+      setLocation("/");
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Impersonation failed",
+        description: error?.message || "Unable to impersonate user.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -2136,6 +2682,23 @@ const UsersManagement = () => {
                             <p>Preview user details</p>
                           </TooltipContent>
                         </Tooltip>
+                        {isSuperAdmin && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => impersonateUserMutation.mutate(userId)}
+                                data-testid={`button-impersonate-user-${userId}`}
+                              >
+                                <UserCheck className="w-4 h-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Impersonate user</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
@@ -5939,6 +6502,46 @@ export default function AdminSuperDashboard() {
       setSelectedEstateId(String(estateId));
     }
   }, [estateList, selectedEstateId, sessionChecked, user]);
+
+  // Listen for service request SSE events to keep stats fresh
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+
+    const setupSSE = () => {
+      try {
+        const es = new EventSource("/api/service-requests/stream");
+        
+        es.addEventListener("service-request", (event: Event) => {
+          try {
+            const evt = event as any;
+            const data = JSON.parse(evt.data);
+            if (data.type === "created" || data.type === "updated" || data.type === "assigned") {
+              // Invalidate bridge stats to refresh counts
+              queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/stats"] });
+              queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/service-requests"] });
+            }
+          } catch (e) {
+            // ignore parse errors
+          }
+        });
+
+        es.addEventListener("error", () => {
+          es.close();
+        });
+
+        return () => {
+          es.close();
+        };
+      } catch (e) {
+        // EventSource not available or failed
+        return undefined;
+      }
+    };
+
+    const cleanup = setupSSE();
+    return cleanup;
+  }, [isSuperAdmin]);
+
   const { toast } = useToast();
   const notificationCount = providerRequests.length;
   const acceptRequestMutation = useMutation({
@@ -6051,8 +6654,8 @@ export default function AdminSuperDashboard() {
 
   return (
     
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div className="flex">
+    <div className="h-screen overflow-hidden bg-gray-50 dark:bg-gray-900">
+      <div className="flex h-full">
         {/* Sidebar */}
         <AdminSidebar
           activeTab={activeTab}
@@ -6062,7 +6665,7 @@ export default function AdminSuperDashboard() {
         />
 
         {/* Main Content */}
-        <div className="flex-1 lg:ml-0">
+        <div className="flex-1 lg:ml-0 h-full overflow-y-auto">
           {/* Mobile Header */}
           <div className="lg:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
             <div className="flex items-center justify-between">
@@ -6343,6 +6946,7 @@ export default function AdminSuperDashboard() {
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "orders" && <OrdersManagement />}
             {activeTab === "ai-conversations" && <AiConversationsPanel />}
+            {activeTab === "ai-conversation-flow" && <AiConversationFlowPanel />}
             {activeTab === "ai-prepared-requests" && <AiPreparedRequestsPanel />}
             {activeTab === "pricing-rules" && <PricingRulesPanel />}
             {activeTab === "provider-matching" && <ProviderMatchingPanel />}

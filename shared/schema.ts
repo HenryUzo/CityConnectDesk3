@@ -156,6 +156,18 @@ export const broadcastStatusEnum = pgEnum("broadcast_status", [
   "sent",
   "scheduled",
 ]);
+export const conversationStatusEnum = pgEnum("conversation_status", [
+  "active",
+  "closed",
+]);
+export const conversationRoleEnum = pgEnum("conversation_role", [
+  "user",
+  "assistant",
+]);
+export const conversationMessageTypeEnum = pgEnum("conversation_message_type", [
+  "text",
+  "image",
+]);
 
 // Simple app settings (key/value) table for global configs
 export const appSettings = pgTable("app_settings", {
@@ -700,6 +712,35 @@ export const requestMessages = pgTable("request_messages", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const conversations = pgTable("conversations", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  residentId: varchar("resident_id")
+    .notNull()
+    .references(() => users.id),
+  category: text("category").notNull(),
+  status: conversationStatusEnum("status").notNull().default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  uniqueResidentCategory: sql`UNIQUE (${table.residentId}, ${table.category})`,
+}));
+
+export const conversationMessages = pgTable("conversation_messages", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  conversationId: varchar("conversation_id")
+    .notNull()
+    .references(() => conversations.id),
+  role: conversationRoleEnum("role").notNull(),
+  type: conversationMessageTypeEnum("type").notNull().default("text"),
+  content: text("content").notNull(),
+  meta: jsonb("meta"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 //Telematics pointer Table
 export const deviceAssignments = pgTable("device_assignments", {
   id: varchar("id")
@@ -768,6 +809,30 @@ export const providerMatchingSettings = pgTable("provider_matching_settings", {
   settings: jsonb("settings").notNull().default("{}"),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// AI Conversation Flow Settings - Controls which categories appear on resident category selection
+// and customizes the conversation flow for each category
+export const aiConversationFlowSettings = pgTable("ai_conversation_flow_settings", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  categoryKey: text("category_key").notNull().unique(), // e.g., "store_owner", "maintenance_repair"
+  categoryName: text("category_name").notNull(), // Display name, e.g., "Store Owner"
+  isEnabled: boolean("is_enabled").notNull().default(true), // Show/hide on resident category selection
+  displayOrder: integer("display_order").notNull().default(0), // Order in the category list
+  emoji: text("emoji"), // Category emoji
+  description: text("description"), // Category description shown to residents
+  // Conversation flow customization
+  initialMessage: text("initial_message"), // Custom first message from CityBuddy
+  followUpSteps: jsonb("follow_up_steps").notNull().default("[]"), // Array of step configs
+  confidenceThreshold: integer("confidence_threshold").notNull().default(70),
+  visualsHelpful: boolean("visuals_helpful").notNull().default(false),
+  // Metadata
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertAiConversationFlowSettingsSchema = createInsertSchema(aiConversationFlowSettings);
 
 // Relations
 export const estatesRelations = relations(estates, ({ many }) => ({

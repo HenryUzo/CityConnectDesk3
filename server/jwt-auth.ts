@@ -13,7 +13,7 @@ import {
 import { requireAuth } from "./auth-middleware";
 import { authRateLimiter } from "./rate-limiter";
 import { db } from "./db";
-import { estates, memberships } from "@shared/schema";
+import { companies, estates, memberships } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
 const scryptAsync = promisify(scrypt);
@@ -127,7 +127,7 @@ export function setupJWTAuth(app: Express) {
 
       if (normalizedRole === "provider") {
         if (newCompanyName && newCompanyName.trim()) {
-          const createdCompany = await db
+          const [createdCompany] = await db
             .insert(companies)
             .values({
               name: newCompanyName.trim(),
@@ -138,8 +138,7 @@ export function setupJWTAuth(app: Express) {
               submittedAt: new Date(),
               isActive: false,
             })
-            .returning()
-            .then((rows) => rows[0]);
+            .returning();
           if (createdCompany) {
             await storage.updateUser(user.id, { company: createdCompany.id } as any);
           }

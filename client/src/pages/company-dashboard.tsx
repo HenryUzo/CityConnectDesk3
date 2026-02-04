@@ -225,6 +225,8 @@ const generatePassword = () => {
 export default function CompanyDashboard() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+
+  // ALL HOOKS MUST BE CALLED UNCONDITIONALLY AT THE TOP
   const { data: providerCompany, isLoading: isLoadingCompany } = useQuery({
     queryKey: ["/api/provider/company"],
     queryFn: async () => {
@@ -235,33 +237,10 @@ export default function CompanyDashboard() {
     staleTime: 30_000,
   });
 
-  useEffect(() => {
-    if (isLoadingCompany) return;
-    if (providerCompany && providerCompany.isActive === false) {
-      toast({
-        title: "Company pending approval",
-        description: "Your company is awaiting verification by an admin.",
-      });
-      setLocation("/provider");
-    }
-  }, [providerCompany, isLoadingCompany, setLocation, toast]);
-
-  if (providerCompany && providerCompany.isActive === false) {
-    return null;
-  }
-
   const { data, isLoading, error } = useQuery<BusinessOverview>({
     queryKey: ["/api/business/overview"],
     queryFn: getQueryFn<BusinessOverview>({ on401: "returnNull" }),
   });
-
-  const stats = data ?? {
-    totalProviders: 0,
-    activeRequests: 0,
-    totalRevenue: 0,
-    recentActivity: [],
-    latestTransactions: [],
-  };
 
   const {
     data: serviceCategories = [],
@@ -323,6 +302,39 @@ export default function CompanyDashboard() {
       .filter((category) => category.isActive !== false)
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }, [serviceCategories]);
+
+  // HANDLE REDIRECTS AFTER ALL HOOKS
+  useEffect(() => {
+    if (isLoadingCompany) return;
+    
+    // If no company returned, provider is not authorized to access company dashboard
+    if (!providerCompany) {
+      toast({
+        title: "Access Denied",
+        description: "You don't have permission to access company dashboard. Only company owners can access this page.",
+        variant: "destructive",
+      });
+      setLocation("/provider");
+      return;
+    }
+    
+    // If company is not approved, redirect
+    if (providerCompany.isActive === false) {
+      toast({
+        title: "Company pending approval",
+        description: "Your company is awaiting verification by an admin.",
+      });
+      setLocation("/provider");
+    }
+  }, [providerCompany, isLoadingCompany, setLocation, toast]);
+
+  const stats = data ?? {
+    totalProviders: 0,
+    activeRequests: 0,
+    totalRevenue: 0,
+    recentActivity: [],
+    latestTransactions: [],
+  };
 
   const itemCategoryOptions = useMemo(() => {
     return [...itemCategories]
@@ -767,6 +779,11 @@ export default function CompanyDashboard() {
   };
 
   return (
+    <>
+      {!providerCompany || providerCompany.isActive === false ? (
+        // Render nothing while redirecting (useEffect handles navigation)
+        null
+      ) : (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <nav className="bg-white border-b border-slate-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -1447,7 +1464,7 @@ export default function CompanyDashboard() {
       </Dialog>
 
       <Dialog open={showProviderModal} onOpenChange={setShowProviderModal}>
-        <DialogContent className="w-[60vw] max-w-[95vw]">
+        <DialogContent className="w-[80vw] max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Create a service provider</DialogTitle>
             <DialogDescription>
@@ -1455,308 +1472,173 @@ export default function CompanyDashboard() {
               the provider on your behalf.
             </DialogDescription>
           </DialogHeader>
+
           <Form {...providerForm}>
             <form className="space-y-4" onSubmit={onProviderSubmit}>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <FormField
-                  control={providerForm.control}
-                  name="firstName"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>First Name</FormLabel>
-                      <FormControl>
-                        <Input placeholder="First name" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={providerForm.control}
-                  name="lastName"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Last Name</FormLabel>
-                      <FormControl>
-                        <Input placeholder="Last name" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={providerForm.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Email</FormLabel>
-                      <FormControl>
-                        <Input placeholder="email@example.com" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <FormField
-                    control={providerForm.control}
-                    name="phone"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Phone number</FormLabel>
-                        <FormControl>
-                          <Input placeholder="+234 ..." {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
-              <FormField
-                control={providerForm.control}
-                name="categories"
-                render={({ field }) => (
+              <div className="grid gap-4 sm:grid-cols-3">
+                <FormField control={providerForm.control} name="firstName" render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Categories (comma separated)</FormLabel>
+                    <FormLabel>First Name</FormLabel>
                     <FormControl>
-                      <Input
-                        {...field}
-                        placeholder="plumbing, electrical"
-                        onChange={(e) =>
-                          field.onChange(
-                            e.target.value
-                              .split(",")
-                              .map((value) => value.trim())
-                              .filter(Boolean),
-                          )
-                        }
-                      />
+                      <Input placeholder="First name" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
-                )}
-              />
-              <FormField
-                control={providerForm.control}
-                name="description"
-                render={({ field }) => (
+                )} />
+
+                <FormField control={providerForm.control} name="lastName" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Last Name</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Last name" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={providerForm.control} name="email" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email</FormLabel>
+                    <FormControl>
+                      <Input placeholder="email@example.com" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <FormField control={providerForm.control} name="phone" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Phone number</FormLabel>
+                    <FormControl>
+                      <Input placeholder="+234 ..." {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={providerForm.control} name="password" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Password *</FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <Input
+                          type={passwordVisible ? "text" : "password"}
+                          placeholder="Enter password"
+                          value={field.value}
+                          onChange={(e) => field.onChange(e.target.value)}
+                          className="pr-20"
+                        />
+                        <button type="button" onClick={() => setPasswordVisible(v => !v)} className="absolute inset-y-0 right-10 flex items-center rounded-full border border-slate-200 bg-white px-2 shadow hover:border-slate-300 dark:border-gray-700 dark:bg-gray-900" aria-label="Toggle password visibility">
+                          {passwordVisible ? <EyeOff className="h-4 w-4 text-slate-600 dark:text-gray-200" /> : <Eye className="h-4 w-4 text-slate-600 dark:text-gray-200" />}
+                        </button>
+                        <button type="button" onClick={() => field.onChange(generatePassword())} className="absolute inset-y-0 right-1 flex items-center rounded-full border border-slate-200 bg-white px-2 shadow hover:border-slate-300 dark:border-gray-700 dark:bg-gray-900" aria-label="Generate random password">
+                          <Dice4 className="h-4 w-4 text-slate-600 dark:text-gray-200" />
+                        </button>
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={providerForm.control} name="company" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Company</FormLabel>
+                    <FormControl>
+                      <div className="space-y-2">
+                        <Input placeholder="Company name" value={providerCompany?.name || ""} readOnly />
+                        <Input type="hidden" {...field} />
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <FormField control={providerForm.control} name="experience" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Years of experience</FormLabel>
+                    <FormControl>
+                      <Input type="number" placeholder="0" {...field} onChange={(e) => field.onChange(Number(e.target.value) || 0)} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={providerForm.control} name="categories" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Service Categories</FormLabel>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" className="w-full justify-between">
+                          {field.value?.length ? `${field.value.length} selected` : "Select categories"}
+                          <ArrowRight className="ml-2 h-3 w-3 rotate-90" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[260px] sm:w-[320px]">
+                        <ScrollArea className="max-h-48 p-2">
+                          <div className="space-y-2">
+                            {serviceCategoriesLoading ? (
+                              <p className="px-3 py-2 text-sm text-slate-500">Loading categories...</p>
+                            ) : serviceCategoryOptions.length > 0 ? (
+                              serviceCategoryOptions.map((option) => {
+                                const optionValue = option.key || option.id;
+                                const isChecked = field.value?.includes(optionValue);
+                                return (
+                                  <label key={optionValue} className="flex items-center gap-2">
+                                    <Checkbox checked={isChecked} onCheckedChange={(value) => {
+                                      const next = value ? [...new Set([...(field.value || []), optionValue])] : (field.value || []).filter((c) => c !== optionValue);
+                                      field.onChange(next);
+                                    }} />
+                                    <span>{option.name || optionValue}</span>
+                                  </label>
+                                );
+                              })
+                            ) : (
+                              <p className="px-3 py-2 text-sm text-slate-500">No categories available.</p>
+                            )}
+                          </div>
+                        </ScrollArea>
+                      </PopoverContent>
+                    </Popover>
+                    {field.value?.length && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {field.value.map((value: string) => (
+                          <Badge key={value} variant="outline">{categoryNameMap.get(value) || value}</Badge>
+                        ))}
+                      </div>
+                    )}
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <div />
+              </div>
+
+              <div>
+                <FormField control={providerForm.control} name="description" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Description</FormLabel>
                     <FormControl>
-                      <Textarea
-                        placeholder="Tell us about your provider"
-                        {...field}
-                      />
+                      <Textarea placeholder="Brief description of services offered" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
-                )}
-              />
-              <div className="grid gap-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <FormField
-                    control={providerForm.control}
-                    name="password"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Password *</FormLabel>
-                        <FormControl>
-                          <div className="relative">
-                            <Input
-                              type={passwordVisible ? "text" : "password"}
-                              placeholder="Enter password"
-                              value={field.value}
-                              onChange={(event) =>
-                                field.onChange(event.target.value)
-                              }
-                              className="pr-20"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setPasswordVisible((prev) => !prev)}
-                              className="absolute inset-y-0 right-10 flex items-center rounded-full border border-slate-200 bg-white px-2 shadow hover:border-slate-300 dark:border-gray-700 dark:bg-gray-900"
-                              aria-label="Toggle password visibility"
-                            >
-                              {passwordVisible ? (
-                                <EyeOff className="h-4 w-4 text-slate-600 dark:text-gray-200" />
-                              ) : (
-                                <Eye className="h-4 w-4 text-slate-600 dark:text-gray-200" />
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => field.onChange(generatePassword())}
-                              className="absolute inset-y-0 right-1 flex items-center rounded-full border border-slate-200 bg-white px-2 shadow hover:border-slate-300 dark:border-gray-700 dark:bg-gray-900"
-                              aria-label="Generate random password"
-                            >
-                              <Dice4 className="h-4 w-4 text-slate-600 dark:text-gray-200" />
-                            </button>
-                          </div>
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                    <FormField
-                      control={providerForm.control}
-                      name="company"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Company</FormLabel>
-                          <FormControl>
-                            <div className="space-y-2">
-                              <Input
-                                placeholder="Company name"
-                                value={providerCompany?.name || ""}
-                                readOnly
-                              />
-                              <Input type="hidden" {...field} />
-                            </div>
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <FormField
-                    control={providerForm.control}
-                    name="experience"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Years of experience</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            placeholder="0"
-                            {...field}
-                            onChange={(e) =>
-                              field.onChange(Number(e.target.value) || 0)
-                            }
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={providerForm.control}
-                    name="categories"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Service Categories</FormLabel>
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <Button
-                              variant="outline"
-                              className="w-full justify-between"
-                            >
-                              {field.value?.length
-                                ? `${field.value.length} selected`
-                                : "Select categories"}
-                              <ArrowRight className="ml-2 h-3 w-3 rotate-90" />
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-[260px] sm:w-[320px]">
-                            <ScrollArea className="max-h-48 p-2">
-                              <div className="space-y-2">
-                                {serviceCategoriesLoading ? (
-                                  <p className="px-3 py-2 text-sm text-slate-500">
-                                    Loading categories...
-                                  </p>
-                                ) : serviceCategoryOptions.length > 0 ? (
-                                  serviceCategoryOptions.map((option) => {
-                                    const optionValue = option.key || option.id;
-                                    const isChecked = field.value?.includes(
-                                      optionValue,
-                                    );
-                                    return (
-                                      <label
-                                        key={optionValue}
-                                        className="flex items-center gap-2"
-                                      >
-                                        <Checkbox
-                                          checked={isChecked}
-                                          onCheckedChange={(value) => {
-                                            const next = value
-                                              ? [
-                                                  ...new Set([
-                                                    ...(field.value || []),
-                                                    optionValue,
-                                                  ]),
-                                                ]
-                                              : (field.value || []).filter(
-                                                  (c) => c !== optionValue,
-                                                );
-                                            field.onChange(next);
-                                          }}
-                                        />
-                                        <span>{option.name || optionValue}</span>
-                                      </label>
-                                    );
-                                  })
-                                ) : (
-                                  <p className="px-3 py-2 text-sm text-slate-500">
-                                    No categories available.
-                                  </p>
-                                )}
-                              </div>
-                            </ScrollArea>
-                          </PopoverContent>
-                        </Popover>
-                        {field.value?.length && (
-                          <div className="flex flex-wrap gap-2 mt-2">
-                            {field.value.map((value: string) => {
-                              const label =
-                                categoryNameMap.get(value) || value;
-                              return (
-                                <Badge key={value} variant="outline">
-                                  {label}
-                                </Badge>
-                              );
-                            })}
-                          </div>
-                        )}
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
-                <div>
-                  <FormField
-                    control={providerForm.control}
-                    name="description"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Description</FormLabel>
-                        <FormControl>
-                          <Textarea
-                            placeholder="Brief description of services offered"
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
-                <div className="flex justify-end gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowProviderModal(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button type="submit" disabled={!providerCompany?.id}>
-                    Create Provider
-                  </Button>
-                </div>
+                )} />
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowProviderModal(false)}>Cancel</Button>
+                <Button type="submit" disabled={!providerCompany?.id}>Create Provider</Button>
               </div>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
     </div>
+      )}
+    </>
   );
 }

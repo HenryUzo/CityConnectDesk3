@@ -42,7 +42,7 @@ import {
   type Membership,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, count, sql, asc, or, inArray, sum } from "drizzle-orm";
+import { eq, and, desc, count, sql, asc, or, inArray, sum, isNull } from "drizzle-orm";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
 const PostgresSessionStore = connectPg(session);
@@ -719,6 +719,8 @@ export class DatabaseStorage implements IStorage {
 
 
   async getAvailableServiceRequests(category?: string): Promise<ServiceRequest[]> {
+    // Only show pending requests that haven't been assigned to any provider yet
+    // (i.e., providerId is NULL)
     if (category) {
       const requests = await db
         .select()
@@ -726,7 +728,8 @@ export class DatabaseStorage implements IStorage {
         .where(
           and(
             eq(serviceRequests.status, "pending"),
-            eq(serviceRequests.category, category as any)
+            eq(serviceRequests.category, category as any),
+            isNull(serviceRequests.providerId)
           )
         )
         .orderBy(desc(serviceRequests.createdAt));
@@ -736,7 +739,12 @@ export class DatabaseStorage implements IStorage {
     const requests = await db
       .select()
       .from(serviceRequests)
-      .where(eq(serviceRequests.status, "pending"))
+      .where(
+        and(
+          eq(serviceRequests.status, "pending"),
+          isNull(serviceRequests.providerId)
+        )
+      )
       .orderBy(desc(serviceRequests.createdAt));
     return requests;
   }

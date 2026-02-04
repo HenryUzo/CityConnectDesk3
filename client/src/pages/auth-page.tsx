@@ -256,16 +256,18 @@ export default function AuthPage() {
       
       // Handle redirect immediately after login
       if (loggedInUser) {
-        if (loggedInUser.role === "resident") {
-          setLocation("/resident");
+        if (loggedInUser.globalRole === "super_admin" || loggedInUser.role === "admin") {
+          setLocation("/admin-dashboard");
+        } else if (loggedInUser.role === "estate_admin") {
+          setLocation("/estate-dashboard");
         } else if (loggedInUser.role === "provider") {
           if (loggedInUser.isApproved === false) {
-            setLocation("/waiting-room");
+            setLocation("/provider-waiting-room");
           } else {
             setLocation("/provider");
           }
-        } else if (loggedInUser.role === "admin") {
-          setLocation("/admin");
+        } else if (loggedInUser.role === "resident") {
+          setLocation("/resident");
         }
       }
     } catch (error) {

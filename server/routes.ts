@@ -29,6 +29,7 @@ import {
   storeMembers,
   notifications,
   storeEstates,
+  aiConversationFlowSettings,
 } from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
@@ -56,9 +57,6 @@ import {
   handlePaystackWebhook,
 } from "./paystackHandlers";
 import { requireAuth, requireResident, requireSuperAdmin } from "./auth-middleware";
-
-// Define requireAdmin as an alias for requireSuperAdmin
-const requireAdmin = requireSuperAdmin;
 
 import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
 import * as ai from "./ai";
@@ -424,6 +422,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const created = await storage.createServiceRequest(parsed);
+      
+      // Broadcast new service request to SSE clients (for admin dashboard real-time updates)
+      try {
+        // @ts-ignore
+        if (global.__serviceRequestSseClients && Array.isArray(global.__serviceRequestSseClients)) {
+          const payload = { type: "created", request: created };
+          const data = JSON.stringify(payload);
+          // @ts-ignore
+          for (const c of global.__serviceRequestSseClients) {
+            try {
+              c.res.write(`event: service-request\n`);
+              c.res.write(`data: ${data}\n\n`);
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Failed to broadcast service-request created event", e);
+      }
+      
       return res.status(201).json(created);
     } catch (error: any) {
       if (error?.issues) {
@@ -477,6 +496,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { id } = req.params;
       const updates = req.body;
+
+      // Convert timestamp fields from ISO strings back to Date objects
+      const timestampFields = ["assignedAt", "closedAt", "createdAt", "updatedAt", "preferredTime"];
+      for (const field of timestampFields) {
+        if (updates[field] && typeof updates[field] === "string") {
+          updates[field] = new Date(updates[field]);
+        }
+      }
 
       const serviceRequest = await storage.updateServiceRequest(id, updates);
       if (!serviceRequest) {
@@ -1351,6 +1378,198 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
+  // ========== AI Conversation Flow Settings ==========
+  // GET all AI conversation flow settings
+  app.get("/api/admin/ai-conversation-flow", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const settings = await db
+        .select()
+        .from(aiConversationFlowSettings)
+        .orderBy(asc(aiConversationFlowSettings.displayOrder));
+      return res.json(settings);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // POST create new AI conversation flow setting
+  app.post("/api/admin/ai-conversation-flow", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const body = req.body ?? {};
+      
+      // Validate required fields
+      if (!body.categoryKey || !body.categoryName) {
+        return res.status(400).json({ message: "categoryKey and categoryName are required" });
+      }
+
+      // Check if category already exists
+      const existing = await db
+        .select({ id: aiConversationFlowSettings.id })
+        .from(aiConversationFlowSettings)
+        .where(eq(aiConversationFlowSettings.categoryKey, body.categoryKey))
+        .limit(1);
+
+      if (existing.length) {
+        return res.status(400).json({ message: "Category with this key already exists" });
+      }
+
+      // Get next display order
+      const maxOrderResult = await db
+        .select({ maxOrder: sql<number>`COALESCE(MAX(${aiConversationFlowSettings.displayOrder}), 0)` })
+        .from(aiConversationFlowSettings);
+      const nextOrder = (maxOrderResult[0]?.maxOrder ?? 0) + 1;
+
+      const [created] = await db
+        .insert(aiConversationFlowSettings)
+        .values({
+          categoryKey: body.categoryKey.trim(),
+          categoryName: body.categoryName.trim(),
+          isEnabled: body.isEnabled ?? true,
+          displayOrder: body.displayOrder ?? nextOrder,
+          emoji: body.emoji || null,
+          description: body.description || null,
+          initialMessage: body.initialMessage || null,
+          followUpSteps: body.followUpSteps || null,
+          confidenceThreshold: body.confidenceThreshold ? String(body.confidenceThreshold) : null,
+          visualsHelpful: body.visualsHelpful ?? true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      return res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // PATCH update AI conversation flow setting
+  app.patch("/api/admin/ai-conversation-flow/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const id = String(req.params.id || "");
+      const body = req.body ?? {};
+
+      const patch: any = { updatedAt: new Date() };
+      
+      if (typeof body.categoryName === "string") patch.categoryName = body.categoryName.trim();
+      if (body.isEnabled !== undefined) patch.isEnabled = Boolean(body.isEnabled);
+      if (body.displayOrder !== undefined && Number.isFinite(Number(body.displayOrder))) {
+        patch.displayOrder = Number(body.displayOrder);
+      }
+      if (body.emoji !== undefined) patch.emoji = body.emoji || null;
+      if (body.description !== undefined) patch.description = body.description || null;
+      if (body.initialMessage !== undefined) patch.initialMessage = body.initialMessage || null;
+      if (body.followUpSteps !== undefined) patch.followUpSteps = body.followUpSteps;
+      if (body.confidenceThreshold !== undefined) {
+        patch.confidenceThreshold = body.confidenceThreshold ? String(body.confidenceThreshold) : null;
+      }
+      if (body.visualsHelpful !== undefined) patch.visualsHelpful = Boolean(body.visualsHelpful);
+
+      const updated = await db
+        .update(aiConversationFlowSettings)
+        .set(patch)
+        .where(eq(aiConversationFlowSettings.id, id))
+        .returning();
+
+      if (!updated.length) return res.status(404).json({ message: "Not found" });
+      return res.json(updated[0]);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // DELETE AI conversation flow setting
+  app.delete("/api/admin/ai-conversation-flow/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const id = String(req.params.id || "");
+      
+      const deleted = await db
+        .delete(aiConversationFlowSettings)
+        .where(eq(aiConversationFlowSettings.id, id))
+        .returning();
+
+      if (!deleted.length) return res.status(404).json({ message: "Not found" });
+      return res.json({ success: true, message: "Deleted successfully" });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // PUT reorder AI conversation flow settings
+  app.put("/api/admin/ai-conversation-flow/reorder", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const { orderedIds } = req.body ?? {};
+      
+      if (!Array.isArray(orderedIds)) {
+        return res.status(400).json({ message: "orderedIds array is required" });
+      }
+
+      // Update each item's displayOrder
+      for (let i = 0; i < orderedIds.length; i++) {
+        await db
+          .update(aiConversationFlowSettings)
+          .set({ displayOrder: i + 1, updatedAt: new Date() })
+          .where(eq(aiConversationFlowSettings.id, orderedIds[i]));
+      }
+
+      const updated = await db
+        .select()
+        .from(aiConversationFlowSettings)
+        .orderBy(asc(aiConversationFlowSettings.displayOrder));
+
+      return res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Seed default categories if none exist
+  app.post("/api/admin/ai-conversation-flow/seed", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const existing = await db.select({ id: aiConversationFlowSettings.id }).from(aiConversationFlowSettings).limit(1);
+      
+      if (existing.length) {
+        return res.json({ message: "Categories already exist", seeded: false });
+      }
+
+      const defaultCategories = [
+        { categoryKey: "plumber", categoryName: "Plumber", emoji: "🔧", description: "Plumbing repairs and installations", displayOrder: 1 },
+        { categoryKey: "electrician", categoryName: "Electrician", emoji: "⚡", description: "Electrical repairs and installations", displayOrder: 2 },
+        { categoryKey: "carpenter", categoryName: "Carpenter", emoji: "🪚", description: "Woodwork and furniture repairs", displayOrder: 3 },
+        { categoryKey: "painter", categoryName: "Painter", emoji: "🎨", description: "Painting and wall treatments", displayOrder: 4 },
+        { categoryKey: "cleaner", categoryName: "Cleaner", emoji: "🧹", description: "Cleaning and sanitation services", displayOrder: 5 },
+        { categoryKey: "hvac", categoryName: "HVAC", emoji: "❄️", description: "Heating, ventilation, and air conditioning", displayOrder: 6 },
+        { categoryKey: "landscaper", categoryName: "Landscaper", emoji: "🌳", description: "Garden and outdoor maintenance", displayOrder: 7 },
+        { categoryKey: "pest_control", categoryName: "Pest Control", emoji: "🐜", description: "Pest removal and prevention", displayOrder: 8 },
+        { categoryKey: "appliance_repair", categoryName: "Appliance Repair", emoji: "🔌", description: "Home appliance repairs", displayOrder: 9 },
+        { categoryKey: "locksmith", categoryName: "Locksmith", emoji: "🔐", description: "Lock and key services", displayOrder: 10 },
+        { categoryKey: "moving", categoryName: "Moving", emoji: "📦", description: "Moving and relocation services", displayOrder: 11 },
+        { categoryKey: "security", categoryName: "Security", emoji: "🛡️", description: "Security systems and monitoring", displayOrder: 12 },
+        { categoryKey: "store_owner", categoryName: "Store Owner", emoji: "🏪", description: "Store management and operations", displayOrder: 13 },
+        { categoryKey: "market_runner", categoryName: "Market Runner", emoji: "🏃", description: "Errand and delivery services", displayOrder: 14 },
+        { categoryKey: "item_vendor", categoryName: "Item Vendor", emoji: "🛒", description: "Product sales and vendors", displayOrder: 15 },
+        { categoryKey: "alarm_system", categoryName: "Alarm System", emoji: "🚨", description: "Alarm installation and monitoring", displayOrder: 16 },
+        { categoryKey: "packaging_solutions", categoryName: "Packaging Solutions", emoji: "📤", description: "Packaging and shipping services", displayOrder: 17 },
+        { categoryKey: "general", categoryName: "General", emoji: "📋", description: "General inquiries and requests", displayOrder: 18 },
+      ];
+
+      const inserted = await db
+        .insert(aiConversationFlowSettings)
+        .values(defaultCategories.map(cat => ({
+          ...cat,
+          isEnabled: true,
+          visualsHelpful: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })))
+        .returning();
+
+      return res.status(201).json({ message: "Default categories seeded", seeded: true, categories: inserted });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Admin: Send advice with inspection dates/times to resident
   app.post("/api/admin/service-requests/:id/advice", async (req, res, next) => {
     try {
@@ -1842,6 +2061,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
       res.json(user);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/impersonate/:userId", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      if (req.user?.globalRole !== "super_admin") {
+        return res.status(403).json({ message: "Super admin only" });
+      }
+
+      const { userId } = req.params;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const session = req.session as any;
+      if (!session.impersonatorId) {
+        session.impersonatorId = req.user?.id;
+        session.impersonatorEmail = req.user?.email;
+      }
+
+      req.login(targetUser, (err) => {
+        if (err) return next(err);
+        res.json({ success: true });
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/impersonate/stop", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const session = req.session as any;
+      if (!session?.impersonatorId) {
+        return res.status(400).json({ message: "Not impersonating" });
+      }
+
+      const adminUser = await storage.getUser(session.impersonatorId);
+      if (!adminUser) {
+        return res.status(404).json({ message: "Impersonator not found" });
+      }
+
+      delete session.impersonatorId;
+      delete session.impersonatorEmail;
+
+      req.login(adminUser, (err) => {
+        if (err) return next(err);
+        res.json({ success: true });
+      });
     } catch (error) {
       next(error);
     }
@@ -2814,6 +3090,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "User not in your company" });
         }
 
+        const [ownedCompany] = await db
+          .select({ id: companies.id })
+          .from(companies)
+          .where(eq(companies.providerId, parsed.userId))
+          .limit(1 as any);
+        if (ownedCompany && String(ownedCompany.id) !== companyId) {
+          return res.status(400).json({ message: "This user already owns another company." });
+        }
+
+        const memberRecord = await storage.getUser(parsed.userId);
+        const memberCompanyId = String(memberRecord?.company || "").trim();
+        if (memberCompanyId && memberCompanyId !== companyId && memberCompanyId !== companyName) {
+          return res.status(400).json({ message: "This user is already part of another company." });
+        }
+
+        const [otherCompanyMembership] = await db
+          .select({ id: storeMembers.id })
+          .from(storeMembers)
+          .innerJoin(stores, eq(storeMembers.storeId, stores.id))
+          .where(
+            and(
+              eq(storeMembers.userId, parsed.userId),
+              eq(storeMembers.isActive, true),
+              isNotNull(stores.companyId),
+              sql`${stores.companyId} <> ${company.id}`,
+            ),
+          )
+          .limit(1 as any);
+        if (otherCompanyMembership) {
+          return res.status(400).json({ message: "This user is already part of another company." });
+        }
+
         const role = parsed.role ?? "member";
         const canManageItems = parsed.canManageItems ?? role === "manager";
         const canManageOrders = parsed.canManageOrders ?? true;
@@ -2871,15 +3179,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .orderBy(desc(storeMembers.createdAt));
 
         res.json(
-          rows.map(({ member, user }) => ({
-            ...member,
+          rows.map((row: { member: typeof storeMembers.$inferSelect; user: typeof users.$inferSelect }) => ({
+            ...row.member,
             user: {
-              id: user.id,
-              name: user.name,
-              email: user.email,
-              phone: user.phone,
-              role: user.role,
-              isActive: user.isActive,
+              id: row.user.id,
+              name: row.user.name,
+              email: row.user.email,
+              phone: row.user.phone,
+              role: row.user.role,
+              isActive: row.user.isActive,
             },
           })),
         );
@@ -2915,21 +3223,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Store not found" });
         }
 
-        const isOwner =
-          store.ownerId === userId ||
-          !!(await db
-            .select({ id: storeMembers.id })
-            .from(storeMembers)
-            .where(
-              and(
-                eq(storeMembers.storeId, storeId),
-                eq(storeMembers.userId, userId),
-                eq(storeMembers.role, "owner"),
-                eq(storeMembers.isActive, true),
-              ),
-            )
-            .limit(1 as any))
-            .then((rows) => rows[0]);
+        const ownerRows = await db
+          .select({ id: storeMembers.id })
+          .from(storeMembers)
+          .where(
+            and(
+              eq(storeMembers.storeId, storeId),
+              eq(storeMembers.userId, userId),
+              eq(storeMembers.role, "owner"),
+              eq(storeMembers.isActive, true),
+            ),
+          )
+          .limit(1 as any);
+
+        const isOwner = store.ownerId === userId || Boolean(ownerRows[0]);
 
         if (!isOwner) {
           return res.status(403).json({ message: "Only the store owner can transfer ownership" });
@@ -2954,7 +3261,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const oldOwnerId = store.ownerId || userId;
 
-        await db.transaction(async (tx) => {
+        await db.transaction(async (tx: typeof db) => {
           await tx
             .update(storeMembers)
             .set({
@@ -3382,6 +3689,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const rows = await query.orderBy(desc(companies.createdAt));
       res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/companies", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const user = await storage.getUser(userId);
+      if (user?.role !== "provider") {
+        return res.status(403).json({ message: "Only providers can create companies." });
+      }
+      if (user.company) {
+        return res
+          .status(403)
+          .json({ message: "You must leave your current company to create a new one." });
+      }
+
+      const [ownedCompany] = await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(eq(companies.providerId, userId))
+        .limit(1 as any);
+      if (ownedCompany) {
+        return res
+          .status(403)
+          .json({ message: "You must leave your current company to create a new one." });
+      }
+
+      const [activeMembership] = await db
+        .select({ id: storeMembers.id })
+        .from(storeMembers)
+        .where(
+          and(
+            eq(storeMembers.userId, userId),
+            eq(storeMembers.isActive, true),
+          ),
+        )
+        .limit(1 as any);
+      if (activeMembership) {
+        return res
+          .status(403)
+          .json({ message: "You must leave your current company to create a new one." });
+      }
+
+      const createCompanySchema = z.object({
+        name: z.string().min(2, "Business name is required"),
+        description: z.string().max(1000).optional(),
+        contactEmail: z.string().email("Valid contact email is required").optional(),
+        phone: z.string().min(7).max(20).optional(),
+      });
+
+      const validated = createCompanySchema.parse(req.body);
+      const createdCompany = await storage.createCompany({
+        name: validated.name,
+        description: validated.description,
+        contactEmail: validated.contactEmail,
+        phone: validated.phone,
+        details: {},
+        isActive: false,
+        providerId: userId,
+        submittedAt: new Date(),
+      });
+
+      await storage.updateUser(userId, { company: createdCompany.id } as any);
+
+      res.status(201).json(createdCompany);
     } catch (error) {
       next(error);
     }
@@ -4109,6 +4487,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { storeId } = req.params;
       const parsed = StoreMemberSchema.parse(req.body);
+      const [store] = await db
+        .select()
+        .from(stores)
+        .where(eq(stores.id, storeId))
+        .limit(1 as any);
+      if (!store) {
+        return res.status(404).json({ message: "Store not found" });
+      }
 
       const existing = await db
         .select()
@@ -4130,6 +4516,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .limit(1);
         if (ownerExists.length > 0) {
           return res.status(409).json({ message: "Store already has an owner" });
+        }
+      }
+
+      const storeCompanyId = String(store.companyId || "").trim();
+      if (storeCompanyId) {
+        const [storeCompany] = await db
+          .select({ id: companies.id, name: companies.name })
+          .from(companies)
+          .where(eq(companies.id, store.companyId as any))
+          .limit(1 as any);
+        const [ownedCompany] = await db
+          .select({ id: companies.id })
+          .from(companies)
+          .where(eq(companies.providerId, parsed.userId))
+          .limit(1 as any);
+        if (ownedCompany && String(ownedCompany.id) !== storeCompanyId) {
+          return res.status(400).json({ message: "This user already owns another company." });
+        }
+
+        const memberUser = await storage.getUser(parsed.userId);
+        const memberCompanyId = String(memberUser?.company || "").trim();
+        const storeCompanyName = String(storeCompany?.name || "").trim();
+        if (
+          memberCompanyId &&
+          memberCompanyId !== storeCompanyId &&
+          (!storeCompanyName || memberCompanyId !== storeCompanyName)
+        ) {
+          return res.status(400).json({ message: "This user is already part of another company." });
+        }
+
+        const [otherCompanyMembership] = await db
+          .select({ id: storeMembers.id })
+          .from(storeMembers)
+          .innerJoin(stores, eq(storeMembers.storeId, stores.id))
+          .where(
+            and(
+              eq(storeMembers.userId, parsed.userId),
+              eq(storeMembers.isActive, true),
+              isNotNull(stores.companyId),
+              sql`${stores.companyId} <> ${store.companyId}`,
+            ),
+          )
+          .limit(1 as any);
+        if (otherCompanyMembership) {
+          return res.status(400).json({ message: "This user is already part of another company." });
         }
       }
 

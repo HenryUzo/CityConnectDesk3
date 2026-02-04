@@ -86,7 +86,8 @@ function PersonalInfoSection({
   pendingLastName,
   setPendingLastName,
   pendingEmail,
-  setPendingEmail
+  setPendingEmail,
+  isSaving
 }: {
   pendingProfileImage: string | null;
   onImageSelect: (image: string) => void;
@@ -98,6 +99,7 @@ function PersonalInfoSection({
   setPendingLastName: (name: string) => void;
   pendingEmail: string;
   setPendingEmail: (email: string) => void;
+  isSaving?: boolean;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -190,11 +192,11 @@ function PersonalInfoSection({
           <div className="bg-[#eaecf0] h-px shrink-0 w-full" />
           <div className="flex justify-end px-[24px] py-[16px] w-full">
             <div className="flex gap-[12px]">
-              <button className="bg-white hover:shadow-md transition-shadow rounded-[4px] px-[14px] py-[10px] cursor-pointer border border-[#d0d5dd] shadow-[0px_1px_2px_0px_rgba(16,24,40,0.05)]" onClick={onCancel}>
+              <button className="bg-white hover:shadow-md transition-shadow rounded-[4px] px-[14px] py-[10px] cursor-pointer border border-[#d0d5dd] shadow-[0px_1px_2px_0px_rgba(16,24,40,0.05)]" onClick={onCancel} disabled={isSaving}>
                 <p className="font-['General_Sans:Medium',sans-serif] leading-[20px] text-[#344054] text-[14px]">Cancel</p>
               </button>
-              <button className="bg-[#039855] hover:bg-[#027a48] transition-colors rounded-[4px] px-[14px] py-[10px] cursor-pointer border border-[#039855] shadow-[0px_1px_2px_0px_rgba(16,24,40,0.05)]" onClick={onSaveChanges}>
-                <p className="font-['General_Sans:Medium',sans-serif] leading-[20px] text-white text-[14px]">Save changes</p>
+              <button className="bg-[#039855] hover:bg-[#027a48] transition-colors rounded-[4px] px-[14px] py-[10px] cursor-pointer border border-[#039855] shadow-[0px_1px_2px_0px_rgba(16,24,40,0.05)] disabled:opacity-50" onClick={onSaveChanges} disabled={isSaving}>
+                <p className="font-['General_Sans:Medium',sans-serif] leading-[20px] text-white text-[14px]">{isSaving ? 'Saving...' : 'Save changes'}</p>
               </button>
             </div>
           </div>
@@ -356,25 +358,36 @@ function ProfileSection() {
 
 // ============ MAIN EXPORT ============
 export default function SettingsMain() {
-  const { firstName, lastName, email, setProfileImage, setFirstName, setLastName, setEmail } = useProfile();
+  const { firstName, lastName, email, phone, setProfileImage, setFirstName, setLastName, setEmail, setPhone, saveProfile, isLoading } = useProfile();
   const [pendingProfileImage, setPendingProfileImage] = useState<string | null>(null);
   const [pendingFirstName, setPendingFirstName] = useState<string>(firstName);
   const [pendingLastName, setPendingLastName] = useState<string>(lastName);
   const [pendingEmail, setPendingEmail] = useState<string>(email);
+  const [isSaving, setIsSaving] = useState(false);
 
   const handleImageSelect = (image: string) => {
     setPendingProfileImage(image);
   };
 
-  const handleSaveChanges = () => {
-    // Commit all pending changes to global state
-    if (pendingProfileImage) {
-      setProfileImage(pendingProfileImage);
+  const handleSaveChanges = async () => {
+    setIsSaving(true);
+    try {
+      // Commit all pending changes to local state first
+      if (pendingProfileImage) {
+        setProfileImage(pendingProfileImage);
+      }
+      setFirstName(pendingFirstName);
+      setLastName(pendingLastName);
+      setEmail(pendingEmail);
+      
+      // Then save to backend
+      await saveProfile();
+      setPendingProfileImage(null);
+    } catch (error) {
+      console.error('Failed to save profile:', error);
+    } finally {
+      setIsSaving(false);
     }
-    setFirstName(pendingFirstName);
-    setLastName(pendingLastName);
-    setEmail(pendingEmail);
-    setPendingProfileImage(null);
   };
 
   const handleCancel = () => {
@@ -400,6 +413,7 @@ export default function SettingsMain() {
           setPendingLastName={setPendingLastName}
           pendingEmail={pendingEmail}
           setPendingEmail={setPendingEmail}
+          isSaving={isSaving}
         />
         <ProfileSection />
       </div>
