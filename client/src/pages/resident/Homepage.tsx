@@ -2,7 +2,8 @@ import { useLocation } from "wouter";
 import Nav from "@/components/layout/Nav";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 import { useProfile } from "@/contexts/ProfileContext";
-import { ShoppingCart, Wrench, MoreVertical as MoreVerticalIcon, ArrowUp as ArrowUpIcon, Zap as ZapIcon, CheckCircle as CheckCircleIcon } from "lucide-react";
+import { useResidentDashboard } from "@/hooks/useResidentDashboard";
+import { ShoppingCart, Wrench, MoreVertical as MoreVerticalIcon, ArrowUp as ArrowUpIcon, ArrowDown as ArrowDownIcon, Zap as ZapIcon, CheckCircle as CheckCircleIcon } from "lucide-react";
 import {
   LineChart,
   Line,
@@ -214,7 +215,23 @@ function ArrowUp() {
   );
 }
 
-function MetricCard1() {
+function ArrowDown() {
+  return (
+    <div className="relative shrink-0 size-[20px]" data-name="arrow-down">
+      <ArrowDownIcon size={20} className="text-[#F04438]" />
+    </div>
+  );
+}
+
+function MetricCard1({ 
+  count = 0, 
+  nextItem = "No scheduled maintenance", 
+  nextCost = null 
+}: { 
+  count?: number; 
+  nextItem?: string | null; 
+  nextCost?: number | null;
+}) {
   return (
     <div
       className="basis-0 bg-white grow min-h-px min-w-px relative rounded-[8px] shrink-0"
@@ -230,7 +247,7 @@ function MetricCard1() {
           <div className="content-stretch flex flex-col gap-[16px] items-end justify-end relative shrink-0 w-full">
             <div className="content-stretch flex gap-[16px] items-center relative shrink-0 w-full">
               <p className="font-['General_Sans:Semibold',sans-serif] leading-[44px] not-italic relative shrink-0 text-[#101828] text-[36px] text-nowrap tracking-[-0.72px]">
-                0
+                {count}
               </p>
               <div className="basis-0 content-stretch flex gap-[16px] grow items-center min-h-px min-w-px relative shrink-0">
                 <div className="basis-0 content-stretch flex gap-[8px] grow items-center justify-end min-h-px min-w-px relative shrink-0">
@@ -238,12 +255,14 @@ function MetricCard1() {
                     Next:
                   </p>
                   <p className="font-['General_Sans:Medium',sans-serif] leading-[20px] not-italic relative shrink-0 text-[#667085] text-[14px] text-center text-nowrap">
-                    Fridge Maintenance
+                    {nextItem || "No scheduled maintenance"}
                   </p>
                 </div>
-                <p className="font-['General_Sans:Medium','Noto_Sans:Medium',sans-serif] leading-[20px] relative shrink-0 text-[#027a48] text-[14px] text-nowrap">
-                  ₦20,000
-                </p>
+                {nextCost !== null && (
+                  <p className="font-['General_Sans:Medium','Noto_Sans:Medium',sans-serif] leading-[20px] relative shrink-0 text-[#027a48] text-[14px] text-nowrap">
+                    ₦{nextCost.toLocaleString()}
+                  </p>
+                )}
               </div>
             </div>
             <div className="content-stretch flex items-start overflow-clip relative rounded-[62px] shrink-0">
@@ -283,7 +302,17 @@ function FeaturedIcon() {
   );
 }
 
-function MetricCard2() {
+function MetricCard2({ 
+  count = 0, 
+  changePercent = 0,
+  onGoToOrders
+}: { 
+  count?: number; 
+  changePercent?: number;
+  onGoToOrders?: () => void;
+}) {
+  const isPositive = changePercent >= 0;
+  
   return (
     <div
       className="basis-0 bg-white grow min-h-px min-w-px relative rounded-[8px] shrink-0"
@@ -299,16 +328,16 @@ function MetricCard2() {
           <div className="content-stretch flex flex-col gap-[16px] items-end justify-end relative shrink-0 w-full">
             <div className="content-stretch flex items-center justify-between relative shrink-0 w-full">
               <p className="font-['General_Sans:Semibold',sans-serif] leading-[44px] not-italic relative shrink-0 text-[#101828] text-[36px] text-nowrap tracking-[-0.72px]">
-                2
+                {count}
               </p>
               <FeaturedIcon />
             </div>
             <div className="content-stretch flex gap-[16px] items-end justify-end relative shrink-0 w-full">
               <div className="basis-0 content-stretch flex gap-[8px] grow items-center min-h-px min-w-px relative shrink-0">
                 <div className="content-stretch flex gap-[4px] items-center justify-center relative shrink-0">
-                  <ArrowUp />
-                  <p className="font-['General_Sans:Medium',sans-serif] leading-[20px] not-italic relative shrink-0 text-[#027a48] text-[14px] text-center text-nowrap">
-                    20%
+                  {isPositive ? <ArrowUp /> : <ArrowDown />}
+                  <p className={`font-['General_Sans:Medium',sans-serif] leading-[20px] not-italic relative shrink-0 text-[14px] text-center text-nowrap ${isPositive ? 'text-[#027a48]' : 'text-[#F04438]'}`}>
+                    {Math.abs(changePercent)}%
                   </p>
                 </div>
                 <p className="basis-0 font-['General_Sans:Medium',sans-serif] grow leading-[20px] min-h-px min-w-px not-italic relative shrink-0 text-[#667085] text-[14px]">
@@ -316,7 +345,7 @@ function MetricCard2() {
                 </p>
               </div>
               <div className="content-stretch flex items-start relative rounded-[62px] shrink-0">
-                <div className="relative rounded-[32px] shrink-0">
+                <div className="relative rounded-[32px] shrink-0 cursor-pointer" onClick={onGoToOrders}>
                   <div className="content-stretch flex items-center justify-center overflow-clip px-[12px] py-[4px] relative rounded-[inherit]">
                     <p className="font-['General_Sans:Medium',sans-serif] leading-[24px] not-italic relative shrink-0 text-[#039855] text-[12px] text-nowrap">
                       Go to Orders
@@ -362,7 +391,17 @@ function FeaturedIcon2() {
   );
 }
 
-function MetricCard3() {
+function MetricCard3({ 
+  count = 0, 
+  changePercent = 0,
+  onViewContracts
+}: { 
+  count?: number; 
+  changePercent?: number;
+  onViewContracts?: () => void;
+}) {
+  const isPositive = changePercent >= 0;
+  
   return (
     <div
       className="basis-0 bg-white grow min-h-px min-w-px relative rounded-[8px] shrink-0"
@@ -374,20 +413,20 @@ function MetricCard3() {
       />
       <div className="size-full">
         <div className="content-stretch flex flex-col gap-[24px] items-start p-[24px] relative w-full">
-          <HeadingAndDropdown title="Completed Request" />
+          <HeadingAndDropdown title="Completed Requests" />
           <div className="content-stretch flex flex-col gap-[16px] items-end justify-end relative shrink-0 w-full">
             <div className="content-stretch flex items-center justify-between relative shrink-0 w-full">
               <p className="font-['General_Sans:Semibold',sans-serif] leading-[44px] not-italic relative shrink-0 text-[#101828] text-[36px] text-nowrap tracking-[-0.72px]">
-                2
+                {count}
               </p>
               <FeaturedIcon2 />
             </div>
             <div className="content-stretch flex gap-[16px] items-end justify-end relative shrink-0 w-full">
               <div className="basis-0 content-stretch flex gap-[8px] grow items-center min-h-px min-w-px relative shrink-0">
                 <div className="content-stretch flex gap-[4px] items-center justify-center relative shrink-0">
-                  <ArrowUp />
-                  <p className="font-['General_Sans:Medium',sans-serif] leading-[20px] not-italic relative shrink-0 text-[#027a48] text-[14px] text-center text-nowrap">
-                    20%
+                  {isPositive ? <ArrowUp /> : <ArrowDown />}
+                  <p className={`font-['General_Sans:Medium',sans-serif] leading-[20px] not-italic relative shrink-0 text-[14px] text-center text-nowrap ${isPositive ? 'text-[#027a48]' : 'text-[#F04438]'}`}>
+                    {Math.abs(changePercent)}%
                   </p>
                 </div>
                 <p className="basis-0 font-['General_Sans:Medium',sans-serif] grow leading-[20px] min-h-px min-w-px not-italic relative shrink-0 text-[#667085] text-[14px]">
@@ -395,10 +434,10 @@ function MetricCard3() {
                 </p>
               </div>
               <div className="content-stretch flex items-start relative rounded-[62px] shrink-0">
-                <div className="relative rounded-[32px] shrink-0">
+                <div className="relative rounded-[32px] shrink-0 cursor-pointer" onClick={onViewContracts}>
                   <div className="content-stretch flex items-center justify-center overflow-clip px-[12px] py-[4px] relative rounded-[inherit]">
                     <p className="font-['General_Sans:Medium',sans-serif] leading-[24px] not-italic relative shrink-0 text-[#039855] text-[12px] text-nowrap">
-                      View Contracts
+                      View Requests
                     </p>
                   </div>
                   <div
@@ -415,7 +454,23 @@ function MetricCard3() {
   );
 }
 
-function MetricCards() {
+function MetricCards({ 
+  stats,
+  onGoToOrders,
+  onViewContracts
+}: { 
+  stats: {
+    maintenanceScheduleCount: number;
+    nextMaintenance: string | null;
+    nextMaintenanceCost: number | null;
+    activeContractsCount: number;
+    contractsChangePercent: number;
+    completedRequestsCount: number;
+    completedChangePercent: number;
+  };
+  onGoToOrders?: () => void;
+  onViewContracts?: () => void;
+}) {
   return (
     <div
       className="relative shrink-0 w-full"
@@ -427,9 +482,21 @@ function MetricCards() {
       />
       <div className="flex flex-row items-center size-full">
         <div className="content-stretch flex gap-[16px] items-center px-[34px] py-[16px] relative w-full">
-          <MetricCard1 />
-          <MetricCard2 />
-          <MetricCard3 />
+          <MetricCard1 
+            count={stats.maintenanceScheduleCount} 
+            nextItem={stats.nextMaintenance}
+            nextCost={stats.nextMaintenanceCost}
+          />
+          <MetricCard2 
+            count={stats.activeContractsCount}
+            changePercent={stats.contractsChangePercent}
+            onGoToOrders={onGoToOrders}
+          />
+          <MetricCard3 
+            count={stats.completedRequestsCount}
+            changePercent={stats.completedChangePercent}
+            onViewContracts={onViewContracts}
+          />
         </div>
       </div>
     </div>
@@ -672,26 +739,65 @@ function BottomSection({ onNavigateToChat }: { onNavigateToChat?: () => void }) 
   );
 }
 
-function Main({ onNavigateToChat }: { onNavigateToChat?: () => void }) {
+type DashboardStats = {
+  maintenanceScheduleCount: number;
+  nextMaintenance: string | null;
+  nextMaintenanceCost: number | null;
+  activeContractsCount: number;
+  contractsChangePercent: number;
+  completedRequestsCount: number;
+  completedChangePercent: number;
+};
+
+function Main({ 
+  onNavigateToChat,
+  stats,
+  onGoToOrders,
+  onViewContracts
+}: { 
+  onNavigateToChat?: () => void;
+  stats: DashboardStats;
+  onGoToOrders?: () => void;
+  onViewContracts?: () => void;
+}) {
   return (
     <div
       className="bg-white content-stretch flex flex-col gap-[32px] items-start pb-[33px] pt-[32px] px-0 relative rounded-bl-[40px] rounded-tl-[40px] shrink-0 w-full h-full"
       data-name="Main"
     >
       <HeaderSection />
-      <MetricCards />
+      <MetricCards 
+        stats={stats} 
+        onGoToOrders={onGoToOrders}
+        onViewContracts={onViewContracts}
+      />
       <BottomSection onNavigateToChat={onNavigateToChat} />
     </div>
   );
 }
 
-function MainWrap({ onNavigateToChat }: { onNavigateToChat?: () => void }) {
+function MainWrap({ 
+  onNavigateToChat,
+  stats,
+  onGoToOrders,
+  onViewContracts
+}: { 
+  onNavigateToChat?: () => void;
+  stats: DashboardStats;
+  onGoToOrders?: () => void;
+  onViewContracts?: () => void;
+}) {
   return (
     <div
       className="basis-0 content-stretch flex flex-col grow items-start min-h-px min-w-px pb-0 pt-[12px] px-0 relative shrink-0"
       data-name="Main wrap"
     >
-      <Main onNavigateToChat={onNavigateToChat} />
+      <Main 
+        onNavigateToChat={onNavigateToChat}
+        stats={stats}
+        onGoToOrders={onGoToOrders}
+        onViewContracts={onViewContracts}
+      />
     </div>
   );
 }
@@ -717,6 +823,8 @@ export default function Homepage({
   currentPage = "homepage",
 }: HomepageProps) {
   const [, navigate] = useLocation();
+  const { stats } = useResidentDashboard();
+  
   const handleBookServiceClick = () => {
     if (onNavigateToChat) {
       onNavigateToChat();
@@ -746,6 +854,14 @@ export default function Homepage({
     navigate("/resident/settings");
   };
 
+  const handleGoToOrders = () => {
+    navigate("/track-orders");
+  };
+
+  const handleViewContracts = () => {
+    navigate("/service-requests");
+  };
+
   return (
     <div
       className="bg-[#054f31] content-stretch flex items-start relative size-full min-h-screen"
@@ -769,7 +885,12 @@ export default function Homepage({
           currentPage={currentPage}
         />
       </div>
-      <MainWrap onNavigateToChat={handleBookServiceClick} />
+      <MainWrap 
+        onNavigateToChat={handleBookServiceClick}
+        stats={stats}
+        onGoToOrders={handleGoToOrders}
+        onViewContracts={handleViewContracts}
+      />
     </div>
   );
 }

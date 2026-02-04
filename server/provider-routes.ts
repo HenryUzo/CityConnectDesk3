@@ -2,13 +2,14 @@ import { Router } from "express";
 import { db } from "./db";
 import { 
   stores, 
-  storeMembers, 
-  marketplaceItems, 
+  storeMembers,
+  marketplaceItems,
   companies,
   users,
   memberships,
+  orders,
   storeEstates,
-  insertMarketplaceItemSchema 
+  insertMarketplaceItemSchema
 } from "@shared/schema";
 import { eq, and, or, like, desc } from "drizzle-orm";
 import { z } from "zod";
@@ -20,7 +21,7 @@ const router = Router();
 // Apply authentication middleware to all provider routes
 router.use(requireProvider);
 
-// GET /api/provider/company - Get the provider's company status
+// GET /api/provider/company - Get the provider's owned company (ONLY companies they created)
 router.get("/company", async (req: any, res) => {
   try {
     const providerId = req.auth?.userId;
@@ -28,30 +29,17 @@ router.get("/company", async (req: any, res) => {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    const provider = await storage.getUser(providerId);
-    const companyId = String(provider?.company || "").trim();
-    if (!companyId) {
-      return res.json(null);
-    }
-
-    let company = await db
+    // Only return companies where this provider is the OWNER (provider_id)
+    // Providers should NOT be able to access companies they're merely assigned to
+    const rows = await db
       .select()
       .from(companies)
-      .where(eq(companies.id, companyId))
-      .limit(1)
-      .then((rows) => rows[0]);
+      .where(eq(companies.providerId, providerId))
+      .limit(1);
+    const company = rows[0] ?? null;
 
     if (!company) {
-      company = await db
-        .select()
-        .from(companies)
-        .where(eq(companies.name, companyId))
-        .limit(1)
-        .then((rows) => rows[0]);
-    }
-
-    if (!company) {
-      return res.status(404).json({ error: "Company not found" });
+      return res.json(null);
     }
 
     res.json(company);
@@ -476,6 +464,33 @@ router.delete("/stores/:storeId/items/:itemId", verifyStoreAccess, async (req: a
   }
 });
 
+// GET /api/provider/stores/:id/orders - Get all orders for this store
+router.get("/stores/:id/orders", verifyStoreAccess, async (req: any, res) => {
+  try {
+    const storeId = req.params.id;
+    const rows = await db
+      .select({
+        order: orders,
+        buyer: users,
+      })
+      .from(orders)
+      .leftJoin(users, eq(orders.buyerId, users.id))
+      .where(eq(orders.storeId, storeId))
+      .orderBy(desc(orders.createdAt));
+
+    res.json(
+      rows.map(
+        (row: { order: typeof orders.$inferSelect; buyer: typeof users.$inferSelect | null }) => ({
+          ...row.order,
+          buyerName: row.buyer?.name || row.buyer?.email || null,
+        }),
+      ),
+    );
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST /api/provider/company-registration - Register new company profile
 router.post("/company-registration", async (req: any, res) => {
   try {
@@ -483,6 +498,40 @@ router.post("/company-registration", async (req: any, res) => {
 
     if (!providerId) {
       return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const provider = await storage.getUser(providerId);
+    if (provider?.company) {
+      return res
+        .status(403)
+        .json({ error: "You must leave your current company to create a new one." });
+    }
+
+    const [ownedCompany] = await db
+      .select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.providerId, providerId))
+      .limit(1);
+    if (ownedCompany) {
+      return res
+        .status(403)
+        .json({ error: "You must leave your current company to create a new one." });
+    }
+
+    const [activeMembership] = await db
+      .select({ id: storeMembers.id })
+      .from(storeMembers)
+      .where(
+        and(
+          eq(storeMembers.userId, providerId),
+          eq(storeMembers.isActive, true),
+        ),
+      )
+      .limit(1);
+    if (activeMembership) {
+      return res
+        .status(403)
+        .json({ error: "You must leave your current company to create a new one." });
     }
 
     const createCompanySchema = z.object({

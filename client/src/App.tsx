@@ -1,5 +1,4 @@
 import { Switch, Route, Redirect } from "wouter";
-import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -19,6 +18,7 @@ import ProviderMarketplace from "@/pages/provider-marketplace";
 import ProviderCompanyRegistration from "@/pages/provider-company-registration";
 import CompanyDashboard from "@/pages/company-dashboard";
 import ProviderStoreItems from "@/pages/provider-store-items";
+import ProviderStoreOrders from "@/pages/provider-store-orders";
 import AdminDashboard from "@/pages/admin-dashboard";
 import AdminSuperDashboard from "@/pages/admin-super-dashboard";
 import AdminAiConversationsPage from "@/pages/admin-ai-conversations";
@@ -45,6 +45,9 @@ import Settings from "@/pages/resident/Settings";
 import Homepage from "@/pages/resident/Homepage";
 import NotFound from "@/pages/not-found";
 import { ProfileProvider } from "@/contexts/ProfileContext";
+import { useAuth } from "./hooks/use-auth";
+import { apiRequest, queryClient } from "./lib/queryClient";
+import { Button } from "@/components/ui/button";
 
 
 function Router() {
@@ -53,6 +56,7 @@ function Router() {
       <Route path="/" component={LandingPage} />
       <Route path="/auth" component={AuthPage} />
       <Route path="/waiting-room" component={WaitingRoom} />
+      <Route path="/provider-waiting-room" component={WaitingRoom} />
       <ProtectedRoute path="/notifications" component={NotificationsPage} />
       <ProtectedRoute path="/resident" component={Homepage} />
       <Route path="/company-registration" component={ProviderCompanyRegistration} />
@@ -61,21 +65,25 @@ function Router() {
       <ProtectedRoute path="/company/stores" component={CompanyStores} />
       <ProtectedRoute path="/company/inventory" component={CompanyInventory} />
       <ProtectedRoute path="/company/tasks" component={CompanyTasks} />
-      <ProtectedRoute path="/provider" component={ProviderDashboard} />
-      <ProtectedRoute path="/provider-dashboard" component={ProviderDashboard} />
-      <ProtectedRoute path="/provider/tasks" component={ProviderTasks} />
-      <ProtectedRoute path="/provider/jobs" component={ProviderJobs} />
-      <ProtectedRoute path="/provider-store-items" component={ProviderStores} />
-      <ProtectedRoute path="/provider/marketplace" component={ProviderMarketplace} />
-      <ProtectedRoute path="/provider/stores/:storeId/items" component={ProviderStoreItems} />
-      <ProtectedRoute path="/admin" component={AdminDashboard} />
-      <ProtectedRoute path="/admin/ai/conversations" component={AdminAiConversationsPage} />
-      <ProtectedRoute path="/admin/ai/prepared-requests" component={AdminAiPreparedRequestsPage} />
+      <ProtectedRoute path="/provider" component={ProviderDashboard} requiredRole="provider" />
+      <ProtectedRoute path="/provider-dashboard" component={ProviderDashboard} requiredRole="provider" />
+      <ProtectedRoute path="/provider/tasks" component={ProviderTasks} requiredRole="provider" />
+      <ProtectedRoute path="/provider/jobs" component={ProviderJobs} requiredRole="provider" />
+      <ProtectedRoute path="/provider-store-items" component={ProviderStores} requiredRole="provider" />
+      <ProtectedRoute path="/provider/marketplace" component={ProviderMarketplace} requiredRole="provider" />
+      <ProtectedRoute path="/provider/stores/:storeId/items" component={ProviderStoreItems} requiredRole="provider" />
+      <ProtectedRoute path="/provider/stores/:storeId/orders" component={ProviderStoreOrders} requiredRole="provider" />
+      <ProtectedRoute path="/admin" component={AdminDashboard} requiredRole="admin" />
+      <ProtectedRoute path="/admin/ai/conversations" component={AdminAiConversationsPage} requiredRole="admin" />
+      <ProtectedRoute path="/admin/ai/prepared-requests" component={AdminAiPreparedRequestsPage} requiredRole="admin" />
       <Route path="/admin/pricing-rules">
         <Redirect to="/admin-dashboard/pricing-rules" />
       </Route>
       <ProtectedRoute path="/admin/providers/matching" component={AdminProviderMatchingPage} />
       <Route path="/admin/login">
+        <Redirect to="/admin-dashboard" />
+      </Route>
+      <Route path="/estate-dashboard">
         <Redirect to="/admin-dashboard" />
       </Route>
       <Route path="/admin-dashboard/stores/inventory/:storeId">
@@ -132,6 +140,32 @@ function Router() {
   );
 }
 
+function ImpersonationBanner() {
+  const { user, refreshUser } = useAuth();
+  const isImpersonating = (user as any)?.isImpersonating;
+  const impersonatedBy = (user as any)?.impersonatedBy;
+
+  if (!isImpersonating) return null;
+
+  const handleStop = async () => {
+    await apiRequest("POST", "/api/admin/impersonate/stop");
+    queryClient.invalidateQueries({ queryKey: ["/api/user"] });
+    await refreshUser();
+  };
+
+  return (
+    <div className="bg-amber-100 text-amber-900 px-4 py-2 text-sm flex items-center justify-between">
+      <span>
+        Impersonating {user?.email || "user"}{" "}
+        {impersonatedBy?.email ? `(by ${impersonatedBy.email})` : ""}
+      </span>
+      <Button size="sm" variant="outline" onClick={handleStop}>
+        Stop Impersonating
+      </Button>
+    </div>
+  );
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -140,6 +174,7 @@ function App() {
           <ProfileProvider>
             <TooltipProvider>
             <Toaster />
+            <ImpersonationBanner />
             <Router />
             </TooltipProvider>
           </ProfileProvider>

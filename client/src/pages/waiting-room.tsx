@@ -9,7 +9,11 @@ export default function WaitingRoom() {
   const { providerApproved } = useNotifications();
 
   useEffect(() => {
-    if (user?.role === "provider" && (user.isApproved || providerApproved)) {
+    if (user?.role !== "provider") {
+      setLocation("/");
+      return;
+    }
+    if (user.isApproved || providerApproved) {
       setLocation("/provider");
     }
   }, [providerApproved, setLocation, user]);

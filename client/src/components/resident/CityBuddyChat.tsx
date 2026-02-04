@@ -11,7 +11,15 @@ import { useQuery } from "@tanstack/react-query";
 import { svgPaths, AIAskBotIcon, UploadItem } from "@/components/ui/icon";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
+import {
+  appendMessage,
+  fetchConversations,
+  fetchMessages,
+  getOrCreateConversation,
+  type ConversationMessage,
+} from "@/lib/conversations";
 import useCategories from "@/hooks/useCategories";
+import { useAiConversationFlowSettings, buildCategoryMappings, type AiConversationFlowSetting } from "@/hooks/useAiConversationFlowSettings";
 import CategorySkeleton from "@/components/ui/CategorySkeleton";
 import { CategoryStatus, AIMessage, AIThinking, UserResponse, TicketMessage, formatTicketStatusLabel, buildProgressSteps } from "./CityBuddyMessage";
 import {
@@ -53,6 +61,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type ConversationStep =
   | "FLOW"
@@ -93,17 +102,11 @@ const INITIAL_INFO_SLOTS: InfoSlots = {
   imageProvided: false,
 };
 
-type ServiceCategoryKey =
-  | "surveillance_monitoring"
-  | "cleaning_janitorial"
-  | "catering_services"
-  | "it_support"
-  | "maintenance_repair"
-  | "marketing_advertising"
-  | "home_tutors"
-  | "furniture_making";
+// Dynamic category key - now accepts any string from the database
+type ServiceCategoryKey = string;
 
-const CATEGORY_TITLE_TO_KEY: Record<string, ServiceCategoryKey> = {
+// Fallback mappings - will be overridden by database settings when available
+const DEFAULT_CATEGORY_TITLE_TO_KEY: Record<string, string> = {
   "Surveillance monitoring": "surveillance_monitoring",
   "Cleaning & janitorial": "cleaning_janitorial",
   "Catering Services": "catering_services",
@@ -112,9 +115,14 @@ const CATEGORY_TITLE_TO_KEY: Record<string, ServiceCategoryKey> = {
   "Marketing & Advertising": "marketing_advertising",
   "Home tutors": "home_tutors",
   "Furniture making": "furniture_making",
+  "Store Owner": "store_owner",
+  "Market Runner": "market_runner",
+  "Item Vendor": "item_vendor",
+  "Alarm System": "alarm_system",
+  "Packaging Solutions": "packaging_solutions",
 };
 
-const CONFIDENCE_THRESHOLDS: Record<ServiceCategoryKey, number> = {
+const DEFAULT_CONFIDENCE_THRESHOLDS: Record<string, number> = {
   cleaning_janitorial: 70,
   maintenance_repair: 75,
   it_support: 70,
@@ -123,9 +131,14 @@ const CONFIDENCE_THRESHOLDS: Record<ServiceCategoryKey, number> = {
   marketing_advertising: 65,
   home_tutors: 70,
   furniture_making: 80,
+  store_owner: 65,
+  market_runner: 60,
+  item_vendor: 65,
+  alarm_system: 75,
+  packaging_solutions: 65,
 };
 
-const CATEGORY_VISUALS_HELPFUL: Record<ServiceCategoryKey, boolean> = {
+const DEFAULT_CATEGORY_VISUALS_HELPFUL: Record<string, boolean> = {
   surveillance_monitoring: true,
   cleaning_janitorial: true,
   catering_services: false,
@@ -134,7 +147,31 @@ const CATEGORY_VISUALS_HELPFUL: Record<ServiceCategoryKey, boolean> = {
   marketing_advertising: false,
   home_tutors: false,
   furniture_making: true,
+  store_owner: false,
+  market_runner: false,
+  item_vendor: true,
+  alarm_system: true,
+  packaging_solutions: false,
 };
+
+// Dynamic context for category settings - will be populated from the hook
+let DYNAMIC_CATEGORY_TITLE_TO_KEY: Record<string, string> = { ...DEFAULT_CATEGORY_TITLE_TO_KEY };
+let DYNAMIC_CONFIDENCE_THRESHOLDS: Record<string, number> = { ...DEFAULT_CONFIDENCE_THRESHOLDS };
+let DYNAMIC_CATEGORY_VISUALS_HELPFUL: Record<string, boolean> = { ...DEFAULT_CATEGORY_VISUALS_HELPFUL };
+let DYNAMIC_INITIAL_MESSAGES: Record<string, string | null> = {};
+let DYNAMIC_FOLLOW_UP_STEPS: Record<string, any[] | null> = {};
+
+// Setter function to update dynamic mappings from the hook
+function updateDynamicCategoryMappings(settings: AiConversationFlowSetting[]) {
+  if (!settings || settings.length === 0) return;
+  
+  const mappings = buildCategoryMappings(settings);
+  DYNAMIC_CATEGORY_TITLE_TO_KEY = { ...DEFAULT_CATEGORY_TITLE_TO_KEY, ...mappings.titleToKey };
+  DYNAMIC_CONFIDENCE_THRESHOLDS = { ...DEFAULT_CONFIDENCE_THRESHOLDS, ...mappings.confidenceThresholds };
+  DYNAMIC_CATEGORY_VISUALS_HELPFUL = { ...DEFAULT_CATEGORY_VISUALS_HELPFUL, ...mappings.visualsHelpful };
+  DYNAMIC_INITIAL_MESSAGES = mappings.initialMessages;
+  DYNAMIC_FOLLOW_UP_STEPS = mappings.followUpSteps;
+}
 
 function clampConfidence(score: number): number {
   return Math.max(0, Math.min(100, Math.round(score)));
@@ -161,7 +198,8 @@ function isNoImageResponse(text: string): boolean {
 
 function hasSufficientConfidence(categoryKey: ServiceCategoryKey | null, confidenceScore: number): boolean {
   if (!categoryKey) return false;
-  return confidenceScore >= CONFIDENCE_THRESHOLDS[categoryKey];
+  const threshold = DYNAMIC_CONFIDENCE_THRESHOLDS[categoryKey] ?? DEFAULT_CONFIDENCE_THRESHOLDS[categoryKey] ?? 70;
+  return confidenceScore >= threshold;
 }
 
 function scoreResponseUpdate(params: {
@@ -228,7 +266,10 @@ function scoreResponseUpdate(params: {
   }
 
   // Visuals only help confidence meaningfully when the category benefits.
-  if (source === "image" && categoryKey && !CATEGORY_VISUALS_HELPFUL[categoryKey]) {
+  const categoryVisualsHelpful = categoryKey 
+    ? (DYNAMIC_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? DEFAULT_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? true) 
+    : true;
+  if (source === "image" && categoryKey && !categoryVisualsHelpful) {
     score -= 5;
   }
 
@@ -237,7 +278,7 @@ function scoreResponseUpdate(params: {
 
 function getServiceCategoryKey(title: string | undefined): ServiceCategoryKey | null {
   if (!title) return null;
-  return CATEGORY_TITLE_TO_KEY[title] ?? null;
+  return DYNAMIC_CATEGORY_TITLE_TO_KEY[title] ?? DEFAULT_CATEGORY_TITLE_TO_KEY[title] ?? null;
 }
 
 function buildUserDescriptionFromAnswers({
@@ -445,17 +486,96 @@ function buildCategoryFollowUpSteps(categoryKey: ServiceCategoryKey): StepConfig
           slotKey: "description",
         },
       ];
+    case "store_owner":
+      return [
+        {
+          id: "store_service",
+          message: "What do you need help with for your store?",
+          inputMode: "tags",
+          options: [
+            { value: "inventory", label: "Inventory management" },
+            { value: "sales", label: "Sales support" },
+            { value: "delivery", label: "Delivery setup" },
+            { value: "marketing", label: "Store marketing" },
+            { value: "other", label: "Other" },
+          ],
+          allowManualInput: true,
+          placeholder: "Describe your store needs",
+          slotKey: "description",
+        },
+      ];
+    case "market_runner":
+      return [
+        {
+          id: "runner_task",
+          message: "What do you need picked up or delivered?",
+          inputMode: "none",
+          allowManualInput: true,
+          placeholder: "e.g., groceries from the market, documents",
+          slotKey: "description",
+        },
+      ];
+    case "item_vendor":
+      return [
+        {
+          id: "vendor_item",
+          message: "What items are you looking for?",
+          inputMode: "none",
+          allowManualInput: true,
+          placeholder: "e.g., fresh vegetables, electronics",
+          slotKey: "description",
+        },
+      ];
+    case "alarm_system":
+      return [
+        {
+          id: "alarm_need",
+          message: "What do you need help with?",
+          inputMode: "tags",
+          options: [
+            { value: "install", label: "Install new alarm" },
+            { value: "repair", label: "Repair existing" },
+            { value: "upgrade", label: "Upgrade system" },
+            { value: "monitoring", label: "Monitoring service" },
+            { value: "other", label: "Other" },
+          ],
+          allowManualInput: true,
+          placeholder: "Describe your alarm needs",
+          slotKey: "description",
+        },
+      ];
+    case "packaging_solutions":
+      return [
+        {
+          id: "packaging_need",
+          message: "What kind of packaging do you need?",
+          inputMode: "tags",
+          options: [
+            { value: "moving", label: "Moving boxes" },
+            { value: "shipping", label: "Shipping supplies" },
+            { value: "gift", label: "Gift wrapping" },
+            { value: "custom", label: "Custom packaging" },
+            { value: "other", label: "Other" },
+          ],
+          allowManualInput: true,
+          placeholder: "Describe your packaging needs",
+          slotKey: "description",
+        },
+      ];
     default:
       return [];
   }
 }
 
 function buildFlowStepsForCategory(categoryKey: ServiceCategoryKey): StepConfig[] {
+  // Check for custom initial message from database settings
+  const customInitialMessage = DYNAMIC_INITIAL_MESSAGES[categoryKey];
+  const defaultMessage = "Tell me what you need help with - include estate (or 'no estate'), when it started, and urgency in one message if you can.";
+  
   const base: StepConfig[] = [
     {
       id: "issue",
-      message:
-        "Tell me what you need help with — include estate (or ‘no estate’), when it started, and urgency in one message if you can.",
+      message: customInitialMessage || defaultMessage,
       inputMode: "none",
       allowManualInput: true,
       placeholder: "Example: I need my house cleaned in Magodo since this morning (urgent).",
@@ -494,7 +614,8 @@ function buildFlowStepsForCategory(categoryKey: ServiceCategoryKey): StepConfig[
   ];
 
   const steps: StepConfig[] = [...base, ...buildCategoryFollowUpSteps(categoryKey)];
-  if (CATEGORY_VISUALS_HELPFUL[categoryKey]) {
+  const visualsHelpful = DYNAMIC_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? DEFAULT_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? true;
+  if (visualsHelpful) {
     steps.push({
       id: "image",
       message: "Do you have a photo or screenshot?",
@@ -556,6 +677,30 @@ type HistoryItem =
       status: string;
       createdAtIso?: string | null;
     };
+
+function mapConversationMessagesToHistory(
+  messages: ConversationMessage[],
+): { history: HistoryItem[]; latestAiMeta: CityBuddyAiResponse | null } {
+  const history: HistoryItem[] = [];
+  let latestAiMeta: CityBuddyAiResponse | null = null;
+
+  messages.forEach((msg) => {
+    if (msg.role === "user" && msg.type === "image") {
+      history.push({ id: msg.id, type: "image", src: msg.content });
+      return;
+    }
+    if (msg.role === "user") {
+      history.push({ id: msg.id, type: "user_text", text: msg.content });
+      return;
+    }
+    history.push({ id: msg.id, type: "ai_message", text: msg.content });
+    if (msg.meta && typeof msg.meta === "object") {
+      latestAiMeta = msg.meta as CityBuddyAiResponse;
+    }
+  });
+
+  return { history, latestAiMeta };
+}
 
 type ConversationSummary = {
   headline: string;
@@ -2642,6 +2787,7 @@ function MainWrapSelectCategory({
 function Frame30NewMain({ 
   step,
   history,
+  isHistoryLoading,
   selectedCategory,
   onChangeCategory,
   onViewServiceRequest,
@@ -2661,6 +2807,7 @@ function Frame30NewMain({
 }: { 
   step: ConversationStep;
   history: HistoryItem[];
+  isHistoryLoading?: boolean;
   selectedCategory?: string;
   onChangeCategory?: () => void;
   onViewServiceRequest?: (id: string) => void;
@@ -2680,6 +2827,13 @@ function Frame30NewMain({
 }) {
   return (
     <div className="content-stretch flex flex-col items-start overflow-x-clip relative shrink-0 w-full pt-[0px] pr-[0px] pb-[24px] pl-[0px] mt-[0px] mr-[0px] mb-[0px] ml-[0px]">
+      {isHistoryLoading ? (
+        <div className="w-full space-y-3 pb-[12px]">
+          <Skeleton className="h-5 w-3/4" />
+          <Skeleton className="h-5 w-2/3" />
+          <Skeleton className="h-5 w-1/2" />
+        </div>
+      ) : null}
       {history.map((item) => {
         switch (item.type) {
           case "user_text":
@@ -3005,6 +3159,7 @@ function Frame30NewMain({
 function RequestDetailsNewMain({ 
   step,
   history,
+  isHistoryLoading,
   selectedCategory,
   onChangeCategory,
   onViewServiceRequest,
@@ -3024,6 +3179,7 @@ function RequestDetailsNewMain({
 }: { 
   step: ConversationStep;
   history: HistoryItem[];
+  isHistoryLoading?: boolean;
   selectedCategory?: string;
   onChangeCategory?: () => void;
   onViewServiceRequest?: (id: string) => void;
@@ -3049,6 +3205,7 @@ function RequestDetailsNewMain({
       <Frame30NewMain 
         step={step}
         history={history}
+        isHistoryLoading={isHistoryLoading}
         selectedCategory={selectedCategory}
         onChangeCategory={onChangeCategory}
         onViewServiceRequest={onViewServiceRequest}
@@ -3535,6 +3692,7 @@ function Content19NewMain({
   step,
   activeFlowStep,
   history,
+  isHistoryLoading,
   inputValue,
   onInputChange,
   onSend,
@@ -3585,6 +3743,7 @@ function Content19NewMain({
   step: ConversationStep;
   activeFlowStep: StepConfig | null;
   history: HistoryItem[];
+  isHistoryLoading?: boolean;
   inputValue: string;
   onInputChange: (value: string) => void;
   onSend: () => void;
@@ -3823,6 +3982,7 @@ function Content19NewMain({
             <RequestDetailsNewMain 
               step={step}
               history={history}
+              isHistoryLoading={isHistoryLoading}
               selectedCategory={selectedCategory}
               onChangeCategory={onChangeCategory}
               onViewServiceRequest={onViewServiceRequest}
@@ -3904,6 +4064,7 @@ function MainChat({
   step,
   activeFlowStep,
   history,
+  isHistoryLoading,
   inputValue,
   onInputChange,
   onSend,
@@ -3954,6 +4115,7 @@ function MainChat({
   step: ConversationStep;
   activeFlowStep: StepConfig | null;
   history: HistoryItem[];
+  isHistoryLoading?: boolean;
   inputValue: string;
   onInputChange: (value: string) => void;
   onSend: () => void;
@@ -4010,6 +4172,7 @@ function MainChat({
         step={step}
         activeFlowStep={activeFlowStep}
         history={history}
+        isHistoryLoading={isHistoryLoading}
         inputValue={inputValue} 
         onInputChange={onInputChange} 
         onSend={onSend}
@@ -4065,6 +4228,7 @@ function MainWrapChat({
   step,
   activeFlowStep,
   history,
+  isHistoryLoading,
   inputValue,
   onInputChange,
   onSend,
@@ -4115,6 +4279,7 @@ function MainWrapChat({
   step: ConversationStep;
   activeFlowStep: StepConfig | null;
   history: HistoryItem[];
+  isHistoryLoading?: boolean;
   inputValue: string;
   onInputChange: (value: string) => void;
   onSend: () => void;
@@ -4173,6 +4338,7 @@ function MainWrapChat({
             step={step}
             activeFlowStep={activeFlowStep}
             history={history}
+            isHistoryLoading={isHistoryLoading}
             inputValue={inputValue} 
             onInputChange={onInputChange} 
             onSend={onSend}
@@ -4255,6 +4421,38 @@ export default function ChatInterface({
   const { data: myEstates } = useMyEstates();
   const { toast } = useToast();
   const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global" });
+  
+  // Load AI conversation flow settings from database
+  const { settings: aiFlowSettings, isLoading: aiFlowLoading } = useAiConversationFlowSettings();
+  
+  // Update dynamic category mappings when settings load
+  useEffect(() => {
+    if (aiFlowSettings && aiFlowSettings.length > 0) {
+      updateDynamicCategoryMappings(aiFlowSettings);
+    }
+  }, [aiFlowSettings]);
+
+  // Transform AI flow settings to category format for display
+  // Prioritize AI flow settings over fetchedCategories when available
+  const displayCategories = useMemo(() => {
+    if (aiFlowSettings && aiFlowSettings.length > 0) {
+      return aiFlowSettings
+        .filter(s => s.isEnabled)
+        .sort((a, b) => a.displayOrder - b.displayOrder)
+        .map(s => ({
+          id: s.id,
+          name: s.categoryName,
+          key: s.categoryKey,
+          emoji: s.emoji || "🛠️",
+          description: s.description,
+          providerCount: 0, // Could be enhanced to fetch provider count
+        }));
+    }
+    return fetchedCategories;
+  }, [aiFlowSettings, fetchedCategories]);
+
+  const categoriesLoading = catsLoading || aiFlowLoading;
+  
   const [useManualEstate, setUseManualEstate] = useState(false);
   const [selectedEstateName, setSelectedEstateName] = useState<string | null>(null);
   const [isOutsideCityConnectEstate, setIsOutsideCityConnectEstate] = useState(false);
@@ -4274,6 +4472,9 @@ export default function ChatInterface({
   const [sendError, setSendError] = useState<string | null>(null);
   const [isUserDistressed, setIsUserDistressed] = useState(false);
   const [hasChosenAction, setHasChosenAction] = useState(false);
+  const [conversationSyncAvailable, setConversationSyncAvailable] = useState(true);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const sessionsStorageKey = `citybuddy_conversation_sessions_v1:${user?.id ?? "anonymous"}`;
@@ -4288,6 +4489,8 @@ export default function ChatInterface({
   const sessionActivityRef = useRef(false);
   const isChangingCategoryRef = useRef(false);
   const lastPreparedSnapshotFingerprintRef = useRef<Record<string, string>>({});
+  const savedHistoryIdsRef = useRef<Set<string>>(new Set());
+  const lastSavedAiResponseRef = useRef<string | null>(null);
 
   const markSessionActivity = useCallback(() => {
     sessionActivityRef.current = true;
@@ -4346,7 +4549,8 @@ export default function ChatInterface({
 
           if (s.id === "image") {
             if (imageDeclined) continue;
-            if (!CATEGORY_VISUALS_HELPFUL[categoryKey]) continue;
+            const catVisualsHelpful = DYNAMIC_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? DEFAULT_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? true;
+            if (!catVisualsHelpful) continue;
             if (hasSufficientConfidence(categoryKey, nextConfidence)) continue;
             if (!descriptionHighQuality) continue;
           }
@@ -4518,6 +4722,94 @@ export default function ChatInterface({
 
   const INSPECTION_DRAFT_KEY = "citybuddy_inspection_draft";
 
+  const buildEmptyConversationSession = useCallback(
+    (categoryName: string, sessionId: string, updatedAtIso?: string) => {
+      const categoryKey = getServiceCategoryKey(categoryName);
+      const steps = categoryKey ? buildFlowStepsForCategory(categoryKey) : [];
+      const firstPrompt = steps[0]?.message || "";
+      const initialHistory: HistoryItem[] = firstPrompt
+        ? [{ id: makeHistoryId(), type: "ai_message", text: firstPrompt }]
+        : [];
+
+      const summary = buildConversationSummary({
+        category: categoryName,
+        categoryKey,
+        flowAnswers: {},
+        infoSlots: INITIAL_INFO_SLOTS,
+        isOutsideCityConnectEstate: false,
+        selectedEstateName: null,
+        hasImage: false,
+        aiDecision: { requiresConsultancy: false, consultancyCompleted: false },
+        aiResponse: null,
+        confidenceScore: 0,
+        step: "FLOW",
+      });
+
+      return {
+        id: sessionId,
+        category: categoryName,
+        title: summary.headline,
+        summary,
+        bookingCard: null,
+        priceEstimationCard: null,
+        providerMatchingPreview: null,
+        readyToBook: false,
+        lastUpdated: updatedAtIso || new Date().toISOString(),
+        confidenceScore: 0,
+        isResolved: false,
+        messages: initialHistory,
+        infoSlots: INITIAL_INFO_SLOTS,
+        conversationState: {
+          step: "FLOW",
+          flowIndex: 0,
+          flowAnswers: {},
+          issueText: "",
+          selectedEstateName: null,
+          isOutsideCityConnectEstate: false,
+          useManualEstate: false,
+          startDate: "",
+          startTime: "",
+          startQuickTag: null,
+          imageDeclined: false,
+          uploadedImageSrc: null,
+          aiResponse: null,
+          aiDecision: { requiresConsultancy: false, consultancyCompleted: false },
+          isUserDistressed: false,
+          earlyStopAcknowledged: false,
+        },
+      } as ConversationSession;
+    },
+    [],
+  );
+
+  const hydrateConversationMessages = useCallback(
+    async (conversationId: string, categoryName: string) => {
+      try {
+        setIsHistoryLoading(true);
+        setHistoryLoadError(null);
+        const messages = await fetchMessages(conversationId);
+        if (!messages.length) return;
+        const { history: hydratedHistory, latestAiMeta } = mapConversationMessagesToHistory(messages);
+        setHistory(hydratedHistory);
+        savedHistoryIdsRef.current = new Set(hydratedHistory.map((item) => item.id));
+        if (latestAiMeta) {
+          setAiResponse(latestAiMeta);
+          setStep("AI_GUIDANCE");
+          lastSavedAiResponseRef.current = `${conversationId}:${latestAiMeta.message}`;
+        }
+        setConversationSessions((prev) =>
+          prev.map((s) => (s.id === conversationId ? { ...s, messages: hydratedHistory } : s)),
+        );
+      } catch (error) {
+        setHistoryLoadError("Unable to load previous conversation.");
+        setConversationSyncAvailable(false);
+      } finally {
+        setIsHistoryLoading(false);
+      }
+    },
+    [],
+  );
+
   const activeConversationSession =
     (activeConversationSessionId
       ? conversationSessions.find((s) => s.id === activeConversationSessionId)
@@ -4550,246 +4842,178 @@ export default function ChatInterface({
   }, [initialSelectedCategory]);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(sessionsStorageKey);
-      if (!raw) {
-        setConversationSessions([]);
-        setActiveConversationSessionId(null);
-        return;
-      }
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) {
-        setConversationSessions([]);
-        setActiveConversationSessionId(null);
-        return;
-      }
-      const sessions = parsed.filter(
-        (s): s is any => Boolean(s && typeof s === "object" && "id" in (s as any)),
-      );
+    let cancelled = false;
 
-      const normalized: ConversationSession[] = sessions.map((rawSession: any) => {
-        const category = typeof rawSession.category === "string" ? rawSession.category : "";
-        const categoryKey = getServiceCategoryKey(category);
-        const flowAnswers = (rawSession.conversationState?.flowAnswers ?? {}) as Record<string, string>;
-        const infoSlots: InfoSlots = rawSession.infoSlots ?? INITIAL_INFO_SLOTS;
-        const isOutsideCityConnectEstate = Boolean(rawSession.conversationState?.isOutsideCityConnectEstate);
-        const selectedEstateName =
-          typeof rawSession.conversationState?.selectedEstateName === "string"
-            ? rawSession.conversationState.selectedEstateName
+    const loadFromLocalStorage = () => {
+      try {
+        const raw = localStorage.getItem(sessionsStorageKey);
+        if (!raw) {
+          setConversationSessions([]);
+          setActiveConversationSessionId(null);
+          return;
+        }
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) {
+          setConversationSessions([]);
+          setActiveConversationSessionId(null);
+          return;
+        }
+        const sessions = parsed.filter(
+          (s): s is any => Boolean(s && typeof s === "object" && "id" in (s as any)),
+        );
+
+        const normalized: ConversationSession[] = sessions.map((rawSession: any) => {
+          const category = typeof rawSession.category === "string" ? rawSession.category : "";
+          const categoryKey = getServiceCategoryKey(category);
+          const flowAnswers = (rawSession.conversationState?.flowAnswers ?? {}) as Record<string, string>;
+          const infoSlots: InfoSlots = rawSession.infoSlots ?? INITIAL_INFO_SLOTS;
+          const isOutsideCityConnectEstate = Boolean(rawSession.conversationState?.isOutsideCityConnectEstate);
+          const selectedEstateName =
+            typeof rawSession.conversationState?.selectedEstateName === "string"
+              ? rawSession.conversationState.selectedEstateName
+              : null;
+          const hasImage =
+            Boolean(rawSession.conversationState?.uploadedImageSrc) ||
+            Array.isArray(rawSession.messages) && rawSession.messages.some((m: any) => m?.type === "image");
+
+          const aiDecision: AiDecision = rawSession.conversationState?.aiDecision ?? {
+            requiresConsultancy: false,
+            consultancyCompleted: false,
+          };
+          const aiResponse: CityBuddyAiResponse | null = rawSession.conversationState?.aiResponse ?? null;
+          const confidenceScore = typeof rawSession.confidenceScore === "number" ? rawSession.confidenceScore : 0;
+          const step: ConversationStep = rawSession.conversationState?.step ?? "FLOW";
+
+          const fallbackSummary: ConversationSummary = buildConversationSummary({
+            category,
+            categoryKey,
+            flowAnswers,
+            infoSlots,
+            isOutsideCityConnectEstate,
+            selectedEstateName,
+            hasImage,
+            aiDecision,
+            aiResponse,
+            confidenceScore,
+            step,
+          });
+
+          const summary: ConversationSummary = rawSession.summary ?? fallbackSummary;
+          const title = typeof rawSession.title === "string" && rawSession.title.trim() ? rawSession.title : summary.headline;
+
+          const readyToBook = Boolean(rawSession.readyToBook);
+          const bookingCard = rawSession.bookingCard && typeof rawSession.bookingCard === "object" ? (rawSession.bookingCard as BookingCard) : null;
+
+          const rawPriceCard = rawSession.priceEstimationCard && typeof rawSession.priceEstimationCard === "object"
+            ? (rawSession.priceEstimationCard as PriceEstimationCard)
             : null;
-        const hasImage =
-          Boolean(rawSession.conversationState?.uploadedImageSrc) ||
-          Array.isArray(rawSession.messages) && rawSession.messages.some((m: any) => m?.type === "image");
 
-        const aiDecision: AiDecision = rawSession.conversationState?.aiDecision ?? {
-          requiresConsultancy: false,
-          consultancyCompleted: false,
-        };
-        const aiResponse: CityBuddyAiResponse | null = rawSession.conversationState?.aiResponse ?? null;
-        const confidenceScore = typeof rawSession.confidenceScore === "number" ? rawSession.confidenceScore : 0;
-        const step: ConversationStep = rawSession.conversationState?.step ?? "FLOW";
+          const thresholdReached = Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, confidenceScore);
+          const shouldShowPricing =
+            thresholdReached &&
+            (summary.recommendedApproach === "Professional" || summary.recommendedApproach === "Hybrid") &&
+            Boolean(bookingCard);
 
-        const fallbackSummary: ConversationSummary = buildConversationSummary({
-          category,
-          categoryKey,
-          flowAnswers,
-          infoSlots,
-          isOutsideCityConnectEstate,
-          selectedEstateName,
-          hasImage,
-          aiDecision,
-          aiResponse,
-          confidenceScore,
-          step,
+          const issueTextForPricing = (flowAnswers.issue || rawSession.conversationState?.issueText || "").trim();
+          const timingTextForPricing = (flowAnswers.timing || "").trim();
+
+          const computedPriceCard =
+            shouldShowPricing && bookingCard
+              ? buildPriceEstimationCard({
+                  sessionId: rawSession.id,
+                  category,
+                  categoryKey,
+                  bookingCard,
+                  summary,
+                  confidenceScore,
+                  thresholdReached,
+                  issueText: issueTextForPricing,
+                  timingText: timingTextForPricing,
+                  hasImage,
+                  existingCard: rawPriceCard,
+                })
+              : null;
+
+          const priceLine = computedPriceCard
+            ? `Estimated cost: ${formatNgnRange(computedPriceCard.estimatedRange.min, computedPriceCard.estimatedRange.max)} (estimate)`
+            : "";
+
+          const summaryWithPrice: ConversationSummary = computedPriceCard
+            ? {
+                ...summary,
+                estimatedPriceRange: computedPriceCard.estimatedRange,
+                priceConfidenceLevel: computedPriceCard.confidenceLevel,
+                details: uniqueNonEmpty(priceLine ? [...(summary.details || []), priceLine] : (summary.details || [])),
+              }
+            : summary;
+
+          return {
+            ...rawSession,
+            title,
+            summary: summaryWithPrice,
+            bookingCard,
+            priceEstimationCard: computedPriceCard,
+            readyToBook,
+            infoSlots,
+          } as ConversationSession;
         });
 
-        const summary: ConversationSummary = rawSession.summary ?? fallbackSummary;
-        const title = typeof rawSession.title === "string" && rawSession.title.trim() ? rawSession.title : summary.headline;
+        const deduped = dedupeConversationSessions(normalized);
+        setConversationSessions(deduped);
+        setActiveConversationSessionId((prev) => prev ?? deduped[0]?.id ?? null);
+      } catch {
+        setConversationSessions([]);
+        setActiveConversationSessionId(null);
+      }
+    };
 
-        const readyToBook = Boolean(rawSession.readyToBook);
-        const bookingCard = rawSession.bookingCard && typeof rawSession.bookingCard === "object" ? (rawSession.bookingCard as BookingCard) : null;
+    (async () => {
+      if (!user?.id) {
+        loadFromLocalStorage();
+        return;
+      }
+      try {
+        const remote = await fetchConversations();
+        if (cancelled) return;
+        setConversationSyncAvailable(true);
+        if (!remote.length) {
+          setConversationSessions([]);
+          setActiveConversationSessionId(null);
+          return;
+        }
+        const sessions = remote.map((conversation) =>
+          buildEmptyConversationSession(
+            conversation.category,
+            conversation.id,
+            conversation.updatedAt || conversation.createdAt || new Date().toISOString(),
+          ),
+        );
+        const deduped = dedupeConversationSessions(sessions);
+        setConversationSessions(deduped);
+        setActiveConversationSessionId((prev) => prev ?? deduped[0]?.id ?? null);
+      } catch {
+        if (cancelled) return;
+        setConversationSyncAvailable(false);
+        loadFromLocalStorage();
+      }
+    })();
 
-        const rawPriceCard = rawSession.priceEstimationCard && typeof rawSession.priceEstimationCard === "object"
-          ? (rawSession.priceEstimationCard as PriceEstimationCard)
-          : null;
-
-        const thresholdReached = Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, confidenceScore);
-        const shouldShowPricing =
-          thresholdReached &&
-          (summary.recommendedApproach === "Professional" || summary.recommendedApproach === "Hybrid") &&
-          Boolean(bookingCard);
-
-        const issueTextForPricing = (flowAnswers.issue || rawSession.conversationState?.issueText || "").trim();
-        const timingTextForPricing = (flowAnswers.timing || "").trim();
-
-        const computedPriceCard =
-          shouldShowPricing && bookingCard
-            ? buildPriceEstimationCard({
-                sessionId: rawSession.id,
-                category,
-                categoryKey,
-                bookingCard,
-                summary,
-                confidenceScore,
-                thresholdReached,
-                issueText: issueTextForPricing,
-                timingText: timingTextForPricing,
-                hasImage,
-                existingCard: rawPriceCard,
-              })
-            : null;
-
-        const priceLine = computedPriceCard
-          ? `Estimated cost: ${formatNgnRange(computedPriceCard.estimatedRange.min, computedPriceCard.estimatedRange.max)} (estimate)`
-          : "";
-
-        const summaryWithPrice: ConversationSummary = computedPriceCard
-          ? {
-              ...summary,
-              estimatedPriceRange: computedPriceCard.estimatedRange,
-              priceConfidenceLevel: computedPriceCard.confidenceLevel,
-              details: uniqueNonEmpty(priceLine ? [...(summary.details || []), priceLine] : (summary.details || [])),
-            }
-          : summary;
-
-        return {
-          ...rawSession,
-          title,
-          summary: summaryWithPrice,
-          bookingCard,
-          priceEstimationCard: computedPriceCard,
-          readyToBook,
-          infoSlots,
-        } as ConversationSession;
-      });
-
-      const deduped = dedupeConversationSessions(normalized);
-      setConversationSessions(deduped);
-      setActiveConversationSessionId((prev) => prev ?? deduped[0]?.id ?? null);
-    } catch {
-      setConversationSessions([]);
-      setActiveConversationSessionId(null);
-    }
-  }, [dedupeConversationSessions, sessionsStorageKey]);
+    return () => {
+      cancelled = true;
+    };
+  }, [buildEmptyConversationSession, dedupeConversationSessions, sessionsStorageKey, user?.id]);
 
   useEffect(() => {
+    if (conversationSyncAvailable) return;
     try {
       localStorage.setItem(sessionsStorageKey, JSON.stringify(conversationSessions));
     } catch {
       // ignore localStorage quota/blocked errors
     }
-  }, [conversationSessions, sessionsStorageKey]);
+  }, [conversationSessions, conversationSyncAvailable, sessionsStorageKey]);
 
-  const startNewConversationSession = useCallback(
-    (categoryName: string, options?: { preserveView?: boolean }) => {
-      const now = Date.now();
-      if (now - lastNewSessionAtRef.current < 600) return;
-      lastNewSessionAtRef.current = now;
-
-      const categoryKey = getServiceCategoryKey(categoryName);
-      if (!categoryKey) return;
-
-      const steps = buildFlowStepsForCategory(categoryKey);
-      const id = makeHistoryId();
-      const nowIso = new Date().toISOString();
-      const firstPrompt = steps[0]?.message || "";
-      const initialHistory: HistoryItem[] = firstPrompt
-        ? [{ id: makeHistoryId(), type: "ai_message", text: firstPrompt }]
-        : [];
-
-      const initialSummary = buildConversationSummary({
-        category: categoryName,
-        categoryKey,
-        flowAnswers: {},
-        infoSlots: INITIAL_INFO_SLOTS,
-        isOutsideCityConnectEstate: false,
-        selectedEstateName: null,
-        hasImage: false,
-        aiDecision: { requiresConsultancy: false, consultancyCompleted: false },
-        aiResponse: null,
-        confidenceScore: 0,
-        step: "FLOW",
-      });
-
-      const newSession: ConversationSession = {
-        id,
-        category: categoryName,
-        title: initialSummary.headline,
-        summary: initialSummary,
-        bookingCard: null,
-        priceEstimationCard: null,
-        readyToBook: false,
-        lastUpdated: nowIso,
-        confidenceScore: 0,
-        isResolved: false,
-        messages: initialHistory,
-        infoSlots: INITIAL_INFO_SLOTS,
-        conversationState: {
-          step: "FLOW",
-          flowIndex: 0,
-          flowAnswers: {},
-          issueText: "",
-          selectedEstateName: null,
-          isOutsideCityConnectEstate: false,
-          useManualEstate: false,
-          startDate: "",
-          startTime: "",
-          startQuickTag: null,
-          imageDeclined: false,
-          uploadedImageSrc: null,
-          aiResponse: null,
-          aiDecision: { requiresConsultancy: false, consultancyCompleted: false },
-          isUserDistressed: false,
-          earlyStopAcknowledged: false,
-        },
-      };
-
-      setConversationSessions((prev) => [newSession, ...prev]);
-      setActiveConversationSessionId(id);
-
-      if (!options?.preserveView) {
-        setSelectedCategory(categoryName);
-        setCurrentView('conversation');
-        setFlowSteps(steps);
-        setFlowIndex(0);
-        setFlowAnswers({});
-
-        setInputValue("");
-        setStep("FLOW");
-        setHistory(initialHistory);
-        setUploadedImageSrc(null);
-        setUploadedImages([]);
-        setUserDescription("");
-        setIssueText("");
-        setUseManualEstate(false);
-        setSelectedEstateName(null);
-        setIsOutsideCityConnectEstate(false);
-        setStartDate("");
-        setStartTime("");
-        setStartQuickTag(null);
-        setAiResponse(null);
-        setAiDecision({ requiresConsultancy: false, consultancyCompleted: false });
-        setConfidenceScore(0);
-        setInfoSlots(INITIAL_INFO_SLOTS);
-        setImageDeclined(false);
-        setEarlyStopAcknowledged(false);
-        setSendError(null);
-        setIsUserDistressed(false);
-        setHasChosenAction(false);
-      }
-    },
-    [],
-  );
-
-  const handleSelectConversationSession = useCallback(
-    (sessionId: string) => {
-      const session = conversationSessions.find((s) => s.id === sessionId);
-      if (!session) return;
-
-      const categoryKey = getServiceCategoryKey(session.category);
-      if (!categoryKey) return;
-      const steps = buildFlowStepsForCategory(categoryKey);
-
+  const applySessionToState = useCallback(
+    (session: ConversationSession, steps: StepConfig[], options?: { includeResumeMessage?: boolean }) => {
       // Selecting a conversation should not reorder it.
       suppressSessionAutosaveRef.current = true;
       window.setTimeout(() => {
@@ -4806,10 +5030,11 @@ export default function ChatInterface({
       const resumeAck: HistoryItem = {
         id: makeHistoryId(),
         type: "ai_message",
-        text: "Welcome back — let’s continue where we left off.",
+        text: "Welcome back - let's continue where we left off.",
       };
-      setHistory((prev) => {
+      setHistory(() => {
         const base = session.messages;
+        if (!options?.includeResumeMessage) return base;
         const last = base[base.length - 1];
         const shouldAppend = last?.type !== "ai_message" || last.text !== resumeAck.text;
         return shouldAppend ? [...base, resumeAck] : base;
@@ -4838,11 +5063,192 @@ export default function ChatInterface({
       setUserDescription("");
       setConfidenceScore(session.confidenceScore);
       setInfoSlots(session.infoSlots);
+      savedHistoryIdsRef.current = new Set(session.messages.map((item) => item.id));
+      lastSavedAiResponseRef.current = session.conversationState.aiResponse?.message
+        ? `${session.id}:${session.conversationState.aiResponse.message}`
+        : null;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!historyLoadError) return;
+    toast({
+      title: "Unable to load previous conversation",
+      description: historyLoadError,
+      variant: "destructive",
+    });
+    setHistoryLoadError(null);
+  }, [historyLoadError, toast]);
+
+  const startNewConversationSession = useCallback(
+    (categoryName: string, options?: { preserveView?: boolean }) => {
+      void (async () => {
+        const now = Date.now();
+        if (now - lastNewSessionAtRef.current < 600) return;
+        lastNewSessionAtRef.current = now;
+
+        const categoryKey = getServiceCategoryKey(categoryName);
+        if (!categoryKey) return;
+
+        const existing = conversationSessions.find((s) => s.category === categoryName);
+        if (existing) {
+          const steps = buildFlowStepsForCategory(categoryKey);
+          applySessionToState(existing, steps, { includeResumeMessage: false });
+          if (conversationSyncAvailable) {
+            await hydrateConversationMessages(existing.id, categoryName);
+          }
+          return;
+        }
+
+        let sessionId = makeHistoryId();
+        let updatedAt = new Date().toISOString();
+        if (conversationSyncAvailable) {
+          try {
+            const conversation = await getOrCreateConversation(categoryName);
+            sessionId = conversation.id;
+            updatedAt = conversation.updatedAt || conversation.createdAt || updatedAt;
+          } catch {
+            setConversationSyncAvailable(false);
+          }
+        }
+
+        const steps = buildFlowStepsForCategory(categoryKey);
+        const newSession = buildEmptyConversationSession(categoryName, sessionId, updatedAt);
+
+        setConversationSessions((prev) => [newSession, ...prev]);
+        setActiveConversationSessionId(sessionId);
+
+        if (!options?.preserveView) {
+          setSelectedCategory(categoryName);
+          setCurrentView('conversation');
+          setFlowSteps(steps);
+          setFlowIndex(0);
+          setFlowAnswers({});
+
+          setInputValue("");
+          setStep("FLOW");
+          setHistory(newSession.messages);
+          setUploadedImageSrc(null);
+          setUploadedImages([]);
+          setUserDescription("");
+          setIssueText("");
+          setUseManualEstate(false);
+          setSelectedEstateName(null);
+          setIsOutsideCityConnectEstate(false);
+          setStartDate("");
+          setStartTime("");
+          setStartQuickTag(null);
+          setAiResponse(null);
+          setAiDecision({ requiresConsultancy: false, consultancyCompleted: false });
+          setConfidenceScore(0);
+          setInfoSlots(INITIAL_INFO_SLOTS);
+          setImageDeclined(false);
+          setEarlyStopAcknowledged(false);
+          setSendError(null);
+          setIsUserDistressed(false);
+          setHasChosenAction(false);
+          lastSavedAiResponseRef.current = null;
+          savedHistoryIdsRef.current = new Set(newSession.messages.map((item) => item.id));
+        }
+
+        if (conversationSyncAvailable) {
+          await hydrateConversationMessages(sessionId, categoryName);
+        }
+      })();
+    },
+    [
+      applySessionToState,
+      buildEmptyConversationSession,
+      conversationSessions,
+      conversationSyncAvailable,
+      hydrateConversationMessages,
+    ],
+  );
+
+  const handleSelectConversationSession = useCallback(
+    (sessionId: string) => {
+      const session = conversationSessions.find((s) => s.id === sessionId);
+      if (!session) return;
+
+      const categoryKey = getServiceCategoryKey(session.category);
+      if (!categoryKey) return;
+      const steps = buildFlowStepsForCategory(categoryKey);
+
+      applySessionToState(session, steps, { includeResumeMessage: true });
       setSendError(null);
       setHasChosenAction(false);
+
+      if (conversationSyncAvailable) {
+        void hydrateConversationMessages(session.id, session.category);
+      }
     },
-    [conversationSessions],
+    [applySessionToState, conversationSessions, conversationSyncAvailable, hydrateConversationMessages],
   );
+
+  useEffect(() => {
+    if (!conversationSyncAvailable) return;
+    if (!activeConversationSessionId) return;
+    if (!history.length) return;
+
+    const pending = history.filter((item) => !savedHistoryIdsRef.current.has(item.id));
+    if (!pending.length) return;
+
+    void (async () => {
+      try {
+        for (const item of pending) {
+          if (item.type === "ticket") continue;
+          const payload = {
+            role: item.type === "user_text" || item.type === "image" ? "user" : "assistant",
+            type: item.type === "image" ? "image" : "text",
+            content: item.type === "image" ? item.src : item.text,
+          } as const;
+
+          const saved = await appendMessage(activeConversationSessionId, payload);
+          savedHistoryIdsRef.current.add(item.id);
+          // Use server ids for hydration, but keep local ids for UI continuity.
+          if (saved?.id) {
+            savedHistoryIdsRef.current.add(saved.id);
+          }
+        }
+      } catch (error: any) {
+        setConversationSyncAvailable(false);
+        toast({
+          title: "Unable to save message",
+          description: error?.message || "Please check your connection.",
+          variant: "destructive",
+        });
+      }
+    })();
+  }, [activeConversationSessionId, conversationSyncAvailable, history, toast]);
+
+  useEffect(() => {
+    if (!conversationSyncAvailable) return;
+    if (!activeConversationSessionId) return;
+    if (!aiResponse?.message) return;
+
+    const fingerprint = `${activeConversationSessionId}:${aiResponse.message}`;
+    if (lastSavedAiResponseRef.current === fingerprint) return;
+    lastSavedAiResponseRef.current = fingerprint;
+
+    void (async () => {
+      try {
+        await appendMessage(activeConversationSessionId, {
+          role: "assistant",
+          type: "text",
+          content: aiResponse.message,
+          meta: aiResponse,
+        });
+      } catch (error: any) {
+        setConversationSyncAvailable(false);
+        toast({
+          title: "Unable to save AI response",
+          description: error?.message || "Please check your connection.",
+          variant: "destructive",
+        });
+      }
+    })();
+  }, [activeConversationSessionId, aiResponse, conversationSyncAvailable, toast]);
 
   useEffect(() => {
     if (!activeConversationSessionId) return;
@@ -5214,7 +5620,10 @@ export default function ChatInterface({
 
   const handleCategorySelect = (categoryName: string) => {
     if (onCategorySelected) {
-      startNewConversationSession(categoryName, { preserveView: true });
+      // When an external navigation callback is provided, let the destination
+      // page create the session. Calling startNewConversationSession here
+      // would create a session that isn't persisted before navigation,
+      // leading to duplicate sessions when the new page also creates one.
       onCategorySelected(categoryName);
       return;
     }
@@ -5254,7 +5663,8 @@ export default function ChatInterface({
         // Intelligent image request gating.
         if (s.id === "image") {
           if (imageDeclined) continue;
-          if (categoryKey && !CATEGORY_VISUALS_HELPFUL[categoryKey]) continue;
+          const catVisualsHelpful = categoryKey ? (DYNAMIC_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? DEFAULT_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? true) : true;
+          if (categoryKey && !catVisualsHelpful) continue;
           if (categoryKey && hasSufficientConfidence(categoryKey, nextConfidence)) continue;
           if (!descriptionHighQuality) continue;
         }
@@ -5612,8 +6022,51 @@ export default function ChatInterface({
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
     if (!activeFlowStep || activeFlowStep.id !== "timing") return;
     setStartQuickTag(tag);
-    setStartDate("");
-    setStartTime("");
+
+    // Compute date and time based on the selected quick tag
+    const now = new Date();
+    const formatDate = (d: Date) => d.toISOString().split("T")[0]; // YYYY-MM-DD
+    const formatTime = (d: Date) => {
+      const h = String(d.getHours()).padStart(2, "0");
+      const m = String(d.getMinutes()).padStart(2, "0");
+      return `${h}:${m}`;
+    };
+
+    switch (tag) {
+      case "Today": {
+        setStartDate(formatDate(now));
+        setStartTime(formatTime(now));
+        break;
+      }
+      case "Yesterday": {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        setStartDate(formatDate(yesterday));
+        setStartTime(formatTime(now));
+        break;
+      }
+      case "This morning": {
+        setStartDate(formatDate(now));
+        setStartTime(formatTime(now));
+        break;
+      }
+      case "This afternoon": {
+        setStartDate(formatDate(now));
+        setStartTime(formatTime(now));
+        break;
+      }
+      case "This evening": {
+        setStartDate(formatDate(now));
+        setStartTime(formatTime(now));
+        break;
+      }
+      case "Not sure":
+      default: {
+        setStartDate("");
+        setStartTime("");
+        break;
+      }
+    }
   };
 
   const onContinueTiming = () => {
@@ -6316,6 +6769,7 @@ export default function ChatInterface({
             step={step}
             activeFlowStep={flowSteps[flowIndex] ?? null}
             history={history}
+            isHistoryLoading={isHistoryLoading}
             inputValue={inputValue}
             onInputChange={setInputValue}
             onSend={handleSend}
@@ -6487,8 +6941,8 @@ export default function ChatInterface({
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             onCategorySelect={handleCategorySelect}
-            categoriesData={fetchedCategories}
-            catsLoading={catsLoading}
+            categoriesData={displayCategories}
+            catsLoading={categoriesLoading}
             myEstates={myEstates}
             selectedEstateName={selectedEstateName}
             setSelectedEstateName={setSelectedEstateName}

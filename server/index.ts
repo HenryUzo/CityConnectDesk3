@@ -373,6 +373,39 @@ async function ensureExtensionsAndEnums() {
       END IF;
     END$$;
   `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'conversation_status'
+      ) THEN
+        CREATE TYPE conversation_status AS ENUM ('active', 'closed');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'conversation_role'
+      ) THEN
+        CREATE TYPE conversation_role AS ENUM ('user', 'assistant');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'conversation_message_type'
+      ) THEN
+        CREATE TYPE conversation_message_type AS ENUM ('text', 'image');
+      END IF;
+    END$$;
+  `);
 }
 
 async function ensureTransactionsColumns() {
@@ -428,6 +461,55 @@ async function ensureMongoIdMappingTable() {
   `);
 }
 
+async function ensureConversationsTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      resident_id varchar NOT NULL REFERENCES users(id),
+      category text NOT NULL,
+      status conversation_status NOT NULL DEFAULT 'active',
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'conversations_resident_category_unique'
+      ) THEN
+        ALTER TABLE conversations
+          ADD CONSTRAINT conversations_resident_category_unique UNIQUE (resident_id, category);
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_conversations_resident_id ON conversations(resident_id);
+    CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at);
+  `);
+}
+
+async function ensureConversationMessagesTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS conversation_messages (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      conversation_id varchar NOT NULL REFERENCES conversations(id),
+      role conversation_role NOT NULL,
+      type conversation_message_type NOT NULL DEFAULT 'text',
+      content text NOT NULL,
+      meta jsonb,
+      created_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id_created_at
+      ON conversation_messages(conversation_id, created_at);
+  `);
+}
+
 // Boot sequence - start immediately without IIFE
 let bootPromise = (async () => {
   console.log("[BOOT] Starting boot sequence...");
@@ -446,6 +528,8 @@ let bootPromise = (async () => {
     await ensureProviderRequestsTable();
     await ensureTransactionsColumns();
     await ensureMongoIdMappingTable();
+    await ensureConversationsTable();
+    await ensureConversationMessagesTable();
     log("[DB] Schema guard OK");
   } catch (e) {
     console.error("[DB] Schema guard failed:", e);

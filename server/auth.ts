@@ -220,6 +220,17 @@ export function setupAuth(app: Express) {
 
   app.get("/api/user", (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
+    const session = req.session as any;
+    if (session?.impersonatorId) {
+      return res.json({
+        ...req.user,
+        isImpersonating: true,
+        impersonatedBy: {
+          id: session.impersonatorId,
+          email: session.impersonatorEmail,
+        },
+      });
+    }
     res.json(req.user);
   });
 }

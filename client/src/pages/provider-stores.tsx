@@ -162,6 +162,15 @@ export default function ProviderStores() {
                           <ArrowRight className="w-4 h-4 ml-2" />
                         </Button>
                       )}
+                      <Link href={`/provider/stores/${store.id}/orders`}>
+                        <Button
+                          className="w-full"
+                          variant="outline"
+                          disabled={store.approvalStatus !== "approved"}
+                        >
+                          View Orders
+                        </Button>
+                      </Link>
                     </CardContent>
                   </Card>
                 ))}

@@ -80,12 +80,26 @@ export default function ProviderDashboard() {
     estateId: "",
   });
 
-  // Show loading while user info loads
+  // Redirect non-providers away from this page
   if (!user) {
     return (
       <ProviderLayout title="Loading...">
         <div className="flex items-center justify-center py-20">
           <p className="text-gray-500">Loading your profile...</p>
+        </div>
+      </ProviderLayout>
+    );
+  }
+
+  if (user.role !== "provider") {
+    return (
+      <ProviderLayout title="Access Denied">
+        <div className="flex flex-col items-center justify-center py-20 gap-4">
+          <p className="text-red-600 font-semibold">Access Denied</p>
+          <p className="text-gray-500">This page is only accessible to providers.</p>
+          <Link href="/" className="text-blue-600 hover:underline">
+            Return to Dashboard
+          </Link>
         </div>
       </ProviderLayout>
     );
@@ -872,13 +886,15 @@ export default function ProviderDashboard() {
                                 Manage Items
                               </Button>
                             </Link>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              data-testid={`button-view-orders-${store.id}`}
-                            >
-                              View Orders
-                            </Button>
+                            <Link href={`/provider/stores/${store.id}/orders`}>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                data-testid={`button-view-orders-${store.id}`}
+                              >
+                                View Orders
+                              </Button>
+                            </Link>
                           </div>
                         </div>
                       </div>
