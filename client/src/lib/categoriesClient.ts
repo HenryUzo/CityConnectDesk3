@@ -1,4 +1,6 @@
-const CACHE_KEY = "cc_categories_cache_v1";
+// Use a distinct cache key for marketplace item categories to avoid
+// colliding with any legacy service-category cache entries.
+const CACHE_KEY = "cc_item_categories_cache_v1";
 
 export type CategoryItem = {
   id?: string;
@@ -30,7 +32,8 @@ export function writeCategoriesCache(items: CategoryItem[]) {
 
 export async function fetchCategories(scope = "global"): Promise<CategoryItem[]> {
   try {
-    const res = await fetch(`/api/categories?scope=${encodeURIComponent(scope)}`);
+    // Fetch item categories for marketplace, not service categories
+    const res = await fetch(`/api/item-categories`);
     if (!res.ok) return [];
     const data = await res.json();
     const mapped: CategoryItem[] = (Array.isArray(data) ? data : []).map((c: any) => ({

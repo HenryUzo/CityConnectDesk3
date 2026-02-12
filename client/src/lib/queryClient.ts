@@ -31,12 +31,13 @@ function resolveUrlFromQueryKey(queryKey: readonly unknown[]): string {
 function getAuthHeaders() {
   const headers: Record<string, string> = {};
 
-  // Read admin token from storage
+  // Read admin token from storage (check resident token keys too)
   const token =
+    sessionStorage.getItem("jwt") ||
+    localStorage.getItem("jwt") ||
     sessionStorage.getItem("admin_access_token") ||
     localStorage.getItem("admin_access_token") ||
     localStorage.getItem("admin_jwt") ||
-    localStorage.getItem("jwt") ||
     localStorage.getItem("token") ||
     "";
 
@@ -59,6 +60,7 @@ export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
+  options?: { signal?: AbortSignal },
 ): Promise<Response> {
   const finalUrl = /^https?:\/\//i.test(url)
     ? url
@@ -72,6 +74,7 @@ export async function apiRequest(
     headers,
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
+    signal: options?.signal,
   });
 
   await throwIfResNotOk(res, finalUrl);

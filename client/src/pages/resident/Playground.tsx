@@ -114,11 +114,13 @@ export default function Playground({
   onNavigateToHomepage,
   onNavigateToSettings,
   onNavigateToChat,
+  onNavigateToOrdinaryFlow,
   currentPage,
 }: {
   onNavigateToHomepage?: () => void;
   onNavigateToSettings?: () => void;
   onNavigateToChat?: () => void;
+  onNavigateToOrdinaryFlow?: () => void;
   currentPage: "homepage" | "chat" | "settings" | "playground";
 }) {
   const [isFavorited, setIsFavorited] = useState(false);
@@ -212,6 +214,7 @@ export default function Playground({
         onNavigateToHomepage={onNavigateToHomepage}
         onNavigateToSettings={onNavigateToSettings}
         onNavigateToMarketplace={() => console.log("Navigate to marketplace - will be connected in App.tsx")}
+        onNavigateToOrdinaryFlow={onNavigateToOrdinaryFlow}
         currentPage={currentPage}
       />
       

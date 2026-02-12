@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { ShoppingBag, Search, Star, Clock, MapPin, ShoppingCart, Plus, Minus } from "lucide-react";
-import { ResidentLayout } from "@/components/resident/ResidentLayout";
+import ResidentShell from "@/components/layout/ResidentShell";
 
 // Marketplace data types
 interface CartItem {
@@ -255,8 +255,8 @@ export default function BookMarketRun() {
   };
 
   return (
-    <ResidentLayout title="Marketplace">
-      <div className="space-y-6">
+    <ResidentShell currentPage="marketplace">
+      <div className="max-w-5xl mx-auto p-8 space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 space-y-3 sm:space-y-0">
           <div className="flex items-center">
             <ShoppingBag className="w-8 h-8 text-secondary mr-3" />
@@ -546,6 +546,6 @@ export default function BookMarketRun() {
           </Card>
         )}
       </div>
-    </ResidentLayout>
+    </ResidentShell>
   );
 }

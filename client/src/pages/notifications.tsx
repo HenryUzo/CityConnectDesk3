@@ -2,6 +2,7 @@ import { useNotifications } from "@/contexts/NotificationsContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useMemo } from "react";
+import ResidentShell from "@/components/layout/ResidentShell";
 
 export default function NotificationsPage() {
   const { notifications, markRead, markAllRead } = useNotifications();
@@ -11,7 +12,8 @@ export default function NotificationsPage() {
   );
 
   return (
-    <div className="mx-auto w-full max-w-3xl p-6 space-y-6">
+    <ResidentShell currentPage="homepage">
+      <div className="mx-auto w-full max-w-3xl p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Notifications</h1>
         <Button
@@ -62,6 +64,7 @@ export default function NotificationsPage() {
           ))
         )}
       </div>
-    </div>
+      </div>
+    </ResidentShell>
   );
 }

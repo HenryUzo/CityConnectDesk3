@@ -6,6 +6,7 @@ import {
   ClipboardList,
   Home,
   LifeBuoy,
+  ListChecks,
   LogOut,
   Settings,
   ShoppingBag,
@@ -24,6 +25,7 @@ export type LayoutNavPage =
   | "requests"
   | "settings"
   | "marketplace"
+  | "ordinary_flow"
   | "playground";
 
 export type LayoutNavProps = {
@@ -32,6 +34,7 @@ export type LayoutNavProps = {
   onNavigateToSettings?: () => void;
   onNavigateToMarketplace?: () => void;
   onNavigateToServiceRequests?: () => void;
+  onNavigateToOrdinaryFlow?: () => void;
   currentPage: LayoutNavPage;
   defaultExpanded?: boolean;
   forceCollapsed?: boolean;
@@ -53,6 +56,7 @@ export default function Nav({
   onNavigateToSettings,
   onNavigateToMarketplace,
   onNavigateToServiceRequests,
+  onNavigateToOrdinaryFlow,
   currentPage,
   defaultExpanded = false,
   forceCollapsed,
@@ -103,6 +107,12 @@ export default function Nav({
       label: "Book a Service",
       Icon: Wrench,
       action: onBookServiceClick,
+    },
+    {
+      key: "ordinary_flow",
+      label: "Smart Intake",
+      Icon: ListChecks,
+      action: onNavigateToOrdinaryFlow,
     },
     {
       key: "marketplace",

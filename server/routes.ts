@@ -19,6 +19,7 @@ import {
   stores,
   itemCategories,
   marketplaceItems,
+  cityMartBanners,
   transactions,
   companies,
   providerRequests,
@@ -30,6 +31,9 @@ import {
   notifications,
   storeEstates,
   aiConversationFlowSettings,
+  requestConversationSettings,
+  requestQuestions,
+  parentOrders,
 } from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
@@ -43,7 +47,7 @@ import {
   providerRequestSchema,
   updateMarketplaceItemSchema,
 } from "@shared/admin-schema";
-import { TransactionStatus } from "@prisma/client";
+import { TransactionStatus, TransactionType } from "@prisma/client";
 import type { Transaction as PrismaTransaction } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import {
@@ -56,12 +60,18 @@ import {
   handlePaystackVerify,
   handlePaystackWebhook,
 } from "./paystackHandlers";
-import { requireAuth, requireResident, requireSuperAdmin } from "./auth-middleware";
+import {
+  requireAuth,
+  requireResident,
+  requireSuperAdmin,
+  ensureDevAuth,
+} from "./auth-middleware";
 
 import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
 import * as ai from "./ai";
 import { runDiagnosis, GEMINI_FALLBACK_DIAGNOSIS, GEMINI_SAFETY_FALLBACK, getGeminiModel } from "./ai/diagnose";
 import { generateGeminiContent } from "./ai/geminiClient";
+import { ollamaChat } from "./ai/ollama";
 
 function membershipIsActive(membership: { isActive?: boolean | null; status?: string | null } | undefined) {
   if (!membership) return false;
@@ -73,16 +83,14 @@ function membershipIsActive(membership: { isActive?: boolean | null; status?: st
 }
 
 const isAdminOrSuper = (req: Express["request"]) => {
-  // Support both session auth (req.user + req.isAuthenticated) and JWT auth (req.auth)
-  const sessionOk =
-    req.isAuthenticated() &&
-    (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
+  const auth = ensureDevAuth(req as any);
+  if (!auth) return false;
 
-  const jwtOk =
-    Boolean(req.auth) &&
-    ((req.auth as any)?.role === "admin" || (req.auth as any)?.globalRole === "super_admin");
-
-  return sessionOk || jwtOk;
+  return (
+    auth.role === "admin" ||
+    auth.role === "super_admin" ||
+    auth.globalRole === "super_admin"
+  );
 };
 
 const resolveCompanyForUser = async (userId?: string | null) => {
@@ -223,10 +231,40 @@ const AiDiagnosisSchema = {
   ],
 } as const;
 
-export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup authentication routes
-  setupAuth(app);
+const RequestConfigSettingsSchema = z.object({
+  mode: z.enum(["ai", "ordinary"]).optional(),
+  aiProvider: z.enum(["gemini", "ollama", "openai"]).optional(),
+  aiModel: z.string().nullable().optional(),
+  aiTemperature: z.number().nullable().optional(),
+  aiSystemPrompt: z.string().nullable().optional(),
+  ordinaryPresentation: z.enum(["chat", "form"]).optional(),
+  adminWaitThresholdMs: z.number().int().positive().nullable().optional(),
+});
 
+const RequestQuestionSchema = z.object({
+  mode: z.enum(["ai", "ordinary"]),
+  scope: z.enum(["global", "category"]).optional(),
+  categoryKey: z.string().nullable().optional(),
+  key: z.string().min(1),
+  label: z.string().min(1),
+  type: z.enum([
+    "text",
+    "textarea",
+    "select",
+    "date",
+    "datetime",
+    "estate",
+    "urgency",
+    "image",
+    "multi_image",
+  ]),
+  required: z.boolean().optional(),
+  options: z.any().optional(),
+  order: z.number().optional(),
+  isEnabled: z.boolean().optional(),
+});
+
+export async function registerRoutes(app: Express): Promise<Server> {
   // Debug endpoint (DEV ONLY): check Paystack secret key loading
   app.get("/api/debug/paystack-key", (req, res) => {
     const key = process.env.PAYSTACK_SECRET_KEY || "";
@@ -253,6 +291,87 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use("/api/provider", providerRoutes);
   app.use("/api/marketplace", marketplaceRoutes);
 
+  // ──────────────────────────────────────────────────────────────
+  // CITYMART BANNERS ROUTES
+  // ──────────────────────────────────────────────────────────────
+
+  // Public: Get active banners
+  app.get("/api/citymart/banners", async (req, res, next) => {
+    try {
+      const banners = await db
+        .select()
+        .from(cityMartBanners)
+        .where(eq(cityMartBanners.isActive, true))
+        .orderBy(asc(cityMartBanners.position), desc(cityMartBanners.createdAt));
+      res.json(banners);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: List all banners (super admin only)
+  app.get("/api/admin/citymart/banners", requireSuperAdmin, async (req, res, next) => {
+    try {
+      const banners = await db
+        .select()
+        .from(cityMartBanners)
+        .orderBy(asc(cityMartBanners.position), desc(cityMartBanners.createdAt));
+      res.json(banners);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: Create banner
+  app.post("/api/admin/citymart/banners", requireSuperAdmin, async (req, res, next) => {
+    try {
+      const user = req.user as any;
+      const [banner] = await db
+        .insert(cityMartBanners)
+        .values({
+          ...req.body,
+          createdBy: user?.id,
+        })
+        .returning();
+      res.status(201).json(banner);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: Update banner
+  app.patch("/api/admin/citymart/banners/:id", requireSuperAdmin, async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const [updated] = await db
+        .update(cityMartBanners)
+        .set({ ...req.body, updatedAt: new Date() })
+        .where(eq(cityMartBanners.id, id))
+        .returning();
+      if (!updated) return res.status(404).json({ message: "Banner not found" });
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Admin: Delete banner
+  app.delete("/api/admin/citymart/banners/:id", requireSuperAdmin, async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const [deleted] = await db
+        .delete(cityMartBanners)
+        .where(eq(cityMartBanners.id, id))
+        .returning();
+      if (!deleted) return res.status(404).json({ message: "Banner not found" });
+      res.json({ message: "Banner deleted", id });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────
+
   const formatPaystackVerifySuccess = (tx?: PrismaTransaction | null) => ({
     status: "success" as const,
     serviceRequestId: tx?.serviceRequestId ?? null,
@@ -270,7 +389,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Service Requests Routes
 
   // Provider matching preview (resident-safe): a short preview list only — no assignment/booking.
-  app.get("/api/providers/preview", requireAuth, requireResident, async (req, res, next) => {
+  app.get("/api/providers/preview", requireAuth, async (req, res, next) => {
     try {
       const schema = z.object({
         category: z.string().min(1),
@@ -391,14 +510,136 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Provider availability (resident-only) - stable contract for chat recommendations
+  app.get("/api/providers/available", requireAuth, requireResident, async (req, res, next) => {
+    try {
+      const schema = z.object({
+        category: z.string().min(1),
+        urgency: z.string().optional(),
+        limit: z
+          .union([z.string(), z.number()])
+          .optional()
+          .transform((v) => {
+            if (v == null || v === "") return 4;
+            const n = typeof v === "number" ? v : Number(v);
+            return Number.isFinite(n) ? Math.max(2, Math.min(6, Math.floor(n))) : 4;
+          }),
+        estateId: z.string().optional(),
+      });
+
+      const parsed = schema.parse(req.query);
+
+      const requestedEstateId = typeof parsed.estateId === "string" && parsed.estateId.trim() ? parsed.estateId.trim() : undefined;
+      let activeEstateId = requestedEstateId;
+      if (!activeEstateId) {
+        const membershipsForUser = await storage.getMembershipsForUser(req.auth!.userId);
+        const primary = membershipsForUser.find((m) => m.isPrimary && m.isActive && m.status === "active");
+        activeEstateId = primary?.estateId;
+      }
+
+      const providers = await storage.getProviders({
+        approved: true,
+        category: parsed.category,
+      });
+
+      const verifiedProviders = (providers || []).filter((p: any) => p?.isActive !== false && p?.isApproved === true);
+      const providerIds = verifiedProviders.map((p: any) => p.id).filter(Boolean);
+
+      if (providerIds.length === 0) {
+        return res.json({
+          providers: [],
+          usedEstateId: activeEstateId ?? null,
+          estateSpecificCount: 0,
+        });
+      }
+
+      const completedJobRows = await db
+        .select({ providerId: serviceRequests.providerId, completedJobs: count() })
+        .from(serviceRequests)
+        .where(and(inArray(serviceRequests.providerId, providerIds as any), eq(serviceRequests.status, "completed")))
+        .groupBy(serviceRequests.providerId);
+
+      const completedJobsByProvider = new Map<string, number>();
+      for (const r of completedJobRows) {
+        const pid = (r as any).providerId as string | null;
+        if (!pid) continue;
+        completedJobsByProvider.set(pid, Number((r as any).completedJobs ?? 0));
+      }
+
+      let estateMatchedIds = new Set<string>();
+      if (activeEstateId) {
+        const membershipRows = await db
+          .select({ userId: memberships.userId })
+          .from(memberships)
+          .where(
+            and(
+              eq(memberships.estateId, activeEstateId),
+              eq(memberships.isActive, true),
+              eq(memberships.status, "active"),
+              inArray(memberships.userId, providerIds as any),
+            ),
+          );
+        estateMatchedIds = new Set(membershipRows.map((m: { userId: string }) => m.userId));
+      }
+
+      const preview = verifiedProviders
+        .map((p: any) => {
+          const ratingNum = Number(p.rating ?? 0);
+          const completedJobs = completedJobsByProvider.get(p.id) ?? 0;
+          const isEstateMatch = activeEstateId ? estateMatchedIds.has(p.id) : false;
+
+          const badges: string[] = [];
+          if (isEstateMatch) badges.push("Estate recommended");
+          if (ratingNum >= 4.5) badges.push("Top rated");
+          if (completedJobs >= 25) badges.push("Experienced");
+
+          const fastResponder = Boolean((p.metadata as any)?.fastResponder);
+          if (fastResponder) badges.push("Fast responder");
+
+          return {
+            id: String(p.id),
+            name: String(p.name ?? ""),
+            serviceCategory: String(p.serviceCategory ?? parsed.category),
+            rating: Number.isFinite(ratingNum) ? ratingNum : 0,
+            completedJobs,
+            responseTime: "Response time not available",
+            location: String(p.location ?? "City-wide"),
+            badges,
+            verificationStatus: "Verified" as const,
+            image: (p.metadata as any)?.avatarUrl ? String((p.metadata as any).avatarUrl) : undefined,
+            __estateMatch: isEstateMatch,
+          };
+        })
+        .sort((a: any, b: any) => {
+          if (a.__estateMatch !== b.__estateMatch) return a.__estateMatch ? -1 : 1;
+          if (b.rating !== a.rating) return b.rating - a.rating;
+          return (b.completedJobs ?? 0) - (a.completedJobs ?? 0);
+        });
+
+      const limited = preview.slice(0, parsed.limit ?? 4).map(({ __estateMatch, ...rest }: any) => rest);
+      const estateSpecificCount = activeEstateId ? preview.filter((p: any) => p.__estateMatch).length : 0;
+
+      res.json({
+        providers: limited,
+        usedEstateId: activeEstateId ?? null,
+        estateSpecificCount,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post(
     "/api/service-requests",
     requireAuth,
     async (req, res, next) => {
+      console.log("[DEBUG] Hit POST /api/service-requests", { 
+        auth: !!req.auth, 
+        user: !!req.user,
+        authenticated: req.isAuthenticated ? req.isAuthenticated() : 'no-func'
+      });
       try {
-      if (!req.isAuthenticated() || req.user?.role !== "resident") {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+      const userId = req.auth!.userId;
 
       const headerEstate = typeof req.headers["x-estate-id"] === "string" ? req.headers["x-estate-id"].trim() : undefined;
       const queryEstate = typeof req.query.estateId === "string" ? req.query.estateId.trim() : undefined;
@@ -408,16 +649,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // estateId is optional in schema; only attach it when it is valid AND the user is an active member.
       let estateId: string | undefined;
       if (requestedEstateId) {
-        const membership = await storage.getMembershipByUserAndEstate(req.user.id, requestedEstateId);
-        if (!membershipIsActive(membership)) {
-          return res.status(403).json({ message: "Your estate membership is not active." });
+        const isAdminCheck = isAdminOrSuper(req);
+        if (!isAdminCheck) {
+          const membership = await storage.getMembershipByUserAndEstate(userId, requestedEstateId);
+          if (!membershipIsActive(membership)) {
+            console.log("[DEBUG-AUTH] Membership check failed", { userId, requestedEstateId, hasMembership: !!membership });
+            return res.status(403).json({ message: "Your estate membership is not active." });
+          }
         }
         estateId = requestedEstateId;
       }
 
       const parsed = CreateServiceRequest.parse({
         ...req.body,
-        residentId: req.user.id,
+        residentId: userId,
         estateId,
       });
 
@@ -461,24 +706,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/service-requests", async (req, res, next) => {
+  app.get("/api/service-requests", requireAuth, async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+      const userId = req.auth!.userId;
+      const userRole = req.auth!.role;
 
       const { status } = req.query;
       let requests;
 
-      if (req.user?.role === "resident") {
-        requests = await storage.getServiceRequestsByResident(req.user.id);
-      } else if (req.user?.role === "provider") {
+      if (userRole === "resident") {
+        requests = await storage.getServiceRequestsByResident(userId);
+      } else if (userRole === "provider") {
+        const user = await storage.getUser(userId);
         if (status === "available") {
-          requests = await storage.getAvailableServiceRequests(req.user.serviceCategory || undefined);
+          requests = await storage.getAvailableServiceRequests(user?.serviceCategory || undefined);
         } else {
-          requests = await storage.getServiceRequestsByProvider(req.user.id);
+          requests = await storage.getServiceRequestsByProvider(userId);
         }
-      } else if (req.user?.role === "admin") {
+      } else if (userRole === "admin" || userRole === "super_admin") {
         requests = await storage.getAllServiceRequests();
       }
 
@@ -488,12 +733,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/service-requests/:id", async (req, res, next) => {
+  app.patch("/api/service-requests/:id", requireAuth, async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
       const { id } = req.params;
       const updates = req.body;
 
@@ -731,7 +972,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/ai/diagnose", requireAuth, requireResident, async (req, res) => {
+  app.post("/api/ai/diagnose", requireAuth, async (req, res) => {
     const parsedBody = AIDiagnosisRequestSchema.safeParse(req.body);
     if (!parsedBody.success) {
       return res.status(400).json({
@@ -786,8 +1027,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { category, description, urgency, specialInstructions } = parsedBody.data;
       const activeProvider = await ai.getActiveProvider();
-      const useGeminiDirect =
-        activeProvider.provider === "gemini" || process.env.AI_PROVIDER === "gemini";
+        const useGeminiDirect = activeProvider.provider === "gemini";
       const geminiModel = getGeminiModel(activeProvider.model || process.env.GEMINI_MODEL);
       let normalized;
       if (useGeminiDirect) {
@@ -839,7 +1079,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post(
     "/api/ai/validate-description",
     requireAuth,
-    requireResident,
     async (req, res) => {
       const parsedBody = AIDescriptionValidationRequestSchema.safeParse(req.body);
       if (!parsedBody.success) {
@@ -997,7 +1236,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post(
     "/api/ai/prepared-requests/snapshot",
     requireAuth,
-    requireResident,
     async (req, res, next) => {
       try {
         const userId = req.auth?.userId ?? req.user?.id;
@@ -1005,7 +1243,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const body = (req.body ?? {}) as any;
         const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
-        const category = typeof body.category === "string" ? body.category : null;
+        const rawCategory = typeof body.category === "string" ? body.category : null;
+        // Normalize category to lowercase with underscores for database enum compatibility
+        const category = rawCategory ? rawCategory.toLowerCase().trim().replace(/[\s-]+/g, '_') : null;
         const urgency = typeof body.urgency === "string" ? body.urgency : null;
         const recommendedApproach = typeof body.recommendedApproach === "string" ? body.recommendedApproach : "";
         const confidenceScore = Number.isFinite(Number(body.confidenceScore)) ? Number(body.confidenceScore) : 0;
@@ -1570,6 +1810,234 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ========== Request Conversation Settings & Questions ==========
+  app.get("/api/admin/request-config/settings", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const [settings] = await db
+        .select()
+        .from(requestConversationSettings)
+        .orderBy(desc(requestConversationSettings.updatedAt))
+        .limit(1);
+      return res.json(settings || null);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/admin/request-config/questions", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const mode = typeof req.query.mode === "string" ? req.query.mode : undefined;
+      let query = db.select().from(requestQuestions);
+      if (mode) {
+        query = query.where(eq(requestQuestions.mode, mode as any));
+      }
+      const rows = await query.orderBy(asc(requestQuestions.order));
+      return res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/request-config/questions", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const parsed = RequestQuestionSchema.parse(req.body || {});
+      const maxOrder = await db
+        .select({ maxOrder: sql<number>`COALESCE(MAX(${requestQuestions.order}), 0)` })
+        .from(requestQuestions)
+        .where(eq(requestQuestions.mode, parsed.mode));
+      const nextOrder = parsed.order ?? ((maxOrder[0]?.maxOrder ?? 0) + 1);
+
+      const [created] = await db
+        .insert(requestQuestions)
+        .values({
+          mode: parsed.mode,
+          scope: parsed.scope ?? "global",
+          categoryKey: parsed.categoryKey ?? null,
+          key: parsed.key.trim(),
+          label: parsed.label.trim(),
+          type: parsed.type,
+          required: parsed.required ?? false,
+          options: parsed.options ?? null,
+          order: nextOrder,
+          isEnabled: parsed.isEnabled ?? true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      return res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/request-config/questions/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const id = String(req.params.id || "");
+      const parsed = RequestQuestionSchema.partial().parse(req.body || {});
+      const patch: any = { updatedAt: new Date() };
+      if (parsed.mode) patch.mode = parsed.mode;
+      if (parsed.scope) patch.scope = parsed.scope;
+      if (parsed.categoryKey !== undefined) patch.categoryKey = parsed.categoryKey ?? null;
+      if (parsed.key) patch.key = parsed.key.trim();
+      if (parsed.label) patch.label = parsed.label.trim();
+      if (parsed.type) patch.type = parsed.type;
+      if (parsed.required !== undefined) patch.required = parsed.required;
+      if (parsed.options !== undefined) patch.options = parsed.options ?? null;
+      if (parsed.order !== undefined && Number.isFinite(Number(parsed.order))) patch.order = Number(parsed.order);
+      if (parsed.isEnabled !== undefined) patch.isEnabled = parsed.isEnabled;
+
+      const updated = await db
+        .update(requestQuestions)
+        .set(patch)
+        .where(eq(requestQuestions.id, id))
+        .returning();
+
+      if (!updated.length) return res.status(404).json({ message: "Not found" });
+      return res.json(updated[0]);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/admin/request-config/questions/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const id = String(req.params.id || "");
+      const deleted = await db
+        .delete(requestQuestions)
+        .where(eq(requestQuestions.id, id))
+        .returning();
+      if (!deleted.length) return res.status(404).json({ message: "Not found" });
+      return res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/request-config/questions/reorder", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const { orderedIds } = req.body ?? {};
+      if (!Array.isArray(orderedIds)) {
+        return res.status(400).json({ message: "orderedIds array is required" });
+      }
+      for (let i = 0; i < orderedIds.length; i++) {
+        await db
+          .update(requestQuestions)
+          .set({ order: i + 1, updatedAt: new Date() })
+          .where(eq(requestQuestions.id, orderedIds[i]));
+      }
+      const updated = await db.select().from(requestQuestions).orderBy(asc(requestQuestions.order));
+      return res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/request-config/settings", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const parsed = RequestConfigSettingsSchema.parse(req.body || {});
+      const [existing] = await db
+        .select({ id: requestConversationSettings.id })
+        .from(requestConversationSettings)
+        .limit(1);
+
+      if (!existing) {
+        const [created] = await db
+          .insert(requestConversationSettings)
+          .values({
+            mode: parsed.mode ?? "ai",
+            aiProvider: parsed.aiProvider ?? "gemini",
+            aiModel: parsed.aiModel ?? null,
+            aiTemperature: parsed.aiTemperature ?? null,
+            aiSystemPrompt: parsed.aiSystemPrompt ?? null,
+            ordinaryPresentation: parsed.ordinaryPresentation ?? "chat",
+            adminWaitThresholdMs: parsed.adminWaitThresholdMs ?? 300000,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .returning();
+        return res.status(201).json(created);
+      }
+
+      const patch: any = { updatedAt: new Date() };
+      if (parsed.mode) patch.mode = parsed.mode;
+      if (parsed.aiProvider) patch.aiProvider = parsed.aiProvider;
+      if (parsed.aiModel !== undefined) patch.aiModel = parsed.aiModel ?? null;
+      if (parsed.aiTemperature !== undefined) patch.aiTemperature = parsed.aiTemperature ?? null;
+      if (parsed.aiSystemPrompt !== undefined) patch.aiSystemPrompt = parsed.aiSystemPrompt ?? null;
+      if (parsed.ordinaryPresentation) patch.ordinaryPresentation = parsed.ordinaryPresentation;
+      if (parsed.adminWaitThresholdMs !== undefined) patch.adminWaitThresholdMs = parsed.adminWaitThresholdMs ?? 300000;
+
+      const updated = await db
+        .update(requestConversationSettings)
+        .set(patch)
+        .where(eq(requestConversationSettings.id, existing.id))
+        .returning();
+
+      return res.json(updated[0]);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/request-config/test-model", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const TestModelSchema = z.object({
+        provider: z.enum(["gemini", "ollama", "openai"]),
+        model: z.string().min(1),
+      });
+      const parsed = TestModelSchema.parse(req.body || {});
+      const prompt = "Reply with: OK";
+      const start = Date.now();
+
+      if (parsed.provider === "ollama") {
+        const out = await ollamaChat({
+          model: parsed.model,
+          temperature: 0,
+          messages: [{ role: "user", content: prompt }],
+        });
+        const text = out?.message?.content || "";
+        return res.json({ ok: true, provider: parsed.provider, model: parsed.model, elapsedMs: Date.now() - start, sample: text.slice(0, 80) });
+      }
+
+      if (parsed.provider === "gemini") {
+        const result = await generateGeminiContent(parsed.model, prompt);
+        const text = result.text || "";
+        return res.json({ ok: true, provider: parsed.provider, model: parsed.model, elapsedMs: Date.now() - start, sample: text.slice(0, 80) });
+      }
+
+      if (parsed.provider === "openai") {
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey) {
+          return res.status(400).json({ ok: false, error: "OpenAI API key is not configured." });
+        }
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: parsed.model,
+            temperature: 0,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          return res.status(502).json({ ok: false, error: text || "Failed to reach OpenAI" });
+        }
+        const json = await response.json();
+        const text = json?.choices?.[0]?.message?.content || "";
+        return res.json({ ok: true, provider: parsed.provider, model: parsed.model, elapsedMs: Date.now() - start, sample: text.slice(0, 80) });
+      }
+
+      return res.status(400).json({ ok: false, error: "Unsupported provider." });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Admin: Send advice with inspection dates/times to resident
   app.post("/api/admin/service-requests/:id/advice", async (req, res, next) => {
     try {
@@ -1677,6 +2145,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           amount: z.preprocess((val) => Number(val), z.number().positive()),
           serviceRequestId: z.string().optional(),
           description: z.string().optional(),
+          consultancyRequest: z
+            .object({
+              categoryKey: z.string().optional(),
+              categoryLabel: z.string().optional(),
+              urgency: z.string().optional(),
+              location: z.string().optional(),
+              description: z.string().optional(),
+              attachmentsCount: z.number().optional(),
+            })
+            .optional(),
         })
         .parse(req.body || {});
 
@@ -1692,14 +2170,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      let createdServiceRequestId: string | undefined;
+      if (payload.consultancyRequest) {
+        const normalizeKey = (value: string) =>
+          String(value || "")
+            .toLowerCase()
+            .trim()
+            .replace(/[\s-]+/g, "_");
+        const allowedCategories = new Set([
+          "electrician",
+          "plumber",
+          "carpenter",
+          "hvac_technician",
+          "painter",
+          "tiler",
+          "mason",
+          "roofer",
+          "gardener",
+          "cleaner",
+          "security_guard",
+          "cook",
+          "laundry_service",
+          "pest_control",
+          "welder",
+          "mechanic",
+          "phone_repair",
+          "appliance_repair",
+          "tailor",
+          "surveillance_monitoring",
+          "alarm_system",
+          "cleaning_janitorial",
+          "catering_services",
+          "it_support",
+          "maintenance_repair",
+          "packaging_solutions",
+          "marketing_advertising",
+          "home_tutors",
+          "furniture_making",
+          "market_runner",
+          "item_vendor",
+        ]);
+        const normalizedCategory = normalizeKey(payload.consultancyRequest.categoryKey || payload.consultancyRequest.categoryLabel || "");
+        const category = allowedCategories.has(normalizedCategory) ? normalizedCategory : "maintenance_repair";
+        const urgencyInput = normalizeKey(payload.consultancyRequest.urgency || "");
+        const urgency =
+          urgencyInput === "emergency" || urgencyInput === "high" || urgencyInput === "medium" || urgencyInput === "low"
+            ? urgencyInput
+            : "medium";
+        const location = String(payload.consultancyRequest.location || "Not specified");
+        const description =
+          String(payload.consultancyRequest.description || "Consultancy request").trim() ||
+          "Consultancy request";
+
+        const created = await storage.createServiceRequest({
+          category: category as any,
+          description,
+          residentId: req.user.id,
+          budget: "Consultancy",
+          urgency: urgency as any,
+          location,
+          status: "pending_inspection" as any,
+          paymentStatus: "pending",
+        });
+        createdServiceRequestId = created.id;
+      }
+
       const session = await createPendingPaystackTransaction({
         userId: req.user.id,
         amount: payload.amount,
-        serviceRequestId: payload.serviceRequestId,
+        serviceRequestId: payload.serviceRequestId ?? createdServiceRequestId,
         description: payload.description,
         meta: {
           initiatorId: req.user.id,
-          serviceRequestId: payload.serviceRequestId,
+          serviceRequestId: payload.serviceRequestId ?? createdServiceRequestId,
+          consultancyRequest: payload.consultancyRequest ?? null,
         },
       });
 
@@ -1713,7 +2257,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/paystack/init", async (req, res, next) => {
+  app.post("/api/paystack/init", (req, res, next) => {
+    if (!req.isAuthenticated?.() || !req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+  }, async (req, res, next) => {
     try {
       const payload = z.object({
         email: z.string().email().optional(),
@@ -1724,22 +2273,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const { email, amountInNaira, metadata, reference, callbackUrl } = payload.parse(req.body || {});
-      const resolvedEmail = (email || (req.user?.email ?? "")).toString().trim().toLowerCase();
+      const user = req.user as any;
+      const resolvedEmail = (email || user?.email || "").toString().trim().toLowerCase();
       if (!resolvedEmail) {
         return res.status(400).json({ error: "Email is required to initialize Paystack." });
       }
+
+      // Ensure wallet exists for the user
+      let wallet = await storage.getWalletByUserId(user.id);
+      if (!wallet) {
+        wallet = await storage.createWallet({
+          userId: user.id,
+          balance: "0.00",
+        });
+      }
+
+      // Create a transaction record in the database
+      const txReference = reference || `CCD-${Date.now()}-${randomBytes(4).toString('hex')}`;
+      const amountFormatted = (amountInNaira).toFixed(2);
+      
+      try {
+        await storage.createTransaction({
+          walletId: wallet.id,
+          userId: user.id,
+          amount: amountFormatted,
+          type: TransactionType.DEBIT,
+          status: TransactionStatus.PENDING,
+          description: "Marketplace order payment",
+          reference: txReference,
+          meta: metadata as Prisma.InputJsonValue || null,
+          gateway: "paystack",
+        });
+      } catch (txError: any) {
+        console.error("Failed to create transaction:", {
+          error: txError?.message,
+          reference: txReference,
+          userId: user.id,
+        });
+        // Continue anyway - the transaction creation isn't critical
+      }
+
+      // Initialize with Paystack using our reference
+      console.log("Initializing Paystack with:", {
+        email: resolvedEmail,
+        amountInNaira,
+        reference: txReference,
+        hasCallbackUrl: !!callbackUrl,
+      });
 
       const result = await initializePaystackTransaction({
         email: resolvedEmail,
         amountInNaira,
         metadata,
-        reference,
+        reference: txReference,
         callbackUrl,
       });
 
-      res.json(result);
-    } catch (error) {
-      next(error);
+      console.log("Paystack init successful:", { reference: txReference, hasAuthUrl: !!result.authorizationUrl });
+
+      res.json({
+        ...result,
+        reference: txReference,
+      });
+    } catch (error: any) {
+      console.error("Paystack init error:", {
+        message: error?.message,
+        status: error?.status,
+        stack: error?.stack,
+      });
+      return res.status(500).json({ 
+        error: error?.message || "Unable to initialize Paystack payment at this time.",
+        details: process.env.NODE_ENV === "development" ? error?.message : undefined,
+      });
     }
   });
 
@@ -1923,8 +2528,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
         transaction: tx,
       });
 
-      const refreshed = await storage.getTransactionByReference(reference);
-      const responseTx = refreshed ?? tx;
+      let refreshed = await storage.getTransactionByReference(reference);
+      let responseTx = refreshed ?? tx;
+
+      if (!responseTx?.serviceRequestId) {
+        const meta: any = responseTx?.meta as any;
+        if (meta?.consultancyRequest && req.user?.id) {
+          try {
+            const normalizeKey = (value: string) =>
+              String(value || "")
+                .toLowerCase()
+                .trim()
+                .replace(/[\s-]+/g, "_");
+            const allowedCategories = new Set([
+              "electrician",
+              "plumber",
+              "carpenter",
+              "hvac_technician",
+              "painter",
+              "tiler",
+              "mason",
+              "roofer",
+              "gardener",
+              "cleaner",
+              "security_guard",
+              "cook",
+              "laundry_service",
+              "pest_control",
+              "welder",
+              "mechanic",
+              "phone_repair",
+              "appliance_repair",
+              "tailor",
+              "surveillance_monitoring",
+              "alarm_system",
+              "cleaning_janitorial",
+              "catering_services",
+              "it_support",
+              "maintenance_repair",
+              "packaging_solutions",
+              "marketing_advertising",
+              "home_tutors",
+              "furniture_making",
+              "market_runner",
+              "item_vendor",
+            ]);
+            const normalizedCategory = normalizeKey(
+              meta.consultancyRequest.categoryKey || meta.consultancyRequest.categoryLabel || "",
+            );
+            const category = allowedCategories.has(normalizedCategory)
+              ? normalizedCategory
+              : "maintenance_repair";
+            const urgencyInput = normalizeKey(meta.consultancyRequest.urgency || "");
+            const urgency =
+              urgencyInput === "emergency" ||
+              urgencyInput === "high" ||
+              urgencyInput === "medium" ||
+              urgencyInput === "low"
+                ? urgencyInput
+                : "medium";
+            const location = String(meta.consultancyRequest.location || "Not specified");
+            const description =
+              String(meta.consultancyRequest.description || "Consultancy request").trim() ||
+              "Consultancy request";
+
+            const created = await storage.createServiceRequest({
+              category: category as any,
+              description,
+              residentId: req.user.id,
+              budget: "Consultancy",
+              urgency: urgency as any,
+              location,
+              status: "pending_inspection" as any,
+              paymentStatus: "paid",
+            });
+
+            await storage.updateTransactionByReference(reference, {
+              serviceRequestId: created.id,
+            } as any);
+
+            refreshed = await storage.getTransactionByReference(reference);
+            responseTx = refreshed ?? responseTx;
+          } catch {
+            // ignore
+          }
+        }
+      }
 
       res.json({
         reference,
@@ -5151,12 +5840,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Resident: Get a specific service request by ID
-  app.get("/api/service-requests/:id", async (req, res, next) => {
+  app.get("/api/service-requests/:id", requireAuth, async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "resident") {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
       const { id } = req.params;
       if (!id || typeof id !== "string") {
         return res.status(400).json({ message: "Invalid service request ID" });
@@ -5196,69 +5881,165 @@ export async function registerRoutes(app: Express): Promise<Server> {
         startDate,
         endDate,
         hasDispute,
+        orderType = "all", // "all", "legacy", "marketplace"
       } = req.query;
 
       const pageNum = Math.max(1, parseInt(page as string) || 1);
       const limitNum = Math.max(1, Math.min(100, parseInt(limit as string) || 20));
       const offset = (pageNum - 1) * limitNum;
+      // Query both legacy orders and marketplace parent orders
+      let allResults: any[] = [];
 
-      let query = db.select().from(orders);
+      // Fetch legacy orders
+      if (orderType === "legacy" || orderType === "all") {
+        let legacyQuery = db
+          .select({
+            id: orders.id,
+            residentId: orders.buyerId,
+            residentName: sql<string>`'Service/Item Order'`.as("residentName"),
+            residentEmail: sql<string>`''`.as("residentEmail"),
+            totalAmount: sql<number>`CAST(CAST(${orders.total} AS NUMERIC) * 100 AS INTEGER)`.as("totalAmount"),
+            currency: orders.currency,
+            status: orders.status,
+            createdAt: orders.createdAt,
+            updatedAt: orders.updatedAt,
+            type: sql<string>`'legacy'`.as("type"),
+            dispute: orders.dispute,
+          })
+          .from(orders);
 
-      // Filter by status
-      if (status && status !== "all") {
-        query = query.where(eq(orders.status, status as any));
+        // Apply filters
+        if (status && status !== "all") {
+          legacyQuery = legacyQuery.where(eq(orders.status, status as any));
+        }
+        if (minTotal) {
+          const minVal = Math.round(parseFloat(minTotal as string) * 100);
+          legacyQuery = legacyQuery.where(
+            sql`CAST(${orders.total} AS NUMERIC) * 100 >= ${minVal}`
+          );
+        }
+        if (maxTotal) {
+          const maxVal = Math.round(parseFloat(maxTotal as string) * 100);
+          legacyQuery = legacyQuery.where(
+            sql`CAST(${orders.total} AS NUMERIC) * 100 <= ${maxVal}`
+          );
+        }
+        if (startDate) {
+          const startDt = new Date(startDate as string);
+          legacyQuery = legacyQuery.where(sql`${orders.createdAt} >= ${startDt}`);
+        }
+        if (endDate) {
+          const endDt = new Date(endDate as string);
+          legacyQuery = legacyQuery.where(sql`${orders.createdAt} <= ${endDt}`);
+        }
+        if (hasDispute === "true") {
+          legacyQuery = legacyQuery.where(sql`${orders.dispute} IS NOT NULL`);
+        } else if (hasDispute === "false") {
+          legacyQuery = legacyQuery.where(sql`${orders.dispute} IS NULL`);
+        }
+
+        const legacyRows = await legacyQuery
+          .orderBy(sortOrder === "desc" ? desc(orders.createdAt) : asc(orders.createdAt))
+          .limit(limitNum)
+          .offset(offset);
+        allResults.push(...legacyRows);
       }
 
-      // Filter by total price range - using sql to compare decimal
-      if (minTotal) {
-        query = query.where(
-          sql`CAST(total AS NUMERIC) >= ${parseFloat(minTotal as string)}`
-        );
-      }
-      if (maxTotal) {
-        query = query.where(
-          sql`CAST(total AS NUMERIC) <= ${parseFloat(maxTotal as string)}`
-        );
+      // Fetch marketplace orders
+      if (orderType === "marketplace" || orderType === "all") {
+        let marketplaceQuery = db
+          .select({
+            id: parentOrders.id,
+            residentId: parentOrders.residentId,
+            residentName: users.name,
+            residentEmail: users.email,
+            totalAmount: parentOrders.totalAmount,
+            currency: parentOrders.currency,
+            status: parentOrders.status,
+            createdAt: parentOrders.createdAt,
+            updatedAt: parentOrders.updatedAt,
+            type: sql<string>`'marketplace'`.as("type"),
+            dispute: sql<any>`NULL`.as("dispute"),
+          })
+          .from(parentOrders)
+          .innerJoin(users, eq(parentOrders.residentId, users.id));
+
+        // Apply filters
+        if (status && status !== "all") {
+          marketplaceQuery = marketplaceQuery.where(eq(parentOrders.status, status as any));
+        }
+        if (minTotal) {
+          const minVal = Math.round(parseFloat(minTotal as string) * 100);
+          marketplaceQuery = marketplaceQuery.where(sql`${parentOrders.totalAmount} >= ${minVal}`);
+        }
+        if (maxTotal) {
+          const maxVal = Math.round(parseFloat(maxTotal as string) * 100);
+          marketplaceQuery = marketplaceQuery.where(sql`${parentOrders.totalAmount} <= ${maxVal}`);
+        }
+        if (startDate) {
+          const startDt = new Date(startDate as string);
+          marketplaceQuery = marketplaceQuery.where(sql`${parentOrders.createdAt} >= ${startDt}`);
+        }
+        if (endDate) {
+          const endDt = new Date(endDate as string);
+          marketplaceQuery = marketplaceQuery.where(sql`${parentOrders.createdAt} <= ${endDt}`);
+        }
+        if (search) {
+          const searchPattern = `%${search}%`;
+          marketplaceQuery = marketplaceQuery.where(
+            or(
+              ilike(users.name, searchPattern),
+              ilike(users.email, searchPattern)
+            )
+          );
+        }
+
+        const marketplaceRows = await marketplaceQuery
+          .orderBy(sortOrder === "desc" ? desc(parentOrders.createdAt) : asc(parentOrders.createdAt))
+          .limit(limitNum)
+          .offset(offset);
+        allResults.push(...marketplaceRows);
       }
 
-      // Filter by date range
-      if (startDate) {
-        query = query.where(
-          sql`created_at >= ${new Date(startDate as string)}`
-        );
+        // Deduplicate combined results by `id` to avoid showing the same order multiple times
+        if (allResults.length > 1) {
+          const seen = new Set<string>();
+          const deduped: any[] = [];
+          for (const r of allResults) {
+            const key = String(r?.id || r?._id || "");
+            if (!key) continue;
+            if (!seen.has(key)) {
+              seen.add(key);
+              deduped.push(r);
+            }
+          }
+          allResults = deduped;
+        }
+
+      // Calculate total
+      let totalCount = 0;
+      if (orderType === "all" || orderType === "legacy") {
+        const [legacyCountResult] = await db
+          .select({ count: sql`count(*)` })
+          .from(orders)
+          .where(status && status !== "all" ? eq(orders.status, status as any) : undefined);
+        totalCount += parseInt((legacyCountResult?.count as number)?.toString() || "0");
       }
-      if (endDate) {
-        query = query.where(
-          sql`created_at <= ${new Date(endDate as string)}`
-        );
+      if (orderType === "all" || orderType === "marketplace") {
+        const [marketplaceCountResult] = await db
+          .select({ count: sql`count(*)` })
+          .from(parentOrders)
+          .where(status && status !== "all" ? eq(parentOrders.status, status as any) : undefined);
+        totalCount += parseInt((marketplaceCountResult?.count as number)?.toString() || "0");
       }
-
-      // Filter by dispute status
-      if (hasDispute === "true") {
-        query = query.where(sql`dispute IS NOT NULL`);
-      } else if (hasDispute === "false") {
-        query = query.where(sql`dispute IS NULL`);
-      }
-
-      // Sort
-      const orderFn = sortOrder === "desc" ? desc(orders.createdAt) : asc(orders.createdAt);
-      query = query.orderBy(orderFn);
-
-      // Pagination
-      const totalResult = await db
-        .select({ count: sql`count(*)` })
-        .from(orders);
-
-      const total = parseInt((totalResult[0]?.count as number)?.toString() || "0");
-      const rows = await query.limit(limitNum).offset(offset);
 
       res.json({
-        data: rows,
+        orders: allResults,
         pagination: {
           page: pageNum,
           limit: limitNum,
-          total,
-          totalPages: Math.ceil(total / limitNum),
+          total: totalCount,
+          totalPages: Math.ceil(totalCount / limitNum),
         },
       });
     } catch (error) {
@@ -5274,73 +6055,102 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      // Get statistics using SQL
-      const statsResult = await db.execute(sql`
-        SELECT 
-          COUNT(*) as total_orders,
-          COUNT(CASE WHEN status = 'DELIVERED' THEN 1 END) as delivered,
-          COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending,
-          COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END) as cancelled,
-          COUNT(CASE WHEN status = 'PROCESSING' THEN 1 END) as processing,
-          COALESCE(SUM(CAST(total AS NUMERIC)), 0) as total_revenue,
-          COALESCE(AVG(CAST(total AS NUMERIC)), 0) as average_order_value
-        FROM "Order"
-      `);
+      // Get legacy orders stats
+      const [legacyStatsResult] = await db
+        .select({
+          total: sql<number>`COUNT(*)`,
+          delivered: sql<number>`COUNT(CASE WHEN ${eq(orders.status, "delivered")} THEN 1 END)`,
+          pending: sql<number>`COUNT(CASE WHEN ${eq(orders.status, "pending")} THEN 1 END)`,
+          cancelled: sql<number>`COUNT(CASE WHEN ${eq(orders.status, "cancelled")} THEN 1 END)`,
+          processing: sql<number>`COUNT(CASE WHEN ${eq(orders.status, "processing")} THEN 1 END)`,
+          totalRevenue: sql<string>`COALESCE(SUM(CAST(${orders.total} AS NUMERIC)), 0)`,
+        })
+        .from(orders);
 
-      // Get recent orders
-      const recentOrdersResult = await db.execute(sql`
-        SELECT 
-          id,
-          status,
-          total,
-          "createdAt",
-          "buyerId"
-        FROM "Order"
-        ORDER BY "createdAt" DESC
-        LIMIT 5
-      `);
+      // Get marketplace orders stats
+      const [marketplaceStatsResult] = await db
+        .select({
+          total: sql<number>`COUNT(*)`,
+          paid: sql<number>`COUNT(CASE WHEN ${eq(parentOrders.status, "paid")} THEN 1 END)`,
+          pending: sql<number>`COUNT(CASE WHEN ${eq(parentOrders.status, "pending_payment")} THEN 1 END)`,
+          totalRevenue: sql<string>`COALESCE(SUM(${parentOrders.totalAmount}), 0)`,
+        })
+        .from(parentOrders);
 
-      const stats = statsResult.rows[0] || {
-        total_orders: 0,
-        delivered: 0,
-        pending: 0,
-        cancelled: 0,
-        processing: 0,
-        total_revenue: 0,
-        average_order_value: 0,
-      };
+      // Get recent orders (combine both types)
+      const recentLegacyOrders = await db
+        .select({
+          id: orders.id,
+          status: orders.status,
+          totalAmount: orders.total,
+          createdAt: orders.createdAt,
+          residentId: orders.buyerId,
+          type: sql<string>`'legacy'`,
+        })
+        .from(orders)
+        .orderBy(desc(orders.createdAt))
+        .limit(3);
 
-      const totalOrders = parseInt(stats.total_orders.toString());
-      const completedOrders = parseInt(stats.delivered.toString());
-      const pendingOrders = parseInt(stats.pending.toString());
-      const cancelledOrders = parseInt(stats.cancelled.toString());
-      const processingOrders = parseInt(stats.processing.toString());
+      const recentMarketplaceOrders = await db
+        .select({
+          id: parentOrders.id,
+          status: parentOrders.status,
+          totalAmount: sql<string>`CAST(${parentOrders.totalAmount} / 100.0 AS VARCHAR)`,
+          createdAt: parentOrders.createdAt,
+          residentId: parentOrders.residentId,
+          type: sql<string>`'marketplace'`,
+        })
+        .from(parentOrders)
+        .orderBy(desc(parentOrders.createdAt))
+        .limit(3);
 
-      res.json({
-        totalOrders,
-        completedOrders,
-        pendingOrders,
-        cancelledOrders,
-        processingOrders,
+      const recentOrders = [
+        ...recentLegacyOrders.map((o: any) => ({
+          id: o.id,
+          resident: o.residentId,
+          category: "Service/Item",
+          status: o.status,
+          totalAmount: parseFloat(o.totalAmount?.toString() || "0"),
+          createdAt: o.createdAt,
+          type: "legacy",
+        })),
+        ...recentMarketplaceOrders.map((o: any) => ({
+          id: o.id,
+          resident: o.residentId,
+          category: "Marketplace",
+          status: o.status,
+          totalAmount: parseFloat(o.totalAmount?.toString() || "0") / 100, // Convert kobo to naira
+          createdAt: o.createdAt,
+          type: "marketplace",
+        })),
+      ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5);
+
+      const totalLegacy = parseInt(legacyStatsResult?.total?.toString() || "0");
+      const totalMarketplace = parseInt(marketplaceStatsResult?.total?.toString() || "0");
+      const legacyRevenue = parseFloat(legacyStatsResult?.totalRevenue?.toString() || "0");
+      const marketplaceRevenue = parseFloat(marketplaceStatsResult?.totalRevenue?.toString() || "0") / 100; // Convert kobo to naira
+
+      const stats = {
+        totalOrders: totalLegacy + totalMarketplace,
+        completedOrders: parseInt(legacyStatsResult?.delivered?.toString() || "0") + parseInt(marketplaceStatsResult?.paid?.toString() || "0"),
+        pendingOrders: parseInt(legacyStatsResult?.pending?.toString() || "0") + parseInt(marketplaceStatsResult?.pending?.toString() || "0"),
+        cancelledOrders: parseInt(legacyStatsResult?.cancelled?.toString() || "0"),
+        processingOrders: parseInt(legacyStatsResult?.processing?.toString() || "0"),
         disputedOrders: 0,
-        totalRevenue: parseFloat(stats.total_revenue.toString()),
-        averageOrderValue: parseFloat(stats.average_order_value.toString()),
+        totalRevenue: legacyRevenue + marketplaceRevenue,
+        averageOrderValue: (totalLegacy + totalMarketplace) > 0 ? (legacyRevenue + marketplaceRevenue) / (totalLegacy + totalMarketplace) : 0,
         byStatus: {
-          delivered: completedOrders,
-          pending: pendingOrders,
-          cancelled: cancelledOrders,
-          processing: processingOrders,
+          delivered: parseInt(legacyStatsResult?.delivered?.toString() || "0"),
+          pending: parseInt(legacyStatsResult?.pending?.toString() || "0"),
+          cancelled: parseInt(legacyStatsResult?.cancelled?.toString() || "0"),
+          processing: parseInt(legacyStatsResult?.processing?.toString() || "0"),
+          paid: parseInt(marketplaceStatsResult?.paid?.toString() || "0"),
           confirmed: 0,
         },
-        recentOrders: (recentOrdersResult.rows || []).map((order: any) => ({
-          id: order.id,
-          resident: order.buyerId,
-          category: "Service",
-          status: order.status,
-          totalAmount: parseFloat(order.total?.toString() || "0"),
-          createdAt: order.createdAt,
-        })),
-      });
+        recentOrders,
+      };
+
+      res.json(stats);
     } catch (error) {
       console.error("Error fetching order stats:", error);
       next(error);

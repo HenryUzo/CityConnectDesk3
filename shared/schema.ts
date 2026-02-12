@@ -144,6 +144,52 @@ export const storeApprovalStatusEnum = pgEnum("store_approval_status", [
   "approved",
   "rejected",
 ]);
+
+// ── Marketplace V2 enums ──
+export const cartStatusEnum = pgEnum("cart_status", [
+  "active",
+  "checked_out",
+  "abandoned",
+]);
+export const parentOrderStatusEnum = pgEnum("parent_order_status", [
+  "pending_payment",
+  "paid",
+  "partially_refunded",
+  "refunded",
+  "cancelled",
+]);
+export const storeOrderStatusEnum = pgEnum("store_order_status", [
+  "pending_acceptance",
+  "accepted",
+  "rejected",
+  "packing",
+  "ready_for_dispatch",
+  "dispatched",
+  "delivered",
+  "cancelled",
+  "refunded",
+]);
+export const deliveryMethodEnum = pgEnum("delivery_method", [
+  "pickup",
+  "store_delivery",
+  "cityconnect_rider",
+]);
+export const paymentProviderEnum = pgEnum("payment_provider", [
+  "paystack",
+]);
+export const paymentStatusEnum = pgEnum("payment_status_enum", [
+  "initiated",
+  "paid",
+  "failed",
+  "refunded",
+  "partial_refund",
+]);
+export const refundStatusEnum = pgEnum("refund_status", [
+  "requested",
+  "approved",
+  "rejected",
+  "processed",
+]);
 export const broadcastTargetEnum = pgEnum("broadcast_target", [
   "all_residents",
   "all_providers",
@@ -167,6 +213,47 @@ export const conversationRoleEnum = pgEnum("conversation_role", [
 export const conversationMessageTypeEnum = pgEnum("conversation_message_type", [
   "text",
   "image",
+]);
+export const requestConversationModeEnum = pgEnum("request_conversation_mode", [
+  "ai",
+  "ordinary",
+]);
+export const aiSessionStatusEnum = pgEnum("ai_session_status", [
+  "active",
+  "completed",
+]);
+export const aiSessionRoleEnum = pgEnum("ai_session_role", [
+  "user",
+  "assistant",
+  "system",
+]);
+export const requestAiProviderEnum = pgEnum("request_ai_provider", [
+  "gemini",
+  "ollama",
+  "openai",
+]);
+export const requestOrdinaryPresentationEnum = pgEnum("request_ordinary_presentation", [
+  "chat",
+  "form",
+]);
+export const requestQuestionModeEnum = pgEnum("request_question_mode", [
+  "ai",
+  "ordinary",
+]);
+export const requestQuestionScopeEnum = pgEnum("request_question_scope", [
+  "global",
+  "category",
+]);
+export const requestQuestionTypeEnum = pgEnum("request_question_type", [
+  "text",
+  "textarea",
+  "select",
+  "date",
+  "datetime",
+  "estate",
+  "urgency",
+  "image",
+  "multi_image",
 ]);
 
 // Simple app settings (key/value) table for global configs
@@ -513,6 +600,178 @@ export const orders = pgTable("orders", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// ── Marketplace V2: Inventory ──
+export const inventory = pgTable("inventory", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  storeId: varchar("store_id")
+    .notNull()
+    .references(() => stores.id, { onDelete: "cascade" }),
+  productId: varchar("product_id")
+    .notNull()
+    .references(() => marketplaceItems.id, { onDelete: "cascade" }),
+  stockQty: integer("stock_qty").notNull().default(0),
+  reservedQty: integer("reserved_qty").notNull().default(0),
+  lowStockThreshold: integer("low_stock_threshold"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  uniqueStoreProduct: sql`UNIQUE (${table.storeId}, ${table.productId})`,
+}));
+
+// ── Marketplace V2: Carts ──
+export const carts = pgTable("carts", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  residentId: varchar("resident_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  status: cartStatusEnum("status").notNull().default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const cartItems = pgTable("cart_items", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  cartId: varchar("cart_id")
+    .notNull()
+    .references(() => carts.id, { onDelete: "cascade" }),
+  storeId: varchar("store_id")
+    .notNull()
+    .references(() => stores.id),
+  productId: varchar("product_id")
+    .notNull()
+    .references(() => marketplaceItems.id),
+  qty: integer("qty").notNull().default(1),
+  unitPrice: integer("unit_price").notNull(), // snapshot in kobo
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  uniqueCartProduct: sql`UNIQUE (${table.cartId}, ${table.productId})`,
+}));
+
+// ── Marketplace V2: Parent Orders (umbrella) ──
+export const parentOrders = pgTable("parent_orders", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  residentId: varchar("resident_id")
+    .notNull()
+    .references(() => users.id),
+  totalAmount: integer("total_amount").notNull(), // kobo
+  currency: varchar("currency", { length: 10 }).notNull().default("NGN"),
+  status: parentOrderStatusEnum("status").notNull().default("pending_payment"),
+  deliveryAddress: jsonb("delivery_address").notNull(), // {estateId, region, addressLine, phone}
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ── Marketplace V2: Store Orders (one per store per parent order) ──
+export const storeOrders = pgTable("store_orders", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  orderId: varchar("order_id")
+    .notNull()
+    .references(() => parentOrders.id, { onDelete: "cascade" }),
+  storeId: varchar("store_id")
+    .notNull()
+    .references(() => stores.id),
+  status: storeOrderStatusEnum("status").notNull().default("pending_acceptance"),
+  subtotalAmount: integer("subtotal_amount").notNull(), // kobo
+  deliveryFee: integer("delivery_fee").notNull().default(0),
+  deliveryMethod: deliveryMethodEnum("delivery_method").notNull().default("pickup"),
+  noteToStore: text("note_to_store"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  uniqueOrderStore: sql`UNIQUE (${table.orderId}, ${table.storeId})`,
+}));
+
+export const storeOrderItems = pgTable("store_order_items", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  storeOrderId: varchar("store_order_id")
+    .notNull()
+    .references(() => storeOrders.id, { onDelete: "cascade" }),
+  productId: varchar("product_id")
+    .notNull()
+    .references(() => marketplaceItems.id),
+  qty: integer("qty").notNull(),
+  unitPrice: integer("unit_price").notNull(), // kobo snapshot
+  lineTotal: integer("line_total").notNull(), // qty * unitPrice
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Marketplace V2: Payments ──
+export const marketplacePayments = pgTable("marketplace_payments", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  orderId: varchar("order_id")
+    .notNull()
+    .references(() => parentOrders.id),
+  provider: paymentProviderEnum("provider").notNull().default("paystack"),
+  reference: varchar("reference", { length: 255 }).notNull().unique(),
+  status: paymentStatusEnum("status").notNull().default("initiated"),
+  amount: integer("amount").notNull(), // kobo
+  meta: jsonb("meta").notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ── Marketplace V2: Refunds (store-level) ──
+export const refunds = pgTable("refunds", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  storeOrderId: varchar("store_order_id")
+    .notNull()
+    .references(() => storeOrders.id),
+  status: refundStatusEnum("status").notNull().default("requested"),
+  amount: integer("amount").notNull(), // kobo
+  reason: text("reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// CityMart Banners table (configurable promotional banners)
+export const cityMartBanners = pgTable("citymart_banners", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  type: varchar("type", { length: 50 }).notNull(), // 'hero', 'horizontal', 'aside-long', 'aside-small', 'full-width'
+  title: text("title").notNull(),
+  description: text("description"),
+  heading: text("heading"), // for full-width banners
+  buttonText: text("button_text"),
+  buttonVariant: text("button_variant"), // 'primary', 'secondary', 'dark'
+  buttonLink: text("button_link"), // URL or route path
+  imageUrl: text("image_url"),
+  backgroundImageUrl: text("background_image_url"),
+  badge: jsonb("badge"), // {text: string, color: string}
+  discount: jsonb("discount"), // {text: string, color: string}
+  price: text("price"),
+  priceLabel: text("price_label"), // "Just", "Only", etc.
+  priceSuffix: text("price_suffix"), // "Only!", etc.
+  priceTopText: text("price_top_text"),
+  priceBottomText: text("price_bottom_text"),
+  promoBadgeText: text("promo_badge_text"), // "SAVE UP TO 50%", etc.
+  countdown: text("countdown"), // Deal countdown timer text
+  category: text("category"), // COMPUTER & ACCESSORIES, etc.
+  position: integer("position").notNull().default(0), // Display order
+  isActive: boolean("is_active").notNull().default(true),
+  showCarouselDots: boolean("show_carousel_dots").default(false),
+  activeCarouselDot: integer("active_carousel_dot").default(0),
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Broadcast Messages table
 export const broadcastMessages = pgTable("broadcast_messages", {
   id: varchar("id")
@@ -723,9 +982,7 @@ export const conversations = pgTable("conversations", {
   status: conversationStatusEnum("status").notNull().default("active"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-}, (table) => ({
-  uniqueResidentCategory: sql`UNIQUE (${table.residentId}, ${table.category})`,
-}));
+});
 
 export const conversationMessages = pgTable("conversation_messages", {
   id: varchar("id")
@@ -739,6 +996,84 @@ export const conversationMessages = pgTable("conversation_messages", {
   content: text("content").notNull(),
   meta: jsonb("meta"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const aiSessions = pgTable("ai_sessions", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  residentId: varchar("resident_id")
+    .notNull()
+    .references(() => users.id),
+  categoryKey: text("category_key").notNull(),
+  mode: requestConversationModeEnum("mode").notNull().default("ai"),
+  status: aiSessionStatusEnum("status").notNull().default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const aiSessionMessages = pgTable("ai_session_messages", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id")
+    .notNull()
+    .references(() => aiSessions.id, { onDelete: "cascade" }),
+  role: aiSessionRoleEnum("role").notNull(),
+  content: text("content").notNull(),
+  meta: jsonb("meta"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const aiSessionAttachments = pgTable("ai_session_attachments", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id")
+    .notNull()
+    .references(() => aiSessions.id),
+  messageId: varchar("message_id").references(() => aiSessionMessages.id, { onDelete: "cascade" }),
+  type: text("type").notNull().default("image"),
+  dataUrl: text("data_url").notNull(),
+  mimeType: varchar("mime_type", { length: 100 }),
+  byteSize: integer("byte_size").notNull(),
+  sha256: varchar("sha256", { length: 128 }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const requestConversationSettings = pgTable("request_conversation_settings", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  mode: requestConversationModeEnum("mode").notNull().default("ai"),
+  aiProvider: requestAiProviderEnum("ai_provider").notNull().default("gemini"),
+  aiModel: text("ai_model"),
+  aiTemperature: doublePrecision("ai_temperature"),
+  aiSystemPrompt: text("ai_system_prompt"),
+  ordinaryPresentation: requestOrdinaryPresentationEnum("ordinary_presentation")
+    .notNull()
+    .default("chat"),
+  adminWaitThresholdMs: integer("admin_wait_threshold_ms").default(300000), // 5 minutes default
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const requestQuestions = pgTable("request_questions", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  mode: requestQuestionModeEnum("mode").notNull(),
+  scope: requestQuestionScopeEnum("scope").notNull().default("global"),
+  categoryKey: text("category_key"),
+  key: text("key").notNull(),
+  label: text("label").notNull(),
+  type: requestQuestionTypeEnum("type").notNull(),
+  required: boolean("required").notNull().default(false),
+  options: jsonb("options"),
+  order: integer("order").notNull().default(0),
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 //Telematics pointer Table
@@ -833,6 +1168,9 @@ export const aiConversationFlowSettings = pgTable("ai_conversation_flow_settings
 });
 
 export const insertAiConversationFlowSettingsSchema = createInsertSchema(aiConversationFlowSettings);
+
+export const insertRequestConversationSettingsSchema = createInsertSchema(requestConversationSettings);
+export const insertRequestQuestionsSchema = createInsertSchema(requestQuestions);
 
 // Relations
 export const estatesRelations = relations(estates, ({ many }) => ({
@@ -1031,6 +1369,49 @@ export const impersonationSessionsRelations = relations(impersonationSessions, (
   }),
 }));
 
+// ── Marketplace V2 relations ──
+export const inventoryRelations = relations(inventory, ({ one }) => ({
+  store: one(stores, { fields: [inventory.storeId], references: [stores.id] }),
+  product: one(marketplaceItems, { fields: [inventory.productId], references: [marketplaceItems.id] }),
+}));
+
+export const cartsRelations = relations(carts, ({ one, many }) => ({
+  resident: one(users, { fields: [carts.residentId], references: [users.id] }),
+  items: many(cartItems),
+}));
+
+export const cartItemsRelations = relations(cartItems, ({ one }) => ({
+  cart: one(carts, { fields: [cartItems.cartId], references: [carts.id] }),
+  store: one(stores, { fields: [cartItems.storeId], references: [stores.id] }),
+  product: one(marketplaceItems, { fields: [cartItems.productId], references: [marketplaceItems.id] }),
+}));
+
+export const parentOrdersRelations = relations(parentOrders, ({ one, many }) => ({
+  resident: one(users, { fields: [parentOrders.residentId], references: [users.id] }),
+  storeOrders: many(storeOrders),
+  payments: many(marketplacePayments),
+}));
+
+export const storeOrdersRelations = relations(storeOrders, ({ one, many }) => ({
+  parentOrder: one(parentOrders, { fields: [storeOrders.orderId], references: [parentOrders.id] }),
+  store: one(stores, { fields: [storeOrders.storeId], references: [stores.id] }),
+  items: many(storeOrderItems),
+  refunds: many(refunds),
+}));
+
+export const storeOrderItemsRelations = relations(storeOrderItems, ({ one }) => ({
+  storeOrder: one(storeOrders, { fields: [storeOrderItems.storeOrderId], references: [storeOrders.id] }),
+  product: one(marketplaceItems, { fields: [storeOrderItems.productId], references: [marketplaceItems.id] }),
+}));
+
+export const marketplacePaymentsRelations = relations(marketplacePayments, ({ one }) => ({
+  order: one(parentOrders, { fields: [marketplacePayments.orderId], references: [parentOrders.id] }),
+}));
+
+export const refundsRelations = relations(refunds, ({ one }) => ({
+  storeOrder: one(storeOrders, { fields: [refunds.storeOrderId], references: [storeOrders.id] }),
+}));
+
 // Insert schemas
 export const insertEstateSchema = createInsertSchema(estates).omit({
   id: true,
@@ -1165,6 +1546,18 @@ export type BroadcastMessage = typeof broadcastMessages.$inferSelect;
 export type InsertBroadcastMessage = z.infer<typeof insertBroadcastMessageSchema>;
 export type ImpersonationSession = typeof impersonationSessions.$inferSelect;
 export type InsertImpersonationSession = z.infer<typeof insertImpersonationSessionSchema>;
+
+// ── Marketplace V2 types ──
+export type Cart = typeof carts.$inferSelect;
+export type CartItem = typeof cartItems.$inferSelect;
+export type Inventory = typeof inventory.$inferSelect;
+export type ParentOrder = typeof parentOrders.$inferSelect;
+export type StoreOrder = typeof storeOrders.$inferSelect;
+export type StoreOrderItem = typeof storeOrderItems.$inferSelect;
+export type MarketplacePayment = typeof marketplacePayments.$inferSelect;
+export type Refund = typeof refunds.$inferSelect;
+export type CityMartBanner = typeof cityMartBanners.$inferSelect;
+export type InsertCityMartBanner = typeof cityMartBanners.$inferInsert;
 
 // Extended user types for login
 export const residentLoginSchema = z

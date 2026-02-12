@@ -78,10 +78,13 @@ function cityBuddyCategoryToServiceCategorySlug(title?: string): string {
 
 export default function ScheduleInspection() {
   const [, navigate] = useLocation();
-  const citybuddySessionId = useMemo(() => {
-    if (typeof window === "undefined") return null;
-    return new URLSearchParams(window.location.search).get("citybuddySessionId");
+  const searchParams = useMemo(() => {
+    if (typeof window === "undefined") return new URLSearchParams();
+    return new URLSearchParams(window.location.search);
   }, []);
+
+  const citybuddySessionId = searchParams.get("citybuddySessionId");
+  const selectedProviderId = searchParams.get("providerId");
 
   const [draft, setDraft] = useState<InspectionDraft>({});
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
@@ -131,6 +134,7 @@ export default function ScheduleInspection() {
         budget: "0",
         location: "Not specified",
         preferredTime,
+        providerId: selectedProviderId || undefined,
         // Store the chosen inspection slot for admins to see.
         inspectionDates: [appointment.date],
         inspectionTimes: [appointment.time],
@@ -165,6 +169,7 @@ export default function ScheduleInspection() {
         onNavigateToSettings={() => navigate("/resident/settings")}
         onNavigateToMarketplace={() => navigate("/resident/citymart")}
         onNavigateToServiceRequests={() => navigate("/service-requests")}
+        onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
         currentPage="chat"
       />
 
@@ -175,6 +180,7 @@ export default function ScheduleInspection() {
           onNavigateToSettings={() => navigate("/resident/settings")}
           onNavigateToMarketplace={() => navigate("/resident/citymart")}
           onNavigateToServiceRequests={() => navigate("/service-requests")}
+          onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
           currentPage="chat"
         />
       </div>

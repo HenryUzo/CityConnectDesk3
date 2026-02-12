@@ -31,6 +31,7 @@ export function AdminLayout({ children, title }: AdminLayoutProps) {
     navLinks.push({ href: "/admin/ai/prepared-requests", icon: Bot, label: "AI Prepared Requests" });
     navLinks.push({ href: "/admin/pricing-rules", icon: SlidersHorizontal, label: "Pricing Rules" });
     navLinks.push({ href: "/admin/providers/matching", icon: UserCheck, label: "Provider Matching" });
+    navLinks.push({ href: "/admin/request-questions", icon: SlidersHorizontal, label: "Request Questions" });
     navLinks.push({ href: "/admin-super", icon: Building, label: "Super Admin" });
   }
 

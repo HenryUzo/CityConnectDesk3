@@ -25,8 +25,8 @@ const paystackWebhookPaths = new Set([
   "/api/payments/paystack/webhook",
   "/api/paystack/webhook",
 ]);
-const jsonParser = express.json({ limit: '50mb' });
-const urlencodedParser = express.urlencoded({ extended: false, limit: '50mb' });
+const jsonParser = express.json({ limit: "12mb" });
+const urlencodedParser = express.urlencoded({ extended: false, limit: "12mb" });
 const rawPaystackParser = express.raw({ type: "*/*" });
 
 function isPaystackWebhookPath(path: string) {
@@ -102,8 +102,15 @@ app.options("*", cors());
 // Setup Passport.js and express-session for authentication
 setupAuth(app);
 
-/** Request logging for /api responses (trimmed to avoid noisy logs) */
 app.use((req, res, next) => {
+  if (req.path === "/api/service-requests" && req.method === "POST") {
+    console.log("[DEBUG-INDEX] Incoming POST /api/service-requests", {
+      headers: req.headers,
+      cookies: req.cookies,
+      authenticated: req.isAuthenticated ? req.isAuthenticated() : 'n/a',
+      user: !!req.user
+    });
+  }
   const start = Date.now();
   const path = req.path;
   let capturedJsonResponse: unknown;
@@ -111,6 +118,9 @@ app.use((req, res, next) => {
   const originalJson = res.json.bind(res);
   res.json = (body: any, ...rest: any[]) => {
     capturedJsonResponse = body;
+    if (res.statusCode === 401) {
+      console.log("[DEBUG-401] Path:", req.originalUrl, "Body:", body, "User:", (req as any).user?.id);
+    }
     // @ts-expect-error forwarding variadic args
     return originalJson(body, ...rest);
   };
@@ -406,15 +416,127 @@ async function ensureExtensionsAndEnums() {
       END IF;
     END$$;
   `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'request_conversation_mode'
+      ) THEN
+        CREATE TYPE request_conversation_mode AS ENUM ('ai', 'ordinary');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'ai_session_status'
+      ) THEN
+        CREATE TYPE ai_session_status AS ENUM ('active', 'completed');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'ai_session_role'
+      ) THEN
+        CREATE TYPE ai_session_role AS ENUM ('user', 'assistant', 'system');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'request_ai_provider'
+      ) THEN
+        CREATE TYPE request_ai_provider AS ENUM ('gemini', 'ollama', 'openai');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      ALTER TYPE request_ai_provider ADD VALUE IF NOT EXISTS 'openai';
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'request_ordinary_presentation'
+      ) THEN
+        CREATE TYPE request_ordinary_presentation AS ENUM ('chat', 'form');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'request_question_mode'
+      ) THEN
+        CREATE TYPE request_question_mode AS ENUM ('ai', 'ordinary');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'request_question_scope'
+      ) THEN
+        CREATE TYPE request_question_scope AS ENUM ('global', 'category');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'request_question_type'
+      ) THEN
+        CREATE TYPE request_question_type AS ENUM (
+          'text',
+          'textarea',
+          'select',
+          'date',
+          'datetime',
+          'estate',
+          'urgency',
+          'image',
+          'multi_image'
+        );
+      END IF;
+    END$$;
+  `);
 }
 
 async function ensureTransactionsColumns() {
   try {
     await db.execute(sql`
       ALTER TABLE transactions
+        ADD COLUMN IF NOT EXISTS reference text,
         ADD COLUMN IF NOT EXISTS "gatewayReference" text,
         ADD COLUMN IF NOT EXISTS gateway text DEFAULT 'paystack',
         ADD COLUMN IF NOT EXISTS meta jsonb DEFAULT '{}'::jsonb;
+    `);
+
+    await db.execute(sql`
+      UPDATE transactions
+      SET reference = COALESCE(reference, gen_random_uuid()::text)
+      WHERE reference IS NULL;
     `);
 
     // Backfill any NULL gatewayReference with generated UUID text
@@ -426,6 +548,21 @@ async function ensureTransactionsColumns() {
 
     // Try to make the column NOT NULL and add a unique constraint if possible
     try {
+      await db.execute(sql`
+        ALTER TABLE transactions
+          ALTER COLUMN reference SET NOT NULL;
+      `);
+      await db.execute(sql`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'transactions_reference_unique'
+          ) THEN
+            ALTER TABLE transactions ADD CONSTRAINT transactions_reference_unique UNIQUE (reference);
+          END IF;
+        END$$;
+      `);
+
       await db.execute(sql`
         ALTER TABLE transactions
           ALTER COLUMN "gatewayReference" SET NOT NULL;
@@ -476,13 +613,18 @@ async function ensureConversationsTable() {
   await db.execute(sql`
     DO $$
     BEGIN
-      IF NOT EXISTS (
+      IF EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'conversations_resident_category_unique'
       ) THEN
-        ALTER TABLE conversations
-          ADD CONSTRAINT conversations_resident_category_unique UNIQUE (resident_id, category);
+        ALTER TABLE conversations DROP CONSTRAINT conversations_resident_category_unique;
       END IF;
     END$$;
+  `);
+
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS conversations_active_unique
+      ON conversations(resident_id, category)
+      WHERE status = 'active';
   `);
 
   await db.execute(sql`
@@ -510,6 +652,437 @@ async function ensureConversationMessagesTable() {
   `);
 }
 
+async function ensureRequestConversationSettingsTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS request_conversation_settings (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      mode request_conversation_mode NOT NULL DEFAULT 'ai',
+      ai_provider request_ai_provider NOT NULL DEFAULT 'gemini',
+      ai_model text,
+      ai_temperature double precision,
+      ai_system_prompt text,
+      ordinary_presentation request_ordinary_presentation NOT NULL DEFAULT 'chat',
+      admin_wait_threshold_ms integer DEFAULT 300000,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+  
+  // Add column if it doesn't exist (for existing databases)
+  try {
+    await db.execute(sql`
+      ALTER TABLE request_conversation_settings 
+      ADD COLUMN IF NOT EXISTS admin_wait_threshold_ms integer DEFAULT 300000;
+    `);
+  } catch (e) {
+    // Column might already exist or other error - safe to ignore
+  }
+}
+
+async function ensureRequestQuestionsTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS request_questions (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      mode request_question_mode NOT NULL,
+      scope request_question_scope NOT NULL DEFAULT 'global',
+      category_key text,
+      key text NOT NULL,
+      label text NOT NULL,
+      type request_question_type NOT NULL,
+      required boolean NOT NULL DEFAULT false,
+      options jsonb,
+      "order" integer NOT NULL DEFAULT 0,
+      is_enabled boolean NOT NULL DEFAULT true,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS request_questions_unique
+      ON request_questions(mode, scope, COALESCE(category_key, ''), key);
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS request_questions_mode_order
+      ON request_questions(mode, "order");
+  `);
+}
+
+async function ensureAiSessionsTables() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ai_sessions (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      resident_id varchar NOT NULL REFERENCES users(id),
+      category_key text NOT NULL,
+      mode request_conversation_mode NOT NULL DEFAULT 'ai',
+      status ai_session_status NOT NULL DEFAULT 'active',
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ai_session_messages (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id varchar NOT NULL REFERENCES ai_sessions(id),
+      role ai_session_role NOT NULL,
+      content text NOT NULL,
+      meta jsonb,
+      created_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_ai_session_messages_session_created
+      ON ai_session_messages(session_id, created_at);
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ai_session_attachments (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id varchar NOT NULL REFERENCES ai_sessions(id) ON DELETE CASCADE,
+      message_id varchar REFERENCES ai_session_messages(id) ON DELETE SET NULL,
+      type text NOT NULL DEFAULT 'image',
+      data_url text NOT NULL,
+      mime_type varchar(100),
+      byte_size integer,
+      sha256 varchar(128),
+      created_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE ai_session_attachments
+      ADD COLUMN IF NOT EXISTS message_id varchar REFERENCES ai_session_messages(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS mime_type varchar(100),
+      ADD COLUMN IF NOT EXISTS byte_size integer,
+      ADD COLUMN IF NOT EXISTS sha256 varchar(128);
+  `);
+
+  try {
+    await db.execute(sql`
+      UPDATE ai_session_attachments
+      SET byte_size = COALESCE(byte_size, 0)
+      WHERE byte_size IS NULL;
+    `);
+    await db.execute(sql`
+      ALTER TABLE ai_session_attachments
+        ALTER COLUMN byte_size SET NOT NULL;
+    `);
+  } catch (e) {
+    console.warn("Could not enforce ai_session_attachments.byte_size NOT NULL:", (e as any)?.message || String(e));
+  }
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_ai_session_attachments_session_created
+      ON ai_session_attachments(session_id, created_at);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_ai_session_attachments_message_id
+      ON ai_session_attachments(message_id);
+  `);
+}
+
+// Seed example CityMart banners if none exist
+async function seedCityMartBanners() {
+  try {
+    const existingBanners: any = await db.execute(sql`
+      SELECT COUNT(*) as count FROM citymart_banners;
+    `);
+    const count = (existingBanners?.rows?.[0]?.count ?? 0) || 0;
+    if (count > 0) return; // Already seeded
+    
+    await db.execute(sql`
+      INSERT INTO citymart_banners (
+        type, title, description, heading, button_text, button_variant,
+        price, price_label, price_suffix, category, position, is_active, created_at, updated_at
+      ) VALUES
+      (
+        'hero', 
+        'Food Items Flash Sale', 
+        'Get your fresh food items at market cost. No hidden charges.',
+        'Food items',
+        'Shop now',
+        'primary',
+        '₦299,000',
+        'Just',
+        'Only!',
+        'Groceries',
+        0,
+        true,
+        now(),
+        now()
+      ),
+      (
+        'horizontal',
+        'Premium Electronics',
+        'New Google Pixel 6 Pro at unbeatable prices',
+        'Google Pixel 6 Pro',
+        'Bid Now',
+        'dark',
+        '₦450,000',
+        'Starting from',
+        null,
+        'Electronics',
+        1,
+        true,
+        now(),
+        now()
+      ),
+      (
+        'aside-long',
+        '32% Discount on Electronics',
+        'For all electronics products',
+        null,
+        'Shop now',
+        'primary',
+        null,
+        null,
+        null,
+        'COMPUTER & ACCESSORIES',
+        2,
+        true,
+        now(),
+        now()
+      ),
+      (
+        'aside-small',
+        '37% DISCOUNT on Smartphones',
+        'Limited time offer on SmartPhone products.',
+        null,
+        'Shop now',
+        'secondary',
+        null,
+        null,
+        null,
+        'Electronics',
+        3,
+        true,
+        now(),
+        now()
+      ),
+      (
+        'full-width',
+        'MacBook Pro Premium Deal',
+        'Apple M1 Max Chip. 32GB Unified Memory, 1TB SSD Storage',
+        'MacBook Pro',
+        'Shop now',
+        'primary',
+        '₦2,499,000',
+        'Just',
+        'Only!',
+        'Electronics',
+        4,
+        true,
+        now(),
+        now()
+      );
+    `);
+    log("[SEED] CityMart banners seeded successfully");
+  } catch (err) {
+    console.warn("[SEED] Failed to seed CityMart banners:", (err as any)?.message || String(err));
+    // Don't fail boot if seeding fails
+  }
+}
+
+async function seedRequestConfigDefaults() {
+  const existingSettings: any = await db.execute(sql`
+    SELECT id FROM request_conversation_settings LIMIT 1;
+  `);
+  const hasSettings = Array.isArray(existingSettings?.rows)
+    ? existingSettings.rows.length > 0
+    : (existingSettings?.length ?? 0) > 0;
+  if (!hasSettings) {
+    await db.execute(sql`
+      INSERT INTO request_conversation_settings (
+        mode, ai_provider, ai_model, ordinary_presentation, created_at, updated_at
+      ) VALUES (
+        'ai', 'gemini', 'qwen2.5:7b', 'chat', now(), now()
+      );
+    `);
+  }
+
+  const existingQuestions: any = await db.execute(sql`
+    SELECT id FROM request_questions LIMIT 1;
+  `);
+  const hasQuestions = Array.isArray(existingQuestions?.rows)
+    ? existingQuestions.rows.length > 0
+    : (existingQuestions?.length ?? 0) > 0;
+  if (hasQuestions) return;
+
+  await db.execute(sql`
+    INSERT INTO request_questions (
+      mode, scope, key, label, type, required, "order", is_enabled, created_at, updated_at
+    ) VALUES
+      ('ordinary', 'global', 'estate', 'Which estate are you in?', 'estate', true, 1, true, now(), now()),
+      ('ordinary', 'global', 'inspectionDate', 'When should we schedule the inspection?', 'datetime', true, 2, true, now(), now()),
+      ('ordinary', 'global', 'urgency', 'How urgent is it?', 'urgency', true, 3, true, now(), now()),
+      ('ordinary', 'global', 'images', 'Please upload images if available.', 'multi_image', false, 4, true, now(), now()),
+      ('ai', 'global', 'estate', 'Estate', 'estate', true, 1, true, now(), now()),
+      ('ai', 'global', 'urgency', 'Urgency', 'urgency', true, 2, true, now(), now()),
+      ('ai', 'global', 'images', 'Images', 'multi_image', false, 3, true, now(), now()),
+      ('ai', 'global', 'budget', 'Budget', 'text', false, 4, true, now(), now());
+  `);
+}
+
+// ── Marketplace V2 tables ──
+async function ensureMarketplaceV2Tables() {
+  // Enum types (CREATE TYPE IF NOT EXISTS workaround)
+  for (const [name, values] of Object.entries({
+    cart_status: ["active", "checked_out", "abandoned"],
+    parent_order_status: ["pending_payment", "paid", "partially_refunded", "refunded", "cancelled"],
+    store_order_status: ["pending_acceptance", "accepted", "rejected", "packing", "ready_for_dispatch", "dispatched", "delivered", "cancelled", "refunded"],
+    delivery_method: ["pickup", "store_delivery", "cityconnect_rider"],
+    payment_provider: ["paystack"],
+    payment_status_enum: ["initiated", "paid", "failed", "refunded", "partial_refund"],
+    refund_status: ["requested", "approved", "rejected", "processed"],
+  })) {
+    await db.execute(sql.raw(`
+      DO $$ BEGIN
+        CREATE TYPE ${name} AS ENUM (${values.map(v => `'${v}'`).join(", ")});
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
+    `));
+  }
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS inventory (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      store_id varchar NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id varchar NOT NULL REFERENCES marketplace_items(id) ON DELETE CASCADE,
+      stock_qty integer NOT NULL DEFAULT 0,
+      reserved_qty integer NOT NULL DEFAULT 0,
+      low_stock_threshold integer,
+      updated_at timestamp DEFAULT now(),
+      UNIQUE (store_id, product_id)
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS carts (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      resident_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status cart_status NOT NULL DEFAULT 'active',
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS cart_items (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      cart_id varchar NOT NULL REFERENCES carts(id) ON DELETE CASCADE,
+      store_id varchar NOT NULL REFERENCES stores(id),
+      product_id varchar NOT NULL REFERENCES marketplace_items(id),
+      qty integer NOT NULL DEFAULT 1,
+      unit_price integer NOT NULL,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now(),
+      UNIQUE (cart_id, product_id)
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS parent_orders (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      resident_id varchar NOT NULL REFERENCES users(id),
+      total_amount integer NOT NULL,
+      currency varchar(10) NOT NULL DEFAULT 'NGN',
+      status parent_order_status NOT NULL DEFAULT 'pending_payment',
+      delivery_address jsonb NOT NULL,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS store_orders (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id varchar NOT NULL REFERENCES parent_orders(id) ON DELETE CASCADE,
+      store_id varchar NOT NULL REFERENCES stores(id),
+      status store_order_status NOT NULL DEFAULT 'pending_acceptance',
+      subtotal_amount integer NOT NULL,
+      delivery_fee integer NOT NULL DEFAULT 0,
+      delivery_method delivery_method NOT NULL DEFAULT 'pickup',
+      note_to_store text,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now(),
+      UNIQUE (order_id, store_id)
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS store_order_items (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      store_order_id varchar NOT NULL REFERENCES store_orders(id) ON DELETE CASCADE,
+      product_id varchar NOT NULL REFERENCES marketplace_items(id),
+      qty integer NOT NULL,
+      unit_price integer NOT NULL,
+      line_total integer NOT NULL,
+      created_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS marketplace_payments (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id varchar NOT NULL REFERENCES parent_orders(id),
+      provider payment_provider NOT NULL DEFAULT 'paystack',
+      reference varchar(255) NOT NULL UNIQUE,
+      status payment_status_enum NOT NULL DEFAULT 'initiated',
+      amount integer NOT NULL,
+      meta jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS refunds (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      store_order_id varchar NOT NULL REFERENCES store_orders(id),
+      status refund_status NOT NULL DEFAULT 'requested',
+      amount integer NOT NULL,
+      reason text,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS citymart_banners (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      type varchar(50) NOT NULL,
+      title text NOT NULL,
+      description text,
+      heading text,
+      button_text text,
+      button_variant text,
+      button_link text,
+      image_url text,
+      background_image_url text,
+      badge jsonb,
+      discount jsonb,
+      price text,
+      price_label text,
+      price_suffix text,
+      price_top_text text,
+      price_bottom_text text,
+      promo_badge_text text,
+      countdown text,
+      category text,
+      position integer NOT NULL DEFAULT 0,
+      is_active boolean NOT NULL DEFAULT true,
+      show_carousel_dots boolean DEFAULT false,
+      active_carousel_dot integer DEFAULT 0,
+      created_by varchar REFERENCES users(id),
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+}
+
 // Boot sequence - start immediately without IIFE
 let bootPromise = (async () => {
   console.log("[BOOT] Starting boot sequence...");
@@ -530,6 +1103,12 @@ let bootPromise = (async () => {
     await ensureMongoIdMappingTable();
     await ensureConversationsTable();
     await ensureConversationMessagesTable();
+    await ensureRequestConversationSettingsTable();
+    await ensureRequestQuestionsTable();
+    await ensureAiSessionsTables();
+    await ensureMarketplaceV2Tables();
+    await seedRequestConfigDefaults();
+    await seedCityMartBanners();
     log("[DB] Schema guard OK");
   } catch (e) {
     console.error("[DB] Schema guard failed:", e);

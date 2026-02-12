@@ -30,6 +30,7 @@ export default function CheckoutDiagnosis() {
   const consultancyFee = 4500;
   const tax = 2000;
   const total = consultancyFee + tax;
+  const CONSULTANCY_DRAFT_KEY = "citybuddy_consultancy_draft";
 
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
 
@@ -54,6 +55,14 @@ export default function CheckoutDiagnosis() {
         json: {
           amount: total,
           description: "Consultancy and diagnostic fee",
+          consultancyRequest: (() => {
+            try {
+              const raw = sessionStorage.getItem(CONSULTANCY_DRAFT_KEY);
+              return raw ? JSON.parse(raw) : undefined;
+            } catch {
+              return undefined;
+            }
+          })(),
         },
       });
 
@@ -98,6 +107,7 @@ export default function CheckoutDiagnosis() {
         onNavigateToSettings={() => navigate("/resident/settings")}
         onBookServiceClick={() => navigate("/resident/requests/new")}
         onNavigateToServiceRequests={() => navigate("/service-requests")}
+        onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
         currentPage="chat"
       />
 
@@ -108,6 +118,7 @@ export default function CheckoutDiagnosis() {
           onNavigateToSettings={() => navigate("/resident/settings")}
           onBookServiceClick={() => navigate("/resident/requests/new")}
           onNavigateToServiceRequests={() => navigate("/service-requests")}
+          onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
           currentPage="chat"
         />
       </div>

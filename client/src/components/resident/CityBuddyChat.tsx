@@ -23,12 +23,10 @@ import { useAiConversationFlowSettings, buildCategoryMappings, type AiConversati
 import CategorySkeleton from "@/components/ui/CategorySkeleton";
 import { CategoryStatus, AIMessage, AIThinking, UserResponse, TicketMessage, formatTicketStatusLabel, buildProgressSteps } from "./CityBuddyMessage";
 import {
-  sendMessageToGemini,
   type CityBuddyAiResponse,
-  type ChatMessage,
+  type CityBuddyIntent,
   type InlineImagePart,
-} from "@/lib/citybuddy-gemini";
-import { classifyCityBuddySituation } from "./citybuddySituation";
+} from "@/lib/citybuddy-types";
 import { OutlineButton, SecButton } from "@/components/ui/buttons";
 import { useAuth } from "@/hooks/use-auth";
 import imgAvatar from "@/assets/avatars/7d14a8788ee6c5268d3404f8441329ce18972f60.png";
@@ -48,9 +46,6 @@ import {
   AlertDialogCancel,
 } from "@/components/NewSelectUi/src/components/ui/alert-dialog";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
-import {
-  isUrgentOrDistressed,
-} from "./citybuddyIntake";
 
 import { useMyEstates } from "@/hooks/useMyEstates";
 import { useToast } from "@/hooks/use-toast";
@@ -67,7 +62,8 @@ type ConversationStep =
   | "FLOW"
   | "THINKING"
   | "AI_ANALYSING"
-  | "AI_GUIDANCE";
+  | "AI_GUIDANCE"
+  | "COMPLETED";
 
 type StepInputMode = "tags" | "dropdown" | "datetime" | "upload" | "none";
 
@@ -84,6 +80,92 @@ type StepConfig = {
   allowManualInput: boolean;
   placeholder?: string;
   slotKey?: keyof InfoSlots;
+};
+
+type RequestConversationSettings = {
+  id?: string;
+  mode?: "ai" | "ordinary";
+  aiProvider?: "gemini" | "ollama" | "openai";
+  aiModel?: string | null;
+  aiTemperature?: number | null;
+  aiSystemPrompt?: string | null;
+  ordinaryPresentation?: "chat" | "form";
+  adminWaitThresholdMs?: number | null;
+};
+
+type RequestQuestion = {
+  id: string;
+  mode: "ai" | "ordinary";
+  scope: "global" | "category";
+  categoryKey?: string | null;
+  key: string;
+  label: string;
+  type:
+    | "text"
+    | "textarea"
+    | "select"
+    | "date"
+    | "datetime"
+    | "estate"
+    | "urgency"
+    | "image"
+    | "multi_image";
+  required: boolean;
+  options?: any;
+  order: number;
+  isEnabled: boolean;
+};
+
+type RequestConfigResponse = {
+  settings: RequestConversationSettings | null;
+  ordinaryQuestions: RequestQuestion[];
+  aiQuestions: RequestQuestion[];
+};
+
+type AiSessionMode = "ai" | "ordinary";
+
+type PendingQuestion = {
+  key: string;
+  label: string;
+  type?: RequestQuestion["type"];
+  options?: string[] | null;
+};
+
+type AiSessionMessageRow = {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  meta?: any;
+  createdAt: string;
+};
+
+type AiSessionStateResponse = {
+  sessionId: string;
+  categoryKey?: string | null;
+  mode: AiSessionMode;
+  status: string;
+  messages: AiSessionMessageRow[];
+};
+
+type AiSessionReplyResponse = {
+  reply?: { text?: string; meta?: any };
+  state?: { isComplete?: boolean; missingKeys?: string[] };
+  suggestedProviders?: Array<{
+    id: string;
+    name: string;
+    rating?: number | null;
+    jobs?: number | null;
+    badges?: string[] | null;
+  }>;
+};
+
+type AiSessionAttachmentMeta = {
+  id: string;
+  messageId?: string | null;
+  mimeType?: string | null;
+  byteSize: number;
+  createdAt: string;
 };
 
 type InfoSlots = {
@@ -123,19 +205,19 @@ const DEFAULT_CATEGORY_TITLE_TO_KEY: Record<string, string> = {
 };
 
 const DEFAULT_CONFIDENCE_THRESHOLDS: Record<string, number> = {
-  cleaning_janitorial: 70,
-  maintenance_repair: 75,
-  it_support: 70,
-  surveillance_monitoring: 80,
-  catering_services: 65,
-  marketing_advertising: 65,
-  home_tutors: 70,
-  furniture_making: 80,
-  store_owner: 65,
-  market_runner: 60,
-  item_vendor: 65,
-  alarm_system: 75,
-  packaging_solutions: 65,
+  cleaning_janitorial: 60,
+  maintenance_repair: 60,
+  it_support: 60,
+  surveillance_monitoring: 65,
+  catering_services: 60,
+  marketing_advertising: 60,
+  home_tutors: 60,
+  furniture_making: 65,
+  store_owner: 60,
+  market_runner: 50,
+  item_vendor: 60,
+  alarm_system: 65,
+  packaging_solutions: 60,
 };
 
 const DEFAULT_CATEGORY_VISUALS_HELPFUL: Record<string, boolean> = {
@@ -196,8 +278,14 @@ function isNoImageResponse(text: string): boolean {
   return (t.includes("don't have") && t.includes("image")) || t.includes("no image");
 }
 
-function hasSufficientConfidence(categoryKey: ServiceCategoryKey | null, confidenceScore: number): boolean {
+function hasSufficientConfidence(categoryKey: ServiceCategoryKey | null, confidenceScore: number, isAdmin: boolean = false, currentStep?: ConversationStep): boolean {
   if (!categoryKey) return false;
+  // If we've reached the guidance step, it means the AI has finished its analysis 
+  // and is confident enough to give a final recommendation. We should show providers too.
+  if (currentStep === "AI_GUIDANCE" || currentStep === "COMPLETED") return true;
+  // For admins/super-admins, we lower the threshold significantly for testing purposes.
+  // This ensures they see the provider preview and booking flow as soon as a basic description is provided.
+  if (isAdmin && confidenceScore >= 10) return true;
   const threshold = DYNAMIC_CONFIDENCE_THRESHOLDS[categoryKey] ?? DEFAULT_CONFIDENCE_THRESHOLDS[categoryKey] ?? 70;
   return confidenceScore >= threshold;
 }
@@ -251,7 +339,13 @@ function scoreResponseUpdate(params: {
 
   // Positive signals
   if (step.id === "issue") {
-    if (trimmed && !isVagueResponse(trimmed) && trimmed.length >= 20) score += 10;
+    // Higher points for high-quality descriptions to help reach full thresholds.
+    const decentLength = trimmed && !isVagueResponse(trimmed) && trimmed.length >= 10;
+    const highQuality = trimmed && !isVagueResponse(trimmed) && trimmed.length >= 30;
+
+    if (highQuality) score += 20;
+    else if (decentLength) score += 10;
+
     if (isVagueResponse(trimmed)) score -= 10;
   }
 
@@ -262,7 +356,8 @@ function scoreResponseUpdate(params: {
   if (source === "structured") score += 10;
   if (source === "image") {
     // Do not penalize "no image" responses.
-    if (!imageDeclined && !isNoImageResponse(trimmed)) score += 15;
+    // Awarding significant points (+25) for visual evidence as it greatly improves request quality.
+    if (!imageDeclined && !isNoImageResponse(trimmed)) score += 25;
   }
 
   // Visuals only help confidence meaningfully when the category benefits.
@@ -278,7 +373,11 @@ function scoreResponseUpdate(params: {
 
 function getServiceCategoryKey(title: string | undefined): ServiceCategoryKey | null {
   if (!title) return null;
-  return DYNAMIC_CATEGORY_TITLE_TO_KEY[title] ?? DEFAULT_CATEGORY_TITLE_TO_KEY[title] ?? null;
+  const mapped = DYNAMIC_CATEGORY_TITLE_TO_KEY[title] ?? DEFAULT_CATEGORY_TITLE_TO_KEY[title];
+  if (mapped) return mapped;
+  
+  // Fallback: slugify the title to ensure we have a stable key for dynamic categories
+  return title.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
 function buildUserDescriptionFromAnswers({
@@ -570,7 +669,7 @@ function buildCategoryFollowUpSteps(categoryKey: ServiceCategoryKey): StepConfig
 function buildFlowStepsForCategory(categoryKey: ServiceCategoryKey): StepConfig[] {
   // Check for custom initial message from database settings
   const customInitialMessage = DYNAMIC_INITIAL_MESSAGES[categoryKey];
-  const defaultMessage = "Tell me what you need help with - include estate (or 'no estate'), when it started, and urgency in one message if you can.";
+  const defaultMessage = "Tell me what you need help with — include estate (or ‘no estate’), when it started, urgency, and feel free to share a photo/screenshot if it helps.";
   
   const base: StepConfig[] = [
     {
@@ -618,13 +717,101 @@ function buildFlowStepsForCategory(categoryKey: ServiceCategoryKey): StepConfig[
   if (visualsHelpful) {
     steps.push({
       id: "image",
-      message: "Do you have a photo or screenshot?",
+      message: "Please provide a photo or screenshot of the issue to help us better understand the problem.",
       inputMode: "upload",
       allowManualInput: false,
       slotKey: "imageProvided",
     });
   }
   return steps;
+}
+
+function buildOrdinaryFlowSteps({
+  questions,
+  categoryTitle,
+}: {
+  questions: RequestQuestion[];
+  categoryTitle?: string;
+}): StepConfig[] {
+  const normalizedCategoryKey = categoryTitle
+    ? getServiceCategoryKey(categoryTitle) ?? categoryTitle.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_")
+    : null;
+
+  const filtered = (questions || [])
+    .filter((q) => q.isEnabled)
+    .filter((q) => {
+      if (q.scope === "global") return true;
+      if (!normalizedCategoryKey) return false;
+      return String(q.categoryKey || "").toLowerCase().trim() === normalizedCategoryKey;
+    })
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+  return filtered.map((q) => {
+    const type = q.type;
+    const id =
+      type === "estate"
+        ? "estate"
+        : type === "urgency"
+          ? "urgency"
+          : type === "image" || type === "multi_image"
+            ? "image"
+            : q.key;
+
+    const inputMode: StepInputMode =
+      type === "select" || type === "estate"
+        ? "dropdown"
+        : type === "urgency"
+          ? "tags"
+          : type === "date" || type === "datetime"
+            ? "datetime"
+            : type === "image" || type === "multi_image"
+              ? "upload"
+              : "none";
+
+    const allowManualInput =
+      type !== "select" && type !== "image" && type !== "multi_image";
+
+    const slotKey: StepConfig["slotKey"] =
+      type === "estate"
+        ? "location"
+        : type === "urgency"
+          ? "urgency"
+          : type === "date" || type === "datetime"
+            ? "timing"
+            : type === "image" || type === "multi_image"
+              ? "imageProvided"
+              : q.key.toLowerCase().includes("issue") || q.key.toLowerCase().includes("description")
+                ? "description"
+                : undefined;
+
+    let options: StepOption[] | undefined;
+    if (type === "select") {
+      if (Array.isArray(q.options)) {
+        options = q.options.map((opt: any) => {
+          if (typeof opt === "string") return { value: opt, label: opt };
+          const value = String(opt?.value ?? opt?.label ?? "");
+          return { value, label: String(opt?.label ?? value) };
+        });
+      }
+    } else if (type === "urgency") {
+      options = [
+        { value: "Emergency", label: "Emergency" },
+        { value: "High", label: "High" },
+        { value: "Medium", label: "Medium" },
+        { value: "Low", label: "Low" },
+      ];
+    }
+
+    return {
+      id,
+      message: q.label,
+      inputMode,
+      options,
+      allowManualInput,
+      placeholder: allowManualInput ? "Type your answer" : undefined,
+      slotKey,
+    };
+  });
 }
 
 type AiDecision = {
@@ -709,6 +896,7 @@ type ConversationSummary = {
   category: string;
   recommendedApproach: "DIY" | "Professional" | "Hybrid";
   nextActions: string[];
+  estateId?: string | null;
   estimatedPriceRange?: {
     min: number;
     max: number;
@@ -763,6 +951,12 @@ type ProviderPreview = {
   badges: string[];
   verificationStatus: "Verified" | "Pending";
   image?: string;
+  metadata?: {
+    availability?: string;
+    yearsExperience?: number;
+    estimatedStartingPrice?: number;
+    [key: string]: unknown;
+  };
 };
 
 type ProviderMatchingPreview = {
@@ -805,6 +999,9 @@ type ConversationSession = {
     aiDecision: AiDecision;
     isUserDistressed: boolean;
     earlyStopAcknowledged: boolean;
+    aiSessionId?: string | null;
+    aiSessionMode?: AiSessionMode | null;
+    pendingQuestion?: PendingQuestion | null;
   };
   // Provider comparison tracking
   comparisonViewed?: boolean;
@@ -832,12 +1029,14 @@ async function fetchProviderMatchingPreview(params: {
   category: string;
   urgency?: string | null;
   limit?: number;
+  estateId?: string | null;
 }): Promise<{ providers: ProviderPreview[]; usedEstateId: string | null; estateSpecificCount: number } | null> {
   try {
     const qs = new URLSearchParams();
     qs.set("category", params.category);
     if (params.urgency) qs.set("urgency", params.urgency);
-    qs.set("limit", String(params.limit ?? 4));
+    qs.set("limit", String(params.limit ?? 3)); // Changed default to 3 (top-3 providers)
+    if (params.estateId) qs.set("estateId", params.estateId);
     const res = await apiRequest("GET", `/api/providers/preview?${qs.toString()}`);
     return (await res.json()) as any;
   } catch {
@@ -1294,6 +1493,8 @@ function buildConversationSummary(params: {
   aiResponse: CityBuddyAiResponse | null;
   confidenceScore: number;
   step: ConversationStep;
+  estates?: Array<{ id: string; name: string }> | null;
+  isAdmin?: boolean;
 }): ConversationSummary {
   const issueRaw = (params.flowAnswers.issue || "").trim();
   const estateText = params.flowAnswers.estate
@@ -1303,6 +1504,10 @@ function buildConversationSummary(params: {
       : params.selectedEstateName || "";
   const timingText = (params.flowAnswers.timing || "").trim();
   const urgencyAnswer = (params.flowAnswers.urgency || "").trim();
+
+  // Try to find the actual estate ID if we have the name
+  const matchedEstate = params.estates?.find((e) => e.name === estateText);
+  const estateId = matchedEstate?.id || null;
 
   const urgency = inferUrgencyLevel({ issue: issueRaw, urgencyAnswer });
   const recommendedApproach = inferRecommendedApproach({
@@ -1326,7 +1531,7 @@ function buildConversationSummary(params: {
   details.push(`Image provided: ${params.hasImage ? "Yes" : "No"}`);
 
   const categoryKey = params.categoryKey;
-  const thresholdReached = Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, params.confidenceScore);
+  const thresholdReached = Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, params.confidenceScore, params.isAdmin);
 
   const nextActions: string[] = [];
   if (!thresholdReached || params.step === "FLOW") {
@@ -1365,6 +1570,7 @@ function buildConversationSummary(params: {
     category: params.category,
     recommendedApproach,
     nextActions: uniqueNonEmpty(nextActions),
+    estateId,
   };
 }
 
@@ -1400,77 +1606,47 @@ function safeImageForStorage(src: string | null): string | null {
   return src;
 }
 
-function buildMemorySummaryForGemini(params: {
+function getInputPlaceholder(params: {
+  step: ConversationStep;
+  activeFlowStep?: StepConfig | null;
+  history: HistoryItem[];
+  aiResponse: CityBuddyAiResponse | null;
   category: string;
   infoSlots: InfoSlots;
-  flowAnswers: Record<string, string>;
-  isOutsideCityConnectEstate: boolean;
-  selectedEstateName: string | null;
-  hasImage: boolean;
-  confidenceScore: number;
 }): string {
-  const {
-    category,
-    infoSlots,
-    flowAnswers,
-    isOutsideCityConnectEstate,
-    selectedEstateName,
-    hasImage,
-    confidenceScore,
-  } = params;
+  const { step, activeFlowStep, history, aiResponse, category, infoSlots } = params;
 
-  const estateText = flowAnswers.estate
-    ? flowAnswers.estate
-    : isOutsideCityConnectEstate
-      ? "Not in a CityConnect estate"
-      : selectedEstateName || "Unknown";
-
-  const bits: string[] = [];
-  bits.push(`Category: ${category}`);
-  if (infoSlots.description && (flowAnswers.issue || "").trim()) bits.push(`Issue: ${(flowAnswers.issue || "").trim()}`);
-  if (infoSlots.location && estateText.trim()) bits.push(`Location/Estate: ${estateText.trim()}`);
-  if (infoSlots.timing && (flowAnswers.timing || "").trim()) bits.push(`Timing: ${(flowAnswers.timing || "").trim()}`);
-  if (infoSlots.urgency && (flowAnswers.urgency || "").trim()) bits.push(`Urgency: ${(flowAnswers.urgency || "").trim()}`);
-  bits.push(`Image available: ${hasImage ? "Yes" : "No"}`);
-  bits.push(`Confidence: ${confidenceScore}/100`);
-
-  return `Memory summary (do not repeat questions already answered):\n${bits.join("\n")}`;
-}
-
-function buildGeminiHistory(params: {
-  items: HistoryItem[];
-  currentUserMessage: string;
-  priorAiResponse: CityBuddyAiResponse | null;
-  memorySummary: string;
-}): ChatMessage[] {
-  const { items, currentUserMessage, priorAiResponse, memorySummary } = params;
-  const mapped: ChatMessage[] = items
-    .filter((i) => i.type === "user_text" || i.type === "ai_message")
-    .map((i) => {
-      const role: ChatMessage["role"] = i.type === "user_text" ? "user" : "assistant";
-      const text = i.type === "user_text" ? i.text.trim() : i.text.trim();
-      return { role, text };
-    })
-    .filter((m) => Boolean(m.text));
-
-  // Summary-first context injection to avoid prompt bloat.
-  const recent = mapped.slice(-2);
-  const context: ChatMessage[] = [{ role: "assistant", text: memorySummary.trim() }];
-
-  if (priorAiResponse?.message) {
-    context.push({ role: "assistant", text: priorAiResponse.message.trim() });
-  }
-  if (priorAiResponse?.intent === "clarify" && priorAiResponse.followUpQuestion) {
-    context.push({ role: "assistant", text: priorAiResponse.followUpQuestion.trim() });
+  // If there's a pending question from AI, suggest answering it
+  if (aiResponse?.intent === "clarify" && aiResponse.followUpQuestion) {
+    const questionPreview = aiResponse.followUpQuestion.split("?")[0]?.slice(0, 40) || "Answer your question";
+    return `Answer: ${questionPreview}...`;
   }
 
-  // Avoid repeating the current user message in both history and `userMessage`.
-  const trimmedCurrent = currentUserMessage.trim();
-  const last = recent[recent.length - 1];
-  const safeRecent =
-    trimmedCurrent && last?.role === "user" && last.text === trimmedCurrent ? recent.slice(0, -1) : recent;
+  // During flow steps, guide based on what's being asked
+  if (step === "FLOW" && activeFlowStep) {
+    const question = activeFlowStep.message?.split("?")[0]?.toLowerCase() || "";
+    if (question.includes("what") || question.includes("describe")) return "Describe your issue...";
+    if (question.includes("when") || question.includes("timing")) return "When does this need to happen?";
+    if (question.includes("where") || question.includes("location")) return "Where is the location?";
+    if (question.includes("how")) return "Tell us how...";
+    if (question.includes("which")) return "Which option works for you?";
+  }
 
-  return [...context, ...safeRecent].filter((m) => m.text.trim());
+  // Post-flow responses
+  if (step === "AI_GUIDANCE" || step === "COMPLETED") {
+    if (aiResponse?.message && aiResponse.message.toLowerCase().includes("image")) {
+      return "You can add more details or ask a follow-up...";
+    }
+    return "Ask a follow-up question or add more details...";
+  }
+
+  // Default helpful message
+  if (history.length === 0) {
+    return "Describe your issue in detail...";
+  }
+
+  // Suggest follow-up for later in conversation
+  return "Add any special instructions...";
 }
 
 function makeHistoryId(): string {
@@ -1487,6 +1663,110 @@ function parseDataUrl(dataUrl: string): InlineImagePart | null {
   const mimeType = match[1];
   const data = match[2];
   return { mimeType, data };
+}
+
+function normalizeCategoryKey(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[\s-]+/g, "_");
+}
+
+function buildStepFromQuestion(question: PendingQuestion | null): StepConfig | null {
+  if (!question) return null;
+  const normalizedType = question.type || "text";
+  const options = Array.isArray(question.options) ? question.options : [];
+
+  let inputMode: StepInputMode = "none";
+  if (normalizedType === "select") inputMode = "dropdown";
+  if (normalizedType === "urgency") inputMode = "tags";
+  if (normalizedType === "estate") inputMode = "dropdown";
+  if (normalizedType === "image" || normalizedType === "multi_image") inputMode = "upload";
+  if ((normalizedType === "date" || normalizedType === "datetime") && (question.key === "timing" || question.key === "inspectionDate")) {
+    inputMode = "datetime";
+  }
+
+  const stepOptions: StepOption[] | undefined =
+    inputMode === "dropdown" || inputMode === "tags"
+      ? (options.length
+          ? options.map((opt) => ({ value: String(opt), label: String(opt) }))
+          : normalizedType === "urgency"
+            ? [
+                { value: "low", label: "Low" },
+                { value: "medium", label: "Medium" },
+                { value: "high", label: "High" },
+                { value: "emergency", label: "Emergency" },
+              ]
+            : undefined)
+      : undefined;
+
+  return {
+    id: question.key,
+    message: question.label,
+    inputMode,
+    options: stepOptions,
+    allowManualInput: true,
+    placeholder: "Type your answer",
+  };
+}
+
+function derivePendingQuestion(mode: AiSessionMode | null, replyText: string, meta?: any): PendingQuestion | null {
+  if (!meta) return null;
+  if (meta.questionKey) {
+    return {
+      key: String(meta.questionKey),
+      label: replyText || meta.label || "Please share more details.",
+      type: meta.questionType as RequestQuestion["type"] | undefined,
+      options: Array.isArray(meta.options) ? meta.options.map((o: any) => String(o)) : null,
+    };
+  }
+  if (mode === "ordinary") return null;
+  const followUps = Array.isArray(meta.followUpQuestions) ? meta.followUpQuestions : [];
+  if (!followUps.length) return null;
+  const next = followUps[0];
+  return {
+    key: String(next.key || next.id || ""),
+    label: String(next.label || replyText || "Please share more details."),
+    type: next.type as RequestQuestion["type"] | undefined,
+    options: Array.isArray(next.options) ? next.options.map((o: any) => String(o)) : null,
+  };
+}
+
+function buildAiResponseFromMeta(replyText: string, meta?: any): CityBuddyAiResponse | null {
+  if (!meta || !meta.intent) return null;
+  const followUps = Array.isArray(meta.followUpQuestions) ? meta.followUpQuestions : [];
+  const mappedIntent: CityBuddyIntent = meta.intent === "clarify" ? "clarify" : "guide";
+  return {
+    intent: mappedIntent,
+    message: replyText || meta.message || "Here's what I recommend next.",
+    followUpQuestion: followUps[0]?.label || meta.followUpQuestion,
+    followUpQuestions: followUps,
+    escalationNote: meta.escalationNote,
+    recommendedProviderIds: Array.isArray(meta.recommendedProviderIds)
+      ? meta.recommendedProviderIds.map((id: any) => String(id))
+      : [],
+    extracted: meta.extracted,
+    confidence: typeof meta.confidence === "number" ? meta.confidence : undefined,
+  };
+}
+
+function mapSuggestedProvidersToPreview(params: {
+  providers: AiSessionReplyResponse["suggestedProviders"];
+  category: string;
+  estateName?: string | null;
+}): ProviderPreview[] {
+  if (!Array.isArray(params.providers)) return [];
+  return params.providers.map((p) => ({
+    id: String(p.id),
+    name: String(p.name || "Provider"),
+    serviceCategory: params.category,
+    rating: typeof p.rating === "number" ? p.rating : 0,
+    completedJobs: typeof p.jobs === "number" ? p.jobs : 0,
+    responseTime: "Within 24h",
+    location: params.estateName || "Near you",
+    badges: Array.isArray(p.badges) ? p.badges.map((b) => String(b)) : [],
+    verificationStatus: "Verified",
+  }));
 }
 
 function SectionCard({
@@ -1707,12 +1987,14 @@ function RecentConversationItem({
   timeLabel,
   onClick,
   onDelete,
+  canDelete = true,
 }: {
   isActive?: boolean;
   title: string;
   timeLabel: string;
   onClick?: () => void;
   onDelete?: () => void;
+  canDelete?: boolean;
 }) {
   return (
     <div
@@ -1735,12 +2017,13 @@ function RecentConversationItem({
             <button
               type="button"
               aria-label="Delete conversation"
+              disabled={!canDelete}
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 onDelete();
               }}
-              className="rounded-[6px] hover:bg-[#027a48]/50 transition-colors p-[6px]"
+              className={`rounded-[6px] transition-colors p-[6px] ${!canDelete ? "opacity-20 cursor-not-allowed" : "hover:bg-[#027a48]/50"}`}
             >
               <DeleteIcon />
             </button>
@@ -1777,17 +2060,21 @@ function RecentRequests({
       className="content-stretch flex flex-col items-start relative shrink-0 w-full max-h-[260px] overflow-y-auto"
       data-name="Recent requests"
     >
-      {(sessions || []).map((s) => (
-        <div key={s.id} className="w-full">
-          <RecentConversationItem
-            isActive={currentView === 'conversation' && activeSessionId === s.id}
-            title={(s.readyToBook && s.bookingCard?.title) ? s.bookingCard.title : (s.summary?.headline || s.title || "New request")}
-            timeLabel={formatRelativeTime(s.lastUpdated)}
-            onClick={() => onSelectSession?.(s.id)}
-            onDelete={onDeleteSession ? () => onDeleteSession(s.id) : undefined}
-          />
-        </div>
-      ))}
+      {(sessions || []).map((s) => {
+        const isBooked = (s.messages || []).some(m => m.type === 'ticket');
+        return (
+          <div key={s.id} className="w-full">
+            <RecentConversationItem
+              isActive={currentView === 'conversation' && activeSessionId === s.id}
+              title={(s.readyToBook && s.bookingCard?.title) ? s.bookingCard.title : (s.summary?.headline || s.title || "New request")}
+              timeLabel={formatRelativeTime(s.lastUpdated)}
+              onClick={() => onSelectSession?.(s.id)}
+              onDelete={onDeleteSession ? () => onDeleteSession(s.id) : undefined}
+              canDelete={!isBooked}
+            />
+          </div>
+        );
+      })}
 
       {sessions.length === 0 ? (
         <RecentConversationItem
@@ -2012,7 +2299,8 @@ export type SidebarNavigationProps = {
   onNavigateToMarketplace?: () => void;
   onNavigateToSettings?: () => void;
   onNavigateToServiceRequests?: () => void;
-  navCurrentPage?: "homepage" | "chat" | "requests" | "settings" | "marketplace" | "playground";
+  onNavigateToOrdinaryFlow?: () => void;
+  navCurrentPage?: "homepage" | "chat" | "requests" | "settings" | "marketplace" | "ordinary_flow" | "playground";
 };
 
 export function SidebarNavigation({
@@ -2024,6 +2312,7 @@ export function SidebarNavigation({
   onNavigateToMarketplace,
   onNavigateToSettings,
   onNavigateToServiceRequests,
+  onNavigateToOrdinaryFlow,
   navCurrentPage = "chat",
 }: SidebarNavigationProps) {
   const [, navigate] = useLocation();
@@ -2060,6 +2349,14 @@ export function SidebarNavigation({
     navigate("/service-requests");
   };
 
+  const handleNavigateToOrdinaryFlow = () => {
+    if (onNavigateToOrdinaryFlow) {
+      onNavigateToOrdinaryFlow();
+      return;
+    }
+    navigate("/resident/requests/ordinary");
+  };
+
   return (
     <div
       className="bg-[#054f31] content-stretch flex h-full isolate items-start overflow-clip relative shrink-0 w-[362px]"
@@ -2071,6 +2368,7 @@ export function SidebarNavigation({
         onNavigateToSettings={handleNavigateToSettings}
         onNavigateToMarketplace={handleNavigateToMarketplace}
         onNavigateToServiceRequests={handleNavigateToServiceRequests}
+        onNavigateToOrdinaryFlow={handleNavigateToOrdinaryFlow}
         currentPage={navCurrentPage}
       />
       <SubNav
@@ -2791,6 +3089,9 @@ function Frame30NewMain({
   selectedCategory,
   onChangeCategory,
   onViewServiceRequest,
+  aiResponse,
+  onBookProfessional,
+  onBuyOnCityMart,
   bookingCard,
   priceEstimationCard,
   providerMatchingPreview,
@@ -2804,6 +3105,12 @@ function Frame30NewMain({
   onOpenProviderComparison,
   selectedProviderId,
   onViewSelectedProvider,
+  onBookProvider,
+  onAskForImageUpload,
+  attachments,
+  attachmentData,
+  attachmentLoading,
+  onLoadAttachment,
 }: { 
   step: ConversationStep;
   history: HistoryItem[];
@@ -2811,6 +3118,9 @@ function Frame30NewMain({
   selectedCategory?: string;
   onChangeCategory?: () => void;
   onViewServiceRequest?: (id: string) => void;
+  aiResponse?: CityBuddyAiResponse | null;
+  onBookProfessional?: () => void;
+  onBuyOnCityMart?: () => void;
   bookingCard?: BookingCard | null;
   priceEstimationCard?: PriceEstimationCard | null;
   providerMatchingPreview?: ProviderMatchingPreview | null;
@@ -2824,7 +3134,25 @@ function Frame30NewMain({
   onRemoveBookingImage?: (src: string) => void;
   selectedProviderId?: string | null;
   onViewSelectedProvider?: (id?: string) => void;
+  onBookProvider?: (providerId: string, providerName: string) => void;
+  onAskForImageUpload?: () => void;
+  attachments?: AiSessionAttachmentMeta[];
+  attachmentData?: Record<string, string>;
+  attachmentLoading?: Record<string, boolean>;
+  onLoadAttachment?: (attachmentId: string) => void;
 }) {
+  const lastAiMessage = [...history].reverse().find((item) => item.type === "ai_message") as
+    | { text: string }
+    | undefined;
+  const suppressAiGuidanceMessage =
+    Boolean(aiResponse?.message) &&
+    Boolean(lastAiMessage?.text) &&
+    lastAiMessage!.text.trim() === aiResponse!.message!.trim();
+  const selectedProvider = useMemo(() => {
+    if (!selectedProviderId || !providerMatchingPreview?.providers?.length) return null;
+    return providerMatchingPreview.providers.find((p) => String(p.id) === String(selectedProviderId)) ?? null;
+  }, [providerMatchingPreview, selectedProviderId]);
+
   return (
     <div className="content-stretch flex flex-col items-start overflow-x-clip relative shrink-0 w-full pt-[0px] pr-[0px] pb-[24px] pl-[0px] mt-[0px] mr-[0px] mb-[0px] ml-[0px]">
       {isHistoryLoading ? (
@@ -2861,7 +3189,83 @@ function Frame30NewMain({
         }
       })}
 
-      {bookingCard ? (
+      {Array.isArray(attachments) && attachments.length > 0 ? (
+        <div className="mt-[12px] w-full">
+          <p className="text-[12px] text-[#667085] mb-[6px]">Attachments</p>
+          <div className="flex flex-wrap gap-[10px]">
+            {attachments.map((att) => {
+              const src = attachmentData?.[att.id];
+              const loading = attachmentLoading?.[att.id];
+              return (
+                <div key={att.id} className="border border-[#EAECF0] rounded-[10px] p-[8px]">
+                  {src ? (
+                    <img
+                      src={src}
+                      alt="Attachment"
+                      className="w-[120px] h-[120px] object-cover rounded-[8px]"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onLoadAttachment?.(att.id)}
+                      disabled={loading}
+                      className="text-[12px] text-[#475467] bg-white border border-[#EAECF0] rounded-[8px] px-[10px] py-[6px]"
+                    >
+                      {loading ? "Loading..." : "Load image"}
+                    </button>
+                  )}
+                  <p className="text-[11px] text-[#98A2B3] mt-[6px]">
+                    {(att.mimeType || "image").toString().toLowerCase()} · {Math.round(att.byteSize / 1024)} KB
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── AI_GUIDANCE: CityBuddy response (rendered BEFORE the cards) ── */}
+      {step === "AI_GUIDANCE" && aiResponse ? (
+        <div className="w-full">
+          {!suppressAiGuidanceMessage ? <AIMessage text={aiResponse.message} /> : null}
+
+          {/* Action buttons from the AI response */}
+          {aiResponse.intent === "guide" ? (
+            <div className="flex flex-wrap gap-[10px] mt-[10px]">
+              {onBookProfessional ? (
+                <SecButton onClick={onBookProfessional}>Book a professional</SecButton>
+              ) : null}
+              {onBuyOnCityMart ? (
+                <OutlineButton onClick={onBuyOnCityMart}>Buy on CityMart</OutlineButton>
+              ) : null}
+            </div>
+          ) : null}
+
+          {aiResponse.intent === "escalate" && aiResponse.escalationNote ? (
+            <div className="mt-[10px] bg-[#FFF4ED] border border-[#FFD6AE] rounded-[12px] px-[14px] py-[10px]">
+              <p className="text-[13px] text-[#B42318] font-['General_Sans:Medium',sans-serif]">⚠️ {aiResponse.escalationNote}</p>
+            </div>
+          ) : null}
+
+          {aiResponse.intent === "clarify" && aiResponse.followUpQuestion ? (
+            <div className="mt-[10px] bg-[#FFF6ED] border border-[#FEDF89] rounded-[12px] px-[14px] py-[10px]">
+              <p className="text-[13px] text-[#B54708]">📷 {aiResponse.followUpQuestion}</p>
+              {onAskForImageUpload ? (
+                <div className="mt-[12px]">
+                  <SecButton onClick={onAskForImageUpload}>
+                    <span className="inline-flex items-center gap-[8px]">
+                      <UploadItem />
+                      <span>Upload correct image</span>
+                    </span>
+                  </SecButton>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {bookingCard && aiResponse?.intent !== "clarify" ? (
         <div className="w-full">
           <AIMessage
             text={
@@ -2960,196 +3364,330 @@ function Frame30NewMain({
               </div>
             </div>
           </div>
+        </div>
+      ) : null}
 
-          {priceEstimationCard ? (
-            <div className="mt-[16px] w-full">
-              <AIMessage text="Based on what you’ve shared, here’s a rough estimate so you know what to expect." />
+      {priceEstimationCard && aiResponse?.intent !== "clarify" ? (
+        <div className="mt-[16px] w-full">
+          <AIMessage text="Based on what you’ve shared, here’s a rough estimate so you know what to expect." />
 
-              <div className="bg-white rounded-[12px] border border-[#EAECF0] overflow-hidden w-full">
-                <div className="px-[20px] py-[16px] border-b border-[#EAECF0]">
-                  <p className="text-[16px] text-[#101828] font-['General_Sans:Semibold',sans-serif]">
-                    Price estimate
+          <div className="bg-white rounded-[12px] border border-[#EAECF0] overflow-hidden w-full">
+            <div className="px-[20px] py-[16px] border-b border-[#EAECF0]">
+              <p className="text-[16px] text-[#101828] font-['General_Sans:Semibold',sans-serif]">
+                Price estimate
+              </p>
+              <p className="text-[12px] text-[#667085]">Estimate only — no charges, no automatic booking</p>
+            </div>
+
+            <div className="px-[20px] py-[16px]">
+              <div className="flex items-start justify-between gap-[12px]">
+                <div className="min-w-0">
+                  <p className="text-[14px] text-[#101828] font-['General_Sans:Medium',sans-serif]">
+                    {priceEstimationCard.title}
                   </p>
-                  <p className="text-[12px] text-[#667085]">Estimate only — no charges, no automatic booking</p>
+                  <p className="text-[12px] text-[#667085] mt-[4px]">
+                    Confidence: {priceEstimationCard.confidenceLevel}
+                  </p>
                 </div>
+                <div className="text-right shrink-0">
+                  <p className="text-[16px] text-[#101828] font-['General_Sans:Semibold',sans-serif]">
+                    {formatNgnRange(priceEstimationCard.estimatedRange.min, priceEstimationCard.estimatedRange.max)}
+                  </p>
+                  {bookingCard?.urgency === "high" ? (
+                    <p className="text-[12px] text-[#D92D20] mt-[2px]">Includes urgency uplift (~25%)</p>
+                  ) : null}
+                </div>
+              </div>
 
-                <div className="px-[20px] py-[16px]">
-                  <div className="flex items-start justify-between gap-[12px]">
-                    <div className="min-w-0">
-                      <p className="text-[14px] text-[#101828] font-['General_Sans:Medium',sans-serif]">
-                        {priceEstimationCard.title}
-                      </p>
-                      <p className="text-[12px] text-[#667085] mt-[4px]">
-                        Confidence: {priceEstimationCard.confidenceLevel}
-                      </p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-[16px] text-[#101828] font-['General_Sans:Semibold',sans-serif]">
-                        {formatNgnRange(priceEstimationCard.estimatedRange.min, priceEstimationCard.estimatedRange.max)}
-                      </p>
-                      {bookingCard.urgency === "high" ? (
-                        <p className="text-[12px] text-[#D92D20] mt-[2px]">Includes urgency uplift (~25%)</p>
+              {Array.isArray(priceEstimationCard.pricingBasis) && priceEstimationCard.pricingBasis.length > 0 ? (
+                <div className="mt-[12px]">
+                  <p className="text-[12px] text-[#667085]">Pricing basis</p>
+                  <ul className="list-disc pl-[18px] text-[12px] text-[#475467] mt-[6px] space-y-[4px]">
+                    {priceEstimationCard.pricingBasis.map((b) => (
+                      <li key={b}>{b}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              <div className="mt-[12px] bg-[#f9fafb] border border-[#EAECF0] rounded-[12px] px-[12px] py-[10px]">
+                <p className="text-[12px] text-[#667085]">Disclaimer</p>
+                <p className="text-[12px] text-[#475467] mt-[4px]">{priceEstimationCard.disclaimer}</p>
+              </div>
+
+              {priceEstimationCard.notes ? (
+                <p className="text-[12px] text-[#667085] mt-[10px]">{priceEstimationCard.notes}</p>
+              ) : null}
+
+              <div className="mt-[14px] flex flex-wrap gap-[10px]">
+                {priceEstimationCard.callToActions.secondary ? (
+                  <OutlineButton onClick={onAskFollowUp ?? onSecondaryBookingAction}>
+                    {priceEstimationCard.callToActions.secondary}
+                  </OutlineButton>
+                ) : null}
+                {priceEstimationCard.callToActions.primary ? (
+                  <SecButton
+                    onClick={
+                      priceEstimationCard.callToActions.primary === "Request professional assessment"
+                        ? (onProfessionalConsultancy ?? onPrimaryBookingAction)
+                        : onPrimaryBookingAction
+                    }
+                  >
+                    {priceEstimationCard.callToActions.primary}
+                  </SecButton>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {providerMatchingPreview && aiResponse?.intent !== "clarify" ? (
+        <div className="mt-[16px] w-full">
+          <AIMessage
+            text="Based on what you’ve shared, here are professionals who typically handle requests like this. You can review them before deciding."
+          />
+
+          <div className="bg-white rounded-[12px] border border-[#EAECF0] overflow-hidden w-full">
+            <div className="px-[20px] py-[16px] border-b border-[#EAECF0]">
+              <p className="text-[16px] text-[#101828] font-['General_Sans:Semibold',sans-serif]">
+                Provider matching preview
+              </p>
+              <p className="text-[12px] text-[#667085]">Preview only — no assignment, no guaranteed availability</p>
+            </div>
+
+            <div className="px-[20px] py-[16px]">
+              {providerMatchingPreview?.note ? (
+                <div className="bg-[#f9fafb] border border-[#EAECF0] rounded-[12px] px-[12px] py-[10px] mb-[12px]">
+                  <p className="text-[12px] text-[#475467]">{providerMatchingPreview.note}</p>
+                </div>
+              ) : null}
+
+              {Array.isArray(providerMatchingPreview?.providers) && providerMatchingPreview!.providers.length > 0 ? (
+                <div className="space-y-[12px]">
+                  {providerMatchingPreview!.providers.map((p) => (
+                    <div key={p.id} className="border border-[#EAECF0] rounded-[12px] px-[12px] py-[12px]">
+                      <div className="flex items-start justify-between gap-[12px]">
+                        <div className="min-w-0">
+                          <p className="text-[14px] text-[#101828] font-['General_Sans:Medium',sans-serif] truncate">
+                            {p.name}
+                          </p>
+                          <p className="text-[12px] text-[#667085] mt-[2px]">
+                            {formatStarRating(p.rating)} · {Number(p.rating || 0).toFixed(1)}
+                          </p>
+                        </div>
+                        <div className="shrink-0 flex flex-col items-end gap-[4px]">
+                          <span className="inline-flex items-center gap-[6px] text-[12px] text-[#475467] bg-[#f9fafb] border border-[#EAECF0] rounded-[999px] px-[10px] py-[4px]">
+                            {p.verificationStatus === "Verified" ? "Verified" : "Pending"}
+                          </span>
+                          {/* Availability indicator */}
+                          {p.metadata?.availability ? (
+                            <span className={`inline-flex items-center gap-[4px] text-[11px] rounded-[999px] px-[8px] py-[3px] ${
+                              p.metadata.availability.toLowerCase().includes('now') || p.metadata.availability.toLowerCase().includes('available')
+                                ? 'text-[#067647] bg-[#ECFDF3] border border-[#ABEFC6]'
+                                : 'text-[#B54708] bg-[#FFFAEB] border border-[#FEDF89]'
+                            }`}>
+                              <span className={`w-[6px] h-[6px] rounded-full ${
+                                p.metadata.availability.toLowerCase().includes('now') || p.metadata.availability.toLowerCase().includes('available')
+                                  ? 'bg-[#17B26A]'
+                                  : 'bg-[#F79009]'
+                              }`} />
+                              {p.metadata.availability}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-[4px] text-[11px] text-[#067647] bg-[#ECFDF3] border border-[#ABEFC6] rounded-[999px] px-[8px] py-[3px]">
+                              <span className="w-[6px] h-[6px] rounded-full bg-[#17B26A]" />
+                              Available now
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-[10px] grid grid-cols-1 sm:grid-cols-2 gap-[10px]">
+                        <div>
+                          <p className="text-[12px] text-[#667085]">Completed jobs</p>
+                          <p className="text-[12px] text-[#101828] font-['General_Sans:Medium',sans-serif]">{p.completedJobs}</p>
+                        </div>
+                        <div>
+                          <p className="text-[12px] text-[#667085]">Estimated response</p>
+                          <p className="text-[12px] text-[#101828] font-['General_Sans:Medium',sans-serif]">{p.responseTime}</p>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <p className="text-[12px] text-[#667085]">Coverage / location</p>
+                          <p className="text-[12px] text-[#101828] font-['General_Sans:Medium',sans-serif]">{p.location}</p>
+                        </div>
+                      </div>
+
+                      {Array.isArray(p.badges) && p.badges.length > 0 ? (
+                        <div className="mt-[10px] flex flex-wrap gap-[8px]">
+                          {p.badges.slice(0, 3).map((b) => (
+                            <span
+                              key={b}
+                              className="text-[12px] text-[#475467] bg-[#f9fafb] border border-[#EAECF0] rounded-[999px] px-[10px] py-[4px]"
+                            >
+                              {b}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {/* Book Now button for each provider */}
+                      {onBookProvider ? (
+                        <div className="mt-[12px]">
+                          <button
+                            onClick={() => onBookProvider(String(p.id), p.name)}
+                            className="w-full text-[12px] font-medium text-white bg-[#7F56D9] hover:bg-[#6941C6] border border-[#7F56D9] rounded-[8px] px-[12px] py-[8px] transition-colors"
+                          >
+                            Book {p.name.split(' ')[0]}
+                          </button>
+                        </div>
                       ) : null}
                     </div>
-                  </div>
-
-                  {Array.isArray(priceEstimationCard.pricingBasis) && priceEstimationCard.pricingBasis.length > 0 ? (
-                    <div className="mt-[12px]">
-                      <p className="text-[12px] text-[#667085]">Pricing basis</p>
-                      <ul className="list-disc pl-[18px] text-[12px] text-[#475467] mt-[6px] space-y-[4px]">
-                        {priceEstimationCard.pricingBasis.map((b) => (
-                          <li key={b}>{b}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-
-                  <div className="mt-[12px] bg-[#f9fafb] border border-[#EAECF0] rounded-[12px] px-[12px] py-[10px]">
-                    <p className="text-[12px] text-[#667085]">Disclaimer</p>
-                    <p className="text-[12px] text-[#475467] mt-[4px]">{priceEstimationCard.disclaimer}</p>
-                  </div>
-
-                  {priceEstimationCard.notes ? (
-                    <p className="text-[12px] text-[#667085] mt-[10px]">{priceEstimationCard.notes}</p>
-                  ) : null}
-
-                  <div className="mt-[14px] flex flex-wrap gap-[10px]">
-                    {priceEstimationCard.callToActions.secondary ? (
-                      <OutlineButton onClick={onAskFollowUp ?? onSecondaryBookingAction}>
-                        {priceEstimationCard.callToActions.secondary}
-                      </OutlineButton>
-                    ) : null}
-                    {priceEstimationCard.callToActions.primary ? (
-                      <SecButton
-                        onClick={
-                          priceEstimationCard.callToActions.primary === "Request professional assessment"
-                            ? (onProfessionalConsultancy ?? onPrimaryBookingAction)
-                            : onPrimaryBookingAction
-                        }
-                      >
-                        {priceEstimationCard.callToActions.primary}
-                      </SecButton>
-                    ) : null}
-                  </div>
+                  ))}
                 </div>
-              </div>
-            </div>
-          ) : null}
-          {priceEstimationCard ? (
-            <div className="mt-[16px] w-full">
-              <AIMessage
-                text="Based on what you’ve shared, here are professionals who typically handle requests like this. You can review them before deciding."
-              />
-
-              <div className="bg-white rounded-[12px] border border-[#EAECF0] overflow-hidden w-full">
-                <div className="px-[20px] py-[16px] border-b border-[#EAECF0]">
-                  <p className="text-[16px] text-[#101828] font-['General_Sans:Semibold',sans-serif]">
-                    Provider matching preview
+              ) : (
+                <div className="bg-[#f9fafb] border border-[#EAECF0] rounded-[12px] px-[12px] py-[10px]">
+                  <p className="text-[12px] text-[#475467]">
+                    I couldn’t find any verified providers to preview right now. You can still continue, schedule for later, or request a consultation.
                   </p>
-                  <p className="text-[12px] text-[#667085]">Preview only — no assignment, no guaranteed availability</p>
                 </div>
+              )}
 
-                <div className="px-[20px] py-[16px]">
-                  {providerMatchingPreview?.note ? (
-                    <div className="bg-[#f9fafb] border border-[#EAECF0] rounded-[12px] px-[12px] py-[10px] mb-[12px]">
-                      <p className="text-[12px] text-[#475467]">{providerMatchingPreview.note}</p>
-                    </div>
-                  ) : null}
-
-                  {Array.isArray(providerMatchingPreview?.providers) && providerMatchingPreview!.providers.length > 0 ? (
-                    <div className="space-y-[12px]">
-                      {providerMatchingPreview!.providers.map((p) => (
-                        <div key={p.id} className="border border-[#EAECF0] rounded-[12px] px-[12px] py-[12px]">
-                          <div className="flex items-start justify-between gap-[12px]">
-                            <div className="min-w-0">
-                              <p className="text-[14px] text-[#101828] font-['General_Sans:Medium',sans-serif] truncate">
-                                {p.name}
-                              </p>
-                              <p className="text-[12px] text-[#667085] mt-[2px]">
-                                {formatStarRating(p.rating)} · {Number(p.rating || 0).toFixed(1)}
-                              </p>
-                            </div>
-                            <div className="shrink-0">
-                              <span className="inline-flex items-center gap-[6px] text-[12px] text-[#475467] bg-[#f9fafb] border border-[#EAECF0] rounded-[999px] px-[10px] py-[4px]">
-                                {p.verificationStatus === "Verified" ? "Verified" : "Pending"}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="mt-[10px] grid grid-cols-1 sm:grid-cols-2 gap-[10px]">
-                            <div>
-                              <p className="text-[12px] text-[#667085]">Completed jobs</p>
-                              <p className="text-[12px] text-[#101828] font-['General_Sans:Medium',sans-serif]">{p.completedJobs}</p>
-                            </div>
-                            <div>
-                              <p className="text-[12px] text-[#667085]">Estimated response</p>
-                              <p className="text-[12px] text-[#101828] font-['General_Sans:Medium',sans-serif]">{p.responseTime}</p>
-                            </div>
-                            <div className="sm:col-span-2">
-                              <p className="text-[12px] text-[#667085]">Coverage / location</p>
-                              <p className="text-[12px] text-[#101828] font-['General_Sans:Medium',sans-serif]">{p.location}</p>
-                            </div>
-                          </div>
-
-                          {Array.isArray(p.badges) && p.badges.length > 0 ? (
-                            <div className="mt-[10px] flex flex-wrap gap-[8px]">
-                              {p.badges.slice(0, 3).map((b) => (
-                                <span
-                                  key={b}
-                                  className="text-[12px] text-[#475467] bg-[#f9fafb] border border-[#EAECF0] rounded-[999px] px-[10px] py-[4px]"
-                                >
-                                  {b}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="bg-[#f9fafb] border border-[#EAECF0] rounded-[12px] px-[12px] py-[10px]">
-                      <p className="text-[12px] text-[#475467]">
-                        I couldn’t find any verified providers to preview right now. You can still continue, schedule for later, or request a consultation.
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="mt-[14px] flex flex-wrap gap-[10px]">
-                    {onViewMoreProviders ? (
-                      <OutlineButton onClick={onViewMoreProviders}>View more providers</OutlineButton>
-                    ) : null}
-                    {Array.isArray(providerMatchingPreview?.providers) && providerMatchingPreview.providers.length >= 2 ? (
-                      <OutlineButton onClick={() => {
-                        const mapped = providerMatchingPreview.providers.map((p: any) => ({
-                          id: String(p.id),
-                          name: String(p.name ?? "Unknown"),
-                          rating: Number(p.rating ?? 0),
-                          completedJobs: Number(p.completedJobs ?? 0),
-                          responseTime: String(p.responseTime ?? "Not available"),
-                          locationCoverage: String(p.location ?? "Not available"),
-                          verificationStatus: (p.verificationStatus === "Verified" ? "Verified" : "Pending") as ProviderComparisonItem["verificationStatus"],
-                          yearsExperience: (p.metadata && p.metadata.yearsExperience) ? Number(p.metadata.yearsExperience) : undefined,
-                          badges: Array.isArray(p.badges) ? p.badges.map((b: any) => String(b)) : [],
-                          estimatedStartingPrice: (p.metadata && p.metadata.estimatedStartingPrice) ? Number(p.metadata.estimatedStartingPrice) : undefined,
-                          availability: (p.metadata && p.metadata.availability) ? String(p.metadata.availability) : undefined,
-                        }));
-                        onOpenProviderComparison?.(mapped);
-                      }}>Compare providers</OutlineButton>
-                    ) : null}
-                    {onAskFollowUp ? (
-                      <OutlineButton onClick={onAskFollowUp}>Ask a question</OutlineButton>
-                    ) : null}
-                    {onAdjustDetails ? (
-                      <OutlineButton onClick={onAdjustDetails}>Adjust details</OutlineButton>
-                    ) : null}
-                    {onPrimaryBookingAction ? (
-                      <SecButton onClick={onPrimaryBookingAction}>Proceed to booking</SecButton>
-                    ) : null}
-                  </div>
-                </div>
+              <div className="mt-[14px] flex flex-wrap gap-[10px]">
+                {onViewMoreProviders ? (
+                  <OutlineButton onClick={onViewMoreProviders}>View more providers</OutlineButton>
+                ) : null}
+                {Array.isArray(providerMatchingPreview?.providers) && providerMatchingPreview.providers.length >= 2 ? (
+                  <OutlineButton onClick={() => {
+                    const mapped = providerMatchingPreview.providers.map((p: any) => ({
+                      id: String(p.id),
+                      name: String(p.name ?? "Unknown"),
+                      rating: Number(p.rating ?? 0),
+                      completedJobs: Number(p.completedJobs ?? 0),
+                      responseTime: String(p.responseTime ?? "Not available"),
+                      locationCoverage: String(p.location ?? "Not available"),
+                      verificationStatus: (p.verificationStatus === "Verified" ? "Verified" : "Pending") as ProviderComparisonItem["verificationStatus"],
+                      yearsExperience: (p.metadata && p.metadata.yearsExperience) ? Number(p.metadata.yearsExperience) : undefined,
+                      badges: Array.isArray(p.badges) ? p.badges.map((b: any) => String(b)) : [],
+                      estimatedStartingPrice: (p.metadata && p.metadata.estimatedStartingPrice) ? Number(p.metadata.estimatedStartingPrice) : undefined,
+                      availability: (p.metadata && p.metadata.availability) ? String(p.metadata.availability) : undefined,
+                    }));
+                    onOpenProviderComparison?.(mapped);
+                  }}>Compare providers</OutlineButton>
+                ) : null}
+                {onAskFollowUp ? (
+                  <OutlineButton onClick={onAskFollowUp}>Ask a question</OutlineButton>
+                ) : null}
+                {onAdjustDetails ? (
+                  <OutlineButton onClick={onAdjustDetails}>Adjust details</OutlineButton>
+                ) : null}
+                {onPrimaryBookingAction ? (
+                  <SecButton onClick={onPrimaryBookingAction}>Proceed to booking</SecButton>
+                ) : null}
               </div>
             </div>
-          ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {selectedProvider ? (
+        <div id="selected-provider-card" className="mt-[16px] w-full">
+          <AIMessage
+            text={`Here are the details for ${selectedProvider.name}. When you're ready, book an inspection and pay the consultancy fee to proceed.`}
+          />
+          <div className="bg-white rounded-[12px] border border-[#EAECF0] overflow-hidden w-full">
+            <div className="px-[20px] py-[16px] border-b border-[#EAECF0]">
+              <p className="text-[16px] text-[#101828] font-['General_Sans:Semibold',sans-serif]">
+                Selected provider
+              </p>
+              <p className="text-[12px] text-[#667085]">
+                Preview only â€” final assignment happens after inspection booking.
+              </p>
+            </div>
+
+            <div className="px-[20px] py-[16px] space-y-[12px]">
+              <div className="flex items-start justify-between gap-[12px]">
+                <div className="min-w-0">
+                  <p className="text-[14px] text-[#101828] font-['General_Sans:Medium',sans-serif] truncate">
+                    {selectedProvider.name}
+                  </p>
+                  <p className="text-[12px] text-[#667085] mt-[2px]">
+                    {formatStarRating(selectedProvider.rating)} Â· {Number(selectedProvider.rating || 0).toFixed(1)}
+                  </p>
+                </div>
+                <div className="shrink-0 flex flex-col items-end gap-[4px]">
+                  <span className="inline-flex items-center gap-[6px] text-[12px] text-[#475467] bg-[#f9fafb] border border-[#EAECF0] rounded-[999px] px-[10px] py-[4px]">
+                    {selectedProvider.verificationStatus === "Verified" ? "Verified" : "Pending"}
+                  </span>
+                  {selectedProvider.metadata?.availability ? (
+                    <span
+                      className={`inline-flex items-center gap-[4px] text-[11px] rounded-[999px] px-[8px] py-[3px] ${
+                        selectedProvider.metadata.availability.toLowerCase().includes("now") ||
+                        selectedProvider.metadata.availability.toLowerCase().includes("available")
+                          ? "text-[#067647] bg-[#ECFDF3] border border-[#ABEFC6]"
+                          : "text-[#B54708] bg-[#FFFAEB] border border-[#FEDF89]"
+                      }`}
+                    >
+                      <span
+                        className={`w-[6px] h-[6px] rounded-full ${
+                          selectedProvider.metadata.availability.toLowerCase().includes("now") ||
+                          selectedProvider.metadata.availability.toLowerCase().includes("available")
+                            ? "bg-[#17B26A]"
+                            : "bg-[#F79009]"
+                        }`}
+                      />
+                      {selectedProvider.metadata.availability}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-[10px]">
+                <div>
+                  <p className="text-[12px] text-[#667085]">Completed jobs</p>
+                  <p className="text-[12px] text-[#101828] font-['General_Sans:Medium',sans-serif]">
+                    {selectedProvider.completedJobs}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[12px] text-[#667085]">Estimated response</p>
+                  <p className="text-[12px] text-[#101828] font-['General_Sans:Medium',sans-serif]">
+                    {selectedProvider.responseTime}
+                  </p>
+                </div>
+                <div className="sm:col-span-2">
+                  <p className="text-[12px] text-[#667085]">Coverage / location</p>
+                  <p className="text-[12px] text-[#101828] font-['General_Sans:Medium',sans-serif]">
+                    {selectedProvider.location}
+                  </p>
+                </div>
+              </div>
+
+              {Array.isArray(selectedProvider.badges) && selectedProvider.badges.length > 0 ? (
+                <div className="flex flex-wrap gap-[8px]">
+                  {selectedProvider.badges.slice(0, 3).map((b) => (
+                    <span
+                      key={b}
+                      className="text-[12px] text-[#475467] bg-[#f9fafb] border border-[#EAECF0] rounded-[999px] px-[10px] py-[4px]"
+                    >
+                      {b}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap gap-[10px]">
+                {onProfessionalConsultancy ? (
+                  <SecButton onClick={onProfessionalConsultancy}>
+                    Book inspection (consultancy)
+                  </SecButton>
+                ) : null}
+                {onViewMoreProviders ? (
+                  <OutlineButton onClick={onViewMoreProviders}>See other providers</OutlineButton>
+                ) : null}
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>
@@ -3163,6 +3701,9 @@ function RequestDetailsNewMain({
   selectedCategory,
   onChangeCategory,
   onViewServiceRequest,
+  aiResponse,
+  onBookProfessional,
+  onBuyOnCityMart,
   bookingCard,
   priceEstimationCard,
   providerMatchingPreview,
@@ -3176,6 +3717,12 @@ function RequestDetailsNewMain({
   onOpenProviderComparison,
   selectedProviderId,
   onViewSelectedProvider,
+  onBookProvider,
+  onAskForImageUpload,
+  attachments,
+  attachmentData,
+  attachmentLoading,
+  onLoadAttachment,
 }: { 
   step: ConversationStep;
   history: HistoryItem[];
@@ -3183,6 +3730,9 @@ function RequestDetailsNewMain({
   selectedCategory?: string;
   onChangeCategory?: () => void;
   onViewServiceRequest?: (id: string) => void;
+  aiResponse?: CityBuddyAiResponse | null;
+  onBookProfessional?: () => void;
+  onBuyOnCityMart?: () => void;
   bookingCard?: BookingCard | null;
   priceEstimationCard?: PriceEstimationCard | null;
   providerMatchingPreview?: ProviderMatchingPreview | null;
@@ -3196,6 +3746,12 @@ function RequestDetailsNewMain({
   onOpenProviderComparison?: (providers: ProviderComparisonItem[]) => void;
   selectedProviderId?: string | null;
   onViewSelectedProvider?: (id?: string) => void;
+  onBookProvider?: (providerId: string, providerName: string) => void;
+  onAskForImageUpload?: () => void;
+  attachments?: AiSessionAttachmentMeta[];
+  attachmentData?: Record<string, string>;
+  attachmentLoading?: Record<string, boolean>;
+  onLoadAttachment?: (attachmentId: string) => void;
 }) {
   return (
     <div
@@ -3209,6 +3765,9 @@ function RequestDetailsNewMain({
         selectedCategory={selectedCategory}
         onChangeCategory={onChangeCategory}
         onViewServiceRequest={onViewServiceRequest}
+        aiResponse={aiResponse}
+        onBookProfessional={onBookProfessional}
+        onBuyOnCityMart={onBuyOnCityMart}
         bookingCard={bookingCard}
         priceEstimationCard={priceEstimationCard}
         providerMatchingPreview={providerMatchingPreview}
@@ -3222,6 +3781,12 @@ function RequestDetailsNewMain({
         onViewSelectedProvider={onViewSelectedProvider}
         onAdjustDetails={onAdjustDetails}
         onRemoveBookingImage={onRemoveBookingImage}
+        onBookProvider={onBookProvider}
+        onAskForImageUpload={onAskForImageUpload}
+        attachments={attachments}
+        attachmentData={attachmentData}
+        attachmentLoading={attachmentLoading}
+        onLoadAttachment={onLoadAttachment}
       />
     </div>
   );
@@ -3418,45 +3983,7 @@ function ActiveStepBlock({
         </SectionCard>
       ) : null}
 
-      {step === "AI_GUIDANCE" ? (
-        <SectionCard title="CityBuddy">
-          <div className="flex flex-col gap-[12px]">
-            <p className="font-['General_Sans:Regular',sans-serif] leading-[24px] text-[#475467] text-[16px] whitespace-pre-wrap">
-              {aiResponse?.message || ""}
-            </p>
-
-            {aiResponse?.steps?.length ? (
-              <ul className="list-disc pl-[18px] text-[#475467] text-[14px] leading-[20px]">
-                {aiResponse.steps.map((s, idx) => (
-                  <li key={idx}>{s}</li>
-                ))}
-              </ul>
-            ) : null}
-
-            {aiResponse?.intent === "clarify" && aiResponse.followUpQuestion ? (
-              <p className="font-['General_Sans:Semibold',sans-serif] leading-[22px] text-[#101828] text-[14px] whitespace-pre-wrap">
-                {aiResponse.followUpQuestion}
-              </p>
-            ) : null}
-
-            {aiResponse?.intent === "escalate" && aiResponse.escalationNote ? (
-              <p className="font-['General_Sans:Regular',sans-serif] leading-[20px] text-[#475467] text-[14px] whitespace-pre-wrap">
-                {aiResponse.escalationNote}
-              </p>
-            ) : null}
-
-            {/* Clear next actions (always available) */}
-            <div className="flex flex-wrap gap-[12px]">
-              <SecButton onClick={onBookProfessional}>Book a service</SecButton>
-              <SecButton onClick={onProfessionalConsultancy}>Request consultation</SecButton>
-              <SecButton onClick={onBuyOnCityMart}>Buy items on CityMart</SecButton>
-              {!(aiResponse?.intent === "clarify" && aiResponse.followUpQuestion) ? (
-                <SecButton onClick={onAskFollowUp}>Ask a follow-up question</SecButton>
-              ) : null}
-            </div>
-          </div>
-        </SectionCard>
-      ) : null}
+      {/* AI_GUIDANCE is now rendered inside Frame30NewMain, before the cards */}
 
       {step === "THINKING" || step === "AI_ANALYSING" ? (
         <div className="w-full">
@@ -3501,10 +4028,12 @@ function ActiveStepBlock({
 // Input field components
 function Content18InputField({ 
   value, 
-  onChange 
+  onChange,
+  placeholder
 }: { 
   value: string; 
   onChange: (value: string) => void;
+  placeholder?: string;
 }) {
   return (
     <div
@@ -3516,7 +4045,7 @@ function Content18InputField({
         data-citybuddy-input="true"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Add any special instructions..."
+        placeholder={placeholder || "Add any special instructions..."}
         className="basis-0 font-['General_Sans:Regular',sans-serif] grow leading-[24px] min-h-px min-w-px not-italic relative shrink-0 text-[#667085] text-[16px] bg-transparent border-none outline-none placeholder:text-[#667085]"
       />
     </div>
@@ -3596,11 +4125,13 @@ function Frame22({ onClick }: { onClick?: () => void }) {
 function Input({ 
   value, 
   onChange, 
-  onSend 
+  onSend,
+  placeholder
 }: { 
   value: string; 
   onChange: (value: string) => void;
   onSend: () => void;
+  placeholder?: string;
 }) {
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -3619,7 +4150,7 @@ function Input({
           className="content-stretch flex flex-col items-start justify-between min-w-[inherit] p-[16px] relative size-full"
           onKeyPress={handleKeyPress}
         >
-          <Content18InputField value={value} onChange={onChange} />
+          <Content18InputField value={value} onChange={onChange} placeholder={placeholder} />
           <Frame22 onClick={onSend} />
         </div>
       </div>
@@ -3634,18 +4165,20 @@ function Input({
 function InputWithLabelChat({ 
   value, 
   onChange, 
-  onSend 
+  onSend,
+  placeholder
 }: { 
   value: string; 
   onChange: (value: string) => void;
   onSend: () => void;
+  placeholder?: string;
 }) {
   return (
     <div
       className="basis-0 content-stretch flex flex-col gap-[6px] grow items-start min-h-px min-w-px relative shrink-0 w-full"
       data-name="Input with label"
     >
-      <Input value={value} onChange={onChange} onSend={onSend} />
+      <Input value={value} onChange={onChange} onSend={onSend} placeholder={placeholder} />
     </div>
   );
 }
@@ -3653,18 +4186,20 @@ function InputWithLabelChat({
 function InputFieldBase({ 
   value, 
   onChange, 
-  onSend 
+  onSend,
+  placeholder
 }: { 
   value: string; 
   onChange: (value: string) => void;
   onSend: () => void;
+  placeholder?: string;
 }) {
   return (
     <div
       className="basis-0 content-stretch flex flex-col gap-[6px] grow items-start min-h-px min-w-px relative shrink-0 w-full"
       data-name="_Input field base"
     >
-      <InputWithLabelChat value={value} onChange={onChange} onSend={onSend} />
+      <InputWithLabelChat value={value} onChange={onChange} onSend={onSend} placeholder={placeholder} />
     </div>
   );
 }
@@ -3672,18 +4207,20 @@ function InputFieldBase({
 function InputFieldNewMain({ 
   value, 
   onChange, 
-  onSend 
+  onSend,
+  placeholder
 }: { 
   value: string; 
   onChange: (value: string) => void;
   onSend: () => void;
+  placeholder?: string;
 }) {
   return (
     <div
       className="content-stretch flex flex-col h-[167px] items-start min-w-[200px] relative shrink-0 w-[694px]"
       data-name="Input field"
     >
-      <InputFieldBase value={value} onChange={onChange} onSend={onSend} />
+      <InputFieldBase value={value} onChange={onChange} onSend={onSend} placeholder={placeholder} />
     </div>
   );
 }
@@ -3739,6 +4276,12 @@ function Content19NewMain({
   onOpenProviderComparison,
   selectedProviderId,
   onViewSelectedProvider,
+  onBookProvider,
+  infoSlots,
+  attachments,
+  attachmentData,
+  attachmentLoading,
+  onLoadAttachment,
 }: {
   step: ConversationStep;
   activeFlowStep: StepConfig | null;
@@ -3790,6 +4333,12 @@ function Content19NewMain({
   onOpenProviderComparison?: (providers: ProviderComparisonItem[]) => void;
   selectedProviderId?: string | null;
   onViewSelectedProvider?: (providerId: string) => void;
+  onBookProvider?: (providerId: string, providerName: string) => void;
+  infoSlots: InfoSlots;
+  attachments?: AiSessionAttachmentMeta[];
+  attachmentData?: Record<string, string>;
+  attachmentLoading?: Record<string, boolean>;
+  onLoadAttachment?: (attachmentId: string) => void;
 }) {
   const [showSummaryDetails, setShowSummaryDetails] = useState(false);
   const hasUserMessage = history.some((h) => h.type === "user_text" && h.text.trim());
@@ -3804,8 +4353,15 @@ function Content19NewMain({
     );
   const showSummaryHeader = Boolean(conversationSummary?.headline) && (hasUserMessage || hasMeaningfulDetail);
   const isDockedChatbox =
-    (step === "FLOW" && Boolean(activeFlowStep?.allowManualInput)) ||
+    step === "FLOW" ||
     (step === "AI_GUIDANCE" && aiResponse?.intent === "clarify" && Boolean(aiResponse.followUpQuestion));
+  const lastAiMessage = [...history].reverse().find((item) => item.type === "ai_message") as
+    | { text: string }
+    | undefined;
+  const suppressAiGuidanceMessage =
+    Boolean(aiResponse?.message) &&
+    Boolean(lastAiMessage?.text) &&
+    lastAiMessage!.text.trim() === aiResponse!.message!.trim();
 
   const [dockedPadding, setDockedPadding] = useState(() => {
     if (typeof window === "undefined") return 160;
@@ -3903,6 +4459,7 @@ function Content19NewMain({
                   categoryName={selectedCategory}
                   onChangeCategory={onChangeCategory}
                   onDeleteConversation={onDeleteConversation}
+                  canDelete={!history.some((m) => m.type === "ticket")}
                 />
               </div>
             </div>
@@ -3962,10 +4519,18 @@ function Content19NewMain({
                     <div>
                       <button
                         type="button"
-                        onClick={() => onViewSelectedProvider?.(selectedProviderId ?? undefined)}
+                        onClick={() => {
+                          onViewSelectedProvider?.(selectedProviderId ?? undefined);
+                          if (typeof window !== "undefined") {
+                            const el = document.getElementById("selected-provider-card");
+                            if (el) {
+                              el.scrollIntoView({ behavior: "smooth", block: "start" });
+                            }
+                          }
+                        }}
                         className="text-[12px] text-[#039855] underline"
                       >
-                        View provider
+                        Show provider details
                       </button>
                     </div>
                   </div>
@@ -3986,6 +4551,9 @@ function Content19NewMain({
               selectedCategory={selectedCategory}
               onChangeCategory={onChangeCategory}
               onViewServiceRequest={onViewServiceRequest}
+              aiResponse={aiResponse}
+              onBookProfessional={onBookProfessional}
+              onBuyOnCityMart={onBuyOnCityMart}
               bookingCard={bookingCard}
               priceEstimationCard={priceEstimationCard}
               providerMatchingPreview={providerMatchingPreview}
@@ -3996,6 +4564,12 @@ function Content19NewMain({
               onViewMoreProviders={onViewMoreProviders}
               onAdjustDetails={onAdjustDetails}
               onRemoveBookingImage={onRemoveBookingImage}
+              onBookProvider={onBookProvider}
+              onAskForImageUpload={onAskForImageUpload}
+              attachments={attachments}
+              attachmentData={attachmentData}
+              attachmentLoading={attachmentLoading}
+              onLoadAttachment={onLoadAttachment}
             />
 
             <ActiveStepBlock
@@ -4050,6 +4624,14 @@ function Content19NewMain({
                   value={inputValue}
                   onChange={onInputChange}
                   onSend={onSend}
+                  placeholder={getInputPlaceholder({
+                    step,
+                    activeFlowStep,
+                    history,
+                    aiResponse,
+                    category: selectedCategory || '',
+                    infoSlots,
+                  })}
                 />
               </div>
             </div>
@@ -4111,6 +4693,12 @@ function MainChat({
   onOpenProviderComparison,
   selectedProviderId,
   onViewSelectedProvider,
+  onBookProvider,
+  infoSlots,
+  attachments,
+  attachmentData,
+  attachmentLoading,
+  onLoadAttachment,
 }: {
   step: ConversationStep;
   activeFlowStep: StepConfig | null;
@@ -4162,6 +4750,12 @@ function MainChat({
   onOpenProviderComparison?: (providers: ProviderComparisonItem[]) => void;
   selectedProviderId?: string | null;
   onViewSelectedProvider?: (id?: string) => void;
+  onBookProvider?: (providerId: string, providerName: string) => void;
+  infoSlots: InfoSlots;
+  attachments?: AiSessionAttachmentMeta[];
+  attachmentData?: Record<string, string>;
+  attachmentLoading?: Record<string, boolean>;
+  onLoadAttachment?: (attachmentId: string) => void;
 }) {
   return (
     <div
@@ -4219,6 +4813,12 @@ function MainChat({
         onOpenProviderComparison={onOpenProviderComparison}
         selectedProviderId={selectedProviderId}
         onViewSelectedProvider={onViewSelectedProvider}
+        onBookProvider={onBookProvider}
+        infoSlots={infoSlots}
+        attachments={attachments}
+        attachmentData={attachmentData}
+        attachmentLoading={attachmentLoading}
+        onLoadAttachment={onLoadAttachment}
       />
     </div>
   );
@@ -4275,6 +4875,12 @@ function MainWrapChat({
   onOpenProviderComparison,
   selectedProviderId,
   onViewSelectedProvider,
+  onBookProvider,
+  infoSlots,
+  attachments,
+  attachmentData,
+  attachmentLoading,
+  onLoadAttachment,
 }: {
   step: ConversationStep;
   activeFlowStep: StepConfig | null;
@@ -4326,6 +4932,12 @@ function MainWrapChat({
   onOpenProviderComparison?: (providers: ProviderComparisonItem[]) => void;
   selectedProviderId?: string | null;
   onViewSelectedProvider?: (id?: string) => void;
+  onBookProvider?: (providerId: string, providerName: string) => void;
+  infoSlots: InfoSlots;
+  attachments?: AiSessionAttachmentMeta[];
+  attachmentData?: Record<string, string>;
+  attachmentLoading?: Record<string, boolean>;
+  onLoadAttachment?: (attachmentId: string) => void;
 }) {
   return (
     <div
@@ -4385,6 +4997,12 @@ function MainWrapChat({
             onOpenProviderComparison={onOpenProviderComparison}
             selectedProviderId={selectedProviderId}
             onViewSelectedProvider={onViewSelectedProvider}
+            onBookProvider={onBookProvider}
+            infoSlots={infoSlots}
+            attachments={attachments}
+            attachmentData={attachmentData}
+            attachmentLoading={attachmentLoading}
+            onLoadAttachment={onLoadAttachment}
           />
         </div>
       </div>
@@ -4405,6 +5023,8 @@ export default function ChatInterface({
   onCategorySelected?: (categoryName: string) => void;
 }) {
   const { user } = useAuth();
+  const [location, navigate] = useLocation();
+  const isAdmin = !!(user && (user.role === 'admin' || user.role === 'super_admin' || user.globalRole === 'super_admin'));
   const [currentView, setCurrentView] = useState<'select-category' | 'conversation'>(initialView);
   const [selectedCategory, setSelectedCategory] = useState<string | undefined>(initialSelectedCategory);
   const [searchQuery, setSearchQuery] = useState("");
@@ -4413,6 +5033,18 @@ export default function ChatInterface({
   const [flowSteps, setFlowSteps] = useState<StepConfig[]>([]);
   const [flowIndex, setFlowIndex] = useState(0);
   const [flowAnswers, setFlowAnswers] = useState<Record<string, string>>({});
+  const [aiSessionId, setAiSessionId] = useState<string | null>(null);
+  const [aiSessionMode, setAiSessionMode] = useState<AiSessionMode | null>(null);
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
+  const [aiSessionAttachments, setAiSessionAttachments] = useState<AiSessionAttachmentMeta[]>([]);
+  const [aiSessionAttachmentData, setAiSessionAttachmentData] = useState<Record<string, string>>({});
+  const [aiSessionAttachmentLoading, setAiSessionAttachmentLoading] = useState<Record<string, boolean>>({});
+  const sessionIdFromUrl = useMemo(() => {
+    const [, qs] = location.split("?");
+    if (!qs) return null;
+    const params = new URLSearchParams(qs);
+    return params.get("aiSessionId");
+  }, [location]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [uploadedImageSrc, setUploadedImageSrc] = useState<string | null>(null);
   const [uploadedImages, setUploadedImages] = useState<InlineImagePart[]>([]);
@@ -4452,6 +5084,22 @@ export default function ChatInterface({
   }, [aiFlowSettings, fetchedCategories]);
 
   const categoriesLoading = catsLoading || aiFlowLoading;
+  const {
+    data: requestConfig,
+    isLoading: requestConfigLoading,
+  } = useQuery<RequestConfigResponse>({
+    queryKey: ["/api/app/request-config"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/app/request-config");
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const requestSettings = requestConfig?.settings ?? null;
+  const ordinaryQuestions = requestConfig?.ordinaryQuestions ?? [];
+  const aiConfigQuestions = requestConfig?.aiQuestions ?? [];
+  const sessionMode = aiSessionMode ?? requestSettings?.mode ?? "ai";
+  const isOrdinaryMode = sessionMode === "ordinary";
   
   const [useManualEstate, setUseManualEstate] = useState(false);
   const [selectedEstateName, setSelectedEstateName] = useState<string | null>(null);
@@ -4476,6 +5124,7 @@ export default function ChatInterface({
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const ordinaryCompletionRef = useRef(false);
 
   const sessionsStorageKey = `citybuddy_conversation_sessions_v1:${user?.id ?? "anonymous"}`;
   const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([]);
@@ -4491,10 +5140,136 @@ export default function ChatInterface({
   const lastPreparedSnapshotFingerprintRef = useRef<Record<string, string>>({});
   const savedHistoryIdsRef = useRef<Set<string>>(new Set());
   const lastSavedAiResponseRef = useRef<string | null>(null);
+  // Track if we need to force a new session from initial URL category
+  const needsInitialNewSessionRef = useRef<boolean>(
+    initialView === 'conversation' && !!initialSelectedCategory
+  );
+
+  const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
 
   const markSessionActivity = useCallback(() => {
     sessionActivityRef.current = true;
   }, []);
+
+  const syncSessionIdToUrl = useCallback(
+    (sessionId: string | null) => {
+      const [path, qs] = location.split("?");
+      const params = new URLSearchParams(qs || "");
+      if (sessionId) {
+        params.set("aiSessionId", sessionId);
+      } else {
+        params.delete("aiSessionId");
+      }
+      const next = params.toString() ? `${path}?${params.toString()}` : path;
+      if (next !== location) {
+        navigate(next, { replace: true });
+      }
+    },
+    [location, navigate],
+  );
+
+  const getFlowStepsForCategory = useCallback(
+    (categoryName?: string) => {
+      if (!categoryName) return [];
+      if (isOrdinaryMode) {
+        return buildOrdinaryFlowSteps({
+          questions: ordinaryQuestions,
+          categoryTitle: categoryName,
+        });
+      }
+      const categoryKey = getServiceCategoryKey(categoryName);
+      if (!categoryKey) return [];
+      const baseSteps = buildFlowStepsForCategory(categoryKey);
+      if (!aiConfigQuestions.length) return baseSteps;
+
+      const aiSteps = buildOrdinaryFlowSteps({
+        questions: aiConfigQuestions,
+        categoryTitle: categoryName,
+      });
+      const aiIds = new Set(aiSteps.map((s) => s.id));
+      const issueStep = baseSteps.find((s) => s.id === "issue");
+      const followups = baseSteps.filter(
+        (s) => !["issue", "estate", "timing", "urgency", "image"].includes(s.id),
+      );
+      const imageStep = baseSteps.find((s) => s.id === "image");
+
+      const merged: StepConfig[] = [];
+      if (issueStep) merged.push(issueStep);
+      merged.push(...aiSteps.filter((s) => s.id !== "issue"));
+      merged.push(...followups);
+      if (imageStep && !aiIds.has("image")) merged.push(imageStep);
+      return merged;
+    },
+    [aiConfigQuestions, isOrdinaryMode, ordinaryQuestions],
+  );
+
+  const resolveCategoryNameFromKey = useCallback(
+    (categoryKey?: string | null) => {
+      if (!categoryKey) return undefined;
+      const normalized = normalizeCategoryKey(categoryKey);
+      const match = displayCategories.find((cat: any) => {
+        const key = cat?.key ? normalizeCategoryKey(cat.key) : normalizeCategoryKey(getServiceCategoryKey(cat?.name || "") || "");
+        return key === normalized;
+      });
+      return match?.name || categoryKey;
+    },
+    [displayCategories],
+  );
+
+  const syncAiSessionToActiveConversation = useCallback(
+    (sessionId: string | null, mode: AiSessionMode | null, question: PendingQuestion | null) => {
+      if (!activeConversationSessionId) return;
+      setConversationSessions((prev) =>
+        prev.map((s) =>
+          s.id === activeConversationSessionId
+            ? {
+                ...s,
+                conversationState: {
+                  ...s.conversationState,
+                  aiSessionId: sessionId,
+                  aiSessionMode: mode,
+                  pendingQuestion: question,
+                },
+              }
+            : s,
+        ),
+      );
+    },
+    [activeConversationSessionId],
+  );
+
+  const fetchAiSessionAttachments = useCallback(async (sessionId: string) => {
+    if (!sessionId) return;
+    try {
+      const res = await apiRequest("GET", `/api/app/ai/session/${sessionId}/attachments`);
+      const data = (await res.json()) as { attachments?: AiSessionAttachmentMeta[] };
+      const list = Array.isArray(data.attachments) ? data.attachments : [];
+      setAiSessionAttachments(list);
+    } catch {
+      setAiSessionAttachments([]);
+    }
+  }, []);
+
+  const loadAiSessionAttachment = useCallback(
+    async (attachmentId: string) => {
+      if (!aiSessionId || !attachmentId) return;
+      if (aiSessionAttachmentData[attachmentId]) return;
+      setAiSessionAttachmentLoading((prev) => ({ ...prev, [attachmentId]: true }));
+      try {
+        const res = await apiRequest(
+          "GET",
+          `/api/app/ai/session/${aiSessionId}/attachments/${attachmentId}`,
+        );
+        const data = (await res.json()) as { dataUrl?: string };
+        if (data?.dataUrl) {
+          setAiSessionAttachmentData((prev) => ({ ...prev, [attachmentId]: data.dataUrl! }));
+        }
+      } finally {
+        setAiSessionAttachmentLoading((prev) => ({ ...prev, [attachmentId]: false }));
+      }
+    },
+    [aiSessionAttachmentData, aiSessionId],
+  );
 
   const buildSlotsFromAnswers = useCallback(
     (answers: Record<string, string>, hasImage: boolean): InfoSlots => {
@@ -4509,15 +5284,322 @@ export default function ChatInterface({
     [],
   );
 
+  const hydrateAiSession = useCallback(
+    async (sessionId: string) => {
+      const res = await apiRequest("GET", `/api/app/ai/session/${sessionId}`);
+      const data = (await res.json()) as AiSessionStateResponse;
+      if (!data?.sessionId) return;
+
+      const categoryName = resolveCategoryNameFromKey(data.categoryKey ?? null);
+      if (categoryName) {
+        setSelectedCategory(categoryName);
+      }
+      setCurrentView("conversation");
+      setAiSessionId(data.sessionId);
+      setAiSessionMode(data.mode);
+      syncSessionIdToUrl(data.sessionId);
+
+      if (!activeConversationSessionId && categoryName) {
+        const summary = buildConversationSummary({
+          category: categoryName,
+          categoryKey: getServiceCategoryKey(categoryName),
+          flowAnswers: {},
+          infoSlots: INITIAL_INFO_SLOTS,
+          isOutsideCityConnectEstate: false,
+          selectedEstateName: null,
+          hasImage: false,
+          aiDecision: { requiresConsultancy: false, consultancyCompleted: false },
+          aiResponse: null,
+          confidenceScore: 0,
+          step: "FLOW",
+          estates: myEstates,
+          isAdmin,
+        });
+
+        const seeded: ConversationSession = {
+          id: data.sessionId,
+          category: categoryName,
+          title: summary.headline,
+          summary,
+          bookingCard: null,
+          priceEstimationCard: null,
+          providerMatchingPreview: null,
+          readyToBook: false,
+          lastUpdated: new Date().toISOString(),
+          confidenceScore: 0,
+          isResolved: false,
+          messages: [],
+          infoSlots: INITIAL_INFO_SLOTS,
+          conversationState: {
+            step: "FLOW",
+            flowIndex: 0,
+            flowAnswers: {},
+            issueText: "",
+            selectedEstateName: null,
+            isOutsideCityConnectEstate: false,
+            useManualEstate: false,
+            startDate: "",
+            startTime: "",
+            startQuickTag: null,
+            imageDeclined: false,
+            uploadedImageSrc: null,
+            aiResponse: null,
+            aiDecision: { requiresConsultancy: false, consultancyCompleted: false },
+            isUserDistressed: false,
+            earlyStopAcknowledged: false,
+            aiSessionId: data.sessionId,
+            aiSessionMode: data.mode,
+            pendingQuestion: null,
+          },
+        };
+
+        setConversationSessions((prev) => {
+          if (prev.find((s) => s.id === data.sessionId)) return prev;
+          return [seeded, ...prev];
+        });
+        setActiveConversationSessionId(data.sessionId);
+      }
+
+      const mappedHistory: HistoryItem[] = (data.messages || [])
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({
+          id: makeHistoryId(),
+          type: m.role === "user" ? "user_text" : "ai_message",
+          text: m.content,
+        }));
+      setHistory(mappedHistory);
+      await fetchAiSessionAttachments(data.sessionId);
+
+      const reconstructedAnswers: Record<string, string> = {};
+      for (const msg of data.messages || []) {
+        if (msg.role !== "user") continue;
+        const key = msg.meta?.answerKey ? String(msg.meta.answerKey) : null;
+        if (key) reconstructedAnswers[key] = msg.content;
+      }
+      setFlowAnswers(reconstructedAnswers);
+      const nextSlots = buildSlotsFromAnswers(reconstructedAnswers, false);
+      setInfoSlots(nextSlots);
+      if (reconstructedAnswers.issue) {
+        setIssueText(reconstructedAnswers.issue);
+        setUserDescription(reconstructedAnswers.issue);
+      }
+
+      const lastAssistant = [...(data.messages || [])].reverse().find((m) => m.role === "assistant");
+      const replyText = lastAssistant?.content || "";
+      const nextQuestion = derivePendingQuestion(data.mode, replyText, lastAssistant?.meta);
+      setPendingQuestion(nextQuestion);
+      syncAiSessionToActiveConversation(data.sessionId, data.mode, nextQuestion);
+
+      if (data.mode === "ai") {
+        const aiMeta = lastAssistant?.meta ?? null;
+        const aiResponse = buildAiResponseFromMeta(replyText, aiMeta);
+        setAiResponse(aiResponse);
+        if (aiResponse) {
+          setStep("AI_GUIDANCE");
+          setFlowSteps([]);
+          setFlowIndex(0);
+        } else {
+          const stepConfig = buildStepFromQuestion(nextQuestion);
+          setFlowSteps(stepConfig ? [stepConfig] : []);
+          setFlowIndex(0);
+          setStep(stepConfig ? "FLOW" : "COMPLETED");
+        }
+      } else {
+        setAiResponse(null);
+        const stepConfig = buildStepFromQuestion(nextQuestion);
+        setFlowSteps(stepConfig ? [stepConfig] : []);
+        setFlowIndex(0);
+        setStep(stepConfig ? "FLOW" : "COMPLETED");
+      }
+    },
+    [
+      activeConversationSessionId,
+      buildSlotsFromAnswers,
+      fetchAiSessionAttachments,
+      getServiceCategoryKey,
+      isAdmin,
+      myEstates,
+      resolveCategoryNameFromKey,
+      syncAiSessionToActiveConversation,
+      syncSessionIdToUrl,
+    ],
+  );
+
+  const startAiSession = useCallback(
+    async (categoryName: string) => {
+      const categoryKey = getServiceCategoryKey(categoryName) || categoryName;
+      const res = await apiRequest("POST", "/api/app/ai/session/start", { categoryKey });
+      const data = (await res.json()) as { sessionId?: string; mode?: AiSessionMode };
+      if (!data.sessionId) throw new Error("Unable to start AI session.");
+      setAiSessionId(data.sessionId);
+      setAiSessionMode(data.mode ?? null);
+      setPendingQuestion(null);
+      setAiSessionAttachments([]);
+      setAiSessionAttachmentData({});
+      setAiSessionAttachmentLoading({});
+      syncSessionIdToUrl(data.sessionId);
+      syncAiSessionToActiveConversation(data.sessionId, data.mode ?? null, null);
+      await hydrateAiSession(data.sessionId);
+      return data;
+    },
+    [getServiceCategoryKey, hydrateAiSession, syncAiSessionToActiveConversation, syncSessionIdToUrl],
+  );
+
+  const sendMessageToSession = useCallback(
+    async (params: { text?: string; images?: string[] }) => {
+      const text = (params.text || "").trim();
+      const images = Array.isArray(params.images) ? params.images.filter(Boolean) : [];
+      if (!text && images.length === 0) return;
+      if (isSending) return;
+      if (!selectedCategory) return;
+
+      let sessionId = aiSessionId;
+      let mode = aiSessionMode;
+      if (!sessionId) {
+        const started = await startAiSession(selectedCategory);
+        sessionId = started.sessionId || null;
+        mode = started.mode ?? null;
+      }
+      if (!sessionId) return;
+
+      const hasUserMessages = history.some((item) => item.type === "user_text");
+      const answerKey = pendingQuestion?.key || (!pendingQuestion && !hasUserMessages && text ? "issue" : null);
+      if (answerKey) {
+        setFlowAnswers((prev) => ({
+          ...prev,
+          [answerKey]: text || (images.length ? "image_uploaded" : ""),
+        }));
+        if (answerKey === "issue" || answerKey === "description") {
+          setIssueText(text);
+          setUserDescription(text);
+        }
+        if (answerKey === "estate") {
+          setSelectedEstateName(text || null);
+        }
+        setInfoSlots((prev) => ({
+          ...prev,
+          description: prev.description || answerKey === "issue" || answerKey === "description",
+          location: prev.location || answerKey === "estate",
+          timing: prev.timing || answerKey === "timing" || answerKey === "inspectionDate",
+          urgency: prev.urgency || answerKey === "urgency",
+          imageProvided: prev.imageProvided || images.length > 0,
+        }));
+      }
+
+      if (text) {
+        setHistory((prev) => [...prev, { id: makeHistoryId(), type: "user_text", text }]);
+      }
+
+      markSessionActivity();
+      setIsSending(true);
+      setSendError(null);
+      setStep("THINKING");
+
+      try {
+        const res = await apiRequest("POST", `/api/app/ai/session/${sessionId}/message`, {
+          text,
+          images,
+        });
+        const data = (await res.json()) as AiSessionReplyResponse;
+        if ((data as any)?.error) {
+          throw new Error((data as any).error);
+        }
+
+        const replyText = data.reply?.text || "";
+        if (replyText) {
+          setHistory((prev) => [...prev, { id: makeHistoryId(), type: "ai_message", text: replyText }]);
+        }
+
+        const nextQuestion = derivePendingQuestion(mode ?? null, replyText, data.reply?.meta);
+        setPendingQuestion(nextQuestion);
+        syncAiSessionToActiveConversation(sessionId, mode ?? null, nextQuestion);
+
+        if (mode === "ai") {
+          const aiResponse = buildAiResponseFromMeta(replyText, data.reply?.meta);
+          setAiResponse(aiResponse);
+          if (aiResponse) {
+            setStep("AI_GUIDANCE");
+            setFlowSteps([]);
+            setFlowIndex(0);
+          } else {
+            const stepConfig = buildStepFromQuestion(nextQuestion);
+            setFlowSteps(stepConfig ? [stepConfig] : []);
+            setFlowIndex(0);
+            setStep(stepConfig ? "FLOW" : "COMPLETED");
+          }
+        } else {
+          setAiResponse(null);
+          const stepConfig = buildStepFromQuestion(nextQuestion);
+          setFlowSteps(stepConfig ? [stepConfig] : []);
+          setFlowIndex(0);
+          setStep(stepConfig ? "FLOW" : "COMPLETED");
+        }
+
+        if (data.state?.isComplete) {
+          setConfidenceScore(100);
+        } else {
+          setConfidenceScore((prev) => Math.max(prev, 20));
+        }
+
+        if (Array.isArray(data.suggestedProviders) && data.suggestedProviders.length) {
+          const mappedProviders = mapSuggestedProvidersToPreview({
+            providers: data.suggestedProviders,
+            category: selectedCategory,
+            estateName: selectedEstateName,
+          });
+          const preview: ProviderMatchingPreview = {
+            providers: mappedProviders,
+            usedEstateId: null,
+            estateSpecificCount: 0,
+            note: "Suggested providers based on your request. Availability is not guaranteed.",
+            inputFingerprint: buildProviderPreviewFingerprint({
+              categoryKey: normalizeCategoryKey(getServiceCategoryKey(selectedCategory) || selectedCategory),
+              urgency: flowAnswers.urgency ?? null,
+              scope: null,
+            }),
+            createdAtIso: new Date().toISOString(),
+          };
+          setConversationSessions((prev) =>
+            prev.map((s) => (s.id === activeConversationSessionId ? { ...s, providerMatchingPreview: preview } : s)),
+          );
+        }
+
+        await fetchAiSessionAttachments(sessionId);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        setSendError(errorMessage);
+        setStep("FLOW");
+      } finally {
+        setIsSending(false);
+      }
+    },
+    [
+      activeConversationSessionId,
+      aiSessionId,
+      aiSessionMode,
+      fetchAiSessionAttachments,
+      flowAnswers.urgency,
+      history,
+      isSending,
+      markSessionActivity,
+      pendingQuestion,
+      selectedCategory,
+      selectedEstateName,
+      startAiSession,
+      syncAiSessionToActiveConversation,
+    ],
+  );
+
   const applyCategoryChangeToActiveSession = useCallback(
     (categoryName: string) => {
       if (!activeConversationSessionId) return;
-      const categoryKey = getServiceCategoryKey(categoryName);
-      if (!categoryKey) return;
 
       markSessionActivity();
 
-      const steps = buildFlowStepsForCategory(categoryKey);
+      const steps = getFlowStepsForCategory(categoryName);
+      if (!steps.length) return;
+      const categoryKey = getServiceCategoryKey(categoryName);
+      if (!isOrdinaryMode && !categoryKey) return;
       const allowedIds = new Set(steps.map((s) => s.id));
 
       const preservedAnswers: Record<string, string> = {};
@@ -4534,7 +5616,7 @@ export default function ChatInterface({
       const nextConfidence = 0;
 
       const nextIndex = (() => {
-        if (nextSlots.description && hasSufficientConfidence(categoryKey, nextConfidence)) {
+        if (!isOrdinaryMode && categoryKey && nextSlots.description && hasSufficientConfidence(categoryKey, nextConfidence, isAdmin)) {
           return steps.length;
         }
 
@@ -4549,10 +5631,12 @@ export default function ChatInterface({
 
           if (s.id === "image") {
             if (imageDeclined) continue;
-            const catVisualsHelpful = DYNAMIC_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? DEFAULT_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? true;
-            if (!catVisualsHelpful) continue;
-            if (hasSufficientConfidence(categoryKey, nextConfidence)) continue;
-            if (!descriptionHighQuality) continue;
+            if (!isOrdinaryMode && categoryKey) {
+              const catVisualsHelpful = DYNAMIC_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? DEFAULT_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? true;
+              if (!catVisualsHelpful) continue;
+              if (hasSufficientConfidence(categoryKey, nextConfidence, isAdmin)) continue;
+              if (!descriptionHighQuality) continue;
+            }
           }
 
           return i;
@@ -4574,6 +5658,10 @@ export default function ChatInterface({
       // Reset AI outputs to ensure we re-analyze under the new category.
       setAiResponse(null);
       setAiDecision({ requiresConsultancy: false, consultancyCompleted: false });
+      setAiSessionId(null);
+      setAiSessionMode(null);
+      setPendingQuestion(null);
+      syncSessionIdToUrl(null);
       setConfidenceScore(0);
       setInfoSlots(nextSlots);
       setEarlyStopAcknowledged(false);
@@ -4594,10 +5682,14 @@ export default function ChatInterface({
       activeConversationSessionId,
       buildSlotsFromAnswers,
       flowAnswers,
+      getFlowStepsForCategory,
       history,
       imageDeclined,
+      isAdmin,
+      isOrdinaryMode,
       issueText,
       markSessionActivity,
+      syncSessionIdToUrl,
       uploadedImageSrc,
     ],
   );
@@ -4725,11 +5817,7 @@ export default function ChatInterface({
   const buildEmptyConversationSession = useCallback(
     (categoryName: string, sessionId: string, updatedAtIso?: string) => {
       const categoryKey = getServiceCategoryKey(categoryName);
-      const steps = categoryKey ? buildFlowStepsForCategory(categoryKey) : [];
-      const firstPrompt = steps[0]?.message || "";
-      const initialHistory: HistoryItem[] = firstPrompt
-        ? [{ id: makeHistoryId(), type: "ai_message", text: firstPrompt }]
-        : [];
+      const initialHistory: HistoryItem[] = [];
 
       const summary = buildConversationSummary({
         category: categoryName,
@@ -4743,6 +5831,8 @@ export default function ChatInterface({
         aiResponse: null,
         confidenceScore: 0,
         step: "FLOW",
+        estates: myEstates,
+        isAdmin,
       });
 
       return {
@@ -4776,10 +5866,13 @@ export default function ChatInterface({
           aiDecision: { requiresConsultancy: false, consultancyCompleted: false },
           isUserDistressed: false,
           earlyStopAcknowledged: false,
+          aiSessionId: null,
+          aiSessionMode: null,
+          pendingQuestion: null,
         },
       } as ConversationSession;
     },
-    [],
+    [isAdmin, myEstates],
   );
 
   const hydrateConversationMessages = useCallback(
@@ -4896,6 +5989,8 @@ export default function ChatInterface({
             aiResponse,
             confidenceScore,
             step,
+            estates: myEstates,
+            isAdmin,
           });
 
           const summary: ConversationSummary = rawSession.summary ?? fallbackSummary;
@@ -4908,7 +6003,7 @@ export default function ChatInterface({
             ? (rawSession.priceEstimationCard as PriceEstimationCard)
             : null;
 
-          const thresholdReached = Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, confidenceScore);
+          const thresholdReached = Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, confidenceScore, isAdmin);
           const shouldShowPricing =
             thresholdReached &&
             (summary.recommendedApproach === "Professional" || summary.recommendedApproach === "Hybrid") &&
@@ -4960,7 +6055,10 @@ export default function ChatInterface({
 
         const deduped = dedupeConversationSessions(normalized);
         setConversationSessions(deduped);
-        setActiveConversationSessionId((prev) => prev ?? deduped[0]?.id ?? null);
+        // Don't auto-select a session if we need to force a new one from URL
+        if (!needsInitialNewSessionRef.current) {
+          setActiveConversationSessionId((prev) => prev ?? deduped[0]?.id ?? null);
+        }
       } catch {
         setConversationSessions([]);
         setActiveConversationSessionId(null);
@@ -4990,7 +6088,10 @@ export default function ChatInterface({
         );
         const deduped = dedupeConversationSessions(sessions);
         setConversationSessions(deduped);
-        setActiveConversationSessionId((prev) => prev ?? deduped[0]?.id ?? null);
+        // Don't auto-select a session if we need to force a new one from URL
+        if (!needsInitialNewSessionRef.current) {
+          setActiveConversationSessionId((prev) => prev ?? deduped[0]?.id ?? null);
+        }
       } catch {
         if (cancelled) return;
         setConversationSyncAvailable(false);
@@ -5013,7 +6114,7 @@ export default function ChatInterface({
   }, [conversationSessions, conversationSyncAvailable, sessionsStorageKey]);
 
   const applySessionToState = useCallback(
-    (session: ConversationSession, steps: StepConfig[], options?: { includeResumeMessage?: boolean }) => {
+    (session: ConversationSession, steps: StepConfig[]) => {
       // Selecting a conversation should not reorder it.
       suppressSessionAutosaveRef.current = true;
       window.setTimeout(() => {
@@ -5023,22 +6124,13 @@ export default function ChatInterface({
       setActiveConversationSessionId(session.id);
       setSelectedCategory(session.category);
       setCurrentView('conversation');
-      setFlowSteps(steps);
-      setFlowIndex(session.conversationState.flowIndex);
+      const pending = session.conversationState.pendingQuestion ?? null;
+      const derivedStep = buildStepFromQuestion(pending);
+      setFlowSteps(derivedStep ? [derivedStep] : steps);
+      setFlowIndex(derivedStep ? 0 : session.conversationState.flowIndex);
       setFlowAnswers(session.conversationState.flowAnswers);
 
-      const resumeAck: HistoryItem = {
-        id: makeHistoryId(),
-        type: "ai_message",
-        text: "Welcome back - let's continue where we left off.",
-      };
-      setHistory(() => {
-        const base = session.messages;
-        if (!options?.includeResumeMessage) return base;
-        const last = base[base.length - 1];
-        const shouldAppend = last?.type !== "ai_message" || last.text !== resumeAck.text;
-        return shouldAppend ? [...base, resumeAck] : base;
-      });
+      setHistory(() => session.messages);
 
       setInputValue("");
       setStep(session.conversationState.step);
@@ -5051,6 +6143,9 @@ export default function ChatInterface({
       setStartQuickTag(session.conversationState.startQuickTag);
       setAiResponse(session.conversationState.aiResponse);
       setAiDecision(session.conversationState.aiDecision);
+      setAiSessionId(session.conversationState.aiSessionId ?? null);
+      setAiSessionMode(session.conversationState.aiSessionMode ?? null);
+      setPendingQuestion(pending);
       setIsUserDistressed(session.conversationState.isUserDistressed);
       setEarlyStopAcknowledged(session.conversationState.earlyStopAcknowledged);
       setImageDeclined(session.conversationState.imageDeclined);
@@ -5082,30 +6177,36 @@ export default function ChatInterface({
   }, [historyLoadError, toast]);
 
   const startNewConversationSession = useCallback(
-    (categoryName: string, options?: { preserveView?: boolean }) => {
+    (categoryName: string, options?: { preserveView?: boolean; forceNew?: boolean }) => {
       void (async () => {
         const now = Date.now();
         if (now - lastNewSessionAtRef.current < 600) return;
         lastNewSessionAtRef.current = now;
 
-        const categoryKey = getServiceCategoryKey(categoryName);
-        if (!categoryKey) return;
-
-        const existing = conversationSessions.find((s) => s.category === categoryName);
-        if (existing) {
-          const steps = buildFlowStepsForCategory(categoryKey);
-          applySessionToState(existing, steps, { includeResumeMessage: false });
-          if (conversationSyncAvailable) {
-            await hydrateConversationMessages(existing.id, categoryName);
+        if (!options?.forceNew) {
+          // Normalize both categories for comparison to handle case variations
+          const normalizedInput = (categoryName || "").toLowerCase().trim();
+          const existing = conversationSessions.find((s) => 
+            (s.category || "").toLowerCase().trim() === normalizedInput
+          );
+          if (existing) {
+            const steps = getFlowStepsForCategory(existing.category);
+            applySessionToState(existing, steps);
+            const existingAiSessionId = existing.conversationState.aiSessionId;
+            if (existingAiSessionId) {
+              await hydrateAiSession(existingAiSessionId);
+            } else {
+              await startAiSession(existing.category);
+            }
+            return;
           }
-          return;
         }
 
         let sessionId = makeHistoryId();
         let updatedAt = new Date().toISOString();
         if (conversationSyncAvailable) {
           try {
-            const conversation = await getOrCreateConversation(categoryName);
+            const conversation = await getOrCreateConversation(categoryName, options?.forceNew);
             sessionId = conversation.id;
             updatedAt = conversation.updatedAt || conversation.createdAt || updatedAt;
           } catch {
@@ -5113,26 +6214,31 @@ export default function ChatInterface({
           }
         }
 
-        const steps = buildFlowStepsForCategory(categoryKey);
         const newSession = buildEmptyConversationSession(categoryName, sessionId, updatedAt);
 
-        setConversationSessions((prev) => [newSession, ...prev]);
+        setConversationSessions((prev) => {
+          return [newSession, ...prev];
+        });
         setActiveConversationSessionId(sessionId);
 
         if (!options?.preserveView) {
           setSelectedCategory(categoryName);
           setCurrentView('conversation');
-          setFlowSteps(steps);
+          setFlowSteps([]);
           setFlowIndex(0);
           setFlowAnswers({});
 
           setInputValue("");
           setStep("FLOW");
           setHistory(newSession.messages);
+          ordinaryCompletionRef.current = false;
           setUploadedImageSrc(null);
           setUploadedImages([]);
           setUserDescription("");
           setIssueText("");
+          setPendingQuestion(null);
+          setAiSessionId(null);
+          setAiSessionMode(null);
           setUseManualEstate(false);
           setSelectedEstateName(null);
           setIsOutsideCityConnectEstate(false);
@@ -5151,18 +6257,16 @@ export default function ChatInterface({
           lastSavedAiResponseRef.current = null;
           savedHistoryIdsRef.current = new Set(newSession.messages.map((item) => item.id));
         }
-
-        if (conversationSyncAvailable) {
-          await hydrateConversationMessages(sessionId, categoryName);
-        }
+        await startAiSession(categoryName);
       })();
     },
     [
       applySessionToState,
       buildEmptyConversationSession,
       conversationSessions,
-      conversationSyncAvailable,
-      hydrateConversationMessages,
+      getFlowStepsForCategory,
+      hydrateAiSession,
+      startAiSession,
     ],
   );
 
@@ -5171,24 +6275,164 @@ export default function ChatInterface({
       const session = conversationSessions.find((s) => s.id === sessionId);
       if (!session) return;
 
-      const categoryKey = getServiceCategoryKey(session.category);
-      if (!categoryKey) return;
-      const steps = buildFlowStepsForCategory(categoryKey);
-
-      applySessionToState(session, steps, { includeResumeMessage: true });
+      const steps = getFlowStepsForCategory(session.category);
+      applySessionToState(session, steps);
       setSendError(null);
       setHasChosenAction(false);
-
-      if (conversationSyncAvailable) {
-        void hydrateConversationMessages(session.id, session.category);
+      const existingAiSessionId = session.conversationState.aiSessionId;
+      if (existingAiSessionId) {
+        void hydrateAiSession(existingAiSessionId);
+      } else {
+        void startAiSession(session.category);
       }
     },
-    [applySessionToState, conversationSessions, conversationSyncAvailable, hydrateConversationMessages],
+    [
+      applySessionToState,
+      conversationSessions,
+      getFlowStepsForCategory,
+      hydrateAiSession,
+      startAiSession,
+    ],
   );
+
+  const completeOrdinaryFlow = useCallback(async () => {
+    if (ordinaryCompletionRef.current) return;
+    ordinaryCompletionRef.current = true;
+    setIsSending(true);
+    setSendError(null);
+
+    try {
+      const urgencyRaw = (flowAnswers.urgency || "").toLowerCase();
+      const urgency =
+        urgencyRaw.includes("emergency")
+          ? "emergency"
+          : urgencyRaw.includes("high")
+            ? "high"
+            : urgencyRaw.includes("low")
+              ? "low"
+              : "medium";
+
+      const estateName = (flowAnswers.estate || selectedEstateName || "").trim();
+      const estateId = myEstates?.find((e: any) => String(e?.name || "").trim() === estateName)?.id;
+      const timing = flowAnswers.inspectionDate || flowAnswers.timing || startDate || "";
+
+      const issue =
+        flowAnswers.issue ||
+        flowAnswers.description ||
+        issueText ||
+        userDescription ||
+        "";
+
+      const descriptionLines: string[] = [];
+      if (issue.trim()) descriptionLines.push(issue.trim());
+      if (estateName) descriptionLines.push(`Estate: ${estateName}`);
+      if (timing) descriptionLines.push(`Timing: ${timing}`);
+      if (flowAnswers.urgency) descriptionLines.push(`Urgency: ${flowAnswers.urgency}`);
+
+      const extraKeys = Object.keys(flowAnswers).filter(
+        (key) => !["issue", "description", "estate", "inspectionDate", "timing", "urgency", "images"].includes(key),
+      );
+      for (const key of extraKeys) {
+        const value = (flowAnswers[key] || "").trim();
+        if (value) descriptionLines.push(`${key}: ${value}`);
+      }
+
+      const description = descriptionLines.join("\n") || "Resident submitted a request via chat.";
+
+      if (!selectedCategory) {
+        throw new Error("Category is missing.");
+      }
+
+      const requestPayload = {
+        category: selectedCategory,
+        description,
+        urgency,
+        preferredTime: timing || undefined,
+        location: estateName || undefined,
+        budget: flowAnswers.budget || undefined,
+        specialInstructions: flowAnswers.specialInstructions || undefined,
+        estateId: estateId || undefined,
+      };
+
+      const createdRes = await apiRequest("POST", "/api/app/service-requests", requestPayload);
+      const created = await createdRes.json();
+
+      setHistory((prev) => [
+        ...prev,
+        {
+          id: makeHistoryId(),
+          type: "ai_message",
+          text: "Your request has been captured. Here are the next best providers we found.",
+        },
+        {
+          id: makeHistoryId(),
+          type: "ticket",
+          serviceRequestId: created.id,
+          title: created.title || created.category || "Service request",
+          status: created.status || "pending",
+          createdAtIso: created.createdAt,
+        },
+      ]);
+
+      const providerRes = await apiRequest(
+        "GET",
+        `/api/providers/available?category=${encodeURIComponent(selectedCategory)}${
+          estateId ? `&estateId=${encodeURIComponent(String(estateId))}` : ""
+        }&urgency=${encodeURIComponent(urgency)}`,
+      );
+      const providerData = await providerRes.json();
+      const providerNames = Array.isArray(providerData?.providers)
+        ? providerData.providers.map((p: any) => p.name).filter(Boolean)
+        : [];
+
+      if (providerNames.length) {
+        setHistory((prev) => [
+          ...prev,
+          {
+            id: makeHistoryId(),
+            type: "ai_message",
+            text: `Recommended providers: ${providerNames.join(", ")}.`,
+          },
+        ]);
+      } else {
+        setHistory((prev) => [
+          ...prev,
+          {
+            id: makeHistoryId(),
+            type: "ai_message",
+            text: "We could not find available providers right now, but your request is saved.",
+          },
+        ]);
+      }
+
+      setStep("COMPLETED");
+    } catch (error: any) {
+      const message = error?.message || "Failed to complete the request.";
+      setSendError(message);
+      toast({
+        title: "Unable to complete request",
+        description: message,
+        variant: "destructive",
+      });
+      setStep("FLOW");
+    } finally {
+      setIsSending(false);
+    }
+  }, [
+    flowAnswers,
+    issueText,
+    myEstates,
+    selectedCategory,
+    selectedEstateName,
+    startDate,
+    toast,
+    userDescription,
+  ]);
 
   useEffect(() => {
     if (!conversationSyncAvailable) return;
     if (!activeConversationSessionId) return;
+    if (aiSessionId) return;
     if (!history.length) return;
 
     const pending = history.filter((item) => !savedHistoryIdsRef.current.has(item.id));
@@ -5220,11 +6464,12 @@ export default function ChatInterface({
         });
       }
     })();
-  }, [activeConversationSessionId, conversationSyncAvailable, history, toast]);
+  }, [activeConversationSessionId, aiSessionId, conversationSyncAvailable, history, toast]);
 
   useEffect(() => {
     if (!conversationSyncAvailable) return;
     if (!activeConversationSessionId) return;
+    if (aiSessionId) return;
     if (!aiResponse?.message) return;
 
     const fingerprint = `${activeConversationSessionId}:${aiResponse.message}`;
@@ -5248,16 +6493,16 @@ export default function ChatInterface({
         });
       }
     })();
-  }, [activeConversationSessionId, aiResponse, conversationSyncAvailable, toast]);
+  }, [activeConversationSessionId, aiResponse, aiSessionId, conversationSyncAvailable, toast]);
 
   useEffect(() => {
     if (!activeConversationSessionId) return;
     if (!selectedCategory) return;
     if (suppressSessionAutosaveRef.current) return;
 
-    const categoryKey = getServiceCategoryKey(selectedCategory);
+    const categoryKey = isOrdinaryMode ? null : getServiceCategoryKey(selectedCategory);
     const isResolvedNow =
-      Boolean(categoryKey) && step === "AI_GUIDANCE" && hasSufficientConfidence(categoryKey!, confidenceScore);
+      Boolean(categoryKey) && step === "AI_GUIDANCE" && hasSufficientConfidence(categoryKey!, confidenceScore, isAdmin, step);
 
     const nextTitle = deriveTitleFromIssue((flowAnswers.issue || issueText || "").trim());
     const shouldMoveToTop = sessionActivityRef.current;
@@ -5274,8 +6519,8 @@ export default function ChatInterface({
         (k) => Boolean(infoSlots[k]) && !Boolean(existing.infoSlots?.[k]),
       );
       const reachedThresholdNow =
-        Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, confidenceScore) &&
-        !hasSufficientConfidence(categoryKey!, existing.confidenceScore || 0);
+        Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, confidenceScore, isAdmin, step) &&
+        !hasSufficientConfidence(categoryKey!, existing.confidenceScore || 0, isAdmin, existing.conversationState?.step);
 
       const shouldUpdateSummary =
         !existing.summary ||
@@ -5297,12 +6542,14 @@ export default function ChatInterface({
         aiResponse,
         confidenceScore,
         step,
+        estates: myEstates,
+        isAdmin,
       });
 
-      const thresholdReached = Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, confidenceScore);
+      const thresholdReached = Boolean(categoryKey) && hasSufficientConfidence(categoryKey!, confidenceScore, isAdmin, step);
       const showBookingCard =
         thresholdReached &&
-        (computedSummary.recommendedApproach === "Professional" || computedSummary.recommendedApproach === "Hybrid");
+        (computedSummary.recommendedApproach === "Professional" || computedSummary.recommendedApproach === "Hybrid" || isAdmin);
 
       const nextBookingCard = showBookingCard
         ? buildBookingCard({
@@ -5358,9 +6605,9 @@ export default function ChatInterface({
             })
           : null;
 
-          // Provider matching preview: show as soon as booking card is available.
-          // (Price estimate may be unavailable, but provider preview can still help users decide next steps.)
-          const shouldShowProviderPreview = Boolean(nextBookingCard) && showBookingCard;
+          // Provider matching preview: show as soon as enough context is gathered.
+          // We show it if confidence is reached, or if analysis is done (AI_GUIDANCE), or if user is an admin for testing.
+          const shouldShowProviderPreview = thresholdReached || isAdmin || step === "AI_GUIDANCE" || step === "COMPLETED";
 
       const priceLine = nextPriceEstimationCard
         ? `Estimated cost: ${formatNgnRange(nextPriceEstimationCard.estimatedRange.min, nextPriceEstimationCard.estimatedRange.max)} (estimate)`
@@ -5424,6 +6671,9 @@ export default function ChatInterface({
           aiDecision,
           isUserDistressed,
           earlyStopAcknowledged,
+          aiSessionId,
+          aiSessionMode,
+          pendingQuestion,
         },
       };
 
@@ -5442,6 +6692,8 @@ export default function ChatInterface({
     activeConversationSessionId,
     aiDecision,
     aiResponse,
+    aiSessionId,
+    aiSessionMode,
     confidenceScore,
     flowAnswers,
     flowIndex,
@@ -5457,6 +6709,7 @@ export default function ChatInterface({
     startQuickTag,
     startTime,
     step,
+    pendingQuestion,
     earlyStopAcknowledged,
     uploadedImageSrc,
     useManualEstate,
@@ -5466,19 +6719,26 @@ export default function ChatInterface({
   useEffect(() => {
     if (!activeConversationSessionId) return;
     if (!activeConversationSession) return;
-    if (!activeConversationSession.bookingCard) return;
+    
+    // Decoupled: provider preview only requires a valid category. 
+    // It no longer strictly requires bookingCard, though it benefits from it.
     const categoryKey = getServiceCategoryKey(activeConversationSession.category);
     if (!categoryKey) return;
 
-    const thresholdReached = hasSufficientConfidence(categoryKey, activeConversationSession.confidenceScore || 0);
+    const thresholdReached = hasSufficientConfidence(categoryKey, activeConversationSession.confidenceScore || 0, isAdmin, activeConversationSession.conversationState?.step);
     const approach = activeConversationSession.summary?.recommendedApproach;
-    // Debug logging removed
+    const currentStep = activeConversationSession.conversationState?.step;
 
+    // Eligible if reached confidence threshold and either:
+    // 1. Approach is Professional or Hybrid
+    // 2. OR analysis is complete (AI_GUIDANCE) - we show providers as a backup even for DIY
+    // 3. OR User is an admin (allowing testing flow end-to-end regardless of AI recommendation)
     const eligible =
       thresholdReached &&
-      (approach === "Professional" || approach === "Hybrid") &&
-      Boolean(activeConversationSession.bookingCard) &&
-      Boolean(activeConversationSession.bookingCard);
+      (approach === "Professional" || 
+       approach === "Hybrid" || 
+       currentStep === "AI_GUIDANCE" || 
+       isAdmin);
 
     // Fire-and-forget snapshot for SUPER_ADMIN observability.
     // This is intentionally non-blocking and safe to fail.
@@ -5502,9 +6762,11 @@ export default function ChatInterface({
       const last = lastPreparedSnapshotFingerprintRef.current[activeConversationSessionId];
       if (last !== snapshotFingerprint) {
         lastPreparedSnapshotFingerprintRef.current[activeConversationSessionId] = snapshotFingerprint;
+        // Normalize category to lowercase for database enum compatibility
+        const normalizedCategory = (activeConversationSession.category || "").toLowerCase().trim().replace(/[\s-]+/g, '_');
         void apiRequest("POST", "/api/ai/prepared-requests/snapshot", {
           sessionId: activeConversationSessionId,
-          category: activeConversationSession.category,
+          category: normalizedCategory,
           urgency: activeConversationSession.summary?.urgency ?? "medium",
           recommendedApproach: activeConversationSession.summary?.recommendedApproach ?? "Hybrid",
           confidenceScore: activeConversationSession.confidenceScore ?? 0,
@@ -5541,7 +6803,8 @@ export default function ChatInterface({
       const result = await fetchProviderMatchingPreview({
         category: activeConversationSession.category,
         urgency: activeConversationSession.summary?.urgency ?? null,
-        limit: 4,
+        limit: 3, // Top 3 providers as per requirements
+        estateId: activeConversationSession.summary?.estateId ?? null,
       });
 
       if (cancelled) return;
@@ -5554,8 +6817,20 @@ export default function ChatInterface({
           : "Showing city-wide verified providers. Availability is not guaranteed."
         : "Provider preview is temporarily unavailable.";
 
+      const recommendedIds = activeConversationSession.conversationState.aiResponse?.recommendedProviderIds ?? [];
+      const providers = Array.isArray(result?.providers) ? [...result!.providers] : [];
+      if (recommendedIds.length > 0 && providers.length > 0) {
+        const order = new Map(recommendedIds.map((id, idx) => [String(id), idx]));
+        providers.sort((a: any, b: any) => {
+          const aIndex = order.has(String(a.id)) ? order.get(String(a.id))! : Number.POSITIVE_INFINITY;
+          const bIndex = order.has(String(b.id)) ? order.get(String(b.id))! : Number.POSITIVE_INFINITY;
+          if (aIndex !== bIndex) return aIndex - bIndex;
+          return 0;
+        });
+      }
+
       const preview: ProviderMatchingPreview = {
-        providers: result?.providers ?? [],
+        providers,
         usedEstateId: result?.usedEstateId ?? null,
         estateSpecificCount: result?.estateSpecificCount ?? 0,
         note,
@@ -5575,55 +6850,22 @@ export default function ChatInterface({
   }, [activeConversationSession, activeConversationSessionId, markSessionActivity]);
 
   useEffect(() => {
-    // When routed directly into the conversation view (e.g. /chat?category=...),
-    // ensure we seed the initial AI prompt and create a session if needed.
-    if (currentView !== 'conversation') return;
-    if (!selectedCategory) return;
-    if (history.length > 0) return;
-
-    if (!activeConversationSessionId) {
-      startNewConversationSession(selectedCategory);
+    if (currentView !== "conversation") return;
+    if (sessionIdFromUrl && sessionIdFromUrl !== aiSessionId) {
+      void hydrateAiSession(sessionIdFromUrl);
       return;
     }
-
-    const categoryKey = getServiceCategoryKey(selectedCategory);
-    if (!categoryKey) return;
-
-    const steps = buildFlowStepsForCategory(categoryKey);
-    setFlowSteps(steps);
-    setFlowIndex(0);
-    setFlowAnswers({});
-
-    setInputValue("");
-    setStep("FLOW");
-    setHistory([{ id: makeHistoryId(), type: "ai_message", text: steps[0]?.message || "" }]);
-    setUploadedImageSrc(null);
-    setUploadedImages([]);
-    setUserDescription("");
-    setIssueText("");
-    setUseManualEstate(false);
-    setSelectedEstateName(null);
-    setIsOutsideCityConnectEstate(false);
-    setStartDate("");
-    setStartTime("");
-    setStartQuickTag(null);
-    setAiResponse(null);
-    setAiDecision({ requiresConsultancy: false, consultancyCompleted: false });
-    setConfidenceScore(0);
-    setInfoSlots(INITIAL_INFO_SLOTS);
-    setImageDeclined(false);
-    setEarlyStopAcknowledged(false);
-    setSendError(null);
-    setIsUserDistressed(false);
-    setHasChosenAction(false);
-  }, [currentView, history.length, selectedCategory]);
+    if (!selectedCategory) return;
+    if (!aiSessionId) {
+      startNewConversationSession(selectedCategory, { forceNew: true });
+    }
+  }, [aiSessionId, currentView, hydrateAiSession, selectedCategory, sessionIdFromUrl, startNewConversationSession]);
 
   const handleCategorySelect = (categoryName: string) => {
     if (onCategorySelected) {
-      // When an external navigation callback is provided, let the destination
-      // page create the session. Calling startNewConversationSession here
-      // would create a session that isn't persisted before navigation,
-      // leading to duplicate sessions when the new page also creates one.
+      // Start a fresh state even if one exists for this category
+      setActiveConversationSessionId(null);
+      resetActiveSessionState();
       onCategorySelected(categoryName);
       return;
     }
@@ -5634,18 +6876,29 @@ export default function ChatInterface({
       return;
     }
 
-    const categoryKey = getServiceCategoryKey(categoryName);
-    if (!categoryKey) return;
-    const steps = buildFlowStepsForCategory(categoryKey);
-
-    startNewConversationSession(categoryName);
+    // Always create a new conversation when selecting a category
+    startNewConversationSession(categoryName, { forceNew: true });
   };
 
   const getNextFlowIndex = useCallback(
     (fromIndex: number, nextAnswers: Record<string, string>, nextSlots: InfoSlots, nextConfidence: number) => {
-      const categoryKey = getServiceCategoryKey(selectedCategory);
-      if (categoryKey && nextSlots.description && hasSufficientConfidence(categoryKey, nextConfidence)) {
+      if (isOrdinaryMode) {
+        for (let i = fromIndex + 1; i < flowSteps.length; i++) {
+          const s = flowSteps[i];
+          if (s.slotKey && nextSlots[s.slotKey]) continue;
+          if (nextAnswers[s.id] && nextAnswers[s.id].trim()) continue;
+          return i;
+        }
         return flowSteps.length;
+      }
+      const categoryKey = isOrdinaryMode ? null : getServiceCategoryKey(selectedCategory);
+      if (!isOrdinaryMode && categoryKey && nextSlots.description && hasSufficientConfidence(categoryKey, nextConfidence, isAdmin)) {
+        // Residents should still be asked for an image if helpful, even if they have high text confidence.
+        const catVisualsHelpful = categoryKey ? (DYNAMIC_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? DEFAULT_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? true) : true;
+        const needsImage = !isAdmin && catVisualsHelpful && !nextSlots.imageProvided && !imageDeclined;
+        if (!needsImage) {
+          return flowSteps.length;
+        }
       }
 
       const issue = (nextAnswers.issue || issueText || "").trim();
@@ -5665,8 +6918,14 @@ export default function ChatInterface({
           if (imageDeclined) continue;
           const catVisualsHelpful = categoryKey ? (DYNAMIC_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? DEFAULT_CATEGORY_VISUALS_HELPFUL[categoryKey] ?? true) : true;
           if (categoryKey && !catVisualsHelpful) continue;
-          if (categoryKey && hasSufficientConfidence(categoryKey, nextConfidence)) continue;
-          if (!descriptionHighQuality) continue;
+          
+          // Skip if already confident enough, but ONLY for admins.
+          // For residents, we always ask for an image if visuals are helpful.
+          if (isAdmin && categoryKey && hasSufficientConfidence(categoryKey, nextConfidence, isAdmin)) continue;
+
+          // For admins, we skip the image step if the description is poor to keep testing fast.
+          // For regular users, we NEVER skip requested images just because the description is short.
+          if (isAdmin && !descriptionHighQuality) continue;
         }
 
         return i;
@@ -5674,7 +6933,7 @@ export default function ChatInterface({
 
       return flowSteps.length;
     },
-    [flowSteps, imageDeclined, issueText, selectedCategory],
+    [flowSteps, imageDeclined, issueText, selectedCategory, isAdmin, isOrdinaryMode],
   );
 
   const handleBackToSelectCategory = () => {
@@ -5682,10 +6941,7 @@ export default function ChatInterface({
     setSearchQuery("");
   };
 
-  const resetConversationStateToFresh = useCallback(() => {
-    setCurrentView('select-category');
-    setSelectedCategory(undefined);
-    setSearchQuery("");
+  const resetActiveSessionState = useCallback(() => {
     setInputValue("");
     setStep("FLOW");
     setFlowSteps([]);
@@ -5704,6 +6960,13 @@ export default function ChatInterface({
     setStartQuickTag(null);
     setAiResponse(null);
     setAiDecision({ requiresConsultancy: false, consultancyCompleted: false });
+    setAiSessionId(null);
+    setAiSessionMode(null);
+    setPendingQuestion(null);
+    setAiSessionAttachments([]);
+    setAiSessionAttachmentData({});
+    setAiSessionAttachmentLoading({});
+    syncSessionIdToUrl(null);
     setConfidenceScore(0);
     setInfoSlots(INITIAL_INFO_SLOTS);
     setImageDeclined(false);
@@ -5711,7 +6974,17 @@ export default function ChatInterface({
     setSendError(null);
     setIsUserDistressed(false);
     setHasChosenAction(false);
+    savedHistoryIdsRef.current = new Set();
+    lastSavedAiResponseRef.current = null;
+    ordinaryCompletionRef.current = false;
   }, []);
+
+  const resetConversationStateToFresh = useCallback(() => {
+    setCurrentView('select-category');
+    setSelectedCategory(undefined);
+    setSearchQuery("");
+    resetActiveSessionState();
+  }, [resetActiveSessionState]);
 
   const handleClearAllConversations = useCallback(() => {
     setConversationSessions([]);
@@ -5726,18 +6999,35 @@ export default function ChatInterface({
 
   const handleDeleteConversationSession = useCallback(
     (sessionId: string) => {
-      setConversationSessions((prev) => prev.filter((s) => s.id !== sessionId));
-      setActiveConversationSessionId((prev) => {
-        if (prev !== sessionId) return prev;
-        return null;
-      });
-
-      if (activeConversationSessionId === sessionId) {
-        resetConversationStateToFresh();
+      const session = conversationSessions.find((s) => s.id === sessionId);
+      const isBooked = session?.messages.some((m) => m.type === "ticket");
+      if (isBooked) {
+        toast({
+          title: "Cannot delete",
+          description: "This conversation is linked to a booked inspection and cannot be deleted.",
+          variant: "destructive",
+        });
+        return;
       }
+      setSessionToDelete(sessionId);
     },
-    [activeConversationSessionId, resetConversationStateToFresh],
+    [conversationSessions, toast],
   );
+
+  const confirmDeleteSession = useCallback(() => {
+    if (!sessionToDelete) return;
+
+    setConversationSessions((prev) => prev.filter((s) => s.id !== sessionToDelete));
+    setActiveConversationSessionId((prev) => {
+      if (prev !== sessionToDelete) return prev;
+      return null;
+    });
+
+    if (activeConversationSessionId === sessionToDelete) {
+      resetConversationStateToFresh();
+    }
+    setSessionToDelete(null);
+  }, [activeConversationSessionId, resetConversationStateToFresh, sessionToDelete]);
 
   const handleCreateNewRequest = useCallback(() => {
     setActiveConversationSessionId(null);
@@ -5747,193 +7037,17 @@ export default function ChatInterface({
   const handleSend = useCallback(async () => {
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
     const canSendFromStep =
-      (step === "FLOW" && Boolean(activeFlowStep?.allowManualInput)) ||
+      step === "FLOW" ||
       (step === "AI_GUIDANCE" && aiResponse?.intent === "clarify" && Boolean(aiResponse.followUpQuestion));
     if (!canSendFromStep) return;
-    if (!inputValue.trim() || isSending || !selectedCategory) return;
+    if (!inputValue.trim() || isSending) return;
 
     const userMessage = inputValue.trim();
     setInputValue("");
-
     setSendError(null);
 
-    markSessionActivity();
-
-    // AI clarify follow-up
-    if (step === "AI_GUIDANCE" && aiResponse?.intent === "clarify") {
-      setHistory((prev) => [...prev, { id: makeHistoryId(), type: "user_text", text: userMessage }]);
-      await new Promise((r) => window.setTimeout(r, 250));
-      setUserDescription((prev) => {
-        const base = prev?.trim() ? prev.trim() : "";
-        const addition = userMessage;
-        return base ? `${base}\n\nUpdate: ${addition}` : addition;
-      });
-      setStep("AI_ANALYSING");
-      return;
-    }
-
-    if (step !== "FLOW" || !activeFlowStep) return;
-
-    setHistory((prev) => [...prev, { id: makeHistoryId(), type: "user_text", text: userMessage }]);
-
-    // Distress: prioritize immediate guidance over data collection.
-    if (activeFlowStep.id === "issue") {
-      const distressed = isUrgentOrDistressed(userMessage);
-      const quick = parseQuickIntake(userMessage);
-      const issue = (quick.issue || userMessage).trim();
-
-      setIssueText(issue);
-
-      // Prefill answers from a single detailed message to speed up the flow.
-      const prefilled: Record<string, string> = { issue };
-      if (quick.estate) prefilled.estate = quick.estate;
-      if (quick.timing) prefilled.timing = quick.timing;
-      if (quick.urgency) prefilled.urgency = quick.urgency;
-
-      if (quick.outsideEstate) {
-        setIsOutsideCityConnectEstate(true);
-        setSelectedEstateName(null);
-        setUseManualEstate(false);
-        prefilled.estate = "Not in a CityConnect estate";
-      } else if (quick.estate && quick.estate !== "Not in a CityConnect estate") {
-        setIsOutsideCityConnectEstate(false);
-        setSelectedEstateName(quick.estate);
-        setUseManualEstate(false);
-      }
-
-      const nextAnswers = { ...flowAnswers, ...prefilled };
-      setFlowAnswers(nextAnswers);
-
-      // Confidence/slot updates for the first message.
-      const categoryKey = getServiceCategoryKey(selectedCategory);
-      let nextSlots = { ...infoSlots };
-      let nextConfidence = confidenceScore;
-
-      const update = scoreResponseUpdate({
-        categoryKey,
-        prevConfidenceScore: nextConfidence,
-        prevSlots: nextSlots,
-        prevAnswers: flowAnswers,
-        step: activeFlowStep,
-        answerText: issue,
-        source: "manual",
-        imageDeclined,
-      });
-      nextConfidence = update.nextConfidenceScore;
-      nextSlots = update.nextSlots;
-
-      // Credit extra context if the user included it in the first message.
-      if (quick.estate && !nextSlots.location) {
-        nextSlots.location = true;
-        nextConfidence += 10;
-      }
-      if (quick.timing && !nextSlots.timing) {
-        nextSlots.timing = true;
-        nextConfidence += 10;
-      }
-      if (quick.urgency && !nextSlots.urgency) {
-        nextSlots.urgency = true;
-        nextConfidence += 10;
-      }
-
-      nextConfidence = clampConfidence(nextConfidence);
-      setConfidenceScore(nextConfidence);
-      setInfoSlots(nextSlots);
-
-      if (distressed) {
-        setIsUserDistressed(true);
-        setUserDescription(issue);
-        setStep("AI_ANALYSING");
-        return;
-      }
-
-      if (categoryKey && nextSlots.description && hasSufficientConfidence(categoryKey, nextConfidence)) {
-        if (!earlyStopAcknowledged) {
-          setEarlyStopAcknowledged(true);
-          setHistory((prev) => [
-            ...prev,
-            { id: makeHistoryId(), type: "ai_message", text: "Thanks — I have a clear picture of the issue now." },
-          ]);
-        }
-        setStep("AI_ANALYSING");
-        return;
-      }
-
-      const nextIndex = getNextFlowIndex(flowIndex, { ...flowAnswers, ...prefilled }, nextSlots, nextConfidence);
-      if (nextIndex >= flowSteps.length) {
-        setStep("AI_ANALYSING");
-        return;
-      }
-      setFlowIndex(nextIndex);
-      setHistory((prev) => [
-        ...prev,
-        { id: makeHistoryId(), type: "ai_message", text: flowSteps[nextIndex]?.message || "" },
-      ]);
-      return;
-    }
-
-    const categoryKey = getServiceCategoryKey(selectedCategory);
-    const nextAnswers = { ...flowAnswers, [activeFlowStep.id]: userMessage };
-
-    if (activeFlowStep.id === "estate") {
-      setSelectedEstateName(userMessage);
-      setIsOutsideCityConnectEstate(false);
-      setUseManualEstate(false);
-      nextAnswers.estate = userMessage;
-    }
-
-    setFlowAnswers(nextAnswers);
-
-    const update = scoreResponseUpdate({
-      categoryKey,
-      prevConfidenceScore: confidenceScore,
-      prevSlots: infoSlots,
-      prevAnswers: flowAnswers,
-      step: activeFlowStep,
-      answerText: userMessage,
-      source: "manual",
-      imageDeclined,
-    });
-    setConfidenceScore(update.nextConfidenceScore);
-    setInfoSlots(update.nextSlots);
-
-    if (categoryKey && update.nextSlots.description && hasSufficientConfidence(categoryKey, update.nextConfidenceScore)) {
-      if (!earlyStopAcknowledged) {
-        setEarlyStopAcknowledged(true);
-        setHistory((prev) => [
-          ...prev,
-          { id: makeHistoryId(), type: "ai_message", text: "Thanks, I have a clear picture of the issue now." },
-        ]);
-      }
-      setStep("AI_ANALYSING");
-      return;
-    }
-
-    const nextIndex = getNextFlowIndex(flowIndex, nextAnswers, update.nextSlots, update.nextConfidenceScore);
-    if (nextIndex >= flowSteps.length) {
-      setStep("AI_ANALYSING");
-      return;
-    }
-    setFlowIndex(nextIndex);
-    setHistory((prev) => [...prev, { id: makeHistoryId(), type: "ai_message", text: flowSteps[nextIndex]?.message || "" }]);
-    return;
-  }, [
-    aiResponse,
-    confidenceScore,
-    earlyStopAcknowledged,
-    flowAnswers,
-    flowIndex,
-    flowSteps,
-    getNextFlowIndex,
-    imageDeclined,
-    infoSlots,
-    inputValue,
-    isSending,
-    issueText,
-    markSessionActivity,
-    selectedCategory,
-    step,
-  ]);
+    await sendMessageToSession({ text: userMessage });
+  }, [aiResponse, flowIndex, flowSteps, inputValue, isSending, sendMessageToSession, step]);
 
   const onToggleManualEstate = () => {
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
@@ -5951,76 +7065,31 @@ export default function ChatInterface({
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
     if (!activeFlowStep || activeFlowStep.id !== "estate") return;
 
-    markSessionActivity();
-
     const isNotInCityConnect = value === "__not_in_cityconnect__";
     setUseManualEstate(false);
     setSelectedEstateName(isNotInCityConnect ? null : value);
     setIsOutsideCityConnectEstate(isNotInCityConnect);
 
     const answerText = isNotInCityConnect ? "Not in a CityConnect estate" : value;
-    const categoryKey = getServiceCategoryKey(selectedCategory);
-    const nextAnswers = { ...flowAnswers, estate: answerText };
-    setFlowAnswers(nextAnswers);
-
-    const update = scoreResponseUpdate({
-      categoryKey,
-      prevConfidenceScore: confidenceScore,
-      prevSlots: infoSlots,
-      prevAnswers: flowAnswers,
-      step: activeFlowStep,
-      answerText,
-      source: "structured",
-      imageDeclined,
-    });
-    setConfidenceScore(update.nextConfidenceScore);
-    setInfoSlots(update.nextSlots);
-
-    if (categoryKey && update.nextSlots.description && hasSufficientConfidence(categoryKey, update.nextConfidenceScore)) {
-      if (!earlyStopAcknowledged) {
-        setEarlyStopAcknowledged(true);
-        setHistory((prev) => [
-          ...prev,
-          { id: makeHistoryId(), type: "user_text", text: answerText },
-          { id: makeHistoryId(), type: "ai_message", text: "Thanks — I have a clear picture of the issue now." },
-        ]);
-      } else {
-        setHistory((prev) => [...prev, { id: makeHistoryId(), type: "user_text", text: answerText }]);
-      }
-      setStep("AI_ANALYSING");
-      return;
-    }
-
-    const nextIndex = getNextFlowIndex(flowIndex, nextAnswers, update.nextSlots, update.nextConfidenceScore);
-    if (nextIndex >= flowSteps.length) {
-      setHistory((prev) => [...prev, { id: makeHistoryId(), type: "user_text", text: answerText }]);
-      setStep("AI_ANALYSING");
-      return;
-    }
-    setHistory((prev) => [
-      ...prev,
-      { id: makeHistoryId(), type: "user_text", text: answerText },
-      { id: makeHistoryId(), type: "ai_message", text: flowSteps[nextIndex]?.message || "" },
-    ]);
-    setFlowIndex(nextIndex);
+    void sendMessageToSession({ text: answerText });
   };
 
   const onStartDateChange = (value: string) => {
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
-    if (!activeFlowStep || activeFlowStep.id !== "timing") return;
+    if (!activeFlowStep || !["timing", "inspectionDate"].includes(activeFlowStep.id)) return;
     setStartDate(value);
     if (value) setStartQuickTag(null);
   };
 
   const onStartTimeChange = (value: string) => {
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
-    if (!activeFlowStep || activeFlowStep.id !== "timing") return;
+    if (!activeFlowStep || !["timing", "inspectionDate"].includes(activeFlowStep.id)) return;
     setStartTime(value);
   };
 
   const onSelectStartQuickTag = (tag: string) => {
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
-    if (!activeFlowStep || activeFlowStep.id !== "timing") return;
+    if (!activeFlowStep || !["timing", "inspectionDate"].includes(activeFlowStep.id)) return;
     setStartQuickTag(tag);
 
     // Compute date and time based on the selected quick tag
@@ -6071,58 +7140,14 @@ export default function ChatInterface({
 
   const onContinueTiming = () => {
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
-    if (!activeFlowStep || activeFlowStep.id !== "timing") return;
+    if (!activeFlowStep || !["timing", "inspectionDate"].includes(activeFlowStep.id)) return;
 
-    markSessionActivity();
     const timingText =
       startQuickTag ||
       [startDate, startTime].filter(Boolean).join(" ") ||
       "Not sure";
 
-    const categoryKey = getServiceCategoryKey(selectedCategory);
-    const nextAnswers = { ...flowAnswers, timing: timingText };
-    setFlowAnswers(nextAnswers);
-
-    const update = scoreResponseUpdate({
-      categoryKey,
-      prevConfidenceScore: confidenceScore,
-      prevSlots: infoSlots,
-      prevAnswers: flowAnswers,
-      step: activeFlowStep,
-      answerText: timingText,
-      source: "structured",
-      imageDeclined,
-    });
-    setConfidenceScore(update.nextConfidenceScore);
-    setInfoSlots(update.nextSlots);
-
-    if (categoryKey && update.nextSlots.description && hasSufficientConfidence(categoryKey, update.nextConfidenceScore)) {
-      if (!earlyStopAcknowledged) {
-        setEarlyStopAcknowledged(true);
-        setHistory((prev) => [
-          ...prev,
-          { id: makeHistoryId(), type: "user_text", text: timingText },
-          { id: makeHistoryId(), type: "ai_message", text: "Thanks — I have a clear picture of the issue now." },
-        ]);
-      } else {
-        setHistory((prev) => [...prev, { id: makeHistoryId(), type: "user_text", text: timingText }]);
-      }
-      setStep("AI_ANALYSING");
-      return;
-    }
-
-    const nextIndex = getNextFlowIndex(flowIndex, nextAnswers, update.nextSlots, update.nextConfidenceScore);
-    if (nextIndex >= flowSteps.length) {
-      setHistory((prev) => [...prev, { id: makeHistoryId(), type: "user_text", text: timingText }]);
-      setStep("AI_ANALYSING");
-      return;
-    }
-    setHistory((prev) => [
-      ...prev,
-      { id: makeHistoryId(), type: "user_text", text: timingText },
-      { id: makeHistoryId(), type: "ai_message", text: flowSteps[nextIndex]?.message || "" },
-    ]);
-    setFlowIndex(nextIndex);
+    void sendMessageToSession({ text: timingText });
   };
 
   const onAnswerAndAdvance = (stepId: string, answerText: string) => {
@@ -6130,66 +7155,18 @@ export default function ChatInterface({
     const active = flowSteps[flowIndex] ?? null;
     if (!active || active.id !== stepId) return;
 
-    markSessionActivity();
-
-    const categoryKey = getServiceCategoryKey(selectedCategory);
-    const nextAnswers = { ...flowAnswers, [stepId]: answerText };
-    setFlowAnswers(nextAnswers);
-    if (stepId === "issue") {
-      setIssueText(answerText);
-    }
-
-    const update = scoreResponseUpdate({
-      categoryKey,
-      prevConfidenceScore: confidenceScore,
-      prevSlots: infoSlots,
-      prevAnswers: flowAnswers,
-      step: active,
-      answerText,
-      source: active.inputMode === "upload" ? "image" : "structured",
-      imageDeclined,
-    });
-    setConfidenceScore(update.nextConfidenceScore);
-    setInfoSlots(update.nextSlots);
-
-    if (categoryKey && update.nextSlots.description && hasSufficientConfidence(categoryKey, update.nextConfidenceScore)) {
-      if (!earlyStopAcknowledged) {
-        setEarlyStopAcknowledged(true);
-        setHistory((prev) => [
-          ...prev,
-          { id: makeHistoryId(), type: "user_text", text: answerText },
-          { id: makeHistoryId(), type: "ai_message", text: "Thanks — I have a clear picture of the issue now." },
-        ]);
-      } else {
-        setHistory((prev) => [...prev, { id: makeHistoryId(), type: "user_text", text: answerText }]);
-      }
-      setStep("AI_ANALYSING");
-      return;
-    }
-
-    const nextIndex = getNextFlowIndex(flowIndex, nextAnswers, update.nextSlots, update.nextConfidenceScore);
-    setHistory((prev) => {
-      const nextMsg = flowSteps[nextIndex]?.message;
-      const base: HistoryItem[] = [
-        ...prev,
-        { id: makeHistoryId(), type: "user_text", text: answerText },
-      ];
-      if (nextMsg) {
-        base.push({ id: makeHistoryId(), type: "ai_message", text: nextMsg });
-      }
-      return base;
-    });
-
-    if (nextIndex >= flowSteps.length) {
-      setStep("AI_ANALYSING");
-      return;
-    }
-    setFlowIndex(nextIndex);
+    void sendMessageToSession({ text: answerText });
   };
 
   const handleAskForImageUpload = () => {
+    // Allow upload during FLOW when inputMode is "upload"
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
-    if (!activeFlowStep || activeFlowStep.inputMode !== "upload") return;
+    const isFlowUpload = activeFlowStep && activeFlowStep.inputMode === "upload";
+    
+    // Also allow upload during AI_GUIDANCE when AI is asking for clarification
+    const isAiClarifyingUpload = step === "AI_GUIDANCE" && aiResponse?.intent === "clarify";
+    
+    if (!isFlowUpload && !isAiClarifyingUpload) return;
     fileInputRef.current?.click();
   };
 
@@ -6197,23 +7174,19 @@ export default function ChatInterface({
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
     if (!activeFlowStep || activeFlowStep.inputMode !== "upload") return;
 
-    markSessionActivity();
     setImageDeclined(true);
     setUploadedImageSrc(null);
     setUploadedImages([]);
-    setHistory((prev) => [
-      ...prev,
-      { id: makeHistoryId(), type: "user_text", text: "I don't have any image." },
-    ]);
-    setFlowAnswers((prev) => ({ ...prev, [activeFlowStep.id]: "no_image" }));
-    setStep("AI_ANALYSING");
+    void sendMessageToSession({ text: "I don't have any image." });
   };
 
   const handleImageSelected = (file: File) => {
     const activeFlowStep = step === "FLOW" ? flowSteps[flowIndex] ?? null : null;
-    if (!activeFlowStep || activeFlowStep.inputMode !== "upload") return;
+    const isFlowUpload = activeFlowStep && activeFlowStep.inputMode === "upload";
+    const isAiClarifyingUpload = step === "AI_GUIDANCE" && aiResponse?.intent === "clarify";
 
-    markSessionActivity();
+    if (!isFlowUpload && !isAiClarifyingUpload) return;
+
     const reader = new FileReader();
     reader.onload = () => {
       const result = typeof reader.result === "string" ? reader.result : null;
@@ -6223,151 +7196,13 @@ export default function ChatInterface({
       if (result) {
         setHistory((prev) => [...prev, { id: makeHistoryId(), type: "image", src: result }]);
       }
-      setFlowAnswers((prev) => ({ ...prev, [activeFlowStep.id]: "image_uploaded" }));
 
-      const categoryKey = getServiceCategoryKey(selectedCategory);
-      const update = scoreResponseUpdate({
-        categoryKey,
-        prevConfidenceScore: confidenceScore,
-        prevSlots: infoSlots,
-        prevAnswers: flowAnswers,
-        step: activeFlowStep,
-        answerText: "image_uploaded",
-        source: "image",
-        imageDeclined: false,
-      });
-      setConfidenceScore(update.nextConfidenceScore);
-      setInfoSlots(update.nextSlots);
-      setImageDeclined(false);
-
-      setStep("AI_ANALYSING");
+      if (result) {
+        void sendMessageToSession({ text: "", images: [result] });
+      }
     };
     reader.readAsDataURL(file);
   };
-
-  useEffect(() => {
-    if (currentView !== 'conversation') return;
-    if (step !== "AI_ANALYSING") return;
-    if (!selectedCategory) return;
-    if (!flowSteps.length) return;
-
-    const categoryKey = getServiceCategoryKey(selectedCategory);
-    if (!categoryKey) return;
-
-    const followups: Array<{ question: string; answer: string }> = [];
-    for (const s of flowSteps) {
-      if (s.id === "issue" || s.id === "estate" || s.id === "timing" || s.id === "urgency" || s.id === "image") {
-        continue;
-      }
-      const answer = flowAnswers[s.id];
-      if (answer && answer.trim()) {
-        followups.push({ question: s.message, answer });
-      }
-    }
-
-    const estateText = flowAnswers.estate
-      ? flowAnswers.estate
-      : isOutsideCityConnectEstate
-        ? "Not in a CityConnect estate"
-        : selectedEstateName || "Unknown";
-
-    const built = buildUserDescriptionFromAnswers({
-      issue: flowAnswers.issue || issueText,
-      estate: estateText,
-      timing: flowAnswers.timing || "",
-      urgency: flowAnswers.urgency || "",
-      followups,
-    });
-
-    if (!built.trim()) return;
-    if (userDescription.trim() !== built.trim()) {
-      setUserDescription(built);
-    }
-
-    let cancelled = false;
-    setIsSending(true);
-    setSendError(null);
-
-    (async () => {
-      try {
-        const situation = classifyCityBuddySituation({
-          categoryId: selectedCategory,
-          description: built,
-        });
-
-        const memorySummary = buildMemorySummaryForGemini({
-          category: selectedCategory,
-          infoSlots,
-          flowAnswers,
-          isOutsideCityConnectEstate,
-          selectedEstateName,
-          hasImage: Boolean(uploadedImageSrc),
-          confidenceScore,
-        });
-
-        const geminiHistory = buildGeminiHistory({
-          items: history,
-          currentUserMessage: built,
-          priorAiResponse: aiResponse,
-          memorySummary,
-        });
-
-        const response = await sendMessageToGemini({
-          category: selectedCategory,
-          estate: isOutsideCityConnectEstate
-            ? "Not in a CityConnect estate"
-            : selectedEstateName || "Unknown",
-          history: geminiHistory,
-          userMessage: built,
-          images: uploadedImages.length ? uploadedImages : undefined,
-          situation: {
-            ...situation,
-            distressed: isUserDistressed,
-          },
-        });
-
-        if (cancelled) return;
-
-        setAiResponse(response);
-        setAiDecision((prev) => ({
-          ...prev,
-          requiresConsultancy: response.intent === "escalate",
-        }));
-
-        setStep("AI_GUIDANCE");
-      } catch (error) {
-        console.error("Failed to analyse issue:", error);
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        setSendError(errorMessage);
-        setStep("AI_GUIDANCE");
-      } finally {
-        if (!cancelled) setIsSending(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    aiResponse,
-    confidenceScore,
-    currentView,
-    flowAnswers,
-    flowSteps,
-    history,
-    infoSlots,
-    isOutsideCityConnectEstate,
-    isUserDistressed,
-    issueText,
-    selectedCategory,
-    selectedEstateName,
-    step,
-    uploadedImageSrc,
-    uploadedImages,
-    userDescription,
-  ]);
-
-  const [, navigate] = useLocation();
 
   const canBookProfessional = aiResponse?.intent === "escalate";
   const showProfessionalConsultancy =
@@ -6427,10 +7262,8 @@ export default function ChatInterface({
         setShowBookingConfirm(true);
         return;
       }
-      const qs = new URLSearchParams();
-      if (activeConversationSessionId) qs.set("citybuddySessionId", activeConversationSessionId);
-      const url = qs.toString() ? `/book-artisan?${qs.toString()}` : "/book-artisan";
-      navigate(url);
+      // Group: Request Professional Help -> redirect to inspection as requested
+      handleBookProfessional();
       return;
     }
     handleBookProfessional();
@@ -6450,6 +7283,12 @@ export default function ChatInterface({
   const cancelBookingConfirm = useCallback(() => {
     setShowBookingConfirm(false);
     setPendingBookingProviderId(null);
+  }, []);
+
+  // Handler for booking a specific provider directly from the provider card
+  const handleBookProvider = useCallback((providerId: string, _providerName: string) => {
+    setPendingBookingProviderId(providerId);
+    setShowBookingConfirm(true);
   }, []);
 
   // Consume cross-page booking events and append a ticket to the right conversation.
@@ -6732,6 +7571,7 @@ export default function ChatInterface({
           onNavigateToSettings={handleNavigateToSettings}
           onNavigateToMarketplace={handleNavigateToMarketplace}
           onNavigateToServiceRequests={() => navigate("/service-requests")}
+          onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
           currentPage="chat"
         />
 
@@ -6743,6 +7583,7 @@ export default function ChatInterface({
             onNavigateToSettings={handleNavigateToSettings}
             onNavigateToMarketplace={handleNavigateToMarketplace}
             onNavigateToServiceRequests={() => navigate("/service-requests")}
+            onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
             currentPage="chat"
           />
         </div>
@@ -6833,6 +7674,12 @@ export default function ChatInterface({
                 viewSelectedProvider(id, p?.name ?? undefined);
               }
             }}
+            onBookProvider={handleBookProvider}
+            infoSlots={infoSlots}
+            attachments={aiSessionAttachments}
+            attachmentData={aiSessionAttachmentData}
+            attachmentLoading={aiSessionAttachmentLoading}
+            onLoadAttachment={loadAiSessionAttachment}
           />
           {/* Booking confirmation modal: show when a provider is selected for this conversation */}
           <AlertDialog open={showBookingConfirm} onOpenChange={(open) => { if (!open) cancelBookingConfirm(); setShowBookingConfirm(open); }}>
@@ -6849,6 +7696,28 @@ export default function ChatInterface({
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+
+          {/* Delete confirmation modal */}
+          <AlertDialog open={!!sessionToDelete} onOpenChange={(open) => { if (!open) setSessionToDelete(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This action is irreversible. All messages and information in this conversation will be permanently removed.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel onClick={() => setSessionToDelete(null)}>Cancel</AlertDialogCancel>
+                <AlertDialogAction 
+                  onClick={confirmDeleteSession}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Delete permanently
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
           {showComparison && comparisonProviders && comparisonProviders.length > 0 ? (
             <div className="fixed inset-0 z-50 flex items-end lg:items-center justify-center p-4 pointer-events-none">
               <div className="w-full lg:w-11/12 xl:w-10/12 pointer-events-auto">
@@ -6904,6 +7773,7 @@ export default function ChatInterface({
         onNavigateToSettings={handleNavigateToSettings}
         onNavigateToMarketplace={handleNavigateToMarketplace}
         onNavigateToServiceRequests={() => navigate("/service-requests")}
+        onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
         currentPage="chat"
       />
 
@@ -6915,6 +7785,7 @@ export default function ChatInterface({
           onNavigateToSettings={handleNavigateToSettings}
           onNavigateToMarketplace={handleNavigateToMarketplace}
           onNavigateToServiceRequests={() => navigate("/service-requests")}
+          onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
           currentPage="chat"
         />
       </div>

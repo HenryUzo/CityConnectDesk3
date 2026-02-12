@@ -212,10 +212,12 @@ function CategorySelected({
   categoryName, 
   onChangeCategory,
   onDeleteConversation,
+  canDelete = true,
 }: { 
   categoryName?: string;
   onChangeCategory?: () => void;
   onDeleteConversation?: () => void;
+  canDelete?: boolean;
 }) {
   return (
     <div className="flex flex-col items-end gap-[6px]" data-name="Category status">
@@ -233,8 +235,9 @@ function CategorySelected({
         {onDeleteConversation ? (
           <button
             type="button"
+            disabled={!canDelete}
             onClick={onDeleteConversation}
-            className="font-['General_Sans:Medium',sans-serif] leading-[18px] text-[#d92d20] text-[12px] text-nowrap underline cursor-pointer bg-transparent border-none p-0"
+            className={`font-['General_Sans:Medium',sans-serif] leading-[18px] text-[#d92d20] text-[12px] text-nowrap underline cursor-pointer bg-transparent border-none p-0 ${!canDelete ? "opacity-20 cursor-not-allowed no-underline" : ""}`}
           >
             Delete conversation
           </button>
@@ -258,10 +261,12 @@ export function CategoryStatus({
   categoryName, 
   onChangeCategory,
   onDeleteConversation,
+  canDelete = true,
 }: { 
   categoryName?: string;
   onChangeCategory?: () => void;
   onDeleteConversation?: () => void;
+  canDelete?: boolean;
 }) {
   return (
     <div className="shrink-0" data-name="Category status">
@@ -269,6 +274,7 @@ export function CategoryStatus({
         categoryName={categoryName}
         onChangeCategory={onChangeCategory}
         onDeleteConversation={onDeleteConversation}
+        canDelete={canDelete}
       />
     </div>
   );

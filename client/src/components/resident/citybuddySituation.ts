@@ -1,4 +1,4 @@
-import type { CityBuddySituation } from "@/lib/citybuddy-gemini";
+import type { CityBuddySituation } from "@/lib/citybuddy-types";
 
 function includesAny(haystack: string, needles: string[]): boolean {
   return needles.some((n) => haystack.includes(n));

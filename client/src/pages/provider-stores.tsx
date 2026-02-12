@@ -162,13 +162,13 @@ export default function ProviderStores() {
                           <ArrowRight className="w-4 h-4 ml-2" />
                         </Button>
                       )}
-                      <Link href={`/provider/stores/${store.id}/orders`}>
+                      <Link href={`/provider/stores/${store.id}/dashboard`}>
                         <Button
                           className="w-full"
                           variant="outline"
                           disabled={store.approvalStatus !== "approved"}
                         >
-                          View Orders
+                          Store Dashboard
                         </Button>
                       </Link>
                     </CardContent>
