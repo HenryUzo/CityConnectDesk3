@@ -41,8 +41,12 @@ import RequestConversation from "@/pages/resident/RequestConversation";
 import BookServiceChat from "@/pages/resident/BookServiceChat";
 import ScheduleInspection from "@/pages/resident/ScheduleInspection";
 import CityMart from "@/pages/resident/CityMart";
+import CartPage from "@/pages/resident/CartPage";
+import OrdersPage from "@/pages/resident/OrdersPage";
+import StoreOrdersDashboard from "@/pages/StoreOrdersDashboard";
 import Settings from "@/pages/resident/Settings";
 import Homepage from "@/pages/resident/Homepage";
+import OrdinaryConversationFlow from "@/pages/resident/OrdinaryConversationFlow";
 import NotFound from "@/pages/not-found";
 import { ProfileProvider } from "@/contexts/ProfileContext";
 import { useAuth } from "./hooks/use-auth";
@@ -73,11 +77,15 @@ function Router() {
       <ProtectedRoute path="/provider/marketplace" component={ProviderMarketplace} requiredRole="provider" />
       <ProtectedRoute path="/provider/stores/:storeId/items" component={ProviderStoreItems} requiredRole="provider" />
       <ProtectedRoute path="/provider/stores/:storeId/orders" component={ProviderStoreOrders} requiredRole="provider" />
+      <ProtectedRoute path="/provider/stores/:storeId/dashboard" component={StoreOrdersDashboard} requiredRole="provider" />
       <ProtectedRoute path="/admin" component={AdminDashboard} requiredRole="admin" />
       <ProtectedRoute path="/admin/ai/conversations" component={AdminAiConversationsPage} requiredRole="admin" />
       <ProtectedRoute path="/admin/ai/prepared-requests" component={AdminAiPreparedRequestsPage} requiredRole="admin" />
       <Route path="/admin/pricing-rules">
         <Redirect to="/admin-dashboard/pricing-rules" />
+      </Route>
+      <Route path="/admin/request-questions">
+        <Redirect to="/admin-dashboard/request-questions" />
       </Route>
       <ProtectedRoute path="/admin/providers/matching" component={AdminProviderMatchingPage} />
       <Route path="/admin/login">
@@ -133,6 +141,9 @@ function Router() {
       <ProtectedRoute path="/resident/requests/new/:category" component={RequestConversation} />
       <ProtectedRoute path="/resident/book-a-service/chat" component={BookServiceChat} />
       <ProtectedRoute path="/resident/book-a-service/inspection" component={ScheduleInspection} />
+      <ProtectedRoute path="/resident/requests/ordinary" component={OrdinaryConversationFlow} />
+      <ProtectedRoute path="/resident/citymart/cart" component={CartPage} />
+      <ProtectedRoute path="/resident/citymart/orders" component={OrdersPage} />
       <ProtectedRoute path="/resident/citymart" component={CityMart} />
       <ProtectedRoute path="/resident/settings" component={Settings} />
       <Route component={NotFound} />

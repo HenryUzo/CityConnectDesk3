@@ -1,5 +1,5 @@
 import SettingsMain from "./SettingsMain";
-import { SidebarNavigation } from "@/components/resident/CityBuddyChat";
+import Nav from "@/components/layout/Nav";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 import { useLocation } from "wouter";
 
@@ -37,14 +37,18 @@ export default function Settings() {
         onNavigateToSettings={handleNavigateToSettings}
         onNavigateToServiceRequests={() => navigate("/service-requests")}
         onBookServiceClick={handleNavigateToChat}
+        onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
         currentPage="settings"
       />
-      <div className="hidden lg:block">
-        <SidebarNavigation
-          currentView="select-category"
-          isActive={false}
-          navCurrentPage="settings"
+      <div className="hidden lg:block h-full">
+        <Nav
+          onNavigateToHomepage={handleNavigateToHomepage}
+          onNavigateToMarketplace={handleNavigateToMarketplace}
+          onNavigateToSettings={handleNavigateToSettings}
           onNavigateToServiceRequests={() => navigate("/service-requests")}
+          onBookServiceClick={handleNavigateToChat}
+          onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
+          currentPage="settings"
         />
       </div>
       <MainWrap />

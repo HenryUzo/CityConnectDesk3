@@ -7,6 +7,8 @@ type BannerButton = {
   buttonVariant?: 'primary' | 'secondary' | 'ghost' | string;
 };
 
+/* ───────────────── Fifty Percent / Hero Banner ───────────────── */
+
 export type FiftyPercentBannerProps = BannerButton & {
   heading?: string;
   description?: string;
@@ -27,49 +29,63 @@ export const FiftyPercentBanner: FC<FiftyPercentBannerProps> = ({
   image,
   buttonText,
   onButtonClick,
-  buttonVariant,
   showCarouselDots,
   activeCarouselDot,
 }) => (
-  <div className="flex items-center gap-4 rounded-[32px] border border-[#d0d5dd] bg-white p-6 shadow-sm">
-    <div className="flex-1">
-      <p className="text-[12px] uppercase text-[#667085]">
-        {priceLabel}
-      </p>
-      <h2 className="text-[32px] font-bold text-[#101828]">{heading}</h2>
-      <p className="mb-4 text-[14px] text-[#475467]">{description}</p>
-      <div className="flex items-center gap-2">
-        <span className="text-[22px] font-bold text-[#039855]">{priceText}</span>
-        <span className="text-[14px] text-[#94a3b8]">{priceSuffix}</span>
+  <div className="relative rounded-[16px] border border-[#e4e7e9] bg-white overflow-hidden">
+    <div className="flex items-center min-h-[220px]">
+      {/* Text */}
+      <div className="flex-1 p-6 lg:p-8 z-10">
+        <h2 className="text-[24px] lg:text-[28px] font-bold text-[#191c1f] leading-tight mb-2">
+          {heading}
+        </h2>
+        <p className="text-[13px] text-[#5f6c72] mb-4 leading-relaxed max-w-[280px]">
+          {description}
+        </p>
+        <button
+          onClick={onButtonClick}
+          className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full bg-[#039855] text-white text-[13px] font-semibold hover:bg-[#027a45] transition-colors"
+        >
+          {buttonText || "Shop now"}
+          <span>›</span>
+        </button>
+        {showCarouselDots && (
+          <div className="flex gap-1.5 mt-4">
+            {[0, 1, 2].map((dot) => (
+              <span
+                key={dot}
+                className={`h-[8px] w-[8px] rounded-full ${
+                  activeCarouselDot === dot ? "bg-[#191c1f]" : "bg-[#d1d5db]"
+                }`}
+              />
+            ))}
+          </div>
+        )}
       </div>
-      <button
-        onClick={onButtonClick}
-        className={`mt-4 rounded-[16px] px-5 py-2 text-[14px] font-semibold ${
-          buttonVariant === 'secondary'
-            ? 'bg-white text-[#039855] border border-[#039855]'
-            : buttonVariant === 'ghost'
-            ? 'bg-transparent text-[#039855]'
-            : 'bg-[#039855] text-white'
-        }`}
-      >
-        {buttonText || "Shop now"}
-      </button>
-      {showCarouselDots && (
-        <div className="mt-2 flex gap-2">
-          {[0, 1, 2].map((dot) => (
-            <span
-              key={dot}
-              className={`h-[6px] w-[6px] rounded-full ${activeCarouselDot === dot ? "bg-[#039855]" : "bg-[#d1d5db]"}`}
-            />
-          ))}
-        </div>
-      )}
+
+      {/* Price badge + Image */}
+      <div className="relative shrink-0 flex items-center">
+        {/* Price badge */}
+        {priceText && (
+          <div className="absolute left-[-20px] top-1/2 -translate-y-1/2 z-20 w-[90px] h-[90px] rounded-full bg-[#039855] flex flex-col items-center justify-center text-white shadow-lg">
+            <span className="text-[9px] uppercase tracking-wide">{priceLabel || "Just"}</span>
+            <span className="text-[14px] font-bold leading-tight">{priceText}</span>
+            <span className="text-[9px] uppercase">{priceSuffix || "Only!"}</span>
+          </div>
+        )}
+        {image && (
+          <img
+            src={image}
+            alt={heading}
+            className="h-[220px] w-[280px] lg:w-[340px] object-cover"
+          />
+        )}
+      </div>
     </div>
-    {image && (
-      <img src={image} alt={heading} className="h-[200px] w-[260px] rounded-[24px] object-cover" />
-    )}
   </div>
 );
+
+/* ───────────────── Aside Banners ───────────────── */
 
 type AsideBannerProps = BannerButton & {
   title?: string;
@@ -77,33 +93,43 @@ type AsideBannerProps = BannerButton & {
   highlightWord?: string;
 };
 
-export const AsideBannerSmall: FC<AsideBannerProps> = ({
+export const AsideBannerSmall: FC<AsideBannerProps & {
+  countdown?: string;
+}> = ({
   title,
   description,
   highlightWord,
   buttonText,
   onButtonClick,
-  buttonVariant,
+  countdown,
 }) => (
-  <div className="flex h-full flex-col justify-between rounded-[28px] bg-[#039855] p-6 text-white shadow-sm">
+  <div className="relative h-full rounded-[12px] bg-gradient-to-br from-[#039855] to-[#027a45] p-5 text-white flex flex-col justify-between overflow-hidden min-h-[200px]">
+    {/* Decorative circle */}
+    <div className="absolute -right-8 -bottom-8 w-[120px] h-[120px] rounded-full bg-white/10" />
+
+    {countdown && (
+      <span className="inline-block self-start px-2.5 py-1 rounded bg-white/20 text-[11px] font-medium mb-2">
+        {countdown}
+      </span>
+    )}
     <div>
-      <p className="text-[12px] uppercase tracking-[0.3em]">CityMart</p>
-      <h3 className="mt-2 text-[18px] font-bold">{title}</h3>
-      <p className="text-[12px] text-[#ecfdf3]">
-        {description} <strong>{highlightWord}</strong>
+      <h3 className="text-[22px] font-bold leading-tight mb-1">{title}</h3>
+      <p className="text-[12px] text-white/80 leading-relaxed">
+        {description?.split(highlightWord || "").map((part, i, arr) =>
+          i < arr.length - 1 ? (
+            <span key={i}>{part}<strong className="text-white">{highlightWord}</strong></span>
+          ) : (
+            <span key={i}>{part}</span>
+          )
+        )}
       </p>
     </div>
     <button
       onClick={onButtonClick}
-      className={`rounded-[16px] px-4 py-2 text-[12px] font-semibold ${
-        buttonVariant === 'secondary'
-          ? 'bg-white text-[#039855] border border-white/50'
-          : buttonVariant === 'ghost'
-          ? 'bg-transparent text-white border border-white/30'
-          : 'bg-transparent text-white border border-white/50'
-      }`}
+      className="inline-flex items-center gap-1.5 self-start px-4 py-2 rounded-full bg-white text-[#039855] text-[12px] font-semibold hover:bg-white/90 transition-colors mt-3"
     >
-      {buttonText || "Learn more"}
+      {buttonText || "Shop now"}
+      <span>›</span>
     </button>
   </div>
 );
@@ -115,24 +141,17 @@ export const AsideBannerMedium: FC<AsideBannerProps & { image?: string; showButt
   showButton,
   buttonText,
   onButtonClick,
-  buttonVariant,
 }) => (
-  <div className="flex h-full flex-col justify-between rounded-[28px] border border-[#d0d5dd] bg-white p-6 shadow-sm">
+  <div className="flex h-full flex-col justify-between rounded-[12px] border border-[#e4e7e9] bg-white p-5">
     <div>
-      <h3 className="text-[20px] font-semibold text-[#101828]">{title}</h3>
-      <p className="text-[14px] text-[#475467]">{description}</p>
+      <h3 className="text-[18px] font-semibold text-[#191c1f] mb-1">{title}</h3>
+      <p className="text-[13px] text-[#5f6c72]">{description}</p>
     </div>
-    {image && <img src={image} alt={title} className="mt-4 h-[180px] w-full rounded-[20px] object-cover" />}
+    {image && <img src={image} alt={title} className="mt-3 h-[140px] w-full rounded-lg object-cover" />}
     {showButton && (
       <button
         onClick={onButtonClick}
-        className={`mt-4 w-full rounded-[16px] px-4 py-2 text-[12px] font-semibold ${
-          buttonVariant === 'secondary'
-            ? 'bg-white text-[#039855] border border-[#e6f4ee]'
-            : buttonVariant === 'ghost'
-            ? 'bg-transparent text-[#039855]'
-            : 'bg-[#039855] text-white'
-        }`}
+        className="mt-3 w-full rounded-full px-4 py-2 text-[12px] font-semibold bg-[#039855] text-white hover:bg-[#027a45] transition-colors"
       >
         {buttonText || "Shop now"}
       </button>
@@ -145,36 +164,55 @@ export const AsideBannerLong: FC<
     category?: string;
     dealExpiry?: string;
     daysRemaining?: string;
+    image?: string;
   }
-> = ({ category, title, description, highlightWord, buttonText, onButtonClick, dealExpiry, daysRemaining, buttonVariant }) => (
-  <div className="flex h-full flex-col justify-between rounded-[28px] bg-white p-6 shadow-sm">
-    <div>
-      <p className="text-[12px] uppercase tracking-[0.3em] text-[#039855]">{category}</p>
-      <h3 className="mt-2 text-[18px] font-bold text-[#101828]">{title}</h3>
-      <p className="text-[14px] text-[#475467]">
-        {description} <strong className="text-[#039855]">{highlightWord}</strong>
+> = ({ category, title, description, highlightWord, buttonText, onButtonClick, dealExpiry, daysRemaining, image }) => (
+  <div className="relative rounded-[12px] bg-white border border-[#e4e7e9] overflow-hidden flex flex-col min-h-[400px]">
+    {/* Content */}
+    <div className="p-5 flex-1 flex flex-col">
+      {category && (
+        <span className="text-[11px] uppercase tracking-[0.15em] font-semibold text-[#039855] mb-2">
+          {category}
+        </span>
+      )}
+      <h3 className="text-[28px] font-bold text-[#191c1f] leading-tight mb-1">{title}</h3>
+      <p className="text-[13px] text-[#5f6c72] leading-relaxed mb-3">
+        {description?.split(highlightWord || "").map((part, i, arr) =>
+          i < arr.length - 1 ? (
+            <span key={i}>{part}<strong className="text-[#039855]">{highlightWord}</strong></span>
+          ) : (
+            <span key={i}>{part}</span>
+          )
+        )}
       </p>
-      {dealExpiry && (
-        <p className="mt-2 text-[12px] text-[#667085]">{dealExpiry}</p>
+      {(dealExpiry || daysRemaining) && (
+        <div className="mb-3">
+          {dealExpiry && <p className="text-[11px] text-[#98a2b3] mb-0.5">{dealExpiry}</p>}
+          {daysRemaining && (
+            <span className="inline-block px-3 py-1.5 rounded-md bg-[#f2f4f7] text-[12px] font-semibold text-[#191c1f]">
+              {daysRemaining}
+            </span>
+          )}
+        </div>
       )}
-      {daysRemaining && (
-        <p className="text-[12px] font-semibold text-[#039855]">{daysRemaining}</p>
-      )}
+      <button
+        onClick={onButtonClick}
+        className="inline-flex items-center gap-1.5 self-start px-5 py-2 rounded-full bg-[#039855] text-white text-[12px] font-semibold hover:bg-[#027a45] transition-colors"
+      >
+        {buttonText || "Shop now"}
+        <span>›</span>
+      </button>
     </div>
-    <button
-      onClick={onButtonClick}
-      className={`mt-4 rounded-[16px] px-4 py-2 text-[12px] font-semibold ${
-        buttonVariant === 'secondary'
-          ? 'bg-white text-[#039855] border border-[#039855]'
-          : buttonVariant === 'ghost'
-          ? 'bg-transparent text-[#039855]'
-          : 'bg-[#039855] text-white'
-      }`}
-    >
-      {buttonText || "Shop now"}
-    </button>
+    {/* Image area */}
+    {image && (
+      <div className="h-[160px] overflow-hidden">
+        <img src={image} alt={title} className="w-full h-full object-cover" />
+      </div>
+    )}
   </div>
 );
+
+/* ───────────────── Full Width Banner ───────────────── */
 
 export type FullWidthBannerProps = BannerButton & {
   heading?: string;
@@ -196,56 +234,66 @@ export const FullWidthBanner: FC<FullWidthBannerProps> = ({
   backgroundImage,
   buttonText,
   onButtonClick,
-  buttonVariant,
 }) => (
-  <div
-    className="relative overflow-hidden rounded-[32px] px-8 py-10 text-white shadow-lg"
-    style={{
-      backgroundImage: backgroundImage ? `url(${backgroundImage})` : undefined,
-      backgroundSize: "cover",
-    }}
-  >
-    {promoBadgeText && (
-      <span className="rounded-full bg-[#ecfdf3] px-4 py-1 text-[12px] font-semibold text-[#039855]">
-        {promoBadgeText}
-      </span>
+  <div className="relative overflow-hidden rounded-[16px] min-h-[260px] flex items-center">
+    {/* Background */}
+    {backgroundImage && (
+      <div
+        className="absolute inset-0 bg-cover bg-center"
+        style={{ backgroundImage: `url(${backgroundImage})` }}
+      >
+        <div className="absolute inset-0 bg-gradient-to-r from-[#191c1f]/90 via-[#191c1f]/60 to-transparent" />
+      </div>
     )}
-    <h2 className="mt-4 text-[32px] font-bold">{heading}</h2>
-    <p className="mt-2 text-[16px]">{description}</p>
-    <div className="mt-4 flex items-baseline gap-2">
-      <span className="text-[14px] uppercase text-[#ecfdf3]">{priceTopText}</span>
-      <span className="text-[28px] font-bold">{price}</span>
-      <span className="text-[12px] text-[#ecfdf3]">{priceBottomText}</span>
+    {!backgroundImage && (
+      <div className="absolute inset-0 bg-gradient-to-r from-[#1b2430] to-[#2d3a4a]" />
+    )}
+
+    {/* Content */}
+    <div className="relative z-10 p-8 lg:p-10 max-w-[520px]">
+      {promoBadgeText && (
+        <span className="inline-block px-3 py-1 rounded text-[11px] font-bold uppercase tracking-wide bg-[#ecfdf3] text-[#039855] mb-3">
+          {promoBadgeText}
+        </span>
+      )}
+      <h2 className="text-[28px] lg:text-[36px] font-bold text-white leading-tight mb-2">
+        {heading}
+      </h2>
+      <p className="text-[14px] text-white/80 mb-4 leading-relaxed">{description}</p>
+      <button
+        onClick={onButtonClick}
+        className="inline-flex items-center gap-1.5 px-6 py-3 rounded-full bg-[#039855] text-white text-[13px] font-semibold hover:bg-[#027a45] transition-colors"
+      >
+        {buttonText || "Shop now"}
+        <span>›</span>
+      </button>
     </div>
-    <button
-      onClick={onButtonClick}
-      className={`mt-6 rounded-[24px] px-6 py-3 text-[14px] font-semibold ${
-        buttonVariant === 'secondary'
-          ? 'bg-white text-[#039855] border border-white'
-          : buttonVariant === 'ghost'
-          ? 'bg-transparent text-white'
-          : 'bg-[#039855] text-white'
-      }`}
-    >
-      {buttonText || "Shop now"}
-    </button>
+
+    {/* Price badge */}
+    {price && (
+      <div className="absolute right-6 lg:right-10 top-6 z-10 w-[80px] h-[80px] lg:w-[100px] lg:h-[100px] rounded-full bg-[#ee5858] flex flex-col items-center justify-center text-white shadow-lg">
+        <span className="text-[8px] lg:text-[9px] uppercase">{priceTopText || "Just"}</span>
+        <span className="text-[12px] lg:text-[15px] font-bold leading-tight">{price}</span>
+        <span className="text-[8px] lg:text-[9px]">{priceBottomText || "Only!"}</span>
+      </div>
+    )}
   </div>
 );
 
-  // Convenience aliases for many themed banners used in Playground
-  export const ElectronicsBanner = FullWidthBanner;
-  export const FashionBanner = FullWidthBanner;
-  export const HomeGardenBanner = FullWidthBanner;
-  export const SportsFitnessBanner = FullWidthBanner;
-  export const BeautyBanner = FullWidthBanner;
-  export const BooksMediaBanner = FullWidthBanner;
-  export const SpringSaleBanner = FullWidthBanner;
-  export const SummerSaleBanner = FullWidthBanner;
-  export const FallSaleBanner = FullWidthBanner;
-  export const WinterSaleBanner = FullWidthBanner;
-  export const BlackFridayBanner = FullWidthBanner;
-  export const CyberMondayBanner = FullWidthBanner;
-  export const HolidayBanner = FullWidthBanner;
-  export const ValentinesBanner = FullWidthBanner;
-  export const BackToSchoolBanner = FullWidthBanner;
-  export const NewYearBanner = FullWidthBanner;
+// Convenience aliases for many themed banners used in Playground
+export const ElectronicsBanner = FullWidthBanner;
+export const FashionBanner = FullWidthBanner;
+export const HomeGardenBanner = FullWidthBanner;
+export const SportsFitnessBanner = FullWidthBanner;
+export const BeautyBanner = FullWidthBanner;
+export const BooksMediaBanner = FullWidthBanner;
+export const SpringSaleBanner = FullWidthBanner;
+export const SummerSaleBanner = FullWidthBanner;
+export const FallSaleBanner = FullWidthBanner;
+export const WinterSaleBanner = FullWidthBanner;
+export const BlackFridayBanner = FullWidthBanner;
+export const CyberMondayBanner = FullWidthBanner;
+export const HolidayBanner = FullWidthBanner;
+export const ValentinesBanner = FullWidthBanner;
+export const BackToSchoolBanner = FullWidthBanner;
+export const NewYearBanner = FullWidthBanner;

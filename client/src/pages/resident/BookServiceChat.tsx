@@ -19,6 +19,7 @@ export default function BookServiceChat() {
 
   return (
     <CityBuddyChat
+      key={category}
       initialView="conversation"
       initialSelectedCategory={category}
     />

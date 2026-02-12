@@ -873,6 +873,7 @@ export default function Homepage({
         onNavigateToSettings={handleNavigateToSettings}
         onNavigateToMarketplace={handleNavigateToMarketplace}
         onNavigateToServiceRequests={() => navigate("/service-requests")}
+        onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
         currentPage={currentPage}
       />
       <div className="hidden lg:block">
@@ -882,6 +883,7 @@ export default function Homepage({
           onNavigateToSettings={handleNavigateToSettings}
           onNavigateToMarketplace={handleNavigateToMarketplace}
           onNavigateToServiceRequests={() => navigate("/service-requests")}
+          onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
           currentPage={currentPage}
         />
       </div>

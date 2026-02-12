@@ -13,7 +13,7 @@ type Provider = "openai" | "ollama" | "gemini";
 
 const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 
-let activeProvider: Provider = (process.env.AI_PROVIDER as Provider) || "openai";
+let activeProvider: Provider = "gemini";
 let activeModel: string =
   activeProvider === "gemini" ? DEFAULT_GEMINI_MODEL : process.env.OPENAI_DIAGNOSIS_MODEL || "gpt-5.2-codex";
 let loadedFromDb = false;

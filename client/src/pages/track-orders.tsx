@@ -14,7 +14,7 @@ import {
   Phone,
   X
 } from "lucide-react";
-import { ResidentLayout } from "@/components/resident/ResidentLayout";
+import ResidentShell from "@/components/layout/ResidentShell";
 
 type StatusFilter = "all" | "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
 type ServiceRequest = {
@@ -141,8 +141,8 @@ export default function TrackOrders() {
   }, [highlightId]);
 
   return (
-    <ResidentLayout title="Track Your Requests">
-      <div className="space-y-6">
+    <ResidentShell currentPage="requests">
+      <div className="max-w-5xl mx-auto p-8 space-y-6">
         <div className="flex items-center">
           <ClipboardList className="w-8 h-8 text-primary mr-3" />
           <div>
@@ -288,6 +288,6 @@ export default function TrackOrders() {
           )}
         </div>
       </div>
-    </ResidentLayout>
+    </ResidentShell>
   );
 }

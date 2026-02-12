@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { residentFetch } from "@/lib/residentApi";
+import ResidentShell from "@/components/layout/ResidentShell";
 
 export default function PaymentConfirmation() {
   const [status, setStatus] = useState<"loading" | "success" | "failed">("loading");
@@ -15,6 +16,8 @@ export default function PaymentConfirmation() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const ref = params.get("reference");
+    const orderType = params.get("orderType");
+    
     if (!ref) {
       setStatus("failed");
       toast({ title: "Missing reference", description: "Payment reference not present", variant: "destructive" });
@@ -36,8 +39,18 @@ export default function PaymentConfirmation() {
         if (res?.status === "success") {
           toast({
             title: "Payment received",
-            description: "Your booking has been confirmed.",
+            description: orderType === "marketplace" ? "Payment confirmed. Completing your order..." : "Your booking has been confirmed.",
           });
+          
+          // Handle marketplace orders
+          if (orderType === "marketplace") {
+            // Redirect back to cart with payment reference
+            // The cart page will use this to finalize the checkout
+            setLocation(`/resident/citymart/cart?paymentReference=${encodeURIComponent(ref)}&orderType=marketplace`);
+            return;
+          }
+          
+          // Handle service requests
           if (res.serviceRequestId) {
             setLocation(`/track-orders?highlight=${encodeURIComponent(res.serviceRequestId)}`);
           } else {
@@ -68,7 +81,8 @@ export default function PaymentConfirmation() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+    <ResidentShell currentPage="chat">
+      <div className="flex items-center justify-center p-6 min-h-full">
       <Card className="max-w-xl w-full p-8">
         <h1 className="text-2xl font-semibold mb-4">Payment Confirmation</h1>
 
@@ -78,9 +92,10 @@ export default function PaymentConfirmation() {
           <div>
             <p className="text-green-700 font-semibold">Payment successful.</p>
             <p className="text-sm text-gray-700 mt-2">Reference: <span className="font-mono">{reference}</span></p>
+            <p className="text-sm text-gray-700 mt-4">Your order is being processed. You will be redirected shortly...</p>
             <div className="mt-6 flex justify-end">
-              <Link href="/resident">
-                <Button>Back to dashboard</Button>
+              <Link href="/resident/citymart/orders">
+                <Button>View Orders</Button>
               </Link>
             </div>
           </div>
@@ -94,8 +109,8 @@ export default function PaymentConfirmation() {
               <p className="text-sm text-gray-500 mt-1">{failureMessage}</p>
             )}
             <div className="mt-6 flex justify-end space-x-2">
-              <Link href="/checkout-diagnosis">
-                <Button variant="outline">Back to checkout</Button>
+              <Link href="/resident/citymart/cart">
+                <Button variant="outline">Back to Cart</Button>
               </Link>
               <Link href="/resident">
                 <Button>Back to dashboard</Button>
@@ -104,6 +119,7 @@ export default function PaymentConfirmation() {
           </div>
         )}
       </Card>
-    </div>
+      </div>
+    </ResidentShell>
   );
 }

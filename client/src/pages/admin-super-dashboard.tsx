@@ -3,13 +3,14 @@
   useEffect,
   useCallback,
   useRef,
+  useMemo,
   createContext,
   useContext,
   type FC,
   ReactNode,
 } from "react";
 import { useLocation, Link } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import {
   adminApiRequest,
@@ -20,6 +21,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import {
   createMarketplaceItemSchema,
   updateMarketplaceItemSchema,
@@ -47,6 +49,7 @@ import formatDate from "@/utils/formatDate";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
+import AdminRequestQuestions from "@/pages/admin-request-questions";
 
 import {
   Table,
@@ -69,6 +72,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+
+function formatNaira(value?: number) {
+  return new Intl.NumberFormat("en-NG", {
+    style: "currency",
+    currency: "NGN",
+    maximumFractionDigits: 0,
+  }).format(value ?? 0);
+}
 import {
   Dialog,
   DialogContent,
@@ -426,6 +437,23 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     setCurrentEstate(selectedEstateId);
   }, [selectedEstateId]);
 
+  // Super admin should default to all estates (no scoped filter)
+  // Only clear on initial login, not on every selectedEstateId change
+  const superAdminCheckedRef = useRef(false);
+  useEffect(() => {
+    const isSuperAdmin =
+      user?.globalRole === "super_admin" || user?.role === "super_admin";
+    if (isSuperAdmin && !superAdminCheckedRef.current) {
+      superAdminCheckedRef.current = true;
+      if (selectedEstateId) {
+        setSelectedEstateId(null);
+      }
+    }
+    if (!user) {
+      superAdminCheckedRef.current = false;
+    }
+  }, [user]);
+
   // Listen for auth failure events from adminApiRequest
   useEffect(() => {
     const handleAuthFailure = () => {
@@ -446,8 +474,10 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     }
   }, []);
 
+  const bootstrapRanRef = useRef(false);
   useEffect(() => {
-    if (sessionChecked) return;
+    if (sessionChecked || bootstrapRanRef.current) return;
+    bootstrapRanRef.current = true;
     let cancelled = false;
 
     const bootstrapSession = async () => {
@@ -457,7 +487,10 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
         const normalizedUser = normalizeAdminUser(sessionUser);
         setUser(normalizedUser);
         const memberships = normalizedUser?.memberships || [];
-        if (memberships.length > 0 && !selectedEstateId) {
+        const isSuperAdmin =
+          normalizedUser?.globalRole === "super_admin" ||
+          normalizedUser?.role === "super_admin";
+        if (!isSuperAdmin && memberships.length > 0 && !selectedEstateId) {
           setSelectedEstateId(memberships[0].estateId);
         }
       } catch {
@@ -476,7 +509,7 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     return () => {
       cancelled = true;
     };
-  }, [sessionChecked, selectedEstateId]);
+  }, [sessionChecked]);
 
   const refreshToken = async () => {
     const refreshTokenValue = sessionStorage.getItem("admin_refresh_token");
@@ -500,7 +533,10 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
 
       // Restore estate selection if user has memberships
       const memberships = normalizedUser?.memberships || [];
-      if (memberships.length > 0 && !selectedEstateId) {
+      const isSuperAdmin =
+        normalizedUser?.globalRole === "super_admin" ||
+        normalizedUser?.role === "super_admin";
+      if (!isSuperAdmin && memberships.length > 0 && !selectedEstateId) {
         const firstEstate = memberships[0].estateId;
         setSelectedEstateId(firstEstate);
       }
@@ -542,7 +578,10 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
 
         // Auto-select first estate for tenant scoping
         const memberships = normalizedUser?.memberships || [];
-        if (memberships.length > 0) {
+        const isSuperAdmin =
+          normalizedUser?.globalRole === "super_admin" ||
+          normalizedUser?.role === "super_admin";
+        if (!isSuperAdmin && memberships.length > 0) {
           const firstEstate = memberships[0].estateId;
           setSelectedEstateId(firstEstate);
         }
@@ -573,19 +612,19 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
   };
 
 
+  const contextValue = useMemo(() => ({
+    user,
+    token,
+    selectedEstateId,
+    setSelectedEstateId,
+    login,
+    logout,
+    isLoading,
+    sessionChecked,
+  }), [user, token, selectedEstateId, isLoading, sessionChecked]);
+
   return (
-    <AdminAuthContext.Provider
-      value={{
-        user,
-        token,
-        selectedEstateId,
-        setSelectedEstateId,
-        login,
-        logout,
-        isLoading,
-        sessionChecked,
-      }}
-    >
+    <AdminAuthContext.Provider value={contextValue}>
       {children}
     </AdminAuthContext.Provider>
   );
@@ -696,6 +735,7 @@ const AdminSidebar = ({
     { id: "item-categories", label: "Item Categories", icon: Tags },
     { id: "categories", label: "Categories", icon: Tags },
     { id: "marketplace", label: "Marketplace", icon: ShoppingBag },
+    { id: "citymart-banners", label: "CityMart Banners", icon: ShoppingBag },
      { id: "artisanRequests", label: "Book an Artisan", icon: Wrench },
     { id: "requests", label: "Service Requests", icon: ClipboardList },
     { id: "orders", label: "Orders", icon: Package },
@@ -713,6 +753,7 @@ const AdminSidebar = ({
       { id: "ai-conversations", label: "AI Conversations", icon: MessageSquare },
       { id: "ai-conversation-flow", label: "AI Conversation Flow", icon: Settings },
       { id: "ai-prepared-requests", label: "AI Prepared Requests", icon: MessageSquare },
+      { id: "request-questions", label: "Request Questions", icon: Settings },
       { id: "pricing-rules", label: "Pricing Rules", icon: Tags },
       { id: "provider-matching", label: "Provider Matching", icon: UserCheck },
     );
@@ -1906,7 +1947,7 @@ const AnalyticsPanel = ({ orderStats }: { orderStats: any }) => {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold">
-              â‚¦{(orderStats?.totalRevenue || 0).toLocaleString()}
+              {formatNaira(orderStats?.totalRevenue || 0)}
             </p>
             <p className="text-xs text-muted-foreground mt-1">Across all orders</p>
           </CardContent>
@@ -1982,7 +2023,7 @@ const AnalyticsPanel = ({ orderStats }: { orderStats: any }) => {
                     <p className="text-xs text-muted-foreground">{order.service || order.category}</p>
                   </div>
                   <div className="text-right">
-                    <p className="font-medium">â‚¦{(order.totalAmount || 0).toLocaleString()}</p>
+                    <p className="font-medium">{formatNaira(order.totalAmount || 0)}</p>
                     <p className="text-xs text-muted-foreground capitalize">{order.status}</p>
                   </div>
                 </div>
@@ -5852,6 +5893,631 @@ const MarketplaceManagement = () => {
   );
 };
 
+// CityMart Banners Component
+const CityMartBannersManagement = () => {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState("");
+  const [editingBanner, setEditingBanner] = useState<any>(null);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+
+  // Fetch all banners
+  const { data: banners = [], isLoading } = useQuery({
+    queryKey: ["admin/citymart-banners"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/citymart/banners"),
+  });
+
+  // Form for creating/editing banners
+  const form = useForm({
+    resolver: zodResolver(
+      editingBanner
+        ? z.object({
+            type: z.string(),
+            title: z.string().optional(),
+            description: z.string().optional(),
+            heading: z.string().optional(),
+            buttonText: z.string().optional(),
+            buttonUrl: z.string().optional(),
+            secondaryButtonText: z.string().optional(),
+            secondaryButtonUrl: z.string().optional(),
+            imageUrl: z.string().optional(),
+            backgroundImageUrl: z.string().optional(),
+            badgeText: z.string().optional(),
+            badgeColor: z.string().optional(),
+            discountText: z.string().optional(),
+            discountValue: z.number().optional(),
+            priceValue: z.number().optional(),
+            position: z.number(),
+            status: z.enum(["active", "inactive"]),
+          })
+        : z.object({
+            type: z.string(),
+            title: z.string().optional(),
+            description: z.string().optional(),
+            heading: z.string().optional(),
+            buttonText: z.string().optional(),
+            buttonUrl: z.string().optional(),
+            secondaryButtonText: z.string().optional(),
+            secondaryButtonUrl: z.string().optional(),
+            imageUrl: z.string().optional(),
+            backgroundImageUrl: z.string().optional(),
+            badgeText: z.string().optional(),
+            badgeColor: z.string().optional(),
+            discountText: z.string().optional(),
+            discountValue: z.number().optional(),
+            priceValue: z.number().optional(),
+            position: z.number(),
+            status: z.enum(["active", "inactive"]),
+          })
+    ),
+    defaultValues: editingBanner || {
+      type: "hero",
+      position: banners.length,
+      status: "active",
+    },
+  });
+
+  // Mutations
+  const createMutation = useMutation({
+    mutationFn: (data: any) =>
+      adminApiRequest("POST", "/api/admin/citymart/banners", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin/citymart-banners"] });
+      setIsCreateDialogOpen(false);
+      setEditingBanner(null);
+      form.reset();
+      toast({ title: "Banner created successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error?.response?.data?.error || "Failed to create banner",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: any) =>
+      adminApiRequest("PATCH", `/api/admin/citymart/banners/${editingBanner.id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin/citymart-banners"] });
+      setIsCreateDialogOpen(false);
+      setEditingBanner(null);
+      form.reset();
+      toast({ title: "Banner updated successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error?.response?.data?.error || "Failed to update banner",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) =>
+      adminApiRequest("DELETE", `/api/admin/citymart/banners/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin/citymart-banners"] });
+      toast({ title: "Banner deleted successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error?.response?.data?.error || "Failed to delete banner",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSubmit = async (data: any) => {
+    if (editingBanner) {
+      updateMutation.mutate(data);
+    } else {
+      createMutation.mutate(data);
+    }
+  };
+
+  const handleEdit = (banner: any) => {
+    setEditingBanner(banner);
+    form.reset(banner);
+    setIsCreateDialogOpen(true);
+  };
+
+  const handleDelete = (id: string) => {
+    if (confirm("Are you sure you want to delete this banner?")) {
+      deleteMutation.mutate(id);
+    }
+  };
+
+  const filteredBanners = banners.filter((banner: any) =>
+    banner.title?.toLowerCase().includes(search.toLowerCase()) ||
+    banner.type?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const BANNER_TYPES = [
+    { value: "hero", label: "Hero Banner" },
+    { value: "horizontal", label: "Horizontal Banner" },
+    { value: "aside-long", label: "Aside Long" },
+    { value: "aside-small", label: "Aside Small" },
+    { value: "full-width", label: "Full Width" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            CityMart Banners
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400">
+            Manage promotional banners for the marketplace
+          </p>
+        </div>
+        <Button
+          onClick={() => {
+            setEditingBanner(null);
+            form.reset({ type: "hero", position: banners.length, status: "active" });
+            setIsCreateDialogOpen(true);
+          }}
+          className="gap-2"
+        >
+          <Plus className="w-4 h-4" />
+          Create Banner
+        </Button>
+      </div>
+
+      {/* Search */}
+      <div className="flex gap-4">
+        <Input
+          placeholder="Search banners by title or type..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1"
+        />
+      </div>
+
+      {/* Banners Table */}
+      <Card>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="p-8 text-center">
+              <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
+              <p>Loading banners...</p>
+            </div>
+          ) : filteredBanners.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">
+              No banners found. Create one to get started!
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Position</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Preview</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredBanners
+                  .sort((a: any, b: any) => (a.position || 0) - (b.position || 0))
+                  .map((banner: any, idx: number) => (
+                    <TableRow key={banner.id}>
+                      <TableCell className="font-medium">{idx + 1}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">
+                          {BANNER_TYPES.find((t) => t.value === banner.type)?.label || banner.type}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="max-w-xs">
+                          <div className="font-medium truncate">{banner.title || "Untitled"}</div>
+                          {banner.heading && (
+                            <div className="text-xs text-gray-500 truncate">{banner.heading}</div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={banner.status === "active" ? "default" : "secondary"}>
+                          {banner.status || "active"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {banner.imageUrl || banner.backgroundImageUrl ? (
+                            <img
+                              src={banner.imageUrl || banner.backgroundImageUrl}
+                              alt={banner.title}
+                              className="w-12 h-12 object-cover rounded"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center text-xs">
+                              No image
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleEdit(banner)}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDelete(banner.id)}
+                            className="text-red-600 hover:text-red-700"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Create/Edit Dialog */}
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="w-[70vw] max-w-[95vw] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editingBanner ? "Edit Banner" : "Create New Banner"}
+            </DialogTitle>
+            <DialogDescription>
+              {editingBanner
+                ? "Update banner details and content"
+                : "Create a new promotional banner for the marketplace"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
+              {/* Type Selection */}
+              <FormField
+                control={form.control}
+                name="type"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Banner Type</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select banner type" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {BANNER_TYPES.map((t) => (
+                          <SelectItem key={t.value} value={t.value}>
+                            {t.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Title Section */}
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="title"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Title</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Banner title" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="heading"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Heading</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Main heading (larger text)" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              {/* Description */}
+              <FormField
+                control={form.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Banner description or subtitle"
+                        className="min-h-20"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Button 1 */}
+              <div className="border rounded-lg p-4 space-y-3">
+                <h3 className="font-semibold text-sm">Primary Button</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="buttonText"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Button Text</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., Shop Now" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="buttonUrl"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Button URL</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., /citymart?category=electronics" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              </div>
+
+              {/* Button 2 */}
+              <div className="border rounded-lg p-4 space-y-3">
+                <h3 className="font-semibold text-sm">Secondary Button (Optional)</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="secondaryButtonText"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Button Text</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., Learn More" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="secondaryButtonUrl"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Button URL</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., /help/promotions" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              </div>
+
+              {/* Images */}
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="imageUrl"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Image URL</FormLabel>
+                      <FormControl>
+                        <Input placeholder="https://example.com/banner.jpg" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="backgroundImageUrl"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Background Image URL</FormLabel>
+                      <FormControl>
+                        <Input placeholder="https://example.com/bg.jpg" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              {/* Policy Info */}
+              <div className="border rounded-lg p-4 space-y-3">
+                <h3 className="font-semibold text-sm">Badge & Discount Info</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="badgeText"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Badge Text</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., New, Hot" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="badgeColor"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Badge Color</FormLabel>
+                        <FormControl>
+                          <Input type="color" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="discountText"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Discount Text</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., Save up to" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="discountValue"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Discount Value (%)</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            placeholder="e.g., 30"
+                            {...field}
+                            onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : undefined)}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="priceValue"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Price Value</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            placeholder="e.g., 2499"
+                            {...field}
+                            onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : undefined)}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              </div>
+
+              {/* Position and Status */}
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="position"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Position (Display Order)</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          placeholder="0"
+                          {...field}
+                          onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="status"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Status</FormLabel>
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select status" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="inactive">Inactive</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              {/* Dialog Footer */}
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setIsCreateDialogOpen(false);
+                    setEditingBanner(null);
+                    form.reset();
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                >
+                  {createMutation.isPending || updateMutation.isPending
+                    ? "Saving..."
+                    : editingBanner
+                      ? "Update Banner"
+                      : "Create Banner"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
 // Recent Activity Component
 const RecentActivity = () => {
   const [dateFrom, setDateFrom] = useState("");
@@ -6463,11 +7129,23 @@ export default function AdminSuperDashboard() {
   const { user, token, sessionChecked, selectedEstateId, setSelectedEstateId } = useAdminAuth();
   const [location, setLocation] = useLocation();
   const activeTab = (() => {
+    if (
+      location.startsWith("/admin-dashboard/request-questions") ||
+      location.startsWith("/admin/request-questions")
+    ) {
+      return "request-questions";
+    }
     if (!location.startsWith("/admin-dashboard")) return "dashboard";
     const pathPart = location.split("/")[2] || "dashboard";
     return String(pathPart).split("?")[0].split("#")[0] || "dashboard";
   })();
-  const setActiveTab = (tab: string) => setLocation(`/admin-dashboard/${tab}`);
+  const setActiveTab = (tab: string) => {
+    if (tab === "request-questions") {
+      setLocation("/admin-dashboard/request-questions");
+      return;
+    }
+    setLocation(`/admin-dashboard/${tab}`);
+  };
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [requestDialogOpen, setRequestDialogOpen] = useState(false);
   const isSuperAdmin = user?.globalRole === "super_admin";
@@ -6475,72 +7153,92 @@ export default function AdminSuperDashboard() {
     queryKey: ["admin/provider-requests"],
     queryFn: () => adminApiRequest("GET", "/api/admin/provider-requests"),
     enabled: isSuperAdmin,
-    refetchInterval: 15_000,
-    staleTime: 15_000,
+    refetchInterval: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
   const { data: estateList = [] } = useQuery({
     queryKey: ["admin-estates"],
     queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
     enabled: Boolean(user),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
   const { data: orderStats } = useQuery({
     queryKey: ["admin-orders-analytics"],
     queryFn: () => adminApiRequest("GET", "/api/admin/orders/analytics/stats"),
     enabled: isSuperAdmin,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
+  
   const { data: categoriesList = [] } = useQuery({
     queryKey: ["/api/admin/categories"],
     queryFn: () => adminApiRequest("GET", "/api/admin/categories"),
     enabled: isSuperAdmin,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
+  const estateAutoSelectedRef = useRef(false);
   useEffect(() => {
-    if (!sessionChecked || !user || selectedEstateId) return;
+    if (!sessionChecked || !user || estateAutoSelectedRef.current) return;
+    // Super admins should NOT have a scoped estate
+    if (isSuperAdmin) {
+      estateAutoSelectedRef.current = true;
+      return;
+    }
+    if (selectedEstateId) {
+      estateAutoSelectedRef.current = true;
+      return;
+    }
     if (!Array.isArray(estateList) || estateList.length === 0) return;
     const firstEstate = estateList[0];
     const estateId = firstEstate?._id || firstEstate?.id || firstEstate?.slug;
     if (estateId) {
+      estateAutoSelectedRef.current = true;
       setSelectedEstateId(String(estateId));
     }
-  }, [estateList, selectedEstateId, sessionChecked, user]);
+  }, [estateList, sessionChecked, user, isSuperAdmin]);
 
   // Listen for service request SSE events to keep stats fresh
-  useEffect(() => {
-    if (!isSuperAdmin) return;
-
-    const setupSSE = () => {
-      try {
-        const es = new EventSource("/api/service-requests/stream");
-        
-        es.addEventListener("service-request", (event: Event) => {
-          try {
-            const evt = event as any;
-            const data = JSON.parse(evt.data);
-            if (data.type === "created" || data.type === "updated" || data.type === "assigned") {
-              // Invalidate bridge stats to refresh counts
-              queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/stats"] });
-              queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/service-requests"] });
-            }
-          } catch (e) {
-            // ignore parse errors
-          }
-        });
-
-        es.addEventListener("error", () => {
-          es.close();
-        });
-
-        return () => {
-          es.close();
-        };
-      } catch (e) {
-        // EventSource not available or failed
-        return undefined;
-      }
-    };
-
-    const cleanup = setupSSE();
-    return cleanup;
-  }, [isSuperAdmin]);
+  // DISABLED: SSE events were causing excessive query invalidations and page flickering
+  // useEffect(() => {
+  //   if (!isSuperAdmin) return;
+  //
+  //   const setupSSE = () => {
+  //     try {
+  //       const es = new EventSource("/api/service-requests/stream");
+  //       
+  //       es.addEventListener("service-request", (event: Event) => {
+  //         try {
+  //           const evt = event as any;
+  //           const data = JSON.parse(evt.data);
+  //           if (data.type === "created" || data.type === "updated" || data.type === "assigned") {
+  //             // Invalidate bridge stats to refresh counts
+  //             queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/stats"] });
+  //             queryClient.invalidateQueries({ queryKey: ["/api/admin/bridge/service-requests"] });
+  //           }
+  //         } catch (e) {
+  //           // ignore parse errors
+  //         }
+  //       });
+  //
+  //       es.addEventListener("error", () => {
+  //         es.close();
+  //       });
+  //
+  //       return () => {
+  //         es.close();
+  //       };
+  //     } catch (e) {
+  //       // EventSource not available or failed
+  //       return undefined;
+  //     }
+  //   };
+  //
+  //   const cleanup = setupSSE();
+  //   return cleanup;
+  // }, [isSuperAdmin]);
 
   const { toast } = useToast();
   const notificationCount = providerRequests.length;
@@ -6944,10 +7642,13 @@ export default function AdminSuperDashboard() {
             {activeTab === "item-categories" && <ItemCategoriesPage />}
             {activeTab === "stores" && <StoresManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
+            {activeTab === "marketplace" && <MarketplaceManagement />}
+            {activeTab === "citymart-banners" && <CityMartBannersManagement />}
             {activeTab === "orders" && <OrdersManagement />}
             {activeTab === "ai-conversations" && <AiConversationsPanel />}
             {activeTab === "ai-conversation-flow" && <AiConversationFlowPanel />}
             {activeTab === "ai-prepared-requests" && <AiPreparedRequestsPanel />}
+            {activeTab === "request-questions" && <AdminRequestQuestions user={user} />}
             {activeTab === "pricing-rules" && <PricingRulesPanel />}
             {activeTab === "provider-matching" && <ProviderMatchingPanel />}
             {activeTab === "analytics" && <AnalyticsPanel orderStats={orderStats} />}
@@ -7631,7 +8332,7 @@ const OrdersManagement = () => {
   const handleCreateDispute = () => {
     if (selectedOrder && disputeForm.reason) {
       createDisputeMutation.mutate({
-        orderId: selectedOrder._id,
+        orderId: selectedOrder.id,
         reason: disputeForm.reason,
         description: disputeForm.description,
       });
@@ -7641,7 +8342,7 @@ const OrdersManagement = () => {
   const handleResolveDispute = () => {
     if (selectedOrder && disputeForm.resolution) {
       resolveDisputeMutation.mutate({
-        orderId: selectedOrder._id,
+        orderId: selectedOrder.id,
         status: disputeForm.status as "resolved" | "rejected" | "escalated",
         resolution: disputeForm.resolution,
         refundAmount: disputeForm.refundAmount || undefined,
@@ -7733,7 +8434,7 @@ const OrdersManagement = () => {
                     Total Revenue
                   </p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                    â‚¦{orderStats.totalRevenue?.toLocaleString()}
+                    {formatNaira(orderStats.totalRevenue)}
                   </p>
                 </div>
               </div>
@@ -7765,7 +8466,7 @@ const OrdersManagement = () => {
                     Avg Order Value
                   </p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                    â‚¦{orderStats.avgOrderValue?.toFixed(0)}
+                    {formatNaira(orderStats.avgOrderValue || 0)}
                   </p>
                 </div>
               </div>
@@ -7849,7 +8550,7 @@ const OrdersManagement = () => {
             </div>
 
             <div>
-              <Label htmlFor="min-price">Min Price (â‚¦)</Label>
+              <Label htmlFor="min-price">Min Price ({'\u20A6'})</Label>
               <Input
                 id="min-price"
                 type="number"
@@ -7928,20 +8629,20 @@ const OrdersManagement = () => {
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {orders.map((order: any) => (
                     <tr
-                      key={order._id}
+                      key={order.id}
                       className="hover:bg-gray-50 dark:hover:bg-gray-700"
                     >
                       <td className="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
-                        #{order._id.slice(-8)}
+                        #{order.id.slice(-8)}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-300">
-                        {order.buyer?.name || "Unknown"}
+                        {order.residentName || "Unknown"}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-300">
-                        {order.vendor?.name || "Unknown"}
+                        {order.type === "marketplace" ? "Marketplace" : "Legacy"}
                       </td>
                       <td className="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
-                        â‚¦{order.total.toLocaleString()}
+                        {formatNaira(Math.round(order.totalAmount / 100))}
                       </td>
                       <td className="px-6 py-4">
                         <span
@@ -7972,7 +8673,7 @@ const OrdersManagement = () => {
                             setSelectedOrder(order);
                             setShowOrderDetails(true);
                           }}
-                          data-testid={`button-view-order-${order._id}`}
+                          data-testid={`button-view-order-${order.id}`}
                         >
                           <Eye className="w-4 h-4" />
                         </Button>
@@ -7986,7 +8687,7 @@ const OrdersManagement = () => {
                                 setDisputeAction("create");
                                 setShowDisputeModal(true);
                               }}
-                              data-testid={`button-create-dispute-${order._id}`}
+                              data-testid={`button-create-dispute-${order.id}`}
                             >
                               <AlertTriangle className="w-4 h-4" />
                             </Button>
@@ -8001,7 +8702,7 @@ const OrdersManagement = () => {
                                 setDisputeAction("resolve");
                                 setShowDisputeModal(true);
                               }}
-                              data-testid={`button-resolve-dispute-${order._id}`}
+                              data-testid={`button-resolve-dispute-${order.id}`}
                             >
                               <CheckCircle className="w-4 h-4" />
                             </Button>
@@ -8068,7 +8769,7 @@ const OrdersManagement = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Order ID</Label>
-                  <p className="text-sm font-mono">#{selectedOrder._id}</p>
+                  <p className="text-sm font-mono">#{selectedOrder.id}</p>
                 </div>
                 <div>
                   <Label>Status</Label>
@@ -8080,16 +8781,16 @@ const OrdersManagement = () => {
                 </div>
                 <div>
                   <Label>Customer</Label>
-                  <p className="text-sm">{selectedOrder.buyer?.name}</p>
+                  <p className="text-sm">{selectedOrder.residentName}</p>
                 </div>
                 <div>
-                  <Label>Vendor</Label>
-                  <p className="text-sm">{selectedOrder.vendor?.name}</p>
+                  <Label>Order Type</Label>
+                  <p className="text-sm">{selectedOrder.type === "marketplace" ? "Marketplace" : "Legacy"}</p>
                 </div>
                 <div>
                   <Label>Total Amount</Label>
                   <p className="text-sm font-medium">
-                    â‚¦{selectedOrder.total.toLocaleString()}
+                    {formatNaira(Math.round(selectedOrder.totalAmount / 100))}
                   </p>
                 </div>
                 <div>
@@ -8100,27 +8801,11 @@ const OrdersManagement = () => {
                 </div>
               </div>
 
-              {/* Items */}
-              <div>
-                <Label>Order Items</Label>
-                <div className="mt-2 space-y-2">
-                  {selectedOrder.items.map((item: any, index: number) => (
-                    <div
-                      key={index}
-                      className="flex justify-between items-center p-3 border rounded-lg"
-                    >
-                      <div>
-                        <p className="font-medium">{item.name}</p>
-                        <p className="text-sm text-gray-600">
-                          Quantity: {item.quantity}
-                        </p>
-                      </div>
-                      <p className="font-medium">
-                        â‚¦{(item.price * item.quantity).toLocaleString()}
-                      </p>
-                    </div>
-                  ))}
-                </div>
+              {/* Items - Not available in list view */}
+              <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                <p className="text-sm text-blue-700 dark:text-blue-300">
+                  Order items details are available in the full order view. ID: {selectedOrder.id}
+                </p>
               </div>
 
               {/* Dispute Info */}
@@ -8158,7 +8843,7 @@ const OrdersManagement = () => {
                     {selectedOrder.status === "pending" && (
                       <Button
                         onClick={() =>
-                          handleStatusChange(selectedOrder._id, "processing")
+                          handleStatusChange(selectedOrder.id, "processing")
                         }
                         disabled={updateOrderStatusMutation.isPending}
                         data-testid="button-mark-processing"
@@ -8169,7 +8854,7 @@ const OrdersManagement = () => {
                     {selectedOrder.status === "processing" && (
                       <Button
                         onClick={() =>
-                          handleStatusChange(selectedOrder._id, "delivered")
+                          handleStatusChange(selectedOrder.id, "delivered")
                         }
                         disabled={updateOrderStatusMutation.isPending}
                         data-testid="button-mark-delivered"
@@ -8180,7 +8865,7 @@ const OrdersManagement = () => {
                     <Button
                       variant="destructive"
                       onClick={() =>
-                        handleStatusChange(selectedOrder._id, "cancelled")
+                        handleStatusChange(selectedOrder.id, "cancelled")
                       }
                       disabled={updateOrderStatusMutation.isPending}
                       data-testid="button-cancel-order"
@@ -8295,7 +8980,7 @@ const OrdersManagement = () => {
                 />
               </div>
               <div>
-                <Label htmlFor="refund-amount">Refund Amount (â‚¦)</Label>
+                <Label htmlFor="refund-amount">Refund Amount ({'\u20A6'})</Label>
                 <Input
                   id="refund-amount"
                   type="number"

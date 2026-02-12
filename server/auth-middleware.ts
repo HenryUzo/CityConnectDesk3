@@ -27,19 +27,22 @@ interface AuthContext extends JWTPayload {
   membership?: AuthMembership;
 }
 
-function ensureDevAuth(req: Request) {
+export function ensureDevAuth(req: Request) {
   if (req.auth) return req.auth;
-  if (process.env.NODE_ENV === "development" && req.user?.id) {
+  // If authenticated via Passport (session-based resident/provider auth)
+  if ((req as any).user?.id) {
+    const u = (req as any).user;
     req.auth = {
-      id: req.user.id,
-      userId: req.user.id,
-      role: req.user?.role ?? undefined,
-      globalRole: req.user?.globalRole ?? undefined,
-    } as JWTPayload & { id: string };
+      id: u.id,
+      userId: u.id,
+      email: u.email || "",
+      role: u.role ?? undefined,
+      globalRole: u.globalRole ?? undefined,
+    } as AuthContext;
     return req.auth;
   }
   return undefined;
- }
+}
 
 /**
  * Middleware to authenticate JWT token
@@ -54,6 +57,7 @@ export function authenticateJWT(req: Request, res: Response, next: NextFunction)
 
   const payload = verifyAccessToken(token);
   if (!payload) {
+    console.log("[AUTH] JWT Verification failed: payload is null");
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 
@@ -73,6 +77,12 @@ export function authenticateJWT(req: Request, res: Response, next: NextFunction)
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const auth = ensureDevAuth(req);
   if (!auth) {
+    console.log("[AUTH] requireAuth failed: no auth found", {
+      path: req.path,
+      method: req.method,
+      hasUser: !!(req as any).user,
+      sessionID: (req as any).sessionID
+    });
     return res.status(401).json({ message: "Authentication required" });
   }
   next();

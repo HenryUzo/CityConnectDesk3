@@ -1,134 +1,267 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
-import Nav from "@/components/layout/Nav";
-import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
+import ResidentShell from "@/components/layout/ResidentShell";
 import { CitymartNavigation, StickyNavigation } from "@/components/ui/navigation";
-import { FiftyPercentBanner, AsideBannerLong, AsideBannerMedium, AsideBannerSmall, FullWidthBanner } from "@/components/ui/banners";
+import { FiftyPercentBanner, AsideBannerLong, AsideBannerSmall, FullWidthBanner } from "@/components/ui/banners";
 import { HorizontalCard, CategoryCard } from "@/components/ui/cards";
 import ProductCard from "@/components/ui/cards";
-import { Pagination } from '../../components/ui/pagination'
+import { Pagination } from "@/components/ui/pagination";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ShoppingCart,
+  Minus,
+  Plus,
+  Trash2,
+  X,
+  Package,
+  Loader2,
+  ArrowRight,
+} from "lucide-react";
+import useCategories from "@/hooks/useCategories";
+import CategorySkeleton from "@/components/ui/CategorySkeleton";
+import { usePublicBanners } from "@/hooks/useCityMartBanners";
+import {
+  useStores,
+  useProducts,
+  useCart,
+  useAddToCart,
+  useUpdateCartItem,
+  useRemoveCartItem,
+  formatPrice,
+  formatKobo,
+  type MarketplaceItem,
+  useEstates,
+} from "@/hooks/useCityMart";
+import { useToast } from "@/hooks/use-toast";
+
 import imgFrame1261153572 from "@/assets/illustrations/630a3214d20e175564b7a3c374bb6db96b4406f8.png";
 import imgImage5 from "@/assets/illustrations/d59fbc735d007a7cd4f9a1f5213a75e964a3267f.png";
 import imgFrame1261153583 from "@/assets/illustrations/e8ff5d9eeecdd876bb66bad7e2c0a06d80d02639.png";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import useCategories from "@/hooks/useCategories";
-import CategorySkeleton from "@/components/ui/CategorySkeleton";
 
 export default function CityMart() {
   const [, navigate] = useLocation();
-  const handleNavigateToHomepage = () => navigate("/resident");
-  const handleNavigateToMarketplace = () => navigate("/resident/citymart");
-  const handleNavigateToSettings = () => navigate("/resident/settings");
-  const handleNavigateToChat = () => navigate("/resident/requests/new");
+  const { toast } = useToast();
+
+  // ── State ──
   const [activeTab, setActiveTab] = useState("all-markets");
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedLocation, setSelectedLocation] = useState("Lagos, Nigeria");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
+  const [hotSalesPage, setHotSalesPage] = useState(1);
+  const [storePage, setStorePage] = useState(1);
+  const [selectedLocation, setSelectedLocation] = useState("global");
+  const [showStickyNav, setShowStickyNav] = useState(false);
+  const [showCartDrawer, setShowCartDrawer] = useState(false);
+
   const categoryScrollRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [showStickyNav, setShowStickyNav] = useState(false);
-  const [activeStoreTab, setActiveStoreTab] = useState("the-city-corner");
-  const [currentPage, setCurrentPage] = useState(1);
 
+  // ── Data fetching ──
   const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global" });
+  const { data: storesData, isLoading: storesLoading } = useStores();
+  const { data: estatesData, isLoading: estatesLoading } = useEstates();
+  const { data: bannersData = [], isLoading: bannersLoading } = usePublicBanners();
+  
+  // Hot sales products (not filtered by store)
+  const { data: hotProductsData, isLoading: hotProductsLoading } = useProducts({
+    search: debouncedSearch || undefined,
+    category: selectedCategory || undefined,
+    storeId: undefined, // Explicitly exclude storeId for hot sales
+    page: hotSalesPage,
+    limit: 12,
+  });
+  
+  // Store-specific products (filtered by selected store)
+  const { data: storeProductsData, isLoading: storeProductsLoading } = useProducts({
+    search: undefined, // Explicitly exclude search for store products
+    category: undefined, // Explicitly exclude category for store products
+    storeId: selectedStoreId || undefined,
+    page: storePage,
+    limit: 20,
+  });
+  
+  const { data: cartData } = useCart();
+  const addToCart = useAddToCart();
+  const updateCartItem = useUpdateCartItem();
+  const removeCartItem = useRemoveCartItem();
 
-  const tabs = [
+  const stores = storesData ?? [];
+  const estates = estatesData ?? [];
+  const banners = bannersData ?? [];
+  const hotProducts = hotProductsData?.products ?? [];
+  const storeProducts = storeProductsData?.products ?? [];
+  const totalPages = hotProductsData?.totalPages ?? 0;
+  const cartItemCount = cartData?.totalItems ?? 0;
+
+  // ── Debounce search ──
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setHotSalesPage(1);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  // ── Scroll detection for sticky nav ──
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const handler = () => setShowStickyNav(el.scrollTop > 180);
+    el.addEventListener("scroll", handler);
+    return () => el.removeEventListener("scroll", handler);
+  }, []);
+
+  const scrollCategories = (dir: "left" | "right") => {
+    categoryScrollRef.current?.scrollTo({
+      left: categoryScrollRef.current.scrollLeft + (dir === "right" ? 280 : -280),
+      behavior: "smooth",
+    });
+  };
+
+  const handleAddToCart = useCallback(
+    (product: MarketplaceItem) => {
+      addToCart.mutate(
+        { productId: product.id, qty: 1 },
+        {
+          onSuccess: () =>
+            toast({ title: "Added to cart", description: product.name }),
+          onError: (err: any) =>
+            toast({ title: "Error", description: err.message, variant: "destructive" }),
+        }
+      );
+    },
+    [addToCart, toast]
+  );
+
+  // Get quantity of product in cart
+  const getCartQuantity = useCallback(
+    (productId: string): number => {
+      if (!cartData) return 0;
+      for (const group of cartData.storeGroups) {
+        const item = group.items.find((i) => i.productId === productId);
+        if (item) return item.qty;
+      }
+      return 0;
+    },
+    [cartData]
+  );
+
+  // Get cart item ID for a product
+  const getCartItemId = useCallback(
+    (productId: string): string | null => {
+      if (!cartData) return null;
+      for (const group of cartData.storeGroups) {
+        const item = group.items.find((i) => i.productId === productId);
+        if (item) return item.id;
+      }
+      return null;
+    },
+    [cartData]
+  );
+
+  const handleIncrement = useCallback(
+    (product: MarketplaceItem) => {
+      const itemId = getCartItemId(product.id);
+      const currentQty = getCartQuantity(product.id);
+      if (!itemId) return;
+      
+      updateCartItem.mutate(
+        { id: itemId, qty: currentQty + 1 },
+        {
+          onError: (err: any) =>
+            toast({ title: "Error", description: err.message, variant: "destructive" }),
+        }
+      );
+    },
+    [getCartItemId, getCartQuantity, updateCartItem, toast]
+  );
+
+  const handleDecrement = useCallback(
+    (product: MarketplaceItem) => {
+      const itemId = getCartItemId(product.id);
+      const currentQty = getCartQuantity(product.id);
+      if (!itemId) return;
+
+      if (currentQty <= 1) {
+        // Remove item from cart
+        removeCartItem.mutate(itemId, {
+          onSuccess: () =>
+            toast({ title: "Removed from cart", description: product.name }),
+          onError: (err: any) =>
+            toast({ title: "Error", description: err.message, variant: "destructive" }),
+        });
+      } else {
+        // Decrease quantity
+        updateCartItem.mutate(
+          { id: itemId, qty: currentQty - 1 },
+          {
+            onError: (err: any) =>
+              toast({ title: "Error", description: err.message, variant: "destructive" }),
+          }
+        );
+      }
+    },
+    [getCartItemId, getCartQuantity, updateCartItem, removeCartItem, toast]
+  );
+
+  const handleCategoryClick = (catName: string) => {
+    setSelectedCategory((prev) => (prev === catName ? null : catName));
+    setHotSalesPage(1);
+  };
+
+  const tabs: { label: string; id: string; isComingSoon?: boolean }[] = [
     { label: "All Markets", id: "all-markets" },
     { label: "Local Markets", id: "local-markets" },
     { label: "Malls", id: "malls" },
     { label: "Neighborhood Shops", id: "neighborhood-shops" },
-    { label: "Distress Sale", id: "distress-sale" },
-    { label: "Properties (COMING SOON)", id: "properties", isComingSoon: true },
   ];
 
-  // Scroll detection for sticky navigation
-  useEffect(() => {
-    const scrollContainer = scrollContainerRef.current;
-    if (!scrollContainer) return;
-
-    const handleScroll = () => {
-      const scrollTop = scrollContainer.scrollTop;
-      // Show sticky nav after scrolling 200px
-      setShowStickyNav(scrollTop > 200);
-    };
-
-    scrollContainer.addEventListener("scroll", handleScroll);
-    return () => scrollContainer.removeEventListener("scroll", handleScroll);
-  }, []);
-
-  const scrollCategories = (direction: "left" | "right") => {
-    if (categoryScrollRef.current) {
-      const scrollAmount = 250; // Adjust scroll distance as needed
-      const newScrollPosition =
-        categoryScrollRef.current.scrollLeft +
-        (direction === "right" ? scrollAmount : -scrollAmount);
-      categoryScrollRef.current.scrollTo({
-        left: newScrollPosition,
-        behavior: "smooth",
-      });
-    }
-  };
+  // Fallback categories if API returns none
+  const categories =
+    Array.isArray(fetchedCategories) && fetchedCategories.length > 0
+      ? fetchedCategories
+      : [
+          { id: "1", name: "Groceries & Fresh Produce", emoji: "🥦" },
+          { id: "2", name: "Meat, Fish & Poultry", emoji: "🥩" },
+          { id: "3", name: "Bakery & Pastries", emoji: "🍞" },
+          { id: "4", name: "Household Essentials", emoji: "🧹" },
+          { id: "5", name: "Baby Care & Diapers", emoji: "🍼" },
+          { id: "6", name: "Beverages", emoji: "🥤" },
+          { id: "7", name: "Electronics", emoji: "📱" },
+          { id: "8", name: "Fashion & Clothing", emoji: "👕" },
+        ];
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#054f31]">
-      {/* Sidebar Navigation */}
-      <MobileNavDrawer
-        onNavigateToHomepage={handleNavigateToHomepage}
-        onNavigateToSettings={handleNavigateToSettings}
-        onBookServiceClick={handleNavigateToChat}
-        onNavigateToMarketplace={handleNavigateToMarketplace}
-        onNavigateToServiceRequests={() => navigate("/service-requests")}
-        currentPage="marketplace"
-      />
-      <div className="hidden lg:block">
-        <Nav
-          onNavigateToHomepage={handleNavigateToHomepage}
-          onNavigateToSettings={handleNavigateToSettings}
-          onBookServiceClick={handleNavigateToChat}
-          onNavigateToMarketplace={handleNavigateToMarketplace}
-          onNavigateToServiceRequests={() => navigate("/service-requests")}
-          currentPage="marketplace"
-        />
-      </div>
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-white lg:rounded-tl-[40px] lg:rounded-bl-[40px] lg:ml-[14px] lg:mt-[12px]">
-        {/* CityMart Navigation */}
-        <div className={`shrink-0 transition-all duration-300 ${
-          showStickyNav ? 'opacity-0 -translate-y-4 pointer-events-none h-0 overflow-hidden' : 'opacity-100 translate-y-0'
-        }`}>
+    <ResidentShell currentPage="marketplace">
+      <div className="flex flex-col h-full overflow-hidden bg-[#f9fafb]">
+        {/* ─── CityMart Navigation ─── */}
+        {!showStickyNav && (
+        <div className="shrink-0 transition-opacity duration-300">
           <CitymartNavigation
             brandName="CityMart"
             searchPlaceholder="Search for any item"
             location={selectedLocation}
+            estates={estates}
             tabs={tabs.map((tab) => ({
               label: tab.label,
               isActive: activeTab === tab.id,
               isComingSoon: tab.isComingSoon,
               onClick: () => setActiveTab(tab.id),
             }))}
-            onSearch={(query) => {
-              setSearchQuery(query);
-              console.log(`Searching for: "${query}"`);
-            }}
-            onCartClick={() => {
-              console.log("Cart clicked!");
-            }}
-            onCategoriesClick={() => {
-              console.log("Categories opened!");
-            }}
-            onLocationChange={(loc) => {
-              setSelectedLocation(loc);
-              console.log(`Location changed to: ${loc}`);
-            }}
+            onSearch={setSearchQuery}
+            onCartClick={() => setShowCartDrawer(true)}
+            onCategoriesClick={() => {}}
+            onLocationChange={setSelectedLocation}
+            cartCount={cartItemCount}
           />
         </div>
+        )}
 
-        {/* Sticky Navigation - Appears on scroll */}
-        <div
-          className={`sticky top-0 left-0 right-0 z-40 transition-transform duration-300 ${
-            showStickyNav ? "translate-y-0" : "-translate-y-full"
-          }`}
-        >
+        {/* ─── Sticky Navigation ─── */}
+        {showStickyNav && (
+        <div className="sticky top-0 left-0 right-0 z-40">
           <StickyNavigation
             tabs={tabs.map((tab) => ({
               label: tab.label,
@@ -136,483 +269,513 @@ export default function CityMart() {
               isComingSoon: tab.isComingSoon,
               onClick: () => setActiveTab(tab.id),
             }))}
+            estates={estates}
             location={selectedLocation}
             searchPlaceholder="Search for any item"
             isSticky={showStickyNav}
-            onSearch={(query) => {
-              setSearchQuery(query);
-              console.log(`Searching for: "${query}"`);
-            }}
-            onCartClick={() => {
-              console.log("Cart clicked!");
-            }}
-            onCategoriesClick={() => {
-              console.log("Categories opened!");
-            }}
-            onLocationChange={(loc) => {
-              setSelectedLocation(loc);
-              console.log(`Location changed to: ${loc}`);
-            }}
+            onSearch={setSearchQuery}
+            onCartClick={() => setShowCartDrawer(true)}
+            onCategoriesClick={() => {}}
+            onLocationChange={setSelectedLocation}
+            cartCount={cartItemCount}
           />
         </div>
+        )}
 
-        {/* Main Content Area */}
-        <div className="flex-1 overflow-y-auto bg-[#f9fafb] px-[48px] py-[32px]" ref={scrollContainerRef}>
-          <div className="w-full mx-auto">
-            {/* Banners Section */}
-            <div className="flex gap-[24px] items-start mb-[48px]">
-              {/* Left Banner - Food Items */}
-              <div className="flex-[819]">
-                <FiftyPercentBanner
-                  heading="Food items"
-                  description="Get your fresh food items at market cost. No hidden charges."
-                  buttonText="Shop now"
-                  buttonVariant="primary"
-                  priceText="₦299,000"
-                  priceLabel="Just"
-                  priceSuffix="Only!"
-                  image={imgFrame1261153572}
-                  showCarouselDots={true}
-                  activeCarouselDot={0}
-                  onButtonClick={() => console.log("Shop now clicked!")}
-                />
-              </div>
+        {/* ─── Main scrollable content ─── */}
+        <div
+          className="flex-1 overflow-y-auto"
+          ref={scrollContainerRef}
+        >
+          <div className="max-w-[1320px] mx-auto px-4 pt-4">
 
-              {/* Right Banner - Google Pixel */}
-              <div className="flex-[424]">
-                <HorizontalCard
-                  title="New Google Pixel 6 Pro"
-                  image={imgImage5}
-                  buttonText="Bid Now"
-                  variant="dark"
-                  badge={{ text: "HOT", color: "red" }}
-                  discount="ABOVE 50%"
-                  discountColor="yellow"
-                  showCarouselDots={true}
-                  activeCarouselDot={1}
-                  onButtonClick={() => console.log("Bid Now clicked!")}
-                />
+            {/* ═══════════════ BANNERS ═══════════════ */}
+            <div className="mt-0">
+              {bannersLoading ? (
+                <div className="flex justify-center py-16">
+                  <Loader2 className="w-8 h-8 animate-spin text-[#039855]" />
+                </div>
+              ) : banners.length > 0 ? (
+                <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 mb-4">
+                {/* Main Hero Banner */}
+                {(() => {
+                  const heroBanner = banners.find(b => b.type === 'hero') || banners[0];
+                  if (!heroBanner) return null;
+                  return (
+                    <div className="lg:flex-[65] w-full">
+                      <FiftyPercentBanner
+                        heading={heroBanner.heading || heroBanner.title}
+                        description={heroBanner.description}
+                        buttonText={heroBanner.buttonText || "Shop now"}
+                        buttonVariant="primary"
+                        image={heroBanner.imageUrl || imgFrame1261153572}
+                        onButtonClick={() => heroBanner.buttonUrl && (window.location.href = heroBanner.buttonUrl)}
+                      />
+                    </div>
+                  );
+                })()}
+                {/* Side Banner */}
+                {(() => {
+                  const sideBanner = banners.find(b => b.type === 'horizontal') || banners[1];
+                  if (!sideBanner) return null;
+                  return (
+                    <div className="lg:flex-[35] w-full hidden lg:block">
+                      <HorizontalCard
+                        title={sideBanner.heading || sideBanner.title}
+                        image={sideBanner.imageUrl || imgImage5}
+                        buttonText={sideBanner.buttonText || "Shop now"}
+                        variant="dark"
+                        onButtonClick={() => sideBanner.buttonUrl && (window.location.href = sideBanner.buttonUrl)}
+                      />
+                    </div>
+                  );
+                })()}
               </div>
+              ) : null}
             </div>
 
-            {/* Categories Section */}
-            <div className="mb-[48px]">
-              {/* Section Header */}
-              <div className="flex items-center justify-between mb-[24px]">
-                <h2 className="font-['Public_Sans:SemiBold',sans-serif] font-semibold text-[#191c1f] text-[20px] leading-[28px]">
-                  Shop by Item Categories
-                </h2>
-                <button className="font-['Public_Sans:Medium',sans-serif] font-medium text-[#039855] text-[14px] leading-[20px] hover:underline">
-                  View all Categories
-                </button>
+            {/* ═══════════════ CATEGORIES ═══════════════ */}
+            <div className="mb-4 mt-8">
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-[18px] font-semibold text-[#191c1f]">
+                    Shop by Item Categories
+                  </h2>
+                  {/* "View all Categories" removed per request */}
+                </div>
+                {selectedCategory && (
+                  <button
+                    className="text-[13px] font-medium text-[#ee5858] hover:underline"
+                    onClick={() => {
+                      setSelectedCategory(null);
+                      setHotSalesPage(1);
+                    }}
+                  >
+                    Clear filter ✕
+                  </button>
+                )}
               </div>
 
-              {/* Category Cards Container with Navigation */}
               <div className="relative">
-                {/* Left Arrow Button */}
+                {/* Left arrow */}
                 <button
-                  className="absolute left-[-24px] top-1/2 -translate-y-1/2 z-10 bg-white hover:bg-gray-50 rounded-full p-2 shadow-md border border-[#f2f4f7] transition-colors"
+                  className="absolute left-[-12px] top-1/2 -translate-y-1/2 z-10 w-9 h-9 bg-white hover:bg-gray-50 rounded-full flex items-center justify-center shadow-md border border-[#e4e7e9]"
                   onClick={() => scrollCategories("left")}
                 >
-                  <ChevronLeft className="w-6 h-6 text-[#191c1f]" />
+                  <ChevronLeft className="w-4 h-4 text-[#191c1f]" />
                 </button>
 
-                {/* Categories Grid */}
                 <div
-                  className="flex gap-[18px] items-center overflow-x-scroll scrollbar-hide"
+                  className="flex gap-3 lg:gap-4 items-start overflow-x-auto scrollbar-hide px-2 py-2"
                   ref={categoryScrollRef}
                 >
-                  {(catsLoading)
+                  {catsLoading
                     ? Array.from({ length: 8 }).map((_, i) => (
                         <div key={i} className="shrink-0">
                           <CategorySkeleton />
                         </div>
                       ))
-                    : (() => {
-                        const cats = Array.isArray(fetchedCategories) && fetchedCategories.length > 0 ? fetchedCategories : [];
-                        if (cats.length === 0) {
-                          return (
-                            <>
-                              <CategoryCard icon="🥦" label="Groceries & Fresh Produce" onClick={() => console.log("Groceries clicked")} />
-                              <CategoryCard icon="🥩" label="Meat, Fish & Poultry" onClick={() => console.log("Meat clicked")} />
-                              <CategoryCard icon="🍞" label="Bakery & Pastries" onClick={() => console.log("Bakery clicked")} />
-                            </>
-                          );
-                        }
-                        return cats.map((c: any) => (
-                          <CategoryCard key={c.id || c.name} icon={c.emoji || "🛍️"} label={c.name} onClick={() => console.log("Category clicked", c.name)} />
-                        ));
-                      })()}
+                    : categories.map((c: any) => (
+                        <CategoryCard
+                          key={c.id || c.name}
+                          icon={c.emoji || "🛍️"}
+                          image={c.image || c.imageUrl}
+                          label={c.name}
+                          isSelected={selectedCategory === c.name}
+                          onClick={() => handleCategoryClick(c.name)}
+                        />
+                      ))}
                 </div>
 
-                {/* Right Arrow Button */}
+                {/* Right arrow */}
                 <button
-                  className="absolute right-[-24px] top-1/2 -translate-y-1/2 z-10 bg-white hover:bg-gray-50 rounded-full p-2 shadow-md border border-[#f2f4f7] transition-colors"
+                  className="absolute right-[-12px] top-1/2 -translate-y-1/2 z-10 w-9 h-9 bg-[#039855] hover:bg-[#027a45] rounded-full flex items-center justify-center shadow-md"
                   onClick={() => scrollCategories("right")}
                 >
-                  <ChevronRight className="w-6 h-6 text-[#191c1f]" />
+                  <ChevronRight className="w-4 h-4 text-white" />
                 </button>
               </div>
             </div>
 
-            {/* Hot Items Section */}
-            <div className="mb-[48px]">
-              {/* Section Header */}
-              <div className="flex items-center justify-between mb-[24px]">
-                <h2 className="font-['Public_Sans:SemiBold',sans-serif] font-semibold text-[#191c1f] text-[20px] leading-[28px]">
-                  Hot items
+            {/* ═══════════════ HOT ITEMS / PRODUCTS ═══════════════ */}
+            <div className="mb-4 mt-8">
+              <div className="flex items-center justify-between mb-5">
+                <h2 className="text-[18px] font-semibold text-[#191c1f]">
+                  {selectedCategory
+                    ? selectedCategory
+                    : debouncedSearch
+                    ? `Results for "${debouncedSearch}"`
+                    : "Hot items"}
                 </h2>
-                <button className="font-['Public_Sans:Medium',sans-serif] font-medium text-[#039855] text-[14px] leading-[20px] hover:underline flex items-center gap-1">
+                <button
+                  className="hidden sm:inline-flex items-center gap-1 text-[13px] font-medium text-[#039855] hover:underline"
+                  onClick={() => {
+                    setSelectedCategory(null);
+                    setSelectedStoreId(null);
+                    setSearchQuery("");
+                    setHotSalesPage(1);
+                  }}
+                >
                   Browse All Products
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M6 12L10 8L6 4" stroke="#039855" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
+                  <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
 
-              {/* Products Grid - 4 columns */}
-              <div className="grid grid-cols-4 gap-[24px]">
-                {/* Row 1 */}
-                <ProductCard
-                  image="https://images.unsplash.com/photo-1690375097427-78224325d7da?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtYWNrZXJlbCUyMGZpc2h8ZW58MXx8fHwxNzY3NDM1MjAxfDA&ixlib=rb-4.1.0&q=80&w=1080"
-                  title="Tomato Amigo Premium Parboiled Rice (50kg)"
-                  price="₦442.12"
-                  originalPrice="₦850.99"
-                  rating={4}
-                  ratingText="(123) 456-7890"
-                  badges={[
-                    { text: "19% OFF", variant: "discount" },
-                    { text: "DISTRESS", variant: "distress" },
-                    { text: "HOT", variant: "hot" }
-                  ]}
-                  onFavoriteToggle={() => console.log("Favorite toggled")}
-                  onAddToCart={() => console.log("Added to cart")}
-                />
-                
-                <ProductCard
-                  image="https://images.unsplash.com/photo-1668649176554-3ad841a780d0?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxibHVldG9vdGglMjBlYXJidWRzfGVufDF8fHx8MTc2NzM0MDY3MXww&ixlib=rb-4.1.0&q=80&w=1080"
-                  title="Bose Sport Earbuds - Wireless Earphones - Bluetooth In Ear..."
-                  price="₦2,300"
-                  badges={[
-                    { text: "SOLD OUT", variant: "custom", backgroundColor: "#929fa5", textColor: "#ffffff" }
-                  ]}
-                  onFavoriteToggle={() => console.log("Favorite toggled")}
-                  onAddToCart={() => console.log("Added to cart")}
-                />
-
-                <ProductCard
-                  image="https://images.unsplash.com/photo-1741061963569-9d0ef54d10d2?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxzbWFydHBob25lJTIwbW9iaWxlJTIwcGhvbmV8ZW58MXx8fHwxNzY3NDA5OTA4fDA&ixlib=rb-4.1.0&q=80&w=1080"
-                  title="Simple Mobile 4G LTE Prepaid Smartphone"
-                  price="₦220"
-                  onFavoriteToggle={() => console.log("Favorite toggled")}
-                  onAddToCart={() => console.log("Added to cart")}
-                />
-
-                <ProductCard
-                  image="https://images.unsplash.com/photo-1686820740687-426a7b9b2043?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxyaWNlJTIwZ3JhaW5zfGVufDF8fHx8MTc2NzM3NjMxNHww&ixlib=rb-4.1.0&q=80&w=1080"
-                  title="Ijebu Garri (1 paint rubber)"
-                  price="₦1,50"
-                  originalPrice="₦865"
-                  badges={[
-                    { text: "19% OFF", variant: "discount" }
-                  ]}
-                  onFavoriteToggle={() => console.log("Favorite toggled")}
-                  onAddToCart={() => console.log("Added to cart")}
-                />
-
-                {/* Row 2 */}
-                <ProductCard
-                  image="https://images.unsplash.com/photo-1611648694931-1aeda329f9da?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjb21wdXRlciUyMG1vbml0b3J8ZW58MXx8fHwxNzY3NDExNzMyfDA&ixlib=rb-4.1.0&q=80&w=1080"
-                  title="Dell Optiplex 7000x7480 All-in-One Computer Monitor"
-                  price="₦299"
-                  onFavoriteToggle={() => console.log("Favorite toggled")}
-                  onAddToCart={() => console.log("Added to cart")}
-                />
-
-                <ProductCard
-                  image="https://images.unsplash.com/photo-1626806819282-2c1dc01a5e0c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHx3YXNoaW5nJTIwbWFjaGluZXxlbnwxfHx8fDE3NjczOTQ3NDR8MA&ixlib=rb-4.1.0&q=80&w=1080"
-                  title="Portable Washing Machine, 11lbs capacity, 1400 RPM"
-                  price="₦70"
-                  originalPrice="₦865.99"
-                  rating={3}
-                  ratingText="(816)"
-                  onFavoriteToggle={() => console.log("Favorite toggled")}
-                  onAddToCart={() => console.log("Added to cart")}
-                />
-
-                <ProductCard
-                  image="https://images.unsplash.com/photo-1652377853721-b6d8c9594442?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjYXIlMjBjYXJidXJldG9yfGVufDF8fHx8MTc2NzQzNTIwM3ww&ixlib=rb-4.1.0&q=80&w=1080"
-                  title="2-Barrel Carburetor Carb 2100 Engine Increase Horsepower"
-                  price="₦160"
-                  badges={[
-                    { text: "HOT", variant: "hot" }
-                  ]}
-                  onFavoriteToggle={() => console.log("Favorite toggled")}
-                  onAddToCart={() => console.log("Added to cart")}
-                />
-              </div>
+              {hotProductsLoading ? (
+                <div className="flex justify-center py-16">
+                  <Loader2 className="w-8 h-8 animate-spin text-[#039855]" />
+                </div>
+              ) : hotProducts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <Package className="w-16 h-16 text-[#d1d5db] mb-4" />
+                  <p className="text-[15px] font-medium text-[#475467]">No products found</p>
+                  <p className="text-[13px] text-[#98a2b3] mt-1">
+                    {debouncedSearch
+                      ? "Try a different search term"
+                      : selectedCategory
+                      ? "No products in this category yet"
+                      : "Products will appear here once stores add them"}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {hotProducts.map((product) => (
+                    <div key={product.id} className="w-full">
+                      <ProductCard
+                        image={product.images?.[0] || undefined}
+                        title={product.name}
+                        price={formatPrice(product.price)}
+                        description={product.storeName ? `by ${product.storeName}` : undefined}
+                        cartQuantity={getCartQuantity(product.id)}
+                        onFavoriteToggle={() => {}}
+                        onAddToCart={() => handleAddToCart(product)}
+                        onIncrement={() => handleIncrement(product)}
+                        onDecrement={() => handleDecrement(product)}
+                        onView={() => navigate(`/resident/citymart/product/${product.id}`)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Stores Section */}
-            <div className="mb-[48px]">
-              {/* Section Header */}
-              <div className="flex items-center justify-between mb-[24px]">
-                <h2 className="font-['Public_Sans:SemiBold',sans-serif] font-semibold text-[#191c1f] text-[20px] leading-[28px]">
-                  Stores
-                </h2>
-              </div>
+            {/* ═══════════════ STORES SECTION ═══════════════ */}
+              {stores.length > 0 && (
+              <div className="mb-4 mt-8">
+                <div className="flex flex-col lg:flex-row gap-5 lg:gap-6">
+                  {/* Side promotional banners (desktop) - only render if banners exist */}
+                  {(() => {
+                    const longBanner = banners.find(b => b.type === 'aside-long');
+                    const smallBanner = banners.find(b => b.type === 'aside-small');
+                    if (!longBanner && !smallBanner) return null;
+                    
+                    return (
+                      <div className="hidden lg:flex flex-col gap-4 shrink-0" style={{ width: 240 }}>
+                        {longBanner && (
+                          <AsideBannerLong
+                            category={longBanner.description?.split(' ')[0] || ""}
+                            title={longBanner.title}
+                            description={longBanner.description}
+                            highlightWord={longBanner.description?.split(' ')[0]}
+                            buttonText={longBanner.buttonText || "Shop now"}
+                            dealExpiry="Deals ends in"
+                            daysRemaining="Limited time"
+                            onButtonClick={() => longBanner.buttonUrl && (window.location.href = longBanner.buttonUrl)}
+                          />
+                        )}
+                        {smallBanner && (
+                          <AsideBannerSmall
+                            title={smallBanner.title}
+                            description={smallBanner.description}
+                            highlightWord={smallBanner.description?.split(' ')[0]}
+                            buttonText={smallBanner.buttonText || "Shop now"}
+                            countdown={smallBanner.discountValue ? `${smallBanner.discountValue}% off` : "Limited time"}
+                            onButtonClick={() => smallBanner.buttonUrl && (window.location.href = smallBanner.buttonUrl)}
+                          />
+                        )}
+                      </div>
+                    );
+                  })()}
 
-              {/* Stores Layout - Aside banners on left, products on right */}
-              <div className="flex gap-[24px] items-start">
-                {/* Left Side - Aside Banners Stack */}
-                <div className="flex flex-col gap-[24px]  shrink-0">
-                  {/* Aside Banner Long - 32% Discount */}
-                  <div className="w-full ">
-                    <AsideBannerLong
-                      category="COMPUTER & ACCESSORIES"
-                      title="32% Discount"
-                      description="For all ellectronics products"
-                      highlightWord="ellectronics"
-                      buttonText="Shop now"
-                      dealExpiry="Deals ends in"
-                      daysRemaining="16d : 21h : 57m : 23s"
-                      onButtonClick={() => console.log("Shop now clicked")}
-                    />
-                  </div>
+                  {/* Store tabs + product grid */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-[18px] font-semibold text-[#191c1f]">Stores</h2>
+                    </div>
 
-                  {/* Aside Banner Medium - Food Image */}
-                  {/* <div className="w-full h-[427px]">
-                    <AsideBannerMedium
-                      title=""
-                      description=""
-                      image="https://images.unsplash.com/photo-1622046751454-c99d3794f96a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxmb29kJTIwbWVhbCUyMHBsYXR0ZXJ8ZW58MXx8fHwxNzY3NDM2ODExfDA&ixlib=rb-4.1.0&q=80&w=1080"
-                      showButton={false}
-                    />
-                  </div> */}
+                    {/* Store tabs */}
+                    <div className="flex gap-1 mb-5 border-b border-[#e4e7e9] overflow-x-auto scrollbar-hide">
+                      {stores.slice(0, 6).map((store) => (
+                        <button
+                          key={store.id}
+                          className={`px-3 py-2.5 text-[13px] font-medium whitespace-nowrap border-b-2 transition-colors ${
+                            selectedStoreId === store.id
+                              ? "text-[#191c1f] border-[#191c1f]"
+                              : "text-[#98a2b3] border-transparent hover:text-[#5f6c72]"
+                          }`}
+                          onClick={() => {
+                            setSelectedStoreId(
+                              selectedStoreId === store.id ? null : store.id
+                            );
+                            setStorePage(1);
+                          }}
+                        >
+                          {store.name}
+                        </button>
+                      ))}
+                    </div>
 
-                  {/* Aside Banner Small - 37% Discount for SmartPhone */}
-                  <div className="w-full h-[232px]">
-                    <AsideBannerSmall
-                      title="37% DISCOUNT"
-                      description="only for SmartPhone product."
-                      highlightWord="SmartPhone"
-                      buttonText="Shop now"
-                      onButtonClick={() => console.log("Shop now clicked")}
-                    />
+                    {/* Selected store info */}
+                    {selectedStoreId && (() => {
+                      const s = stores.find((x) => x.id === selectedStoreId);
+                      if (!s) return null;
+                      return (
+                        <div className="flex items-center gap-3 mb-4 p-3 bg-white rounded-lg border border-[#e4e7e9]">
+                          {s.logo ? (
+                            <img src={s.logo} alt={s.name} className="w-9 h-9 rounded-full object-cover" />
+                          ) : (
+                            <div className="w-9 h-9 rounded-full bg-[#039855] flex items-center justify-center text-white font-bold text-sm">
+                              {s.name.charAt(0)}
+                            </div>
+                          )}
+                          <div>
+                            <p className="text-[13px] font-semibold text-[#191c1f]">{s.name}</p>
+                            {s.location && <p className="text-[11px] text-[#98a2b3]">{s.location}</p>}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Store products grid (3 columns since side banner takes space) */}
+                    {selectedStoreId && storeProductsLoading ? (
+                      <div className="flex justify-center py-12">
+                        <Loader2 className="w-6 h-6 animate-spin text-[#039855]" />
+                      </div>
+                    ) : selectedStoreId && storeProducts.length > 0 ? (
+                      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                        {storeProducts.map((product) => (
+                          <ProductCard
+                            key={product.id}
+                            image={product.images?.[0] || undefined}
+                            title={product.name}
+                            price={formatPrice(product.price)}
+                            description={product.storeName ? `by ${product.storeName}` : undefined}
+                            cartQuantity={getCartQuantity(product.id)}
+                            onFavoriteToggle={() => {}}
+                            onAddToCart={() => handleAddToCart(product)}
+                            onIncrement={() => handleIncrement(product)}
+                            onDecrement={() => handleDecrement(product)}
+                            onView={() => navigate(`/resident/citymart/product/${product.id}`)}
+                          />
+                        ))}
+                      </div>
+                    ) : selectedStoreId ? (
+                      <div className="text-center py-10 text-[#98a2b3]">
+                        <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                        <p className="text-[13px]">No products in this store yet</p>
+                      </div>
+                    ) : (
+                      <div className="text-center py-10 text-[#98a2b3]">
+                        <p className="text-[13px]">Select a store above to browse their products</p>
+                      </div>
+                    )}
                   </div>
                 </div>
+              </div>
+            )}
 
-                {/* Right Side - Stores Tabs and Product Grid */}
-                <div className="flex-1">
-                  {/* Store Tabs */}
-                  <div className="flex gap-[8px] mb-[24px] border-b border-[#e4e7e9] w-full overflow-x-auto">
-                    <button
-                      className={`px-[16px] py-[12px] font-['Public_Sans:Medium',sans-serif] font-medium text-[14px] leading-[20px] transition-colors border-b-2 ${
-                        activeStoreTab === "the-city-corner"
-                          ? "text-[#039855] border-[#039855]"
-                          : "text-[#475467] border-transparent hover:text-[#039855]"
-                      }`}
-                      onClick={() => setActiveStoreTab("the-city-corner")}
-                    >
-                      The City Corner
-                    </button>
-                    <button
-                      className={`px-[16px] py-[12px] font-['Public_Sans:Medium',sans-serif] font-medium text-[14px] leading-[20px] transition-colors border-b-2 ${
-                        activeStoreTab === "fresh-fruits-market"
-                          ? "text-[#039855] border-[#039855]"
-                          : "text-[#475467] border-transparent hover:text-[#039855]"
-                      }`}
-                      onClick={() => setActiveStoreTab("fresh-fruits-market")}
-                    >
-                      Fresh Fruits Market
-                    </button>
-                    <button
-                      className={`px-[16px] py-[12px] font-['Public_Sans:Medium',sans-serif] font-medium text-[14px] leading-[20px] transition-colors border-b-2 ${
-                        activeStoreTab === "the-grand-emporium"
-                          ? "text-[#039855] border-[#039855]"
-                          : "text-[#475467] border-transparent hover:text-[#039855]"
-                      }`}
-                      onClick={() => setActiveStoreTab("the-grand-emporium")}
-                    >
-                      The Grand Emporium
-                    </button>
-                    <button
-                      className={`px-[16px] py-[12px] font-['Public_Sans:Medium',sans-serif] font-medium text-[14px] leading-[20px] transition-colors border-b-2 ${
-                        activeStoreTab === "charming-village-store"
-                          ? "text-[#039855] border-[#039855]"
-                          : "text-[#475467] border-transparent hover:text-[#039855]"
-                      }`}
-                      onClick={() => setActiveStoreTab("charming-village-store")}
-                    >
-                      Charming Village Store
-                    </button>
-                    <button
-                      className={`px-[16px] py-[12px] font-['Public_Sans:Medium',sans-serif] font-medium text-[14px] leading-[20px] transition-colors border-b-2 ${
-                        activeStoreTab === "biggest-news"
-                          ? "text-[#039855] border-[#039855]"
-                          : "text-[#475467] border-transparent hover:text-[#039855]"
-                      }`}
-                      onClick={() => setActiveStoreTab("biggest-news")}
-                    >
-                      Biggest News
-                    </button>
-                  </div>
+            {/* ═══════════════ PAGINATION ═══════════════ */}
+            {totalPages > 1 && (
+              <div className="mb-4 flex justify-center">
+                <Pagination
+                  currentPage={hotSalesPage}
+                  totalPages={totalPages}
+                  onPageChange={(p) => setHotSalesPage(p)}
+                  siblingCount={1}
+                  showPrevNext={true}
+                />
+              </div>
+            )}
 
-                  {/* Products Grid - 3 columns */}
-                  <div className="grid grid-cols-[248px_248px_248px] gap-0 mb-[24px] w-fit">
-                    {/* Row 1 */}
-                    <ProductCard
-                      image="https://images.unsplash.com/photo-1668649176554-3ad841a780d0?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxibHVldG9vdGglMjBlYXJidWRzfGVufDF8fHx8MTc2NzM0MDY3MXww&ixlib=rb-4.1.0&q=80&w=1080"
-                      title="Bose Sport Earbuds - Wireless Earphones - Bluetooth In Ear..."
-                      price="₦2,300"
-                      badges={[
-                        { text: "SOLD OUT", variant: "custom", backgroundColor: "#929fa5", textColor: "#ffffff" }
-                      ]}
-                      onFavoriteToggle={() => console.log("Favorite toggled")}
-                      onAddToCart={() => console.log("Added to cart")}
-                    />
-
-                    <ProductCard
-                      image="https://images.unsplash.com/photo-1626806819282-2c1dc01a5e0c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHx3YXNoaW5nJTIwbWFjaGluZXxlbnwxfHx8fDE3NjczOTQ3NDR8MA&ixlib=rb-4.1.0&q=80&w=1080"
-                      title="Simple Mobile 4G LTE Prepaid Smartphone"
-                      price="₦220"
-                      onFavoriteToggle={() => console.log("Favorite toggled")}
-                      onAddToCart={() => console.log("Added to cart")}
-                    />
-
-                    <ProductCard
-                      image="https://images.unsplash.com/photo-1686820740687-426a7b9b2043?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxyaWNlJTIwZ3JhaW5zfGVufDF8fHx8MTc2NzM3NjMxNHww&ixlib=rb-4.1.0&q=80&w=1080"
-                      title="Ijebu Garri (1 paint rubber)"
-                      price="₦1,50"
-                      originalPrice="₦865"
-                      badges={[
-                        { text: "19% OFF", variant: "discount" }
-                      ]}
-                      onFavoriteToggle={() => console.log("Favorite toggled")}
-                      onAddToCart={() => console.log("Added to cart")}
-                    />
-
-                    {/* Row 2 */}
-                    <ProductCard
-                      image="https://images.unsplash.com/photo-1611648694931-1aeda329f9da?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjb21wdXRlciUyMG1vbml0b3J8ZW58MXx8fHwxNzY3NDExNzMyfDA&ixlib=rb-4.1.0&q=80&w=1080"
-                      title="Dell Optiplex 7000x7480 All-in-One Computer Monitor"
-                      price="₦299"
-                      onFavoriteToggle={() => console.log("Favorite toggled")}
-                      onAddToCart={() => console.log("Added to cart")}
-                    />
-
-                    <ProductCard
-                      image="https://images.unsplash.com/photo-1690375097427-78224325d7da?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtYWNrZXJlbCUyMGZpc2h8ZW58MXx8fHwxNzY3NDM1MjAxfDA&ixlib=rb-4.1.0&q=80&w=1080"
-                      title="Frozen Tuna Fillet"
-                      price="₦850.00"
-                      originalPrice="₦865.00"
-                      rating={4}
-                      ratingText="(238) 456-7890"
-                      badges={[
-                        { text: "19% OFF", variant: "discount" },
-                        { text: "DISTRESS", variant: "distress" },
-                        { text: "HOT", variant: "hot" },
-                        { text: "SAVE UP TO 50%", variant: "custom", backgroundColor: "#f79009", textColor: "#ffffff" }
-                      ]}
-                      onFavoriteToggle={() => console.log("Favorite toggled")}
-                      onAddToCart={() => console.log("Added to cart")}
-                    />
-
-                    <ProductCard
-                      image="https://images.unsplash.com/photo-1652377853721-b6d8c9594442?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjYXIlMjBjYXJidXJldG9yfGVufDF8fHx8MTc2NzQzNTIwM3ww&ixlib=rb-4.1.0&q=80&w=1080"
-                      title="2-Barrel Carburetor Carb 2100 Engine Increase Horsepower"
-                      price="₦160"
-                      badges={[
-                        { text: "HOT", variant: "hot" }
-                      ]}
-                      onFavoriteToggle={() => console.log("Favorite toggled")}
-                      onAddToCart={() => console.log("Added to cart")}
-                    />
-
-                    {/* Row 3 */}
-                    <ProductCard
-                      image="https://images.unsplash.com/photo-1690375097427-78224325d7da?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtYWNrZXJlbCUyMGZpc2h8ZW58MXx8fHwxNzY3NDM1MjAxfDA&ixlib=rb-4.1.0&q=80&w=1080"
-                      title="Frozen Tuna Fillet"
-                      price="₦850.00"
-                      originalPrice="₦865.00"
-                      rating={3}
-                      ratingText="(238) 456-7890"
-                      badges={[
-                        { text: "19% OFF", variant: "discount" },
-                        { text: "DISTRESS", variant: "distress" },
-                        { text: "HOT", variant: "hot" },
-                        { text: "SAVE UP TO 50%", variant: "custom", backgroundColor: "#f79009", textColor: "#ffffff" }
-                      ]}
-                      onFavoriteToggle={() => console.log("Favorite toggled")}
-                      onAddToCart={() => console.log("Added to cart")}
-                    />
-
-                    <ProductCard
-                      image="https://images.unsplash.com/photo-1690375097427-78224325d7da?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtYWNrZXJlbCUyMGZpc2h8ZW58MXx8fHwxNzY3NDM1MjAxfDA&ixlib=rb-4.1.0&q=80&w=1080"
-                      title="Frozen Tuna Fillet"
-                      price="₦850.00"
-                      originalPrice="₦865.00"
-                      rating={4}
-                      ratingText="(238) 456-7890"
-                      badges={[
-                        { text: "19% OFF", variant: "discount" },
-                        { text: "DISTRESS", variant: "distress" },
-                        { text: "HOT", variant: "hot" },
-                        { text: "SAVE UP TO 50%", variant: "custom", backgroundColor: "#f79009", textColor: "#ffffff" }
-                      ]}
-                      onFavoriteToggle={() => console.log("Favorite toggled")}
-                      onAddToCart={() => console.log("Added to cart")}
-                    />
-
-                    <ProductCard
-                      image="https://images.unsplash.com/photo-1690375097427-78224325d7da?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtYWNrZXJlbCUyMGZpc2h8ZW58MXx8fHwxNzY3NDM1MjAxfDA&ixlib=rb-4.1.0&q=80&w=1080"
-                      title="Frozen Tuna Fillet"
-                      price="₦865.00"
-                      rating={4}
-                      ratingText="(238) 456-7890"
-                      badges={[
-                        { text: "19% OFF", variant: "discount" },
-                        { text: "DISTRESS", variant: "distress" },
-                        { text: "HOT", variant: "hot" },
-                        { text: "SAVE UP TO 50%", variant: "custom", backgroundColor: "#f79009", textColor: "#ffffff" }
-                      ]}
-                      onFavoriteToggle={() => console.log("Favorite toggled")}
-                      onAddToCart={() => console.log("Added to cart")}
-                    />
-                  </div>
-
-                  {/* Pagination */}
-                  <Pagination
-                    currentPage={currentPage}
-                    totalPages={10}
-                    onPageChange={(page) => {
-                      setCurrentPage(page);
-                      console.log(`Page changed to: ${page}`);
-                    }}
-                    siblingCount={1}
-                    showPrevNext={true}
+            {/* ═══════════════ FULL WIDTH BANNER ═══════════════ */}
+            {(() => {
+              const fullBanner = banners.find(b => b.type === 'full-width');
+              if (!fullBanner) return null;
+              return (
+                <div className="mb-4">
+                  <FullWidthBanner
+                    heading={fullBanner.heading || fullBanner.title}
+                    description={fullBanner.description}
+                    price={fullBanner.priceValue?.toString()}
+                    buttonText={fullBanner.buttonText || "Shop now"}
+                    backgroundImage={fullBanner.backgroundImageUrl || imgFrame1261153583}
+                    onButtonClick={() => fullBanner.buttonUrl && (window.location.href = fullBanner.buttonUrl)}
                   />
                 </div>
-              </div>
-            </div>
-
-            {/* Full Width Banner - Macbook Pro */}
-            <div className="mb-[48px] mx-[-48px]">
-              <FullWidthBanner
-                heading="Macbook Pro"
-                description="Apple M1 Max Chip. 32GB Unified Memory, 1TB SSD Storage"
-                price="₦299,000"
-                priceTopText="Just"
-                priceBottomText="Only!"
-                promoBadgeText="SAVE UP TO 50%"
-                buttonText="Shop now"
-                backgroundImage={imgFrame1261153583}
-                onButtonClick={() => console.log("Shop now clicked!")}
-              />
-            </div>
+              );
+            })()}
           </div>
         </div>
+
+        {/* ─── Floating Cart Button (mobile) ─── */}
+        <button
+          className="fixed bottom-6 right-6 z-50 bg-[#039855] text-white rounded-full p-4 shadow-lg lg:hidden flex items-center gap-2"
+          onClick={() => setShowCartDrawer(true)}
+        >
+          <ShoppingCart className="w-5 h-5" />
+          {cartItemCount > 0 && (
+            <span className="bg-white text-[#039855] text-[11px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
+              {cartItemCount}
+            </span>
+          )}
+        </button>
+
+        {/* ─── Cart Drawer ─── */}
+        {showCartDrawer && (
+          <div className="fixed inset-0 z-50 flex justify-end">
+            {/* Backdrop */}
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setShowCartDrawer(false)}
+            />
+            {/* Drawer */}
+            <div className="relative w-full max-w-md bg-white shadow-xl flex flex-col animate-in slide-in-from-right duration-300">
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-[#e4e7e9]">
+                <h2 className="font-semibold text-[16px] text-[#191c1f] flex items-center gap-2">
+                  <ShoppingCart className="w-5 h-5" />
+                  Cart
+                  {cartItemCount > 0 && (
+                    <span className="text-[13px] text-[#98a2b3] font-normal">({cartItemCount})</span>
+                  )}
+                </h2>
+                <button
+                  onClick={() => setShowCartDrawer(false)}
+                  className="p-1 hover:bg-[#f2f4f7] rounded-md transition-colors"
+                >
+                  <X className="w-5 h-5 text-[#667085]" />
+                </button>
+              </div>
+
+              {/* Cart content */}
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                {!cartData || cartData.storeGroups.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full text-center py-12">
+                    <ShoppingCart className="w-16 h-16 text-[#e4e7e9] mb-4" />
+                    <p className="text-[#5f6c72] font-medium text-[14px]">Your cart is empty</p>
+                    <p className="text-[12px] text-[#98a2b3] mt-1">
+                      Add items from the marketplace
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    {cartData.storeGroups.map((group) => (
+                      <div key={group.storeId}>
+                        {/* Store label */}
+                        <div className="flex items-center gap-2 mb-3">
+                          <div className="w-6 h-6 rounded-full bg-[#039855] flex items-center justify-center text-white text-[10px] font-bold">
+                            {group.storeName.charAt(0)}
+                          </div>
+                          <span className="font-medium text-[13px] text-[#191c1f]">
+                            {group.storeName}
+                          </span>
+                        </div>
+                        {/* Items */}
+                        <div className="space-y-2.5">
+                          {group.items.map((item) => (
+                            <div key={item.id} className="flex gap-3 bg-[#f9fafb] rounded-lg p-3 border border-[#f2f4f7]">
+                              {item.productImages?.[0] ? (
+                                <img
+                                  src={item.productImages[0]}
+                                  alt={item.productName}
+                                  className="w-14 h-14 rounded-md object-cover shrink-0"
+                                />
+                              ) : (
+                                <div className="w-14 h-14 rounded-md bg-[#e4e7e9] flex items-center justify-center shrink-0">
+                                  <Package className="w-5 h-5 text-[#98a2b3]" />
+                                </div>
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[13px] font-medium text-[#191c1f] truncate">{item.productName}</p>
+                                <p className="text-[13px] text-[#039855] font-semibold mt-0.5">
+                                  {formatKobo(item.unitPrice)}
+                                </p>
+                                <div className="flex items-center gap-2 mt-2">
+                                  <button
+                                    className="w-7 h-7 rounded-md border border-[#e4e7e9] flex items-center justify-center hover:bg-white transition-colors"
+                                    onClick={() =>
+                                      item.qty <= 1
+                                        ? removeCartItem.mutate(item.id)
+                                        : updateCartItem.mutate({ id: item.id, qty: item.qty - 1 })
+                                    }
+                                  >
+                                    {item.qty <= 1 ? (
+                                      <Trash2 className="w-3.5 h-3.5 text-[#ee5858]" />
+                                    ) : (
+                                      <Minus className="w-3.5 h-3.5 text-[#5f6c72]" />
+                                    )}
+                                  </button>
+                                  <span className="text-[13px] font-medium w-6 text-center text-[#191c1f]">
+                                    {item.qty}
+                                  </span>
+                                  <button
+                                    className="w-7 h-7 rounded-md border border-[#e4e7e9] flex items-center justify-center hover:bg-white transition-colors"
+                                    onClick={() =>
+                                      updateCartItem.mutate({ id: item.id, qty: item.qty + 1 })
+                                    }
+                                  >
+                                    <Plus className="w-3.5 h-3.5 text-[#5f6c72]" />
+                                  </button>
+                                </div>
+                              </div>
+                              <button
+                                className="shrink-0 self-start p-1 hover:bg-[#fef2f2] rounded-md transition-colors"
+                                onClick={() => removeCartItem.mutate(item.id)}
+                              >
+                                <X className="w-4 h-4 text-[#98a2b3] hover:text-[#ee5858]" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              {cartData && cartData.totalItems > 0 && (
+                <div className="border-t border-[#e4e7e9] px-5 py-4 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium text-[14px] text-[#5f6c72]">Total</span>
+                    <span className="font-bold text-[18px] text-[#039855]">
+                      {formatKobo(cartData.totalAmount)}
+                    </span>
+                  </div>
+                  <button
+                    className="w-full bg-[#039855] text-white py-3 rounded-lg text-[14px] font-semibold hover:bg-[#027a45] transition-colors"
+                    onClick={() => {
+                      setShowCartDrawer(false);
+                      navigate("/resident/citymart/cart");
+                    }}
+                  >
+                    Proceed to Checkout
+                  </button>
+                  <button
+                    className="w-full text-center text-[13px] text-[#039855] hover:underline py-1"
+                    onClick={() => {
+                      setShowCartDrawer(false);
+                      navigate("/resident/citymart/orders");
+                    }}
+                  >
+                    View My Orders
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
-    </div>
+    </ResidentShell>
   );
 }

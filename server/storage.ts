@@ -208,6 +208,7 @@ export interface IStorage {
   
   // Wallets
   getWalletByUserId(userId: string): Promise<PrismaWallet | undefined>;
+  getWalletById(id: string): Promise<PrismaWallet | undefined>;
   createWallet(wallet: WalletCreationInput): Promise<PrismaWallet>;
   updateWalletBalance(userId: string, amount: string): Promise<PrismaWallet | undefined>;
 
@@ -785,6 +786,11 @@ export class DatabaseStorage implements IStorage {
     return (res as any as PrismaWallet) ?? undefined;
   }
 
+  async getWalletById(id: string): Promise<PrismaWallet | undefined> {
+    const [res] = await db.select().from(wallets).where(eq(wallets.id, id));
+    return (res as any as PrismaWallet) ?? undefined;
+  }
+
   async createWallet(wallet: WalletCreationInput): Promise<PrismaWallet> {
     const [w] = await db
       .insert(wallets)
@@ -881,6 +887,10 @@ export class DatabaseStorage implements IStorage {
     if (updates.meta !== undefined) {
       const mVal = updates.meta as any;
       patch.meta = typeof mVal === "object" && mVal?.set !== undefined ? mVal.set : mVal;
+    }
+    if ((updates as any).serviceRequestId !== undefined) {
+      const sVal = (updates as any).serviceRequestId;
+      patch.serviceRequestId = typeof sVal === "object" && sVal?.set !== undefined ? sVal.set : sVal;
     }
 
     const [row] = await db

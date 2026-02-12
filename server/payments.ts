@@ -26,6 +26,88 @@ function requirePositiveAmount(amount: number) {
   }
 }
 
+function normalizeCategoryKey(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[\s-]+/g, "_");
+}
+
+const ALLOWED_CATEGORIES = new Set([
+  "electrician",
+  "plumber",
+  "carpenter",
+  "hvac_technician",
+  "painter",
+  "tiler",
+  "mason",
+  "roofer",
+  "gardener",
+  "cleaner",
+  "security_guard",
+  "cook",
+  "laundry_service",
+  "pest_control",
+  "welder",
+  "mechanic",
+  "phone_repair",
+  "appliance_repair",
+  "tailor",
+  "surveillance_monitoring",
+  "alarm_system",
+  "cleaning_janitorial",
+  "catering_services",
+  "it_support",
+  "maintenance_repair",
+  "packaging_solutions",
+  "marketing_advertising",
+  "home_tutors",
+  "furniture_making",
+  "market_runner",
+  "item_vendor",
+]);
+
+async function ensureConsultancyServiceRequest(params: {
+  userId: string;
+  txMeta?: Prisma.JsonValue | null;
+}) {
+  const meta = (params.txMeta as any) || {};
+  const consultancy = meta?.consultancyRequest;
+  if (!consultancy || typeof consultancy !== "object") return null;
+
+  const normalizedCategory = normalizeCategoryKey(
+    consultancy.categoryKey || consultancy.categoryLabel || "",
+  );
+  const category = ALLOWED_CATEGORIES.has(normalizedCategory)
+    ? normalizedCategory
+    : "maintenance_repair";
+  const urgencyInput = normalizeCategoryKey(consultancy.urgency || "");
+  const urgency =
+    urgencyInput === "emergency" ||
+    urgencyInput === "high" ||
+    urgencyInput === "medium" ||
+    urgencyInput === "low"
+      ? urgencyInput
+      : "medium";
+  const location = String(consultancy.location || "Not specified");
+  const description =
+    String(consultancy.description || "Consultancy request").trim() ||
+    "Consultancy request";
+
+  const created = await storage.createServiceRequest({
+    category: category as any,
+    description,
+    residentId: params.userId,
+    budget: "Consultancy",
+    urgency: urgency as any,
+    location,
+    status: "pending_inspection" as any,
+    paymentStatus: "pending",
+  });
+
+  return created?.id ?? null;
+}
+
 async function ensureWallet(userId: string): Promise<Wallet> {
   let wallet = await storage.getWalletByUserId(userId);
   if (!wallet) {
@@ -89,17 +171,35 @@ export async function verifyAndFinalizePaystackCharge(reference: string) {
     );
   }
 
+  let serviceRequestId = tx.serviceRequestId ?? null;
+  if (!serviceRequestId) {
+    try {
+      const wallet = tx.walletId ? await storage.getWalletById(tx.walletId) : undefined;
+      const userId = wallet?.userId;
+      if (userId) {
+        serviceRequestId = await ensureConsultancyServiceRequest({
+          userId,
+          txMeta: tx.meta as any,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const updatedTx = await storage.updateTransactionByReference(reference, {
     status: TransactionStatus.COMPLETED,
     description: `Paystack ${charge.channel || "charge"}`,
+    serviceRequest: serviceRequestId ? { connect: { id: serviceRequestId } } : undefined,
     meta: {
       ...((tx.meta as Prisma.JsonObject) || {}),
       paystack: charge as any,
     } as Prisma.InputJsonObject,
   });
 
-  if (tx.serviceRequestId) {
-    await storage.updateServiceRequest(tx.serviceRequestId, {
+  const finalServiceRequestId = serviceRequestId ?? tx.serviceRequestId;
+  if (finalServiceRequestId) {
+    await storage.updateServiceRequest(finalServiceRequestId, {
       paymentStatus: "paid",
       billedAmount: tx.amount as any,
     });

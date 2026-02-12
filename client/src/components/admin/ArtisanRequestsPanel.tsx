@@ -114,7 +114,7 @@ export default function ArtisanRequestsPanel({
   
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<RequestStatus | "all">("all");
-  const enabled = Boolean(selectedEstateId);
+  const enabled = true;
 
   // Modal states
   const [viewRequest, setViewRequest] = useState<ServiceRequest | null>(null);
@@ -128,18 +128,21 @@ export default function ArtisanRequestsPanel({
   const [cancelReason, setCancelReason] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
 
-  const estateOptions = (Array.isArray(estates) ? estates : [])
-    .map((estate, idx) => {
-      const id = estate?._id || estate?.id || estate?.slug || `estate-${idx}`;
-      return id ? { value: String(id), label: estate.name || estate.slug || id } : null;
-    })
-    .filter(Boolean) as { value: string; label: string }[];
+  const estateOptions = [
+    { value: "__all__", label: "All estates" },
+    ...((Array.isArray(estates) ? estates : [])
+      .map((estate, idx) => {
+        const id = estate?._id || estate?.id || estate?.slug || `estate-${idx}`;
+        return id ? { value: String(id), label: estate.name || estate.slug || id } : null;
+      })
+      .filter(Boolean) as { value: string; label: string }[]),
+  ];
 
   // Fetch service requests
-  const { data, isLoading, error, refetch } = useQuery<ServiceRequest[], Error>({
+  const { data, isLoading, isFetching, error, refetch } = useQuery<ServiceRequest[], Error>({
     queryKey: [
       "admin.bridge.service-requests",
-      { status, q, estateId: selectedEstateId },
+      { status, q, estateId: selectedEstateId || null },
     ],
     queryFn: async () => {
       const params: Record<string, string> = {};
@@ -149,7 +152,9 @@ export default function ArtisanRequestsPanel({
       return await AdminAPI.bridge.getServiceRequests(params);
     },
     enabled,
-    refetchInterval: enabled ? 5000 : false,
+    staleTime: 15000,
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
   });
 
@@ -318,11 +323,11 @@ export default function ArtisanRequestsPanel({
             <span className="text-xs text-muted-foreground">Estate</span>
             <div className="w-full sm:w-64">
               <Select
-                value={selectedEstateId ?? ""}
-                onValueChange={(value) => onSelectEstate(value || null)}
+                value={selectedEstateId ?? "__all__"}
+                onValueChange={(value) => onSelectEstate(value === "__all__" ? null : value)}
               >
                 <SelectTrigger data-testid="select-requests-estate">
-                  <SelectValue placeholder="Select an estate" />
+                  <SelectValue placeholder="All estates" />
                 </SelectTrigger>
                 <SelectContent>
                   {estateOptions.length > 0 ? (
@@ -340,11 +345,11 @@ export default function ArtisanRequestsPanel({
             </Select>
             </div>
           </div>
-          <Badge variant="outline" className="text-xs text-muted-foreground">
+            <Badge variant="outline" className="text-xs text-muted-foreground">
             {selectedEstateId
               ? estateOptions.find((option) => option.value === selectedEstateId)?.label ||
                 "Selected estate"
-              : "No estate selected"}
+              : "All estates"}
           </Badge>
         </div>
       </CardHeader>
@@ -371,6 +376,7 @@ export default function ArtisanRequestsPanel({
           />
           <div className="flex items-center gap-2 ml-auto text-sm text-muted-foreground">
             <span>{requests.length} request(s)</span>
+            {isFetching ? <span>Refreshingâ€¦</span> : null}
           </div>
         </div>
       </div>

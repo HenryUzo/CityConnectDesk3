@@ -61,7 +61,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         : { username: credentials.username, password: credentials.password };
 
       const res = await apiRequest("POST", "/api/login", loginData);
-      return (await res.json()) as SelectUser;
+      const data = await res.json();
+      
+      // Store JWT tokens from response
+      if (data.accessToken) {
+        localStorage.setItem("jwt", data.accessToken);
+        sessionStorage.setItem("jwt", data.accessToken);
+      }
+      if (data.refreshToken) {
+        localStorage.setItem("refreshToken", data.refreshToken);
+        sessionStorage.setItem("refreshToken", data.refreshToken);
+      }
+      
+      return data.user || data;
     },
     onSuccess: (user: SelectUser) => {
       queryClient.setQueryData(["/api/user"], user);
@@ -80,7 +92,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Optional: validate on client (keeps your original import in use)
       insertUserSchema.passthrough().parse(credentials);
       const res = await apiRequest("POST", "/api/register", credentials);
-      return (await res.json()) as SelectUser;
+      const data = await res.json();
+      
+      // Store JWT tokens from response
+      if (data.accessToken) {
+        localStorage.setItem("jwt", data.accessToken);
+        sessionStorage.setItem("jwt", data.accessToken);
+      }
+      if (data.refreshToken) {
+        localStorage.setItem("refreshToken", data.refreshToken);
+        sessionStorage.setItem("refreshToken", data.refreshToken);
+      }
+      
+      return data.user || data;
     },
     onSuccess: (user: SelectUser) => {
       queryClient.setQueryData(["/api/user"], user);

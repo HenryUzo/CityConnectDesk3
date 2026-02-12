@@ -88,6 +88,7 @@ export default function ServiceRequestsPage() {
         onNavigateToSettings={handleNavigateToSettings}
         onBookServiceClick={handleNavigateToChat}
         onNavigateToServiceRequests={() => navigate("/service-requests")}
+        onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
         currentPage="requests"
       />
 
@@ -98,6 +99,7 @@ export default function ServiceRequestsPage() {
           onNavigateToSettings={handleNavigateToSettings}
           onBookServiceClick={handleNavigateToChat}
           onNavigateToServiceRequests={() => navigate("/service-requests")}
+          onNavigateToOrdinaryFlow={() => navigate("/resident/requests/ordinary")}
           currentPage="requests"
         />
       </div>

@@ -28,8 +28,8 @@ export async function fetchConversations(category?: string) {
   return res.json() as Promise<Conversation[]>;
 }
 
-export async function getOrCreateConversation(category: string) {
-  const res = await apiRequest("POST", "/api/app/conversations", { category });
+export async function getOrCreateConversation(category: string, forceNew?: boolean) {
+  const res = await apiRequest("POST", "/api/app/conversations", { category, forceNew });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body?.error || "Failed to create conversation");
