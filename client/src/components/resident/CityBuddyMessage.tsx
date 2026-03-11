@@ -7,37 +7,26 @@ import imgFrame48096905 from "@/assets/illustrations/dbfd1eb1f4deee5c7bffcee9e49
 import imgFrame48096904 from "@/assets/illustrations/f63d5fd57c758ae2cb4167e39f9cb5ce550c7982.png";
 import imgImage from "@/assets/avatars/f63f4dcbfe5ff0deaa52653ee347f8561b1180d8.png";
 import { useProfile } from "@/contexts/ProfileContext";
+import { formatServiceRequestStatusLabel } from "@/lib/serviceRequestStatus";
 
 export type CityBuddyTicketStatus =
   | "pending_inspection"
   | "pending"
   | "assigned"
+  | "assigned_for_job"
   | "in_progress"
   | "completed"
   | "cancelled"
   | (string & {});
 
-export function formatTicketStatusLabel(status: string) {
-  switch (status) {
-    case "pending_inspection":
-      return "Pending inspection";
-    case "pending":
-      return "Pending";
-    case "assigned":
-      return "Assigned";
-    case "in_progress":
-      return "In progress";
-    case "completed":
-      return "Completed";
-    case "cancelled":
-      return "Cancelled";
-    default:
-      return status ? status.replace(/_/g, " ") : "";
-  }
+export function formatTicketStatusLabel(status: string, categoryHint?: string) {
+  return formatServiceRequestStatusLabel(status, categoryHint);
 }
 
-export function buildProgressSteps(status: string) {
+export function buildProgressSteps(status: string, categoryHint?: string) {
   const s = (status || "").toLowerCase();
+  const assignedStepLabel = formatServiceRequestStatusLabel("assigned", categoryHint);
+  const assignedForJobStepLabel = formatServiceRequestStatusLabel("assigned_for_job", categoryHint);
 
   if (s === "cancelled") {
     return {
@@ -46,24 +35,41 @@ export function buildProgressSteps(status: string) {
     };
   }
 
-  if (s === "pending_inspection") {
-    const steps = ["Submitted", "Inspection scheduled", "Assigned", "In progress", "Completed"];
+  if (s === "pending_inspection" || s === "assigned" || s === "assigned_for_job") {
+    const steps = [
+      "Submitted",
+      "Inspection scheduled",
+      assignedStepLabel,
+      assignedForJobStepLabel,
+      "In progress",
+      "Completed",
+    ];
     const activeIndex =
       s === "pending_inspection"
         ? 1
         : s === "assigned"
           ? 2
-          : s === "in_progress"
+          : s === "assigned_for_job"
             ? 3
-            : s === "completed"
+            : s === "in_progress"
               ? 4
+              : s === "completed"
+                ? 5
               : 0;
     return { steps, activeIndex };
   }
 
-  const steps = ["Submitted", "Assigned", "In progress", "Completed"];
+  const steps = ["Submitted", assignedStepLabel, assignedForJobStepLabel, "In progress", "Completed"];
   const activeIndex =
-    s === "assigned" ? 1 : s === "in_progress" ? 2 : s === "completed" ? 3 : 0;
+    s === "assigned"
+      ? 1
+      : s === "assigned_for_job"
+        ? 2
+        : s === "in_progress"
+          ? 3
+          : s === "completed"
+            ? 4
+            : 0;
   return { steps, activeIndex };
 }
 
@@ -97,8 +103,8 @@ export function TicketMessage({
   createdAtIso?: string | null;
   onViewRequest?: () => void;
 }) {
-  const label = formatTicketStatusLabel(String(status || ""));
-  const { steps, activeIndex } = buildProgressSteps(String(status || ""));
+  const label = formatTicketStatusLabel(String(status || ""), title || undefined);
+  const { steps, activeIndex } = buildProgressSteps(String(status || ""), title || undefined);
 
   return (
     <div

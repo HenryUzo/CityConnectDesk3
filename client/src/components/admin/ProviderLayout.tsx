@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Building,
   CheckCircle,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +31,7 @@ const navLinks = [
   { href: "/provider-dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/provider/jobs", icon: Briefcase, label: "My Jobs" },
   { href: "/provider/tasks", icon: CheckCircle, label: "My Tasks" },
+  { href: "/provider/chat", icon: MessageSquare, label: "Resident Chat" },
   { href: "/provider-store-items", icon: Store, label: "My Stores" },
   { href: "/provider/marketplace", icon: Package, label: "Marketplace" },
 ];
@@ -67,24 +69,31 @@ export function ProviderLayout({ children, title }: ProviderLayoutProps) {
               <Building className="h-4 w-4 transition-all group-hover:scale-110" />
               <span className="sr-only">CityConnect</span>
             </Link>
-            {navLinks.map((link) => (
-              <Tooltip key={link.href}>
-                <TooltipTrigger asChild>
-                  <Link
-                    href={link.href}
-                    className={`flex h-9 w-9 items-center justify-center rounded-lg transition-colors md:h-8 md:w-8 ${
-                      location === link.href
-                        ? "bg-accent text-accent-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    <link.icon className="h-5 w-5" />
-                    <span className="sr-only">{link.label}</span>
-                  </Link>
-                </TooltipTrigger>
-                <TooltipContent side="right">{link.label}</TooltipContent>
-              </Tooltip>
-            ))}
+            {navLinks.map((link) => {
+              const isActive =
+                location === link.href ||
+                location.startsWith(`${link.href}?`) ||
+                location.startsWith(`${link.href}/`);
+
+              return (
+                <Tooltip key={link.href}>
+                  <TooltipTrigger asChild>
+                    <Link
+                      href={link.href}
+                      className={`flex h-9 w-9 items-center justify-center rounded-lg transition-colors md:h-8 md:w-8 ${
+                        isActive
+                          ? "bg-accent text-accent-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <link.icon className="h-5 w-5" />
+                      <span className="sr-only">{link.label}</span>
+                    </Link>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">{link.label}</TooltipContent>
+                </Tooltip>
+              );
+            })}
           </nav>
           <nav className="mt-auto flex flex-col items-center gap-4 px-2 sm:py-5">
             <Tooltip>

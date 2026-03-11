@@ -135,6 +135,32 @@ const resolveCompanyAccess = async (req: Express["request"]) => {
   return { userId, company, isOwner };
 };
 
+const SERVICE_REQUEST_STATUS_KEYS = new Set([
+  "pending",
+  "pending_inspection",
+  "assigned",
+  "assigned_for_job",
+  "in_progress",
+  "completed",
+  "cancelled",
+]);
+
+function normalizeServiceRequestStatusKey(value: unknown) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .trim();
+}
+
+const ConsultancyReportPayloadSchema = z.object({
+  inspectionDate: z.string().min(1),
+  actualIssue: z.string().trim().min(3).max(2000),
+  causeOfIssue: z.string().trim().min(3).max(2000),
+  materialCost: z.preprocess((val) => Number(val), z.number().min(0)),
+  serviceCost: z.preprocess((val) => Number(val), z.number().min(0)),
+  preventiveRecommendation: z.string().trim().min(3).max(2000),
+});
+
 // Accept flexible inputs, normalize output types
 const CreateServiceRequest = insertServiceRequestSchema.extend({
   preferredTime: z
@@ -290,6 +316,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use("/api/app", appRoutes);
   app.use("/api/provider", providerRoutes);
   app.use("/api/marketplace", marketplaceRoutes);
+
+  const emitServiceRequestUpdate = (
+    expressApp: { get: (name: string) => unknown },
+    serviceRequest: { id?: string; residentId?: string | null; providerId?: string | null } | null | undefined,
+    updateType: "updated" | "assigned" | "advice" | "status" = "updated",
+  ) => {
+    if (!serviceRequest?.id) return;
+    const io = expressApp.get("io") as SocketIOServer | undefined;
+    if (!io) return;
+
+    const participantIds = new Set<string>();
+    if (serviceRequest.residentId) participantIds.add(serviceRequest.residentId);
+    if (serviceRequest.providerId) participantIds.add(serviceRequest.providerId);
+
+    for (const participantUserId of participantIds) {
+      io.to(`user-${participantUserId}`).emit("service-request:updated", {
+        type: updateType,
+        requestId: serviceRequest.id,
+        request: serviceRequest,
+        at: new Date().toISOString(),
+      });
+    }
+  };
 
   // ──────────────────────────────────────────────────────────────
   // CITYMART BANNERS ROUTES
@@ -723,7 +772,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } else {
           requests = await storage.getServiceRequestsByProvider(userId);
         }
-      } else if (userRole === "admin" || userRole === "super_admin") {
+      } else if (userRole === "admin" || userRole === "super_admin" || userRole === "estate_admin") {
         requests = await storage.getAllServiceRequests();
       }
 
@@ -736,19 +785,287 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/service-requests/:id", requireAuth, async (req, res, next) => {
     try {
       const { id } = req.params;
-      const updates = req.body;
+      const updates = { ...(req.body || {}) };
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!actorId || !actorRole) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const currentRequest = await storage.getServiceRequest(id);
+      if (!currentRequest) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      const isAdminActor =
+        actorRole === "admin" || actorRole === "super_admin" || actorRole === "estate_admin";
+      const isResidentOwner = currentRequest.residentId === actorId;
+      const isAssignedProvider = currentRequest.providerId === actorId;
+
+      if (!isAdminActor && !isResidentOwner && !isAssignedProvider) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
 
       // Convert timestamp fields from ISO strings back to Date objects
-      const timestampFields = ["assignedAt", "closedAt", "createdAt", "updatedAt", "preferredTime"];
+      const timestampFields = [
+        "assignedAt",
+        "paymentRequestedAt",
+        "approvedForJobAt",
+        "closedAt",
+        "createdAt",
+        "updatedAt",
+        "preferredTime",
+      ];
       for (const field of timestampFields) {
         if (updates[field] && typeof updates[field] === "string") {
           updates[field] = new Date(updates[field]);
         }
       }
 
+      const currentStatus = normalizeServiceRequestStatusKey(currentRequest.status);
+      const nextStatus = updates.status
+        ? normalizeServiceRequestStatusKey(updates.status)
+        : currentStatus;
+      if (updates.status && !SERVICE_REQUEST_STATUS_KEYS.has(nextStatus)) {
+        return res.status(400).json({ message: "Invalid service request status" });
+      }
+      if (updates.status) {
+        updates.status = nextStatus;
+      }
+
+      const changedKeys = new Set(Object.keys(updates));
+      const adminOnlyKeys = new Set([
+        "providerId",
+        "adminNotes",
+        "assignedAt",
+        "paymentRequestedAt",
+        "approvedForJobAt",
+        "approvedForJobBy",
+        "billedAmount",
+        "paymentStatus",
+      ]);
+      const residentEditableKeys = new Set([
+        "category",
+        "description",
+        "urgency",
+        "location",
+        "latitude",
+        "longitude",
+        "preferredTime",
+        "specialInstructions",
+        "status",
+      ]);
+      const providerEditableKeys = new Set(["status", "closeReason"]);
+
+      if (!isAdminActor) {
+        for (const key of changedKeys) {
+          if (adminOnlyKeys.has(key)) {
+            return res.status(403).json({ message: `Only admin can update ${key}` });
+          }
+        }
+      }
+
+      if (isResidentOwner && !isAdminActor) {
+        for (const key of changedKeys) {
+          if (!residentEditableKeys.has(key)) {
+            return res.status(403).json({ message: `Residents cannot update ${key}` });
+          }
+        }
+        if (updates.status && nextStatus !== "cancelled") {
+          return res.status(403).json({ message: "Residents can only cancel their request" });
+        }
+      }
+
+      if (isAssignedProvider && !isAdminActor && !isResidentOwner) {
+        for (const key of changedKeys) {
+          if (!providerEditableKeys.has(key)) {
+            return res.status(403).json({ message: `Providers cannot update ${key}` });
+          }
+        }
+        if (updates.status && !["in_progress", "completed"].includes(nextStatus)) {
+          return res.status(403).json({ message: "Providers can only move requests to in_progress or completed" });
+        }
+      }
+
+      if ((currentStatus === "completed" || currentStatus === "cancelled") && nextStatus !== currentStatus) {
+        return res.status(409).json({ message: "Completed or cancelled requests cannot be reopened" });
+      }
+
+      if (updates.providerId !== undefined) {
+        if (!isAdminActor) {
+          return res.status(403).json({ message: "Only admin can change assigned provider" });
+        }
+        const lockedStatuses = new Set(["assigned_for_job", "in_progress", "completed", "cancelled"]);
+        if (lockedStatuses.has(currentStatus) && nextStatus !== "assigned") {
+          return res
+            .status(400)
+            .json({ message: "Provider can only be changed before the request is assigned for job" });
+        }
+      }
+
+      if (updates.paymentStatus !== undefined) {
+        if (!isAdminActor) {
+          return res.status(403).json({ message: "Only admin can update payment status directly" });
+        }
+        const normalizedPaymentStatus = String(updates.paymentStatus || "").toLowerCase().trim();
+        if (!["pending", "paid", "failed", "unpaid", "cancelled", "unset"].includes(normalizedPaymentStatus)) {
+          return res.status(400).json({ message: "Invalid payment status value" });
+        }
+        updates.paymentStatus = normalizedPaymentStatus;
+        if (normalizedPaymentStatus === "pending") {
+          if (!currentRequest.consultancyReportSubmittedAt || !currentRequest.consultancyReport) {
+            return res.status(400).json({
+              message: "Provider consultancy report is required before requesting payment",
+            });
+          }
+        }
+        if (normalizedPaymentStatus === "pending" && !updates.paymentRequestedAt) {
+          updates.paymentRequestedAt = new Date();
+        }
+      }
+
+      if (nextStatus === "assigned") {
+        if (!isAdminActor) {
+          return res.status(403).json({ message: "Only admin can assign request for inspection" });
+        }
+        if (!updates.providerId && !currentRequest.providerId) {
+          return res.status(400).json({ message: "Assign a provider before setting inspection assignment" });
+        }
+        updates.assignedAt = updates.assignedAt || currentRequest.assignedAt || new Date();
+        updates.approvedForJobAt = null;
+        updates.approvedForJobBy = null;
+      }
+
+      if (nextStatus === "assigned_for_job") {
+        if (!isAdminActor) {
+          return res.status(403).json({ message: "Only admin can assign a request for job" });
+        }
+        const providerIdForJob = String(updates.providerId || currentRequest.providerId || "").trim();
+        if (!providerIdForJob) {
+          return res.status(400).json({ message: "A provider must be selected before assigning for job" });
+        }
+
+        const paymentRequestedAt = updates.paymentRequestedAt || currentRequest.paymentRequestedAt;
+        if (!paymentRequestedAt) {
+          return res.status(400).json({
+            message: "Payment must be requested from the resident before assigning for job",
+          });
+        }
+
+        const effectivePaymentStatus = String(
+          updates.paymentStatus ?? currentRequest.paymentStatus ?? "",
+        ).toLowerCase();
+        if (effectivePaymentStatus !== "paid") {
+          return res.status(400).json({
+            message: "Resident payment must be completed before assigning for job",
+          });
+        }
+
+        updates.approvedForJobAt = new Date();
+        updates.approvedForJobBy = actorId;
+        updates.assignedAt = updates.assignedAt || currentRequest.assignedAt || new Date();
+      }
+
+      if (nextStatus === "in_progress") {
+        const fromStatus = currentStatus;
+        if (!["assigned_for_job", "in_progress"].includes(fromStatus)) {
+          return res.status(400).json({
+            message: "Request must be assigned for job before work can start",
+          });
+        }
+      }
+
+      if (nextStatus === "completed") {
+        if (currentStatus !== "in_progress" && currentStatus !== "completed") {
+          return res.status(400).json({
+            message: "Only requests in progress can be marked as completed",
+          });
+        }
+        if (!isAdminActor && isAssignedProvider && currentStatus !== "in_progress") {
+          return res.status(400).json({
+            message: "Provider can only complete a request that is already in progress",
+          });
+        }
+        updates.closedAt = updates.closedAt || new Date();
+      }
+
+      if (nextStatus === "cancelled" && !isAdminActor && !isResidentOwner) {
+        return res.status(403).json({ message: "Only admin or resident can cancel requests" });
+      }
+
       const serviceRequest = await storage.updateServiceRequest(id, updates);
       if (!serviceRequest) {
         return res.status(404).json({ message: "Service request not found" });
+      }
+
+      if (isAdminActor && updates.paymentStatus === "pending" && currentRequest.residentId) {
+        const notification = await storage.createNotification({
+          userId: currentRequest.residentId,
+          title: "Payment requested",
+          message: "A job payment request has been raised for your service request.",
+          type: "info",
+          metadata: {
+            requestId: currentRequest.id,
+            kind: "job_payment_requested",
+          },
+        });
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        io?.to(`user-${currentRequest.residentId}`).emit("notification:new", notification);
+
+        const effectiveAmount = updates.billedAmount ?? currentRequest.billedAmount;
+        const paymentMessage =
+          effectiveAmount && Number.isFinite(Number(effectiveAmount))
+            ? `Service payment requested: NGN ${Number(effectiveAmount).toLocaleString()}.`
+            : "Service payment has been requested.";
+        const inserted = await storage.addRequestMessage(
+          currentRequest.id,
+          actorId,
+          "admin",
+          paymentMessage,
+        );
+        const participantIds = new Set<string>();
+        if (currentRequest.residentId) participantIds.add(currentRequest.residentId);
+        if (updates.providerId || currentRequest.providerId) {
+          participantIds.add(String(updates.providerId || currentRequest.providerId));
+        }
+        for (const participantUserId of participantIds) {
+          io?.to(`user-${participantUserId}`).emit("request-message:new", {
+            requestId: currentRequest.id,
+            message: inserted,
+          });
+        }
+      }
+
+      if (nextStatus === "assigned_for_job") {
+        const io = req.app.get("io") as SocketIOServer | undefined;
+
+        if (serviceRequest.residentId) {
+          const residentNotification = await storage.createNotification({
+            userId: serviceRequest.residentId,
+            title: "Provider assigned for job",
+            message: "Your request has been approved and assigned for job execution.",
+            type: "success",
+            metadata: {
+              requestId: serviceRequest.id,
+              kind: "request_status",
+            },
+          });
+          io?.to(`user-${serviceRequest.residentId}`).emit("notification:new", residentNotification);
+        }
+
+        if (serviceRequest.providerId) {
+          const providerNotification = await storage.createNotification({
+            userId: serviceRequest.providerId,
+            title: "Job approved",
+            message: "You can proceed with this service request.",
+            type: "info",
+            metadata: {
+              requestId: serviceRequest.id,
+              kind: "request_status",
+            },
+          });
+          io?.to(`user-${serviceRequest.providerId}`).emit("notification:new", providerNotification);
+        }
       }
 
       // Broadcast update to SSE clients
@@ -772,6 +1089,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (e) {
         console.error("Failed to broadcast service-request updated event", e);
       }
+
+      emitServiceRequestUpdate(req.app, serviceRequest, "status");
 
       res.json(serviceRequest);
     } catch (error) {
@@ -798,6 +1117,230 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to fetch my service requests", error);
       res.status(500).json({ message: "Unable to load service requests" });
+    }
+  });
+
+  app.delete("/api/service-requests/:id", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const { id } = req.params;
+      const existing = await storage.getServiceRequest(id);
+      if (!existing) return res.status(404).json({ message: "Service request not found" });
+      if (existing.residentId !== userId) return res.status(403).json({ message: "Forbidden" });
+
+      const cancelled = await storage.cancelServiceRequest(id, userId);
+      if (!cancelled) return res.status(404).json({ message: "Service request not found" });
+
+      res.json({ ok: true, status: cancelled.status });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/service-requests/:id/messages", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      const userRole = req.auth?.role ?? req.user?.role;
+      if (!userId || !userRole) return res.status(401).json({ message: "Unauthorized" });
+
+      const request = await storage.getServiceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+
+      const canAccess =
+        userRole === "admin" ||
+        userRole === "super_admin" ||
+        request.residentId === userId ||
+        request.providerId === userId;
+      if (!canAccess) return res.status(403).json({ message: "Forbidden" });
+
+      const messages = await storage.getRequestMessages(req.params.id);
+      res.json(messages);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/service-requests/:id/messages", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      const userRole = req.auth?.role ?? req.user?.role;
+      if (!userId || !userRole) return res.status(401).json({ message: "Unauthorized" });
+
+      const request = await storage.getServiceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+
+      const canAccess =
+        userRole === "admin" ||
+        userRole === "super_admin" ||
+        request.residentId === userId ||
+        request.providerId === userId;
+      if (!canAccess) return res.status(403).json({ message: "Forbidden" });
+
+      const parsed = z
+        .object({
+          message: z.string().trim().min(1).max(2000),
+          attachmentUrl: z.string().url().optional(),
+        })
+        .parse(req.body || {});
+
+      const senderRole =
+        userRole === "admin" || userRole === "super_admin"
+          ? "admin"
+          : userRole === "provider"
+            ? "provider"
+            : "resident";
+
+      const inserted = await storage.addRequestMessage(
+        req.params.id,
+        userId,
+        senderRole,
+        parsed.message,
+        parsed.attachmentUrl,
+      );
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const participantIds = new Set<string>();
+      if (request.residentId) participantIds.add(request.residentId);
+      if (request.providerId) participantIds.add(request.providerId);
+      for (const participantUserId of participantIds) {
+        io?.to(`user-${participantUserId}`).emit("request-message:new", {
+          requestId: req.params.id,
+          message: inserted,
+        });
+      }
+
+      const recipientIds = new Set<string>();
+      if (request.residentId) recipientIds.add(request.residentId);
+      if (request.providerId) recipientIds.add(request.providerId);
+      recipientIds.delete(userId);
+
+      if (recipientIds.size > 0) {
+        const titleByRole = {
+          provider: "New message from provider",
+          resident: "New message from resident",
+          admin: "New message from support",
+        } as const;
+        const notificationMessage = parsed.message.length > 140
+          ? `${parsed.message.slice(0, 137)}...`
+          : parsed.message;
+
+        for (const recipientUserId of recipientIds) {
+          const notification = await storage.createNotification({
+            userId: recipientUserId,
+            title: titleByRole[senderRole],
+            message: notificationMessage,
+            type: "info",
+            metadata: {
+              kind: "request_message",
+              requestId: req.params.id,
+              senderRole,
+            } as any,
+          });
+          io?.to(`user-${recipientUserId}`).emit("notification:new", notification);
+        }
+      }
+
+      res.status(201).json(inserted);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/provider/service-requests/:id/consultancy-report", requireAuth, async (req, res, next) => {
+    try {
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!actorId || !actorRole) return res.status(401).json({ message: "Unauthorized" });
+
+      const request = await storage.getServiceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+
+      const isAdminActor = actorRole === "admin" || actorRole === "super_admin" || actorRole === "estate_admin";
+      const isAssignedProvider = actorRole === "provider" && request.providerId === actorId;
+      if (!isAdminActor && !isAssignedProvider) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      if (["completed", "cancelled"].includes(statusKey)) {
+        return res.status(400).json({ message: "Cannot submit a consultancy report for a closed request" });
+      }
+
+      const payload = ConsultancyReportPayloadSchema.parse(req.body || {});
+      const inspectionDate = new Date(payload.inspectionDate);
+      if (Number.isNaN(inspectionDate.getTime())) {
+        return res.status(400).json({ message: "Invalid inspection date" });
+      }
+
+      const totalRecommendation = payload.materialCost + payload.serviceCost;
+      const report = {
+        inspectionDate: inspectionDate.toISOString(),
+        actualIssue: payload.actualIssue,
+        causeOfIssue: payload.causeOfIssue,
+        materialCost: payload.materialCost,
+        serviceCost: payload.serviceCost,
+        totalRecommendation,
+        preventiveRecommendation: payload.preventiveRecommendation,
+        submittedAt: new Date().toISOString(),
+        submittedBy: actorId,
+      };
+
+      const updated = await storage.updateServiceRequest(req.params.id, {
+        consultancyReport: report as any,
+        consultancyReportSubmittedAt: new Date(),
+        consultancyReportSubmittedBy: actorId,
+      } as any);
+
+      if (!updated) return res.status(404).json({ message: "Service request not found" });
+
+      const message =
+        `Consultancy report submitted.\n` +
+        `Inspection date: ${inspectionDate.toLocaleDateString()}\n` +
+        `Issue: ${payload.actualIssue}\n` +
+        `Cause: ${payload.causeOfIssue}\n` +
+        `Recommended material cost: NGN ${payload.materialCost.toLocaleString()}\n` +
+        `Recommended service cost: NGN ${payload.serviceCost.toLocaleString()}\n` +
+        `Preventive recommendation: ${payload.preventiveRecommendation}`;
+
+      const senderRole = isAdminActor ? "admin" : "provider";
+      const inserted = await storage.addRequestMessage(
+        req.params.id,
+        actorId,
+        senderRole,
+        message,
+      );
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const participantIds = new Set<string>();
+      if (request.residentId) participantIds.add(request.residentId);
+      if (request.providerId) participantIds.add(request.providerId);
+      for (const participantUserId of participantIds) {
+        io?.to(`user-${participantUserId}`).emit("request-message:new", {
+          requestId: req.params.id,
+          message: inserted,
+        });
+      }
+
+      if (request.residentId) {
+        const notification = await storage.createNotification({
+          userId: request.residentId,
+          title: "Consultancy report added",
+          message: "Your provider submitted an inspection report for this request.",
+          type: "info",
+          metadata: {
+            requestId: request.id,
+            kind: "consultancy_report",
+          },
+        });
+        io?.to(`user-${request.residentId}`).emit("notification:new", notification);
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      res.status(201).json({ success: true, report, request: updated });
+    } catch (error) {
+      next(error);
     }
   });
 
@@ -870,6 +1413,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (e) {
         console.error("Failed to broadcast service-request assigned event", e);
       }
+
+      emitServiceRequestUpdate(req.app, serviceRequest, "assigned");
 
       res.json(serviceRequest);
     } catch (error) {
@@ -2074,6 +2619,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         io?.to(`user-${updated.residentId}`).emit("notification:new", notification);
       }
 
+      emitServiceRequestUpdate(req.app, updated, "advice");
+
       // TODO: Send notification/email to the resident
       res.json({ success: true, message: "Advice sent successfully", request: updated });
     } catch (error) {
@@ -2084,7 +2631,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: Assign provider to a service request
   app.post("/api/admin/service-requests/:id/assign", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "admin") {
+      if (
+        !req.isAuthenticated() ||
+        (
+          req.user?.role !== "admin" &&
+          req.user?.role !== "estate_admin" &&
+          req.user?.globalRole !== "super_admin"
+        )
+      ) {
         return res.status(401).json({ message: "Unauthorized - Admin only" });
       }
 
@@ -2112,8 +2666,300 @@ export async function registerRoutes(app: Express): Promise<Server> {
         io?.to(`user-${serviceRequest.residentId}`).emit("notification:new", notification);
       }
 
+      emitServiceRequestUpdate(req.app, serviceRequest, "assigned");
+
       // TODO: Send notification to the assigned provider
       res.json({ success: true, message: "Provider assigned successfully", request: serviceRequest });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/service-requests/:id/request-payment", async (req, res, next) => {
+    try {
+      if (
+        !req.isAuthenticated() ||
+        (
+          req.user?.role !== "admin" &&
+          req.user?.role !== "estate_admin" &&
+          req.user?.globalRole !== "super_admin"
+        )
+      ) {
+        return res.status(401).json({ message: "Unauthorized - Admin only" });
+      }
+
+      const { id } = req.params;
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const payload = z
+        .object({
+          amount: z.union([z.string(), z.number()]).optional(),
+          note: z.string().trim().max(1000).optional(),
+          providerId: z.string().trim().min(1).optional(),
+        })
+        .parse(req.body || {});
+
+      const request = await storage.getServiceRequest(id);
+      if (!request) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      if (["assigned_for_job", "in_progress", "completed", "cancelled"].includes(statusKey)) {
+        return res.status(400).json({
+          message: "Payment request can only be raised before the request is assigned for job",
+        });
+      }
+
+      if (!request.consultancyReportSubmittedAt || !request.consultancyReport) {
+        return res.status(400).json({
+          message: "Provider consultancy report is required before requesting payment",
+        });
+      }
+
+      const nextProviderId = payload.providerId || request.providerId || undefined;
+      if (!nextProviderId) {
+        return res.status(400).json({ message: "Assign a provider before requesting job payment" });
+      }
+
+      const amountText =
+        payload.amount === undefined || payload.amount === null || payload.amount === ""
+          ? undefined
+          : String(payload.amount);
+
+      const adminNote = payload.note
+        ? `${request.adminNotes ? `${request.adminNotes}\n` : ""}[Payment request] ${payload.note}`
+        : request.adminNotes;
+
+      const updated = await storage.updateServiceRequest(id, {
+        providerId: nextProviderId,
+        status: "assigned",
+        assignedAt: request.assignedAt || new Date(),
+        paymentStatus: "pending",
+        paymentRequestedAt: new Date(),
+        ...(amountText ? { billedAmount: amountText as any } : {}),
+        ...(adminNote ? { adminNotes: adminNote } : {}),
+      } as any);
+
+      if (!updated) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      if (actorId) {
+        const paymentMessage =
+          amountText && Number.isFinite(Number(amountText))
+            ? `Service payment requested: NGN ${Number(amountText).toLocaleString()}${
+                payload.note ? `. ${payload.note}` : "."
+              }`
+            : `Service payment has been requested.${payload.note ? ` ${payload.note}` : ""}`;
+        const inserted = await storage.addRequestMessage(
+          updated.id,
+          actorId,
+          "admin",
+          paymentMessage,
+        );
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        const participantIds = new Set<string>();
+        if (updated.residentId) participantIds.add(updated.residentId);
+        if (updated.providerId) participantIds.add(updated.providerId);
+        for (const participantUserId of participantIds) {
+          io?.to(`user-${participantUserId}`).emit("request-message:new", {
+            requestId: updated.id,
+            message: inserted,
+          });
+        }
+      }
+
+      if (updated.residentId) {
+        const notification = await storage.createNotification({
+          userId: updated.residentId,
+          title: "Payment requested",
+          message: "A payment request has been sent for your service job.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "job_payment_requested",
+          },
+        });
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        io?.to(`user-${updated.residentId}`).emit("notification:new", notification);
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      res.json({ success: true, message: "Payment request sent", request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/service-requests/:id/payment/decline", requireAuth, async (req, res, next) => {
+    try {
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!actorId || !actorRole) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const request = await storage.getServiceRequest(id);
+      if (!request) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      const isResidentOwner = request.residentId === actorId;
+      const isAdminActor = actorRole === "admin" || actorRole === "super_admin" || actorRole === "estate_admin";
+      if (!isResidentOwner && !isAdminActor) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      if (["assigned_for_job", "in_progress", "completed", "cancelled"].includes(statusKey)) {
+        return res.status(400).json({ message: "Payment decline is no longer allowed for this request status" });
+      }
+
+      const payload = z
+        .object({
+          reason: z.string().trim().max(1000).optional(),
+        })
+        .parse(req.body || {});
+
+      const paymentStatus = String(request.paymentStatus || "").toLowerCase();
+      if (paymentStatus === "paid") {
+        return res.status(400).json({ message: "Payment is already completed for this request" });
+      }
+
+      const note = payload.reason
+        ? `[Payment declined] ${payload.reason}`
+        : "[Payment declined] Resident declined the payment request.";
+      const updated = await storage.updateServiceRequest(id, {
+        paymentStatus: "cancelled",
+        adminNotes: `${request.adminNotes ? `${request.adminNotes}\n` : ""}${note}`,
+      } as any);
+
+      if (!updated) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      const messageText = payload.reason
+        ? `Payment request declined. Reason: ${payload.reason}`
+        : "Payment request declined.";
+      const senderRole = isAdminActor ? "admin" : "resident";
+      const inserted = await storage.addRequestMessage(id, actorId, senderRole, messageText);
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const participantIds = new Set<string>();
+      if (updated.residentId) participantIds.add(updated.residentId);
+      if (updated.providerId) participantIds.add(updated.providerId);
+      for (const participantUserId of participantIds) {
+        io?.to(`user-${participantUserId}`).emit("request-message:new", {
+          requestId: id,
+          message: inserted,
+        });
+      }
+
+      if (updated.providerId && isResidentOwner) {
+        const providerNotification = await storage.createNotification({
+          userId: updated.providerId,
+          title: "Resident declined payment",
+          message: "The resident declined the current payment request.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "job_payment_declined",
+          },
+        });
+        io?.to(`user-${updated.providerId}`).emit("notification:new", providerNotification);
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      return res.json({ success: true, message: "Payment request declined", request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/service-requests/:id/approve-job", async (req, res, next) => {
+    try {
+      if (
+        !req.isAuthenticated() ||
+        (
+          req.user?.role !== "admin" &&
+          req.user?.role !== "estate_admin" &&
+          req.user?.globalRole !== "super_admin"
+        )
+      ) {
+        return res.status(401).json({ message: "Unauthorized - Admin only" });
+      }
+
+      const { id } = req.params;
+      const payload = z
+        .object({
+          providerId: z.string().trim().min(1).optional(),
+        })
+        .parse(req.body || {});
+
+      const request = await storage.getServiceRequest(id);
+      if (!request) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      const providerId = payload.providerId || request.providerId;
+      if (!providerId) {
+        return res.status(400).json({ message: "Assign a provider before approving for job" });
+      }
+
+      if (!request.paymentRequestedAt) {
+        return res.status(400).json({ message: "Payment has not been requested for this request yet" });
+      }
+
+      const paymentStatus = String(request.paymentStatus || "").toLowerCase();
+      if (paymentStatus !== "paid") {
+        return res.status(400).json({ message: "Resident payment is required before job approval" });
+      }
+
+      const updated = await storage.updateServiceRequest(id, {
+        providerId,
+        status: "assigned_for_job" as any,
+        approvedForJobAt: new Date(),
+        approvedForJobBy: req.user?.id,
+        assignedAt: request.assignedAt || new Date(),
+      });
+
+      if (!updated) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+
+      if (updated.residentId) {
+        const residentNotification = await storage.createNotification({
+          userId: updated.residentId,
+          title: "Job approved",
+          message: "Your request is approved and assigned for job execution.",
+          type: "success",
+          metadata: {
+            requestId: updated.id,
+            kind: "request_status",
+          },
+        });
+        io?.to(`user-${updated.residentId}`).emit("notification:new", residentNotification);
+      }
+
+      if (updated.providerId) {
+        const providerNotification = await storage.createNotification({
+          userId: updated.providerId,
+          title: "Proceed with service",
+          message: "This request has been approved. You can start the job.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "request_status",
+          },
+        });
+        io?.to(`user-${updated.providerId}`).emit("notification:new", providerNotification);
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      res.json({ success: true, message: "Request approved for job", request: updated });
     } catch (error) {
       next(error);
     }
@@ -2422,10 +3268,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (tx.serviceRequestId) {
         // TODO: ensure this ties into the full service-order billing workflow.
-        await storage.updateServiceRequest(tx.serviceRequestId, {
+        const updatedRequest = await storage.updateServiceRequest(tx.serviceRequestId, {
           paymentStatus: "paid",
           billedAmount: tx.amount as any,
         });
+        emitServiceRequestUpdate(req.app, updatedRequest, "status");
       }
     } catch (error: any) {
       console.error("Paystack webhook handler failed", { message: error?.message });
@@ -2484,10 +3331,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     if (tx.serviceRequestId) {
         // TODO: replace with real billing workflow (e.g., payment record table update) before marking service request paid.
-        await storage.updateServiceRequest(tx.serviceRequestId, {
+        const updatedRequest = await storage.updateServiceRequest(tx.serviceRequestId, {
           paymentStatus: "paid",
           billedAmount: tx.amount as any,
         });
+        emitServiceRequestUpdate(req.app, updatedRequest, "status");
       }
 
     const finalTx = updatedTx ?? tx;
@@ -3164,7 +4012,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(and(eq(users.role, "provider"), eq(users.isApproved, false))),
       ]);
 
-      const [[srTotal], [srPending], [srPendingInspection], [srAssigned], [srInProgress], [srCompleted], [srCancelled]] =
+      const [
+        [srTotal],
+        [srPending],
+        [srPendingInspection],
+        [srAssignedInspection],
+        [srAssignedForJob],
+        [srInProgress],
+        [srCompleted],
+        [srCancelled],
+      ] =
         await Promise.all([
           db.select({ c: count() }).from(serviceRequests),
           db
@@ -3179,6 +4036,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .select({ c: count() })
             .from(serviceRequests)
             .where(eq(serviceRequests.status, "assigned")),
+          db
+            .select({ c: count() })
+            .from(serviceRequests)
+            .where(eq(serviceRequests.status, "assigned_for_job")),
           db
             .select({ c: count() })
             .from(serviceRequests)
@@ -3205,7 +4066,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           total: Number(srTotal?.c ?? 0),
           pending: Number(srPending?.c ?? 0),
           pendingInspection: Number(srPendingInspection?.c ?? 0),
-          assigned: Number(srAssigned?.c ?? 0),
+          assigned: Number(srAssignedInspection?.c ?? 0),
+          assignedForJob: Number(srAssignedForJob?.c ?? 0),
           inProgress: Number(srInProgress?.c ?? 0),
           completed: Number(srCompleted?.c ?? 0),
           cancelled: Number(srCancelled?.c ?? 0),

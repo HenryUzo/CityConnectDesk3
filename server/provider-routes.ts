@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Server as SocketIOServer } from "socket.io";
 import { db } from "./db";
 import { 
   stores, 
@@ -20,6 +21,128 @@ const router = Router();
 
 // Apply authentication middleware to all provider routes
 router.use(requireProvider);
+
+const ConsultancyReportSchema = z.object({
+  inspectionDate: z.string().min(1),
+  actualIssue: z.string().trim().min(3).max(2000),
+  causeOfIssue: z.string().trim().min(3).max(2000),
+  materialCost: z.preprocess((val) => Number(val), z.number().min(0)),
+  serviceCost: z.preprocess((val) => Number(val), z.number().min(0)),
+  preventiveRecommendation: z.string().trim().min(3).max(2000),
+});
+
+const normalizeStatusKey = (value: unknown) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .trim();
+
+router.post("/service-requests/:id/consultancy-report", async (req: any, res) => {
+  try {
+    const providerId = req.auth?.userId;
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const requestId = String(req.params.id || "").trim();
+    const serviceRequest = await storage.getServiceRequest(requestId);
+    if (!serviceRequest) {
+      return res.status(404).json({ error: "Service request not found" });
+    }
+
+    if (serviceRequest.providerId !== providerId) {
+      return res.status(403).json({ error: "Only the assigned provider can submit this report" });
+    }
+
+    const statusKey = normalizeStatusKey(serviceRequest.status);
+    if (["completed", "cancelled"].includes(statusKey)) {
+      return res.status(400).json({ error: "Cannot submit report for closed request" });
+    }
+
+    const payload = ConsultancyReportSchema.parse(req.body || {});
+    const inspectionDate = new Date(payload.inspectionDate);
+    if (Number.isNaN(inspectionDate.getTime())) {
+      return res.status(400).json({ error: "Invalid inspection date" });
+    }
+
+    const totalRecommendation = payload.materialCost + payload.serviceCost;
+    const report = {
+      inspectionDate: inspectionDate.toISOString(),
+      actualIssue: payload.actualIssue,
+      causeOfIssue: payload.causeOfIssue,
+      materialCost: payload.materialCost,
+      serviceCost: payload.serviceCost,
+      totalRecommendation,
+      preventiveRecommendation: payload.preventiveRecommendation,
+      submittedAt: new Date().toISOString(),
+      submittedBy: providerId,
+    };
+
+    const updated = await storage.updateServiceRequest(requestId, {
+      consultancyReport: report as any,
+      consultancyReportSubmittedAt: new Date(),
+      consultancyReportSubmittedBy: providerId,
+    } as any);
+
+    if (!updated) {
+      return res.status(404).json({ error: "Service request not found" });
+    }
+
+    const summaryMessage =
+      `Consultancy report submitted.\n` +
+      `Inspection date: ${inspectionDate.toLocaleDateString()}\n` +
+      `Issue: ${payload.actualIssue}\n` +
+      `Cause: ${payload.causeOfIssue}\n` +
+      `Recommended material cost: NGN ${payload.materialCost.toLocaleString()}\n` +
+      `Recommended service cost: NGN ${payload.serviceCost.toLocaleString()}\n` +
+      `Preventive recommendation: ${payload.preventiveRecommendation}`;
+
+    const inserted = await storage.addRequestMessage(
+      requestId,
+      providerId,
+      "provider",
+      summaryMessage,
+    );
+
+    const io = req.app.get("io") as SocketIOServer | undefined;
+    const participantIds = new Set<string>();
+    if (updated.residentId) participantIds.add(updated.residentId);
+    if (updated.providerId) participantIds.add(updated.providerId);
+    for (const participantUserId of participantIds) {
+      io?.to(`user-${participantUserId}`).emit("request-message:new", {
+        requestId,
+        message: inserted,
+      });
+      io?.to(`user-${participantUserId}`).emit("service-request:updated", {
+        type: "status",
+        requestId,
+        request: updated,
+        at: new Date().toISOString(),
+      });
+    }
+
+    if (updated.residentId) {
+      const notification = await storage.createNotification({
+        userId: updated.residentId,
+        title: "Consultancy report added",
+        message: "Your provider submitted an inspection report for this request.",
+        type: "info",
+        metadata: {
+          requestId,
+          kind: "consultancy_report",
+        },
+      });
+      io?.to(`user-${updated.residentId}`).emit("notification:new", notification);
+    }
+
+    return res.status(201).json({ success: true, report, request: updated });
+  } catch (error: any) {
+    if (error?.name === "ZodError") {
+      return res.status(400).json({ error: "Validation error", details: error.errors });
+    }
+    return res.status(500).json({ error: error?.message || "Failed to submit consultancy report" });
+  }
+});
 
 // GET /api/provider/company - Get the provider's owned company (ONLY companies they created)
 router.get("/company", async (req: any, res) => {

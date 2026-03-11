@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { AdminAPI } from "@/lib/adminApi";
 import { useToast } from "@/hooks/use-toast";
+import { formatServiceRequestStatusLabel } from "@/lib/serviceRequestStatus";
 import { 
   User, 
   Clock, 
@@ -49,6 +50,7 @@ type RequestStatus =
   | "pending"
   | "pending_inspection"
   | "assigned"
+  | "assigned_for_job"
   | "in_progress"
   | "completed"
   | "cancelled";
@@ -68,6 +70,21 @@ interface ServiceRequest {
   specialInstructions?: string;
   adminNotes?: string;
   assignedAt?: string;
+  paymentRequestedAt?: string;
+  approvedForJobAt?: string;
+  approvedForJobBy?: string;
+  paymentStatus?: string;
+  consultancyReport?: {
+    inspectionDate?: string;
+    actualIssue?: string;
+    causeOfIssue?: string;
+    materialCost?: number;
+    serviceCost?: number;
+    totalRecommendation?: number;
+    preventiveRecommendation?: string;
+    submittedAt?: string;
+  } | null;
+  consultancyReportSubmittedAt?: string;
   closedAt?: string;
   closeReason?: string;
 }
@@ -91,8 +108,9 @@ interface ArtisanRequestsPanelProps {
 const STATUS_COLORS: Record<RequestStatus, string> = {
   pending: "bg-yellow-50 text-yellow-700 border-yellow-200",
   pending_inspection: "bg-orange-50 text-orange-700 border-orange-200",
-  assigned: "bg-blue-50 text-blue-700 border-blue-200",
-  in_progress: "bg-purple-50 text-purple-700 border-purple-200",
+  assigned: "bg-purple-50 text-purple-700 border-purple-200",
+  assigned_for_job: "bg-indigo-50 text-indigo-700 border-indigo-200",
+  in_progress: "bg-blue-50 text-blue-700 border-blue-200",
   completed: "bg-green-50 text-green-700 border-green-200",
   cancelled: "bg-red-50 text-red-700 border-red-200",
 };
@@ -103,6 +121,29 @@ const URGENCY_COLORS: Record<string, string> = {
   high: "bg-orange-100 text-orange-700",
   emergency: "bg-red-100 text-red-700",
 };
+
+function readConsultancyReport(report: ServiceRequest["consultancyReport"]) {
+  if (!report || typeof report !== "object") return null;
+  const materialCost = Number((report as any).materialCost || 0);
+  const serviceCost = Number((report as any).serviceCost || 0);
+  const totalRecommendation =
+    Number((report as any).totalRecommendation || 0) || materialCost + serviceCost;
+  return {
+    inspectionDate: String((report as any).inspectionDate || ""),
+    actualIssue: String((report as any).actualIssue || ""),
+    causeOfIssue: String((report as any).causeOfIssue || ""),
+    materialCost: Number.isFinite(materialCost) ? materialCost : 0,
+    serviceCost: Number.isFinite(serviceCost) ? serviceCost : 0,
+    totalRecommendation: Number.isFinite(totalRecommendation) ? totalRecommendation : 0,
+    preventiveRecommendation: String((report as any).preventiveRecommendation || ""),
+    submittedAt: String((report as any).submittedAt || ""),
+  };
+}
+
+function formatNgnAmount(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "Not set";
+  return `NGN ${value.toLocaleString()}`;
+}
 
 export default function ArtisanRequestsPanel({
   selectedEstateId,
@@ -124,6 +165,9 @@ export default function ArtisanRequestsPanel({
   const [completeRequest, setCompleteRequest] = useState<ServiceRequest | null>(null);
   const [billedAmount, setBilledAmount] = useState("");
   const [closeReason, setCloseReason] = useState("");
+  const [paymentRequestTarget, setPaymentRequestTarget] = useState<ServiceRequest | null>(null);
+  const [paymentRequestAmount, setPaymentRequestAmount] = useState("");
+  const [paymentRequestNote, setPaymentRequestNote] = useState("");
   const [cancelRequest, setCancelRequest] = useState<ServiceRequest | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
@@ -195,6 +239,46 @@ export default function ArtisanRequestsPanel({
     },
   });
 
+  const requestPaymentMutation = useMutation({
+    mutationFn: async ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: { amount?: string; providerId?: string; note?: string };
+    }) => {
+      return await AdminAPI.bridge.requestJobPayment(id, payload);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] });
+      toast({ title: "Payment request sent" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to request payment",
+        description: error.message || "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const approveForJobMutation = useMutation({
+    mutationFn: async ({ id, providerId }: { id: string; providerId?: string }) => {
+      return await AdminAPI.bridge.approveRequestForJob(id, providerId ? { providerId } : {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] });
+      toast({ title: "Request approved for job" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Approval failed",
+        description: error.message || "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
   const requests = useMemo<ServiceRequest[]>(() => {
     const list = data ?? [];
     const needle = q.trim().toLowerCase();
@@ -247,6 +331,60 @@ export default function ArtisanRequestsPanel({
       updates: {
         status: "in_progress",
       },
+    });
+  };
+
+  const handleOpenRequestPayment = (request: ServiceRequest) => {
+    const report = readConsultancyReport(request.consultancyReport);
+    setPaymentRequestTarget(request);
+    setPaymentRequestAmount(
+      request.billedAmount && Number(request.billedAmount) > 0
+        ? String(request.billedAmount)
+        : report && report.totalRecommendation > 0
+          ? String(report.totalRecommendation)
+        : "",
+    );
+    setPaymentRequestNote("");
+  };
+
+  const handleRequestPayment = async () => {
+    if (!paymentRequestTarget) return;
+
+    const amountValue = Number(paymentRequestAmount);
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      toast({
+        title: "Invalid amount",
+        description: "Enter a valid amount greater than 0",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    await requestPaymentMutation.mutateAsync({
+      id: paymentRequestTarget.id,
+      payload: {
+        providerId: paymentRequestTarget.providerId,
+        amount: amountValue.toString(),
+        note: paymentRequestNote.trim() || undefined,
+      },
+    });
+
+    setPaymentRequestTarget(null);
+    setPaymentRequestAmount("");
+    setPaymentRequestNote("");
+  };
+
+  const handleClosePaymentRequestDialog = () => {
+    if (requestPaymentMutation.isPending) return;
+    setPaymentRequestTarget(null);
+    setPaymentRequestAmount("");
+    setPaymentRequestNote("");
+  };
+
+  const handleApproveForJob = (request: ServiceRequest) => {
+    approveForJobMutation.mutate({
+      id: request.id,
+      providerId: request.providerId,
     });
   };
 
@@ -362,8 +500,9 @@ export default function ArtisanRequestsPanel({
           >
             <option value="all">All Statuses</option>
             <option value="pending">Pending</option>
-            <option value="pending_inspection">Pending Inspection</option>
-            <option value="assigned">Assigned</option>
+            <option value="pending_inspection">Pending inspection</option>
+            <option value="assigned">Assigned for inspection</option>
+            <option value="assigned_for_job">Assigned for job/maintenance</option>
             <option value="in_progress">In Progress</option>
             <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
@@ -395,12 +534,21 @@ export default function ArtisanRequestsPanel({
         ) : requests.length === 0 ? (
           <div className="text-sm text-muted-foreground">No requests found.</div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-            {requests.map((r: ServiceRequest) => (
-              <div
-                key={r.id}
-                className="border border-border rounded-xl p-4 flex flex-col gap-3 bg-white dark:bg-gray-900 shadow-sm hover:shadow-md transition-shadow"
-              >
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
+            {requests.map((r: ServiceRequest) => {
+              const paymentStatusValue = String(r.paymentStatus || "").toLowerCase();
+              const hasPaymentRequest = Boolean(r.paymentRequestedAt);
+              const isPaymentPending = hasPaymentRequest && paymentStatusValue === "pending";
+              const isPaymentPaid = paymentStatusValue === "paid";
+              const consultancyReport = readConsultancyReport(r.consultancyReport);
+              const hasConsultancyReport =
+                Boolean(r.consultancyReportSubmittedAt) || Boolean(consultancyReport);
+
+              return (
+                <div
+                  key={r.id}
+                  className="border border-border rounded-xl p-4 flex h-full flex-col gap-3 bg-white dark:bg-gray-900 shadow-sm hover:shadow-md transition-shadow"
+                >
                 {/* Header */}
                 <div className="flex items-start justify-between gap-3">
                   <div className="font-semibold text-base capitalize">
@@ -411,7 +559,7 @@ export default function ArtisanRequestsPanel({
                       variant="outline"
                       className={`border px-2 py-1 text-xs capitalize ${STATUS_COLORS[r.status]}`}
                     >
-                      {r.status.replaceAll("_", " ")}
+                      {formatServiceRequestStatusLabel(r.status, r.category)}
                     </Badge>
                     {r.urgency && (
                       <Badge
@@ -428,6 +576,32 @@ export default function ArtisanRequestsPanel({
                 <p className="text-sm text-muted-foreground line-clamp-2">
                   {r.description}
                 </p>
+
+                {/* Provider advice (consultancy report) */}
+                {consultancyReport ? (
+                  <div className="rounded-lg border border-[#D0D5DD] bg-[#F8FAFC] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-[#344054]">Provider advice</p>
+                      <Badge variant="outline" className="text-[10px] border-[#B2DDFF] bg-[#EFF8FF] text-[#175CD3]">
+                        Report submitted
+                      </Badge>
+                    </div>
+                    <p className="mt-2 text-xs text-[#344054] line-clamp-2">
+                      <span className="font-medium text-[#101828]">Issue:</span>{" "}
+                      {consultancyReport.actualIssue || "Not provided"}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[#475467]">
+                      <span className="rounded-full bg-white px-2 py-0.5 border border-[#EAECF0]">
+                        Total: {formatNgnAmount(consultancyReport.totalRecommendation)}
+                      </span>
+                      {consultancyReport.inspectionDate ? (
+                        <span className="rounded-full bg-white px-2 py-0.5 border border-[#EAECF0]">
+                          Inspected {new Date(consultancyReport.inspectionDate).toLocaleDateString()}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
 
                 {/* Meta info */}
                 <div className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -447,6 +621,12 @@ export default function ArtisanRequestsPanel({
                       <span>Provider assigned</span>
                     </div>
                   )}
+                  {r.paymentStatus && (
+                    <div className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      <span>Payment: {String(r.paymentStatus).replace(/_/g, " ")}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Billed amount for completed */}
@@ -459,45 +639,83 @@ export default function ArtisanRequestsPanel({
                 )}
 
                 {/* Actions */}
-                <div className="flex items-center gap-2 justify-end pt-2 border-t">
+                <div className="mt-auto flex flex-wrap items-center justify-end gap-2 border-t pt-3">
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => setViewRequest(r)}
+                    className="h-8 whitespace-nowrap"
                   >
                     View
                   </Button>
 
                   {/* Pending: Assign */}
                   {(r.status === "pending" || r.status === "pending_inspection") && (
-                    <Button size="sm" onClick={() => setAssignRequest(r)}>
+                    <Button size="sm" onClick={() => setAssignRequest(r)} className="h-8 whitespace-nowrap">
                       Assign
                     </Button>
                   )}
 
-                  {/* Assigned: Start or Reassign if unavailable */}
+                  {/* Assigned for inspection: payment request, approval, reassign */}
                   {r.status === "assigned" && (
                     <>
                       <Button
                         size="sm"
                         variant="secondary"
-                        onClick={() => handleStartWork(r)}
+                        onClick={() => handleOpenRequestPayment(r)}
+                        disabled={
+                          requestPaymentMutation.isPending ||
+                          isPaymentPending ||
+                          isPaymentPaid ||
+                          !hasConsultancyReport
+                        }
+                        className="h-8 whitespace-nowrap"
                       >
-                        Start
+                        {isPaymentPaid
+                          ? "Payment paid"
+                          : isPaymentPending
+                            ? "Payment requested"
+                            : !hasConsultancyReport
+                              ? "Awaiting report"
+                              : "Request payment"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => handleApproveForJob(r)}
+                        disabled={
+                          approveForJobMutation.isPending ||
+                          String(r.paymentStatus || "").toLowerCase() !== "paid"
+                        }
+                        className="h-8 whitespace-nowrap"
+                      >
+                        Assign for job
                       </Button>
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={() => handleMarkUnavailable(r)}
+                        className="h-8 whitespace-nowrap"
                       >
                         Reassign
                       </Button>
                     </>
                   )}
 
+                  {/* Assigned for job: provider can start work */}
+                  {r.status === "assigned_for_job" && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => handleStartWork(r)}
+                      className="h-8 whitespace-nowrap"
+                    >
+                      Start
+                    </Button>
+                  )}
+
                   {/* In Progress: Complete */}
                   {r.status === "in_progress" && (
-                    <Button size="sm" onClick={() => setCompleteRequest(r)}>
+                    <Button size="sm" onClick={() => setCompleteRequest(r)} className="h-8 whitespace-nowrap">
                       Complete
                     </Button>
                   )}
@@ -507,7 +725,7 @@ export default function ArtisanRequestsPanel({
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      className="h-8 text-red-600 hover:text-red-700 hover:bg-red-50"
                       onClick={() => setCancelRequest(r)}
                     >
                       <XCircle className="w-4 h-4" />
@@ -515,7 +733,8 @@ export default function ArtisanRequestsPanel({
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </CardContent>
@@ -540,7 +759,7 @@ export default function ArtisanRequestsPanel({
                   variant="outline"
                   className={`${STATUS_COLORS[viewRequest.status]}`}
                 >
-                  {viewRequest.status.replaceAll("_", " ")}
+                  {formatServiceRequestStatusLabel(viewRequest.status, viewRequest.category)}
                 </Badge>
                 {viewRequest.urgency && (
                   <Badge className={URGENCY_COLORS[viewRequest.urgency]}>
@@ -590,6 +809,20 @@ export default function ArtisanRequestsPanel({
                       <span>{formatDate(viewRequest.assignedAt)}</span>
                     </div>
                   )}
+                  {viewRequest.paymentRequestedAt && (
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-amber-500" />
+                      <span className="text-muted-foreground">Payment requested:</span>
+                      <span>{formatDate(viewRequest.paymentRequestedAt)}</span>
+                    </div>
+                  )}
+                  {viewRequest.approvedForJobAt && (
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-indigo-500" />
+                      <span className="text-muted-foreground">Approved for job:</span>
+                      <span>{formatDate(viewRequest.approvedForJobAt)}</span>
+                    </div>
+                  )}
                   {viewRequest.closedAt && (
                     <div className="flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-green-500" />
@@ -599,6 +832,56 @@ export default function ArtisanRequestsPanel({
                   )}
                 </div>
               </div>
+
+              {/* Provider Advice */}
+              {(() => {
+                const report = readConsultancyReport(viewRequest.consultancyReport);
+                if (!report) return null;
+                return (
+                  <div className="border rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-sm font-medium">Provider advice (consultancy report)</Label>
+                      <Badge variant="outline" className="border-[#B2DDFF] bg-[#EFF8FF] text-[#175CD3]">
+                        Submitted
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Inspection date</p>
+                        <p>{report.inspectionDate ? formatDate(report.inspectionDate) : "Not set"}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Submitted</p>
+                        <p>{report.submittedAt ? formatDate(report.submittedAt) : "Not set"}</p>
+                      </div>
+                      <div className="space-y-1 md:col-span-2">
+                        <p className="text-xs text-muted-foreground">Actual issue</p>
+                        <p>{report.actualIssue || "Not provided"}</p>
+                      </div>
+                      <div className="space-y-1 md:col-span-2">
+                        <p className="text-xs text-muted-foreground">Cause of issue</p>
+                        <p>{report.causeOfIssue || "Not provided"}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Material cost</p>
+                        <p>{formatNgnAmount(report.materialCost)}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Service cost</p>
+                        <p>{formatNgnAmount(report.serviceCost)}</p>
+                      </div>
+                      <div className="space-y-1 md:col-span-2">
+                        <p className="text-xs text-muted-foreground">Total recommendation</p>
+                        <p className="font-medium">{formatNgnAmount(report.totalRecommendation)}</p>
+                      </div>
+                      <div className="space-y-1 md:col-span-2">
+                        <p className="text-xs text-muted-foreground">Preventive recommendation</p>
+                        <p>{report.preventiveRecommendation || "Not provided"}</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Billing */}
               {viewRequest.billedAmount && Number(viewRequest.billedAmount) > 0 && (
@@ -699,6 +982,83 @@ export default function ArtisanRequestsPanel({
               disabled={!selectedProviderId || updateRequestMutation.isPending}
             >
               {updateRequestMutation.isPending ? "Assigning..." : "Assign Provider"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Request Payment Dialog */}
+      <Dialog open={Boolean(paymentRequestTarget)} onOpenChange={handleClosePaymentRequestDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Request job payment</DialogTitle>
+            <DialogDescription>
+              Enter the agreed service cost to send a payment card to the resident chat.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {paymentRequestTarget ? (() => {
+              const report = readConsultancyReport(paymentRequestTarget.consultancyReport);
+              if (!report) {
+                return (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
+                    No consultancy report has been submitted yet for this request.
+                  </div>
+                );
+              }
+              return (
+                <div className="rounded-lg border border-[#EAECF0] bg-[#F9FAFB] p-3">
+                  <p className="text-sm font-semibold text-[#101828]">Provider consultancy report</p>
+                  <div className="mt-2 space-y-2 text-sm text-[#344054]">
+                    <p><span className="font-medium">Inspection date:</span> {report.inspectionDate ? new Date(report.inspectionDate).toLocaleString() : "Not set"}</p>
+                    <p><span className="font-medium">Issue:</span> {report.actualIssue || "Not provided"}</p>
+                    <p><span className="font-medium">Cause:</span> {report.causeOfIssue || "Not provided"}</p>
+                    <p>
+                      <span className="font-medium">Recommendation:</span> Materials NGN {report.materialCost.toLocaleString()} + Service NGN {report.serviceCost.toLocaleString()}
+                      {report.totalRecommendation > 0 ? ` (Total NGN ${report.totalRecommendation.toLocaleString()})` : ""}
+                    </p>
+                    <p><span className="font-medium">Prevention:</span> {report.preventiveRecommendation || "Not provided"}</p>
+                  </div>
+                </div>
+              );
+            })() : null}
+            <div>
+              <Label htmlFor="job-payment-amount">Service cost (NGN)</Label>
+              <Input
+                id="job-payment-amount"
+                type="number"
+                min="1"
+                step="0.01"
+                className="mt-1"
+                placeholder="e.g. 65000"
+                value={paymentRequestAmount}
+                onChange={(event) => setPaymentRequestAmount(event.target.value)}
+              />
+            </div>
+            <div>
+              <Label htmlFor="job-payment-note">Note (optional)</Label>
+              <Textarea
+                id="job-payment-note"
+                className="mt-1"
+                placeholder="Add context for the resident (scope, inclusions, timeline, etc.)"
+                value={paymentRequestNote}
+                onChange={(event) => setPaymentRequestNote(event.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleClosePaymentRequestDialog}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRequestPayment}
+              disabled={
+                requestPaymentMutation.isPending ||
+                !paymentRequestAmount.trim() ||
+                Number(paymentRequestAmount) <= 0
+              }
+            >
+              {requestPaymentMutation.isPending ? "Sending..." : "Send payment request"}
             </Button>
           </DialogFooter>
         </DialogContent>

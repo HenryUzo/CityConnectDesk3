@@ -29,6 +29,7 @@ export const serviceStatusEnum = pgEnum("service_status", [
   "pending",
   "pending_inspection",
   "assigned",
+  "assigned_for_job",
   "in_progress",
   "completed",
   "cancelled",
@@ -856,6 +857,12 @@ export const serviceRequests = pgTable("service_requests", {
   // Other admin fields
   adminNotes: text("admin_notes"),
   assignedAt: timestamp("assigned_at"),
+  paymentRequestedAt: timestamp("payment_requested_at"),
+  approvedForJobAt: timestamp("approved_for_job_at"),
+  approvedForJobBy: varchar("approved_for_job_by").references(() => users.id),
+  consultancyReport: jsonb("consultancy_report"),
+  consultancyReportSubmittedAt: timestamp("consultancy_report_submitted_at"),
+  consultancyReportSubmittedBy: varchar("consultancy_report_submitted_by").references(() => users.id),
   closedAt: timestamp("closed_at"),
   closeReason: text("close_reason"),
   billedAmount: decimal("billed_amount", { precision: 10, scale: 2 }).default(

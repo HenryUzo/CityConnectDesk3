@@ -6864,8 +6864,13 @@ const PostgreSQLBridgeStats = () => {
           color: "bg-orange-500",
         },
         {
-          label: "Assigned",
+          label: "Assigned for inspection",
           value: bridgeStats.serviceRequests.assigned - 0,
+          color: "bg-purple-500",
+        },
+        {
+          label: "Assigned for job",
+          value: bridgeStats.serviceRequests.assignedForJob - 0,
           color: "bg-indigo-500",
         },
         {

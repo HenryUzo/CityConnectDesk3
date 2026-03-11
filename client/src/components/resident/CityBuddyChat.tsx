@@ -44,7 +44,7 @@ import {
   AlertDialogDescription,
   AlertDialogAction,
   AlertDialogCancel,
-} from "@/components/NewSelectUi/src/components/ui/alert-dialog";
+} from "@/components/ui/alert-dialog";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 
 import { useMyEstates } from "@/hooks/useMyEstates";
@@ -3080,6 +3080,9 @@ function MainWrapSelectCategory({
     </div>
   );
 }
+
+// Exported for reuse (e.g., OrdinaryConversationFlow category gate)
+export { MainWrapSelectCategory };
 
 // ============ CHAT VIEW COMPONENTS ============
 function Frame30NewMain({ 

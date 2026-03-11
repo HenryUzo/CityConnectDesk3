@@ -14,14 +14,14 @@ export default defineConfig({
     viewport: { width: 1280, height: 720 },
     trace: "on-first-retry",
   },
-  webServer: {
-    command: "npm run dev",
-    url: "http://localhost:5000",
-    reuseExistingServer: true,
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 120_000,
-  },
+  // webServer: {
+  //   command: "npm run dev",
+  //   url: "http://localhost:5000",
+  //   reuseExistingServer: true,
+  //   stdout: "pipe",
+  //   stderr: "pipe",
+  //   timeout: 120_000,
+  // },
   projects: [
     {
       name: "chromium",

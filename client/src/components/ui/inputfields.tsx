@@ -823,7 +823,7 @@ export function SearchInputField({
 // MASTERCARD ICON COMPONENT
 // ============================================
 
-import svgPaths from "../../imports/svg-xjqmzlhbx";
+import svgPaths from "./imports/svg-xjqmzlhbx";
 
 /**
  * Mastercard Icon Component

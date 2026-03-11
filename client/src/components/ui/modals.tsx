@@ -17,7 +17,7 @@
 import { useState, useEffect } from "react";
 import { RatingBadge } from "./badge";
 import { DropdownInputField, DropdownOption } from "./dropdown";
-import svgPaths from "../../imports/svg-3rnsh2it2n";
+import svgPaths from "./imports/svg-3rnsh2it2n";
 import img01 from "figma:asset/993680a4fb804721053db577fe1e84c4758c415b.png";
 import img05 from "figma:asset/76236df7a5ad3774e8e14a241d83f4af473d2f52.png";
 import img03 from "figma:asset/26a18289fe1664427df3d41a562c2d7f8e974028.png";
@@ -462,7 +462,7 @@ function ActionButtons({
       {/* Checkout Button */}
       <button
         onClick={onAddToCart}
-        className="basis-0 bg-[#039855] grow min-h-px min-w-px relative rounded-[8px] shrink-0 hover:bg-[#027a45] active:scale-[0.98] transition-all min-w-[200px]"
+        className="basis-0 bg-[#039855] grow min-h-px relative rounded-[8px] shrink-0 hover:bg-[#027a45] active:scale-[0.98] transition-all min-w-[200px]"
       >
         <div className="flex flex-row items-center justify-center overflow-clip rounded-[inherit] size-full">
           <div className="content-stretch flex gap-[8px] items-center justify-center px-[16px] py-[10px] relative w-full">
@@ -483,7 +483,7 @@ function ActionButtons({
       
       {/* View Cart Button */}
       <button
-        className="basis-0 bg-white grow min-h-px min-w-px relative rounded-[8px] shrink-0 hover:bg-gray-50 active:scale-[0.98] transition-all min-w-[150px]"
+        className="basis-0 bg-white grow min-h-px relative rounded-[8px] shrink-0 hover:bg-gray-50 active:scale-[0.98] transition-all min-w-[150px]"
       >
         <div className="flex flex-row items-center justify-center overflow-clip rounded-[inherit] size-full">
           <div className="content-stretch flex gap-[8px] items-center justify-center px-[16px] py-[10px] relative w-full">

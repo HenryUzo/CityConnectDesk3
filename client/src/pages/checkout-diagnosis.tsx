@@ -67,7 +67,7 @@ export default function CheckoutDiagnosis() {
       });
 
       // 2) initialize Paystack and get an authorization URL that will redirect the user
-      const init = await residentFetch<{ authorization_url: string; reference: string }>(
+      const init = await residentFetch<{ authorization_url?: string; authorizationUrl?: string; reference: string }>(
         "/api/paystack/init",
         {
           method: "POST",
@@ -82,8 +82,9 @@ export default function CheckoutDiagnosis() {
       );
 
       // 3) redirect the browser to Paystack's hosted payment page
-      if (init?.authorization_url) {
-        window.location.href = init.authorization_url;
+      const authUrl = init?.authorization_url || init?.authorizationUrl;
+      if (authUrl) {
+        window.location.href = authUrl;
       } else {
         throw new Error("Missing authorization URL from Paystack initialization");
       }

@@ -490,6 +490,15 @@ export class DatabaseStorage implements IStorage {
     return request || undefined;
   }
 
+  async cancelServiceRequest(id: string, residentId: string): Promise<ServiceRequest | undefined> {
+    const [request] = await db
+      .update(serviceRequests)
+      .set({ status: "cancelled", updatedAt: new Date() })
+      .where(and(eq(serviceRequests.id, id), eq(serviceRequests.residentId, residentId)))
+      .returning();
+    return request || undefined;
+  }
+
   async getServiceRequestsByResident(
     residentId: string,
     options?: { estateId?: string },
@@ -557,7 +566,14 @@ export class DatabaseStorage implements IStorage {
   async assignProviderToRequest(requestId: string, providerId: string) {
     const [updated] = await db
       .update(serviceRequests)
-      .set({ providerId, status: "assigned", assignedAt: new Date(), updatedAt: new Date() })
+      .set({
+        providerId,
+        status: "assigned",
+        assignedAt: new Date(),
+        approvedForJobAt: null,
+        approvedForJobBy: null,
+        updatedAt: new Date(),
+      })
       .where(eq(serviceRequests.id, requestId))
       .returning();
     return updated || undefined;
@@ -566,7 +582,14 @@ export class DatabaseStorage implements IStorage {
   // --- UPDATE request status ---
   async updateRequestStatus(
     requestId: string,
-    status: "pending" | "pending_inspection" | "assigned" | "in_progress" | "completed" | "cancelled",
+    status:
+      | "pending"
+      | "pending_inspection"
+      | "assigned"
+      | "assigned_for_job"
+      | "in_progress"
+      | "completed"
+      | "cancelled",
     closeReason?: string
   ) {
     const patch: any = { status, updatedAt: new Date() };
@@ -772,7 +795,10 @@ export class DatabaseStorage implements IStorage {
       .update(serviceRequests)
       .set({ 
         providerId, 
-        status: "assigned", 
+        status: "assigned",
+        assignedAt: new Date(),
+        approvedForJobAt: null,
+        approvedForJobBy: null,
         updatedAt: new Date() 
       })
       .where(eq(serviceRequests.id, id))

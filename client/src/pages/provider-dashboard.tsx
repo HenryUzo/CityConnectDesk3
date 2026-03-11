@@ -16,8 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
-import { Link } from "wouter";
+import { useMemo, useState } from "react";
+import { Link, useLocation } from "wouter";
 import {
   Star,
   Clock,
@@ -32,6 +32,7 @@ import {
   Package,
 } from "lucide-react";
 import { ProviderLayout } from "@/components/admin/ProviderLayout";
+import { formatServiceRequestStatusLabel, normalizeServiceRequestStatus } from "@/lib/serviceRequestStatus";
 
 type ServiceRequest = {
   id: string;
@@ -45,6 +46,15 @@ type ServiceRequest = {
   updatedAt?: string;
   buyer?: { name?: string };
   specialInstructions?: string;
+};
+
+type RequestMessage = {
+  id: string;
+  requestId: string;
+  senderId: string;
+  senderRole: "admin" | "resident" | "provider";
+  message: string;
+  createdAt?: string;
 };
 
 type StoreFormData = {
@@ -70,7 +80,10 @@ type ProviderStore = {
 export default function ProviderDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [isCreateStoreDialogOpen, setIsCreateStoreDialogOpen] = useState(false);
+  const [activeChatRequestId, setActiveChatRequestId] = useState<string | null>(null);
+  const [messageDraft, setMessageDraft] = useState("");
   const [storeFormData, setStoreFormData] = useState<StoreFormData>({
     name: "",
     description: "",
@@ -226,10 +239,57 @@ export default function ProviderDashboard() {
     },
   });
 
+  const sendMessageMutation = useMutation({
+    mutationFn: async (payload: { requestId: string; message: string }) => {
+      const res = await apiRequest("POST", `/api/service-requests/${payload.requestId}/messages`, {
+        message: payload.message,
+      });
+      return res.json() as Promise<RequestMessage>;
+    },
+    onSuccess: () => {
+      setMessageDraft("");
+      queryClient.invalidateQueries({ queryKey: ["provider-dashboard-request-messages", activeChatRequestId] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Message failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const activeJobs: ServiceRequest[] = myRequests.filter((r) =>
-    ["assigned", "in_progress"].includes(r.status)
+    ["assigned", "assigned_for_job", "in_progress"].includes(normalizeServiceRequestStatus(r.status))
   );
-  const completedJobs: ServiceRequest[] = myRequests.filter((r) => r.status === "completed");
+  const completedJobs: ServiceRequest[] = myRequests.filter(
+    (r) => normalizeServiceRequestStatus(r.status) === "completed",
+  );
+
+  const activeChatRequest = useMemo(
+    () => myRequests.find((r) => r.id === activeChatRequestId) ?? null,
+    [myRequests, activeChatRequestId],
+  );
+
+  const { data: requestMessages = [], isLoading: isLoadingMessages } = useQuery<RequestMessage[]>({
+    queryKey: ["provider-dashboard-request-messages", activeChatRequestId],
+    enabled: Boolean(activeChatRequestId),
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/service-requests/${activeChatRequestId}/messages`);
+      return res.json() as Promise<RequestMessage[]>;
+    },
+    refetchInterval: 5000,
+  });
+
+  const orderedMessages = useMemo(
+    () =>
+      [...requestMessages].sort((a, b) => {
+        const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return aTime - bTime;
+      }),
+    [requestMessages],
+  );
 
   const stats = {
     available: availableRequests.length,
@@ -243,13 +303,15 @@ export default function ProviderDashboard() {
   };
 
   const getStatusColor = (status: string) => {
-    switch (status) {
+    switch (normalizeServiceRequestStatus(status)) {
       case "pending":
         return "bg-gray-100 text-gray-800";
       case "assigned":
-        return "bg-blue-100 text-blue-800";
+        return "bg-purple-100 text-purple-800";
+      case "assigned_for_job":
+        return "bg-indigo-100 text-indigo-800";
       case "in_progress":
-        return "bg-yellow-100 text-yellow-800";
+        return "bg-blue-100 text-blue-800";
       case "completed":
         return "bg-green-100 text-green-800";
       default:
@@ -507,11 +569,7 @@ export default function ProviderDashboard() {
                             </p>
                           </div>
                           <Badge className={getStatusColor(job.status)}>
-                            {job.status
-                              .replace("_", " ")
-                              .replace(/\b\w/g, (l: string) =>
-                                l.toUpperCase()
-                              )}
+                            {formatServiceRequestStatusLabel(job.status, job.category)}
                           </Badge>
                         </div>
 
@@ -544,13 +602,17 @@ export default function ProviderDashboard() {
 
                         <div className="flex justify-between items-center">
                           <div className="flex space-x-2">
-                            <Button size="sm" variant="outline">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setLocation(`/provider/chat?requestId=${encodeURIComponent(job.id)}`)}
+                            >
                               <Phone className="w-4 h-4 mr-2" />
-                              Contact Customer
+                              Open Chat
                             </Button>
                           </div>
                           <div className="flex space-x-2">
-                            {job.status === "assigned" && (
+                            {normalizeServiceRequestStatus(job.status) === "assigned_for_job" && (
                               <Button
                                 size="sm"
                                 onClick={() =>
@@ -565,7 +627,7 @@ export default function ProviderDashboard() {
                                 Start Job
                               </Button>
                             )}
-                            {job.status === "in_progress" && (
+                            {normalizeServiceRequestStatus(job.status) === "in_progress" && (
                               <Button
                                 size="sm"
                                 onClick={() =>
@@ -923,6 +985,64 @@ export default function ProviderDashboard() {
             </TabsContent>
           </Tabs>
         </Card>
+
+        {activeChatRequest ? (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <CardTitle className="text-base">
+                Resident Chat: {activeChatRequest.description || activeChatRequest.category || "Service Request"}
+              </CardTitle>
+              <Badge variant="outline">{activeChatRequest.status}</Badge>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-lg border bg-muted/20 p-3 max-h-[320px] overflow-y-auto space-y-2">
+                {isLoadingMessages ? (
+                  <p className="text-sm text-muted-foreground">Loading messages...</p>
+                ) : orderedMessages.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No messages yet. Start the conversation.</p>
+                ) : (
+                  orderedMessages.map((m) => (
+                    <div key={m.id} className={m.senderRole === "provider" ? "flex justify-end" : "flex justify-start"}>
+                      <div
+                        className={
+                          m.senderRole === "provider"
+                            ? "max-w-[75%] rounded-xl bg-primary text-primary-foreground px-3 py-2 text-sm"
+                            : "max-w-[75%] rounded-xl bg-background border px-3 py-2 text-sm"
+                        }
+                      >
+                        <p className="text-[11px] opacity-80 mb-1">{m.senderRole}</p>
+                        <p>{m.message}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Textarea
+                  value={messageDraft}
+                  onChange={(e) => setMessageDraft(e.target.value)}
+                  placeholder="Type a message to the resident..."
+                  className="min-h-[90px]"
+                />
+                <div className="flex justify-end">
+                  <Button
+                    onClick={() => {
+                      if (!activeChatRequestId || !messageDraft.trim()) return;
+                      sendMessageMutation.mutate({
+                        requestId: activeChatRequestId,
+                        message: messageDraft.trim(),
+                      });
+                    }}
+                    disabled={!messageDraft.trim() || sendMessageMutation.isPending}
+                  >
+                    {sendMessageMutation.isPending ? "Sending..." : "Send message"}
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
     </ProviderLayout>
   );

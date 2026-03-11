@@ -13,6 +13,7 @@ import WaitingRoom from "@/pages/waiting-room";
 import NotificationsPage from "@/pages/notifications";
 import ProviderDashboard from "@/pages/provider-dashboard";
 import ProviderJobs from "@/pages/provider-jobs";
+import ProviderChatPage from "@/pages/provider-chat";
 import ProviderStores from "@/pages/provider-stores";
 import ProviderMarketplace from "@/pages/provider-marketplace";
 import ProviderCompanyRegistration from "@/pages/provider-company-registration";
@@ -73,6 +74,7 @@ function Router() {
       <ProtectedRoute path="/provider-dashboard" component={ProviderDashboard} requiredRole="provider" />
       <ProtectedRoute path="/provider/tasks" component={ProviderTasks} requiredRole="provider" />
       <ProtectedRoute path="/provider/jobs" component={ProviderJobs} requiredRole="provider" />
+      <ProtectedRoute path="/provider/chat" component={ProviderChatPage} requiredRole="provider" />
       <ProtectedRoute path="/provider-store-items" component={ProviderStores} requiredRole="provider" />
       <ProtectedRoute path="/provider/marketplace" component={ProviderMarketplace} requiredRole="provider" />
       <ProtectedRoute path="/provider/stores/:storeId/items" component={ProviderStoreItems} requiredRole="provider" />

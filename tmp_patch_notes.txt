@@ -1,9 +1,0 @@
-Patch notes: replacing accidental ' - ' tokens with proper operators at multiple places in admin-super-dashboard.tsx
-1) normalizedUser?.memberships - [] -> normalizedUser?.memberships || []
-2) response?.user - response -> response?.user || response
-3) response?.accessToken - null -> response?.accessToken ?? null
-4) response?.refreshToken - null -> response?.refreshToken ?? null
-5) r?.items - [] -> r?.items || []
-6) r.field - "â€”" -> r.field || "—"
-7) (resetPasswordMutation as any).isPending - false -> (resetPasswordMutation as any).isPending || false
-8) isActive: cat.isActive - true -> isActive: cat.isActive ?? true

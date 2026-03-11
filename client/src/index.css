@@ -120,3 +120,30 @@
     @apply font-sans antialiased bg-background text-foreground;
   }
 }
+
+@layer utilities {
+  .city-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.7) transparent;
+  }
+
+  .city-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .city-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .city-scrollbar::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: padding-box;
+    background-color: rgba(148, 163, 184, 0.7);
+  }
+
+  .city-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(100, 116, 139, 0.85);
+  }
+}

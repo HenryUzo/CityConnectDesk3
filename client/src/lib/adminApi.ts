@@ -147,6 +147,10 @@ export async function adminFetch<T = any>(
   return (await res.json()) as T;
 }
 
+function isHttpNotFoundError(error: unknown) {
+  return error instanceof Error && /\b404\b/.test(error.message);
+}
+
 // back-compat wrapper you may use elsewhere
 export async function adminApiRequest(
   method: string,
@@ -254,6 +258,46 @@ export const AdminAPI = {
     }) => adminFetch("/api/admin/bridge/service-requests", { query: params }),
     updateServiceRequest: (id: string, data: any) =>
       adminFetch(`/api/service-requests/${id}`, { method: "PATCH", json: data }),
+    requestJobPayment: async (id: string, data?: { amount?: string; providerId?: string; note?: string }) => {
+      try {
+        return await adminFetch(`/api/admin/service-requests/${id}/request-payment`, {
+          method: "POST",
+          json: data ?? {},
+        });
+      } catch (error) {
+        if (!isHttpNotFoundError(error)) throw error;
+        // Backward-compatible fallback for older backends missing the dedicated endpoint.
+        return await adminFetch(`/api/service-requests/${id}`, {
+          method: "PATCH",
+          json: {
+            status: "assigned",
+            paymentStatus: "pending",
+            paymentRequestedAt: new Date().toISOString(),
+            ...(data?.providerId ? { providerId: data.providerId } : {}),
+            ...(data?.amount ? { billedAmount: data.amount } : {}),
+          },
+        });
+      }
+    },
+    approveRequestForJob: async (id: string, data?: { providerId?: string }) => {
+      try {
+        return await adminFetch(`/api/admin/service-requests/${id}/approve-job`, {
+          method: "POST",
+          json: data ?? {},
+        });
+      } catch (error) {
+        if (!isHttpNotFoundError(error)) throw error;
+        // Backward-compatible fallback for older backends missing the dedicated endpoint.
+        return await adminFetch(`/api/service-requests/${id}`, {
+          method: "PATCH",
+          json: {
+            status: "assigned_for_job",
+            ...(data?.providerId ? { providerId: data.providerId } : {}),
+            approvedForJobAt: new Date().toISOString(),
+          },
+        });
+      }
+    },
     getUsers: (params?: { role?: string; search?: string; status?: string }) =>
       adminFetch("/api/admin/bridge/users", { query: params }),
     getStats: () => adminFetch("/api/admin/bridge/stats"),

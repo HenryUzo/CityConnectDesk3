@@ -836,6 +836,83 @@ router.post("/checkout", requireAuth, async (req, res) => {
       }
 
       // Step 3: Create parent order with status based on payment verification
+      // If paymentReference provided, ensure we don't create a duplicate parent order
+      if (body.paymentReference) {
+        const [existingPayment] = await tx
+          .select()
+          .from(marketplacePayments)
+          .where(eq(marketplacePayments.reference, body.paymentReference))
+          .limit(1);
+
+        if (existingPayment) {
+          // Return existing parent order (with store orders/items/payments) to caller
+          const [poExisting] = await tx
+            .select()
+            .from(parentOrders)
+            .where(eq(parentOrders.id, existingPayment.orderId))
+            .limit(1);
+
+          if (poExisting) {
+            const sosExisting = await tx
+              .select({
+                id: storeOrders.id,
+                orderId: storeOrders.orderId,
+                storeId: storeOrders.storeId,
+                status: storeOrders.status,
+                subtotalAmount: storeOrders.subtotalAmount,
+                deliveryFee: storeOrders.deliveryFee,
+                deliveryMethod: storeOrders.deliveryMethod,
+                noteToStore: storeOrders.noteToStore,
+                createdAt: storeOrders.createdAt,
+                updatedAt: storeOrders.updatedAt,
+                storeName: stores.name,
+                storeLogo: stores.logo,
+              })
+              .from(storeOrders)
+              .innerJoin(stores, eq(storeOrders.storeId, stores.id))
+              .where(eq(storeOrders.orderId, poExisting.id));
+
+            const soIdsExisting = sosExisting.map((s: any) => s.id);
+            let soiRowsExisting: any[] = [];
+            if (soIdsExisting.length > 0) {
+              soiRowsExisting = await tx
+                .select({
+                  id: storeOrderItems.id,
+                  storeOrderId: storeOrderItems.storeOrderId,
+                  productId: storeOrderItems.productId,
+                  qty: storeOrderItems.qty,
+                  unitPrice: storeOrderItems.unitPrice,
+                  lineTotal: storeOrderItems.lineTotal,
+                  productName: marketplaceItems.name,
+                  productImages: marketplaceItems.images,
+                })
+                .from(storeOrderItems)
+                .innerJoin(marketplaceItems, eq(storeOrderItems.productId, marketplaceItems.id))
+                .where(inArray(storeOrderItems.storeOrderId, soIdsExisting));
+            }
+
+            const soiMapExisting = new Map<string, typeof soiRowsExisting>();
+            for (const soi of soiRowsExisting) {
+              const list = soiMapExisting.get(soi.storeOrderId) ?? [];
+              list.push(soi);
+              soiMapExisting.set(soi.storeOrderId, list);
+            }
+
+            const paymentsExisting = await tx
+              .select()
+              .from(marketplacePayments)
+              .where(eq(marketplacePayments.orderId, poExisting.id));
+
+            const enrichedSosExisting = sosExisting.map((so: any) => ({
+              ...so,
+              items: soiMapExisting.get(so.id) ?? [],
+            }));
+
+            return { parentOrder: poExisting, storeOrders: enrichedSosExisting, payments: paymentsExisting };
+          }
+        }
+      }
+
       const [po] = await tx
         .insert(parentOrders)
         .values({
@@ -873,6 +950,22 @@ router.post("/checkout", requireAuth, async (req, res) => {
 
         await tx.insert(storeOrderItems).values(soItems);
         createdStoreOrders.push(so);
+      }
+
+      // If paymentReference provided, record a marketplace payment to prevent duplicates
+      if (body.paymentReference) {
+        try {
+          await tx.insert(marketplacePayments).values({
+            orderId: po.id,
+            reference: body.paymentReference,
+            status: "paid",
+            amount: totalAmount,
+            meta: {},
+          });
+        } catch (err: any) {
+          // Ignore insert errors (e.g., unique constraint) — another concurrent request may have created it
+          console.warn(`[Marketplace] marketplacePayments insert warning: ${err.message}`);
+        }
       }
 
       // Step 5: Mark cart as checked_out

@@ -152,6 +152,12 @@ async function ensureServiceRequestsColumns() {
     ALTER TABLE service_requests
       ADD COLUMN IF NOT EXISTS admin_notes      text,
       ADD COLUMN IF NOT EXISTS assigned_at      timestamp NULL,
+      ADD COLUMN IF NOT EXISTS payment_requested_at timestamp NULL,
+      ADD COLUMN IF NOT EXISTS approved_for_job_at timestamp NULL,
+      ADD COLUMN IF NOT EXISTS approved_for_job_by varchar(255) NULL,
+      ADD COLUMN IF NOT EXISTS consultancy_report jsonb,
+      ADD COLUMN IF NOT EXISTS consultancy_report_submitted_at timestamp NULL,
+      ADD COLUMN IF NOT EXISTS consultancy_report_submitted_by varchar(255) NULL,
       ADD COLUMN IF NOT EXISTS closed_at        timestamp NULL,
       ADD COLUMN IF NOT EXISTS close_reason     text,
       ADD COLUMN IF NOT EXISTS billed_amount    numeric(10,2) DEFAULT '0',
@@ -168,6 +174,49 @@ async function ensureServiceRequestsColumns() {
       ADD COLUMN IF NOT EXISTS location text,
       ADD COLUMN IF NOT EXISTS latitude double precision,
       ADD COLUMN IF NOT EXISTS longitude double precision;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'users'
+      ) THEN
+        BEGIN
+          ALTER TABLE service_requests
+            ADD CONSTRAINT service_requests_approved_for_job_by_fkey
+            FOREIGN KEY (approved_for_job_by) REFERENCES users(id);
+        EXCEPTION
+          WHEN duplicate_object THEN
+            NULL;
+        END;
+
+        BEGIN
+          ALTER TABLE service_requests
+            ADD CONSTRAINT service_requests_consultancy_report_submitted_by_fkey
+            FOREIGN KEY (consultancy_report_submitted_by) REFERENCES users(id);
+        EXCEPTION
+          WHEN duplicate_object THEN
+            NULL;
+        END;
+      END IF;
+    END$$;
+  `);
+}
+
+async function ensureServiceStatusValues() {
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'service_status'
+      ) THEN
+        ALTER TYPE service_status ADD VALUE IF NOT EXISTS 'assigned_for_job';
+      END IF;
+    END$$;
   `);
 }
 
@@ -1090,10 +1139,11 @@ let bootPromise = (async () => {
     await dbReady;
     // Create required extensions and enums first to avoid ALTER type errors
     await ensureExtensionsAndEnums();
+    await ensureServiceStatusValues();
     await ensureServiceRequestsTable();
-    await ensureServiceRequestsColumns();
     await ensureUsersTable();
     await ensureUsersColumns();
+    await ensureServiceRequestsColumns();
     await ensureEstatesColumns();
     await ensureStoresColumns();
     await ensureCompaniesTable();
