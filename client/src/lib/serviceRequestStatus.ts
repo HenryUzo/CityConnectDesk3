@@ -6,8 +6,19 @@ export function normalizeServiceRequestStatus(status?: string | null) {
 }
 
 export function isMaintenanceServiceCategory(category?: string | null) {
-  const key = String(category || "").toLowerCase();
-  return /(maintenance|repair|plumb|elect|hvac|fix)/i.test(key);
+  const key = String(category || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  // Keep this narrow: only explicit maintenance categories should use
+  // "Assigned for maintenance". Every other category uses "Assigned for job".
+  return new Set([
+    "maintenance",
+    "maintenance_repair",
+    "maintenance_and_repair",
+  ]).has(key);
 }
 
 export function formatServiceRequestStatusLabel(status?: string | null, category?: string | null) {

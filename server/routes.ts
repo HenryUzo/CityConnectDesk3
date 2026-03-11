@@ -56,6 +56,7 @@ import {
 } from "./payments";
 import { validatePaystackSignature, verifyPaystackTransaction } from "./paystack";
 import { initializePaystackTransaction } from "./paystackService";
+import { normalizeCategoryKey, resolveServiceRequestCategory } from "./serviceCategoryResolver";
 import {
   handlePaystackVerify,
   handlePaystackWebhook,
@@ -338,6 +339,90 @@ export async function registerRoutes(app: Express): Promise<Server> {
         at: new Date().toISOString(),
       });
     }
+  };
+
+
+  const finalizeServiceRequestAfterPayment = async (
+    expressApp: { get: (name: string) => unknown },
+    params: {
+      serviceRequestId?: string | null;
+      billedAmount?: string | number | null;
+      paymentReference?: string | null;
+    },
+  ) => {
+    const serviceRequestId = String(params.serviceRequestId || "").trim();
+    if (!serviceRequestId) return null;
+
+    const currentRequest = await storage.getServiceRequest(serviceRequestId);
+    if (!currentRequest) return null;
+
+    const currentStatus = normalizeServiceRequestStatusKey(currentRequest.status);
+    const canAutoAssignForJob =
+      Boolean(currentRequest.providerId) &&
+      !["assigned_for_job", "in_progress", "completed", "cancelled"].includes(currentStatus);
+
+    const updates: Record<string, unknown> = {};
+    if (String(currentRequest.paymentStatus || "").toLowerCase() !== "paid") {
+      updates.paymentStatus = "paid";
+    }
+
+    const billedAmountRaw = params.billedAmount;
+    if (billedAmountRaw !== undefined && billedAmountRaw !== null && billedAmountRaw !== "") {
+      const billedAmountNumber = Number(billedAmountRaw);
+      if (Number.isFinite(billedAmountNumber) && billedAmountNumber > 0) {
+        updates.billedAmount = billedAmountNumber.toString();
+      }
+    }
+
+    if (canAutoAssignForJob) {
+      updates.status = "assigned_for_job";
+      updates.assignedAt = currentRequest.assignedAt || new Date();
+      updates.approvedForJobAt = currentRequest.approvedForJobAt || new Date();
+      updates.approvedForJobBy = currentRequest.approvedForJobBy || null;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return currentRequest;
+    }
+
+    const updatedRequest = await storage.updateServiceRequest(serviceRequestId, updates as any);
+    if (!updatedRequest) return null;
+
+    const io = expressApp.get("io") as SocketIOServer | undefined;
+    if (canAutoAssignForJob) {
+      if (updatedRequest.residentId) {
+        const residentNotification = await storage.createNotification({
+          userId: updatedRequest.residentId,
+          title: "Payment confirmed",
+          message: "Payment is confirmed. Your request is now assigned for job execution.",
+          type: "success",
+          metadata: {
+            requestId: updatedRequest.id,
+            paymentReference: params.paymentReference || undefined,
+            kind: "request_status",
+          },
+        });
+        io?.to(`user-${updatedRequest.residentId}`).emit("notification:new", residentNotification);
+      }
+
+      if (updatedRequest.providerId) {
+        const providerNotification = await storage.createNotification({
+          userId: updatedRequest.providerId,
+          title: "Job assigned after payment",
+          message: "Resident payment is confirmed. You are the task owner for this job.",
+          type: "info",
+          metadata: {
+            requestId: updatedRequest.id,
+            paymentReference: params.paymentReference || undefined,
+            kind: "request_status",
+          },
+        });
+        io?.to(`user-${updatedRequest.providerId}`).emit("notification:new", providerNotification);
+      }
+    }
+
+    emitServiceRequestUpdate(expressApp, updatedRequest, "status");
+    return updatedRequest;
   };
 
   // ──────────────────────────────────────────────────────────────
@@ -1295,48 +1380,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!updated) return res.status(404).json({ message: "Service request not found" });
 
-      const message =
-        `Consultancy report submitted.\n` +
-        `Inspection date: ${inspectionDate.toLocaleDateString()}\n` +
-        `Issue: ${payload.actualIssue}\n` +
-        `Cause: ${payload.causeOfIssue}\n` +
-        `Recommended material cost: NGN ${payload.materialCost.toLocaleString()}\n` +
-        `Recommended service cost: NGN ${payload.serviceCost.toLocaleString()}\n` +
-        `Preventive recommendation: ${payload.preventiveRecommendation}`;
-
-      const senderRole = isAdminActor ? "admin" : "provider";
-      const inserted = await storage.addRequestMessage(
-        req.params.id,
-        actorId,
-        senderRole,
-        message,
-      );
-
-      const io = req.app.get("io") as SocketIOServer | undefined;
-      const participantIds = new Set<string>();
-      if (request.residentId) participantIds.add(request.residentId);
-      if (request.providerId) participantIds.add(request.providerId);
-      for (const participantUserId of participantIds) {
-        io?.to(`user-${participantUserId}`).emit("request-message:new", {
-          requestId: req.params.id,
-          message: inserted,
-        });
-      }
-
-      if (request.residentId) {
-        const notification = await storage.createNotification({
-          userId: request.residentId,
-          title: "Consultancy report added",
-          message: "Your provider submitted an inspection report for this request.",
-          type: "info",
-          metadata: {
-            requestId: request.id,
-            kind: "consultancy_report",
-          },
-        });
-        io?.to(`user-${request.residentId}`).emit("notification:new", notification);
-      }
-
+      // Keep consultancy report internal until admin/company raises a payment request.
       emitServiceRequestUpdate(req.app, updated, "status");
       res.status(201).json({ success: true, report, request: updated });
     } catch (error) {
@@ -2693,6 +2737,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const payload = z
         .object({
           amount: z.union([z.string(), z.number()]).optional(),
+          materialCost: z.preprocess(
+            (value) => (value === "" || value === null || value === undefined ? undefined : Number(value)),
+            z.number().nonnegative().optional(),
+          ),
+          serviceCost: z.preprocess(
+            (value) => (value === "" || value === null || value === undefined ? undefined : Number(value)),
+            z.number().nonnegative().optional(),
+          ),
           note: z.string().trim().max(1000).optional(),
           providerId: z.string().trim().min(1).optional(),
         })
@@ -2716,16 +2768,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      const report =
+        request.consultancyReport && typeof request.consultancyReport === "object"
+          ? ({ ...(request.consultancyReport as any) } as Record<string, any>)
+          : {};
+
+      const reportMaterialCost = Number(report.materialCost || 0);
+      const reportServiceCost = Number(report.serviceCost || 0);
+
+      const materialCost =
+        payload.materialCost ?? (Number.isFinite(reportMaterialCost) && reportMaterialCost >= 0 ? reportMaterialCost : 0);
+      const serviceCost =
+        payload.serviceCost ?? (Number.isFinite(reportServiceCost) && reportServiceCost >= 0 ? reportServiceCost : 0);
+
+      if (!Number.isFinite(materialCost) || materialCost < 0 || !Number.isFinite(serviceCost) || serviceCost < 0) {
+        return res.status(400).json({ message: "Material and service cost must be valid non-negative numbers" });
+      }
+
+      const totalFromBreakdown = materialCost + serviceCost;
+      const requestedAmount =
+        payload.amount === undefined || payload.amount === null || payload.amount === ""
+          ? totalFromBreakdown
+          : Number(payload.amount);
+      if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+        return res.status(400).json({ message: "Enter a valid amount greater than 0" });
+      }
+
       const nextProviderId = payload.providerId || request.providerId || undefined;
       if (!nextProviderId) {
         return res.status(400).json({ message: "Assign a provider before requesting job payment" });
       }
 
-      const amountText =
-        payload.amount === undefined || payload.amount === null || payload.amount === ""
-          ? undefined
-          : String(payload.amount);
+      report.materialCost = materialCost;
+      report.serviceCost = serviceCost;
+      report.totalRecommendation = totalFromBreakdown;
+      report.reviewedByAdminAt = new Date().toISOString();
+      if (actorId) {
+        report.reviewedByAdminId = actorId;
+      }
 
+      const amountText = requestedAmount.toString();
       const adminNote = payload.note
         ? `${request.adminNotes ? `${request.adminNotes}\n` : ""}[Payment request] ${payload.note}`
         : request.adminNotes;
@@ -2736,7 +2818,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         assignedAt: request.assignedAt || new Date(),
         paymentStatus: "pending",
         paymentRequestedAt: new Date(),
-        ...(amountText ? { billedAmount: amountText as any } : {}),
+        billedAmount: amountText as any,
+        consultancyReport: report as any,
         ...(adminNote ? { adminNotes: adminNote } : {}),
       } as any);
 
@@ -2746,11 +2829,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (actorId) {
         const paymentMessage =
-          amountText && Number.isFinite(Number(amountText))
-            ? `Service payment requested: NGN ${Number(amountText).toLocaleString()}${
-                payload.note ? `. ${payload.note}` : "."
-              }`
-            : `Service payment has been requested.${payload.note ? ` ${payload.note}` : ""}`;
+          `Service payment requested: NGN ${Number(amountText).toLocaleString()}.` +
+          (payload.note ? ` ${payload.note}` : "");
         const inserted = await storage.addRequestMessage(
           updated.id,
           actorId,
@@ -2791,6 +2871,145 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/admin/service-requests/:id/reassign-job-provider", async (req, res, next) => {
+    try {
+      if (
+        !req.isAuthenticated() ||
+        (
+          req.user?.role !== "admin" &&
+          req.user?.role !== "estate_admin" &&
+          req.user?.globalRole !== "super_admin"
+        )
+      ) {
+        return res.status(401).json({ message: "Unauthorized - Admin only" });
+      }
+
+      const actorId = req.auth?.userId ?? req.user?.id;
+      if (!actorId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const payload = z
+        .object({
+          providerId: z.string().trim().min(1),
+          reason: z.string().trim().min(5).max(1000),
+          evidence: z.string().trim().min(3).max(2000),
+        })
+        .parse(req.body || {});
+
+      const request = await storage.getServiceRequest(id);
+      if (!request) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      if (!["assigned_for_job", "in_progress"].includes(statusKey)) {
+        return res.status(400).json({
+          message: "Provider change is only allowed after job assignment",
+        });
+      }
+
+      const paymentStatus = String(request.paymentStatus || "").toLowerCase();
+      if (paymentStatus !== "paid") {
+        return res.status(400).json({
+          message: "Resident payment must be completed before changing the job provider",
+        });
+      }
+
+      const nextProviderId = String(payload.providerId || "").trim();
+      if (!nextProviderId) {
+        return res.status(400).json({ message: "A provider is required" });
+      }
+
+      const previousProviderId = request.providerId ? String(request.providerId) : "";
+      if (previousProviderId && previousProviderId === nextProviderId) {
+        return res.status(400).json({ message: "Select a different provider" });
+      }
+
+      const auditNote =
+        `[Provider changed for job ${new Date().toISOString()}] ` +
+        `From: ${previousProviderId || "unassigned"}; To: ${nextProviderId}; ` +
+        `Reason: ${payload.reason}; Evidence: ${payload.evidence}`;
+
+      const updated = await storage.updateServiceRequest(id, {
+        providerId: nextProviderId,
+        status: "assigned_for_job" as any,
+        assignedAt: request.assignedAt || new Date(),
+        approvedForJobAt: request.approvedForJobAt || new Date(),
+        approvedForJobBy: request.approvedForJobBy || actorId,
+        adminNotes: `${request.adminNotes ? `${request.adminNotes}\n` : ""}${auditNote}`,
+      });
+
+      if (!updated) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      const reassignMessage =
+        `Provider changed for this job. Reason: ${payload.reason}. Evidence: ${payload.evidence}.`;
+      const inserted = await storage.addRequestMessage(updated.id, actorId, "admin", reassignMessage);
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const participantIds = new Set<string>();
+      if (updated.residentId) participantIds.add(updated.residentId);
+      if (previousProviderId) participantIds.add(previousProviderId);
+      if (updated.providerId) participantIds.add(updated.providerId);
+
+      for (const participantUserId of participantIds) {
+        io?.to(`user-${participantUserId}`).emit("request-message:new", {
+          requestId: updated.id,
+          message: inserted,
+        });
+      }
+
+      if (updated.residentId) {
+        const residentNotification = await storage.createNotification({
+          userId: updated.residentId,
+          title: "Provider updated",
+          message: "The provider assigned to your job has been changed by admin.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "request_status",
+          },
+        });
+        io?.to(`user-${updated.residentId}`).emit("notification:new", residentNotification);
+      }
+
+      if (updated.providerId) {
+        const providerNotification = await storage.createNotification({
+          userId: updated.providerId,
+          title: "You were assigned to a paid job",
+          message: "Admin has assigned this paid request to you for execution.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "request_status",
+          },
+        });
+        io?.to(`user-${updated.providerId}`).emit("notification:new", providerNotification);
+      }
+
+      if (previousProviderId && previousProviderId !== updated.providerId) {
+        const previousProviderNotification = await storage.createNotification({
+          userId: previousProviderId,
+          title: "Job reassigned",
+          message: "This request has been reassigned to another provider.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "request_status",
+          },
+        });
+        io?.to(`user-${previousProviderId}`).emit("notification:new", previousProviderNotification);
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      return res.json({ success: true, message: "Provider changed for job", request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
   app.post("/api/service-requests/:id/payment/decline", requireAuth, async (req, res, next) => {
     try {
       const actorId = req.auth?.userId ?? req.user?.id;
@@ -3018,47 +3237,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let createdServiceRequestId: string | undefined;
       if (payload.consultancyRequest) {
-        const normalizeKey = (value: string) =>
-          String(value || "")
-            .toLowerCase()
-            .trim()
-            .replace(/[\s-]+/g, "_");
-        const allowedCategories = new Set([
-          "electrician",
-          "plumber",
-          "carpenter",
-          "hvac_technician",
-          "painter",
-          "tiler",
-          "mason",
-          "roofer",
-          "gardener",
-          "cleaner",
-          "security_guard",
-          "cook",
-          "laundry_service",
-          "pest_control",
-          "welder",
-          "mechanic",
-          "phone_repair",
-          "appliance_repair",
-          "tailor",
-          "surveillance_monitoring",
-          "alarm_system",
-          "cleaning_janitorial",
-          "catering_services",
-          "it_support",
-          "maintenance_repair",
-          "packaging_solutions",
-          "marketing_advertising",
-          "home_tutors",
-          "furniture_making",
-          "market_runner",
-          "item_vendor",
-        ]);
-        const normalizedCategory = normalizeKey(payload.consultancyRequest.categoryKey || payload.consultancyRequest.categoryLabel || "");
-        const category = allowedCategories.has(normalizedCategory) ? normalizedCategory : "maintenance_repair";
-        const urgencyInput = normalizeKey(payload.consultancyRequest.urgency || "");
+        const category = resolveServiceRequestCategory(
+          payload.consultancyRequest.categoryKey || "",
+          payload.consultancyRequest.categoryLabel || "",
+        );
+        const urgencyInput = normalizeCategoryKey(payload.consultancyRequest.urgency || "");
         const urgency =
           urgencyInput === "emergency" || urgencyInput === "high" || urgencyInput === "medium" || urgencyInput === "low"
             ? urgencyInput
@@ -3241,6 +3424,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Security: idempotency—if already paid, just acknowledge to avoid double credits.
       if (tx.status === TransactionStatus.COMPLETED) {
+        await finalizeServiceRequestAfterPayment(req.app, {
+          serviceRequestId: tx.serviceRequestId,
+          billedAmount: tx.amount as any,
+          paymentReference: reference,
+        });
         return res.json({ received: true });
       }
 
@@ -3266,14 +3454,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } as Prisma.InputJsonObject,
       });
 
-      if (tx.serviceRequestId) {
-        // TODO: ensure this ties into the full service-order billing workflow.
-        const updatedRequest = await storage.updateServiceRequest(tx.serviceRequestId, {
-          paymentStatus: "paid",
-          billedAmount: tx.amount as any,
-        });
-        emitServiceRequestUpdate(req.app, updatedRequest, "status");
-      }
+      await finalizeServiceRequestAfterPayment(req.app, {
+        serviceRequestId: tx.serviceRequestId,
+        billedAmount: tx.amount as any,
+        paymentReference: reference,
+      });
     } catch (error: any) {
       console.error("Paystack webhook handler failed", { message: error?.message });
     }
@@ -3296,6 +3481,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     if (tx.status === TransactionStatus.COMPLETED) {
+      await finalizeServiceRequestAfterPayment(req.app, {
+        serviceRequestId: tx.serviceRequestId,
+        billedAmount: tx.amount as any,
+        paymentReference: reference,
+      });
       return res.json(formatPaystackVerifySuccess(tx));
     }
 
@@ -3329,14 +3519,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } as Prisma.InputJsonObject,
     });
 
-    if (tx.serviceRequestId) {
-        // TODO: replace with real billing workflow (e.g., payment record table update) before marking service request paid.
-        const updatedRequest = await storage.updateServiceRequest(tx.serviceRequestId, {
-          paymentStatus: "paid",
-          billedAmount: tx.amount as any,
-        });
-        emitServiceRequestUpdate(req.app, updatedRequest, "status");
-      }
+    await finalizeServiceRequestAfterPayment(req.app, {
+      serviceRequestId: tx.serviceRequestId,
+      billedAmount: tx.amount as any,
+      paymentReference: reference,
+    });
 
     const finalTx = updatedTx ?? tx;
     res.json(formatPaystackVerifySuccess(finalTx));
@@ -3383,51 +3570,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const meta: any = responseTx?.meta as any;
         if (meta?.consultancyRequest && req.user?.id) {
           try {
-            const normalizeKey = (value: string) =>
-              String(value || "")
-                .toLowerCase()
-                .trim()
-                .replace(/[\s-]+/g, "_");
-            const allowedCategories = new Set([
-              "electrician",
-              "plumber",
-              "carpenter",
-              "hvac_technician",
-              "painter",
-              "tiler",
-              "mason",
-              "roofer",
-              "gardener",
-              "cleaner",
-              "security_guard",
-              "cook",
-              "laundry_service",
-              "pest_control",
-              "welder",
-              "mechanic",
-              "phone_repair",
-              "appliance_repair",
-              "tailor",
-              "surveillance_monitoring",
-              "alarm_system",
-              "cleaning_janitorial",
-              "catering_services",
-              "it_support",
-              "maintenance_repair",
-              "packaging_solutions",
-              "marketing_advertising",
-              "home_tutors",
-              "furniture_making",
-              "market_runner",
-              "item_vendor",
-            ]);
-            const normalizedCategory = normalizeKey(
-              meta.consultancyRequest.categoryKey || meta.consultancyRequest.categoryLabel || "",
+            const category = resolveServiceRequestCategory(
+              meta.consultancyRequest.categoryKey || "",
+              meta.consultancyRequest.categoryLabel || "",
             );
-            const category = allowedCategories.has(normalizedCategory)
-              ? normalizedCategory
-              : "maintenance_repair";
-            const urgencyInput = normalizeKey(meta.consultancyRequest.urgency || "");
+            const urgencyInput = normalizeCategoryKey(meta.consultancyRequest.urgency || "");
             const urgency =
               urgencyInput === "emergency" ||
               urgencyInput === "high" ||
@@ -3463,6 +3610,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      if (result.status === "success" && responseTx?.serviceRequestId) {
+        await finalizeServiceRequestAfterPayment(req.app, {
+          serviceRequestId: responseTx.serviceRequestId,
+          billedAmount: responseTx.amount as any,
+          paymentReference: reference,
+        });
+      }
+
       res.json({
         reference,
         ...result,
@@ -3492,7 +3647,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const reference = payload?.data?.reference;
 
       if (reference) {
-        await verifyAndFinalizePaystackCharge(reference);
+        const finalized = await verifyAndFinalizePaystackCharge(reference);
+        await finalizeServiceRequestAfterPayment(req.app, {
+          serviceRequestId: finalized?.transaction?.serviceRequestId || null,
+          billedAmount: finalized?.transaction?.amount as any,
+          paymentReference: reference,
+        });
       }
 
       res.json({ received: true });

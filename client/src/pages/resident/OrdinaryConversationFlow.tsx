@@ -573,7 +573,7 @@ export default function OrdinaryConversationFlow() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { data: estates = [] } = useMyEstates();
-  const { categories, isLoading: categoriesLoading } = useCategories({ scope: "global" });
+  const { categories, isLoading: categoriesLoading } = useCategories({ scope: "global", kind: "service" });
   const CONSULTANCY_DRAFT_KEY = "citybuddy_consultancy_draft";
 
   const queryParams = useMemo(() => {
@@ -1034,9 +1034,16 @@ export default function OrdinaryConversationFlow() {
         ? `Photos attached: ${effectiveAttachmentCount}`
         : "Photos attached: 0",
     ].filter(Boolean);
+    const categoryKeyCandidate = String(
+      selectedCategory?.key ?? selectedCategory?.name ?? selectedCategoryLabel ?? selectedCategoryValue ?? "",
+    )
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
 
     const draft = {
-      categoryKey: String(selectedCategory?.key ?? selectedCategory?.id ?? selectedCategoryLabel ?? "maintenance_repair"),
+      categoryKey: categoryKeyCandidate || "maintenance_repair",
       categoryLabel: selectedCategoryLabel || String(selectedCategory?.name ?? ""),
       urgency,
       location: intakeLocationLabel(),
@@ -2204,3 +2211,5 @@ export default function OrdinaryConversationFlow() {
     </div>
   );
 }
+
+

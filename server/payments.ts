@@ -4,6 +4,7 @@ import type { Wallet } from "@prisma/client";
 import { storage } from "./storage";
 import { verifyPaystackTransaction } from "./paystack";
 import { Prisma } from "@prisma/client";
+import { normalizeCategoryKey, resolveServiceRequestCategory } from "./serviceCategoryResolver";
 
 type CreatePendingTxArgs = {
   userId: string;
@@ -26,47 +27,6 @@ function requirePositiveAmount(amount: number) {
   }
 }
 
-function normalizeCategoryKey(value: string): string {
-  return String(value || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[\s-]+/g, "_");
-}
-
-const ALLOWED_CATEGORIES = new Set([
-  "electrician",
-  "plumber",
-  "carpenter",
-  "hvac_technician",
-  "painter",
-  "tiler",
-  "mason",
-  "roofer",
-  "gardener",
-  "cleaner",
-  "security_guard",
-  "cook",
-  "laundry_service",
-  "pest_control",
-  "welder",
-  "mechanic",
-  "phone_repair",
-  "appliance_repair",
-  "tailor",
-  "surveillance_monitoring",
-  "alarm_system",
-  "cleaning_janitorial",
-  "catering_services",
-  "it_support",
-  "maintenance_repair",
-  "packaging_solutions",
-  "marketing_advertising",
-  "home_tutors",
-  "furniture_making",
-  "market_runner",
-  "item_vendor",
-]);
-
 async function ensureConsultancyServiceRequest(params: {
   userId: string;
   txMeta?: Prisma.JsonValue | null;
@@ -75,12 +35,7 @@ async function ensureConsultancyServiceRequest(params: {
   const consultancy = meta?.consultancyRequest;
   if (!consultancy || typeof consultancy !== "object") return null;
 
-  const normalizedCategory = normalizeCategoryKey(
-    consultancy.categoryKey || consultancy.categoryLabel || "",
-  );
-  const category = ALLOWED_CATEGORIES.has(normalizedCategory)
-    ? normalizedCategory
-    : "maintenance_repair";
+  const category = resolveServiceRequestCategory(consultancy.categoryKey || "", consultancy.categoryLabel || "");
   const urgencyInput = normalizeCategoryKey(consultancy.urgency || "");
   const urgency =
     urgencyInput === "emergency" ||

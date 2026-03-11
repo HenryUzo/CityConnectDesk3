@@ -5055,7 +5055,7 @@ export default function ChatInterface({
   const [issueText, setIssueText] = useState<string>("");
   const { data: myEstates } = useMyEstates();
   const { toast } = useToast();
-  const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global" });
+  const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global", kind: "service" });
   
   // Load AI conversation flow settings from database
   const { settings: aiFlowSettings, isLoading: aiFlowLoading } = useAiConversationFlowSettings();

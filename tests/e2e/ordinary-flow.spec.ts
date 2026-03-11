@@ -1,4 +1,21 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function openOrdinaryFlowAndSelectFirstCategory(page: Page) {
+  await page.goto("/resident/requests/ordinary");
+  await page.waitForLoadState("domcontentloaded");
+
+  const createNewRequestCta = page.getByRole("button", { name: /Create new request/i }).first();
+  if (await createNewRequestCta.isVisible().catch(() => false)) {
+    await createNewRequestCta.click();
+  }
+
+  await expect(page.getByText("Request Assistant")).toBeVisible();
+  await expect(page.getByText("Select Categories")).toBeVisible();
+
+  const categoryButton = page.locator('[data-name="Form"] button').first();
+  await expect(categoryButton).toBeVisible();
+  await categoryButton.click();
+}
 
 test.describe("Ordinary conversation flow", () => {
   test.beforeEach(async ({ page }) => {
@@ -8,37 +25,16 @@ test.describe("Ordinary conversation flow", () => {
   });
 
   test("category -> estate branch -> urgency -> wizard", async ({ page }) => {
-    await page.goto("/resident/requests/ordinary");
-    await page.waitForLoadState("domcontentloaded");
-
-    const createNewRequestCta = page.getByRole("button", { name: /Create new request/i }).first();
-    if (await createNewRequestCta.isVisible().catch(() => false)) {
-      await createNewRequestCta.click();
-    }
-
-    await expect(page.getByText("Smart Intake (Ordinary Mode)")).toBeVisible();
-    await expect(page.getByText("Select the service category to begin.")).toBeVisible();
-
-    const categoryButtons = page
-      .locator("button")
-      .filter({ hasText: /\+ Providers available/i });
-    await expect(categoryButtons.first()).toBeVisible();
-    await categoryButtons.first().click();
+    await openOrdinaryFlowAndSelectFirstCategory(page);
 
     await expect(page.getByText("Which estate do you reside?")).toBeVisible();
-    const estateButton = page
-      .locator("button.rounded-xl.border.px-4.py-2")
-      .filter({ hasNotText: "I don't stay in an estate" })
-      .first();
-    await expect(estateButton).toBeVisible();
-    await estateButton.click();
 
     await page.getByPlaceholder("Enter your address").fill("Block 2, Saint Peters Church Street");
     await page.getByPlaceholder("Enter unit/apartment number").fill("Flat 12B");
 
-    const continueButton = page.getByRole("button", { name: /^Continue$/ });
-    await expect(continueButton).toBeEnabled();
-    await continueButton.click();
+    const addLocationButton = page.getByRole("button", { name: /^Add location$/i });
+    await expect(addLocationButton).toBeEnabled();
+    await addLocationButton.click();
 
     await expect(page.getByText("How urgent is this?")).toBeVisible();
     await page.getByRole("button", { name: /Emergency/i }).click();
@@ -48,35 +44,34 @@ test.describe("Ordinary conversation flow", () => {
   });
 
   test("outside-estate branch asks state+lga+address before urgency", async ({ page }) => {
-    await page.goto("/resident/requests/ordinary");
-    await page.waitForLoadState("domcontentloaded");
-
-    const createNewRequestCta = page.getByRole("button", { name: /Create new request/i }).first();
-    if (await createNewRequestCta.isVisible().catch(() => false)) {
-      await createNewRequestCta.click();
-    }
-
-    const categoryButtons = page
-      .locator("button")
-      .filter({ hasText: /\+ Providers available/i });
-    await expect(categoryButtons.first()).toBeVisible();
-    await categoryButtons.first().click();
+    await openOrdinaryFlowAndSelectFirstCategory(page);
 
     const outsideButton = page.getByRole("button", { name: "I don't stay in an estate" });
     await outsideButton.click();
 
     await expect(page.getByText("Where do you stay?")).toBeVisible();
 
-    await page.locator("button[role='combobox']").first().click();
-    await page.getByRole("option", { name: "Lagos" }).click();
+    const stateField = page
+      .locator("p")
+      .filter({ hasText: /^State$/i })
+      .first()
+      .locator("xpath=..");
+    await stateField.getByRole("combobox").click();
+    await page.locator("[role='listbox']").last().getByRole("option", { name: "Lagos" }).click();
 
-    await page.locator("button[role='combobox']").nth(1).click();
-    await page.getByRole("option", { name: "Alimosho" }).click();
+    const lgaField = page
+      .locator("p")
+      .filter({ hasText: /^LGA$/i })
+      .first()
+      .locator("xpath=..");
+    await lgaField.getByRole("combobox").click();
+    await page.locator("[role='listbox']").last().getByRole("option", { name: "Alimosho" }).click();
 
     await page.getByPlaceholder("Enter your address").fill("2 Saint Peters Church Street");
-    const continueButton = page.getByRole("button", { name: /^Continue$/ });
-    await expect(continueButton).toBeEnabled();
-    await continueButton.click();
+
+    const addLocationButton = page.getByRole("button", { name: /^Add location$/i });
+    await expect(addLocationButton).toBeEnabled();
+    await addLocationButton.click();
 
     await expect(page.getByText("How urgent is this?")).toBeVisible();
     await page.screenshot({ path: "test-results/ordinary-flow-outside.png", fullPage: true });

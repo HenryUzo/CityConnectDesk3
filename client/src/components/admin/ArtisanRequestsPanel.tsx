@@ -162,11 +162,16 @@ export default function ArtisanRequestsPanel({
   const [assignRequest, setAssignRequest] = useState<ServiceRequest | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
   const [reassignRequest, setReassignRequest] = useState<ServiceRequest | null>(null);
+  const [jobReassignRequest, setJobReassignRequest] = useState<ServiceRequest | null>(null);
+  const [jobReassignProviderId, setJobReassignProviderId] = useState("");
+  const [jobReassignReason, setJobReassignReason] = useState("");
+  const [jobReassignEvidence, setJobReassignEvidence] = useState("");
   const [completeRequest, setCompleteRequest] = useState<ServiceRequest | null>(null);
   const [billedAmount, setBilledAmount] = useState("");
   const [closeReason, setCloseReason] = useState("");
   const [paymentRequestTarget, setPaymentRequestTarget] = useState<ServiceRequest | null>(null);
-  const [paymentRequestAmount, setPaymentRequestAmount] = useState("");
+  const [paymentRequestMaterialCost, setPaymentRequestMaterialCost] = useState("");
+  const [paymentRequestServiceCost, setPaymentRequestServiceCost] = useState("");
   const [paymentRequestNote, setPaymentRequestNote] = useState("");
   const [cancelRequest, setCancelRequest] = useState<ServiceRequest | null>(null);
   const [cancelReason, setCancelReason] = useState("");
@@ -206,20 +211,21 @@ export default function ArtisanRequestsPanel({
   const { data: providersData } = useQuery<Provider[]>({
     queryKey: ["admin.providers"],
     queryFn: () => AdminAPI.providers.getAll({ isApproved: true }),
-    enabled: Boolean(assignRequest || reassignRequest),
+    enabled: Boolean(assignRequest || reassignRequest || jobReassignRequest),
   });
 
   const providers = useMemo(() => {
     const list = providersData ?? [];
     // Filter providers by category if request has a category
-    const requestCategory = assignRequest?.category || reassignRequest?.category;
+    const requestCategory =
+      assignRequest?.category || reassignRequest?.category || jobReassignRequest?.category;
     if (requestCategory) {
       return list.filter(
         (p) => !p.serviceCategory || p.serviceCategory === requestCategory
       );
     }
     return list;
-  }, [providersData, assignRequest, reassignRequest]);
+  }, [providersData, assignRequest, reassignRequest, jobReassignRequest]);
 
   // Update request mutation
   const updateRequestMutation = useMutation({
@@ -245,7 +251,7 @@ export default function ArtisanRequestsPanel({
       payload,
     }: {
       id: string;
-      payload: { amount?: string; providerId?: string; note?: string };
+      payload: { amount?: string; materialCost?: number; serviceCost?: number; providerId?: string; note?: string };
     }) => {
       return await AdminAPI.bridge.requestJobPayment(id, payload);
     },
@@ -262,17 +268,24 @@ export default function ArtisanRequestsPanel({
     },
   });
 
-  const approveForJobMutation = useMutation({
-    mutationFn: async ({ id, providerId }: { id: string; providerId?: string }) => {
-      return await AdminAPI.bridge.approveRequestForJob(id, providerId ? { providerId } : {});
+
+  const reassignJobProviderMutation = useMutation({
+    mutationFn: async ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: { providerId: string; reason: string; evidence: string };
+    }) => {
+      return await AdminAPI.bridge.reassignJobProvider(id, payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] });
-      toast({ title: "Request approved for job" });
+      toast({ title: "Job provider changed" });
     },
     onError: (error: any) => {
       toast({
-        title: "Approval failed",
+        title: "Failed to change provider",
         description: error.message || "Please try again",
         variant: "destructive",
       });
@@ -325,6 +338,41 @@ export default function ArtisanRequestsPanel({
     setAdminNotes("");
   };
 
+  const handleOpenJobReassign = (request: ServiceRequest) => {
+    setJobReassignRequest(request);
+    setJobReassignProviderId("");
+    setJobReassignReason("");
+    setJobReassignEvidence("");
+  };
+
+  const handleSubmitJobReassign = async () => {
+    if (!jobReassignRequest || !jobReassignProviderId) return;
+    const reason = jobReassignReason.trim();
+    const evidence = jobReassignEvidence.trim();
+    if (reason.length < 5 || evidence.length < 3) {
+      toast({
+        title: "Reason and evidence are required",
+        description: "Provide a clear reason and supporting evidence before changing the provider.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    await reassignJobProviderMutation.mutateAsync({
+      id: jobReassignRequest.id,
+      payload: {
+        providerId: jobReassignProviderId,
+        reason,
+        evidence,
+      },
+    });
+
+    setJobReassignRequest(null);
+    setJobReassignProviderId("");
+    setJobReassignReason("");
+    setJobReassignEvidence("");
+  };
+
   const handleStartWork = (request: ServiceRequest) => {
     updateRequestMutation.mutate({
       id: request.id,
@@ -336,25 +384,59 @@ export default function ArtisanRequestsPanel({
 
   const handleOpenRequestPayment = (request: ServiceRequest) => {
     const report = readConsultancyReport(request.consultancyReport);
+    const billedAmount = Number(request.billedAmount || 0);
     setPaymentRequestTarget(request);
-    setPaymentRequestAmount(
-      request.billedAmount && Number(request.billedAmount) > 0
-        ? String(request.billedAmount)
-        : report && report.totalRecommendation > 0
-          ? String(report.totalRecommendation)
-        : "",
-    );
+    if (report) {
+      setPaymentRequestMaterialCost(String(report.materialCost || 0));
+      setPaymentRequestServiceCost(
+        String(
+          report.serviceCost ||
+            (report.totalRecommendation > 0 && report.materialCost >= 0
+              ? Math.max(report.totalRecommendation - report.materialCost, 0)
+              : 0),
+        ),
+      );
+    } else {
+      setPaymentRequestMaterialCost("0");
+      setPaymentRequestServiceCost(Number.isFinite(billedAmount) && billedAmount > 0 ? String(billedAmount) : "");
+    }
     setPaymentRequestNote("");
   };
+
+  const paymentRequestMaterialCostValue = Number(paymentRequestMaterialCost || 0);
+  const paymentRequestServiceCostValue = Number(paymentRequestServiceCost || 0);
+  const paymentRequestTotal =
+    (Number.isFinite(paymentRequestMaterialCostValue) ? paymentRequestMaterialCostValue : 0) +
+    (Number.isFinite(paymentRequestServiceCostValue) ? paymentRequestServiceCostValue : 0);
 
   const handleRequestPayment = async () => {
     if (!paymentRequestTarget) return;
 
-    const amountValue = Number(paymentRequestAmount);
-    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+    const materialCostValue = Number(paymentRequestMaterialCost || 0);
+    const serviceCostValue = Number(paymentRequestServiceCost || 0);
+    const totalAmount = materialCostValue + serviceCostValue;
+    if (!Number.isFinite(materialCostValue) || materialCostValue < 0) {
       toast({
-        title: "Invalid amount",
-        description: "Enter a valid amount greater than 0",
+        title: "Invalid material cost",
+        description: "Enter a valid material cost (0 or greater)",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!Number.isFinite(serviceCostValue) || serviceCostValue < 0) {
+      toast({
+        title: "Invalid service charge",
+        description: "Enter a valid service charge (0 or greater)",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+      toast({
+        title: "Invalid total amount",
+        description: "Material + service charge must be greater than 0",
         variant: "destructive",
       });
       return;
@@ -364,29 +446,27 @@ export default function ArtisanRequestsPanel({
       id: paymentRequestTarget.id,
       payload: {
         providerId: paymentRequestTarget.providerId,
-        amount: amountValue.toString(),
+        materialCost: materialCostValue,
+        serviceCost: serviceCostValue,
+        amount: totalAmount.toString(),
         note: paymentRequestNote.trim() || undefined,
       },
     });
 
     setPaymentRequestTarget(null);
-    setPaymentRequestAmount("");
+    setPaymentRequestMaterialCost("");
+    setPaymentRequestServiceCost("");
     setPaymentRequestNote("");
   };
 
   const handleClosePaymentRequestDialog = () => {
     if (requestPaymentMutation.isPending) return;
     setPaymentRequestTarget(null);
-    setPaymentRequestAmount("");
+    setPaymentRequestMaterialCost("");
+    setPaymentRequestServiceCost("");
     setPaymentRequestNote("");
   };
 
-  const handleApproveForJob = (request: ServiceRequest) => {
-    approveForJobMutation.mutate({
-      id: request.id,
-      providerId: request.providerId,
-    });
-  };
 
   const handleCompleteRequest = () => {
     if (!completeRequest) return;
@@ -502,7 +582,7 @@ export default function ArtisanRequestsPanel({
             <option value="pending">Pending</option>
             <option value="pending_inspection">Pending inspection</option>
             <option value="assigned">Assigned for inspection</option>
-            <option value="assigned_for_job">Assigned for job/maintenance</option>
+            <option value="assigned_for_job">Assigned for job</option>
             <option value="in_progress">In Progress</option>
             <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
@@ -515,7 +595,7 @@ export default function ArtisanRequestsPanel({
           />
           <div className="flex items-center gap-2 ml-auto text-sm text-muted-foreground">
             <span>{requests.length} request(s)</span>
-            {isFetching ? <span>Refreshingâ€¦</span> : null}
+            {isFetching ? <span>Refreshing...</span> : null}
           </div>
         </div>
       </div>
@@ -539,7 +619,7 @@ export default function ArtisanRequestsPanel({
               const paymentStatusValue = String(r.paymentStatus || "").toLowerCase();
               const hasPaymentRequest = Boolean(r.paymentRequestedAt);
               const isPaymentPending = hasPaymentRequest && paymentStatusValue === "pending";
-              const isPaymentPaid = paymentStatusValue === "paid";
+              const isPaymentPaid = hasPaymentRequest && paymentStatusValue === "paid";
               const consultancyReport = readConsultancyReport(r.consultancyReport);
               const hasConsultancyReport =
                 Boolean(r.consultancyReportSubmittedAt) || Boolean(consultancyReport);
@@ -633,7 +713,7 @@ export default function ArtisanRequestsPanel({
                 {r.status === "completed" && r.billedAmount && (
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary" className="px-2 py-1 text-xs">
-                      ₦ {Number(r.billedAmount).toLocaleString()}
+                      NGN {Number(r.billedAmount).toLocaleString()}
                     </Badge>
                   </div>
                 )}
@@ -681,17 +761,6 @@ export default function ArtisanRequestsPanel({
                       </Button>
                       <Button
                         size="sm"
-                        onClick={() => handleApproveForJob(r)}
-                        disabled={
-                          approveForJobMutation.isPending ||
-                          String(r.paymentStatus || "").toLowerCase() !== "paid"
-                        }
-                        className="h-8 whitespace-nowrap"
-                      >
-                        Assign for job
-                      </Button>
-                      <Button
-                        size="sm"
                         variant="outline"
                         onClick={() => handleMarkUnavailable(r)}
                         className="h-8 whitespace-nowrap"
@@ -701,23 +770,43 @@ export default function ArtisanRequestsPanel({
                     </>
                   )}
 
-                  {/* Assigned for job: provider can start work */}
+                  {/* Assigned for job: provider can start work and admin can change provider */}
                   {r.status === "assigned_for_job" && (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => handleStartWork(r)}
-                      className="h-8 whitespace-nowrap"
-                    >
-                      Start
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleStartWork(r)}
+                        className="h-8 whitespace-nowrap"
+                      >
+                        Start
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleOpenJobReassign(r)}
+                        className="h-8 whitespace-nowrap"
+                      >
+                        Change provider
+                      </Button>
+                    </>
                   )}
 
-                  {/* In Progress: Complete */}
+                  {/* In Progress: Complete (admin can still change provider with evidence) */}
                   {r.status === "in_progress" && (
-                    <Button size="sm" onClick={() => setCompleteRequest(r)} className="h-8 whitespace-nowrap">
-                      Complete
-                    </Button>
+                    <>
+                      <Button size="sm" onClick={() => setCompleteRequest(r)} className="h-8 whitespace-nowrap">
+                        Complete
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleOpenJobReassign(r)}
+                        className="h-8 whitespace-nowrap"
+                      >
+                        Change provider
+                      </Button>
+                    </>
                   )}
 
                   {/* Cancel option for non-completed/cancelled */}
@@ -888,7 +977,7 @@ export default function ArtisanRequestsPanel({
                 <div>
                   <Label className="text-xs text-muted-foreground">Billed Amount</Label>
                   <p className="mt-1 text-lg font-semibold">
-                    ₦ {Number(viewRequest.billedAmount).toLocaleString()}
+                    NGN {Number(viewRequest.billedAmount).toLocaleString()}
                   </p>
                 </div>
               )}
@@ -993,7 +1082,7 @@ export default function ArtisanRequestsPanel({
           <DialogHeader>
             <DialogTitle>Request job payment</DialogTitle>
             <DialogDescription>
-              Enter the agreed service cost to send a payment card to the resident chat.
+              Review the provider report, adjust material/service charges, then send the payment card to the resident.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -1022,18 +1111,37 @@ export default function ArtisanRequestsPanel({
                 </div>
               );
             })() : null}
-            <div>
-              <Label htmlFor="job-payment-amount">Service cost (NGN)</Label>
-              <Input
-                id="job-payment-amount"
-                type="number"
-                min="1"
-                step="0.01"
-                className="mt-1"
-                placeholder="e.g. 65000"
-                value={paymentRequestAmount}
-                onChange={(event) => setPaymentRequestAmount(event.target.value)}
-              />
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <Label htmlFor="job-payment-material">Material cost (NGN)</Label>
+                <Input
+                  id="job-payment-material"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="mt-1"
+                  placeholder="e.g. 25000"
+                  value={paymentRequestMaterialCost}
+                  onChange={(event) => setPaymentRequestMaterialCost(event.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="job-payment-service">Service charge (NGN)</Label>
+                <Input
+                  id="job-payment-service"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="mt-1"
+                  placeholder="e.g. 15000"
+                  value={paymentRequestServiceCost}
+                  onChange={(event) => setPaymentRequestServiceCost(event.target.value)}
+                />
+              </div>
+            </div>
+            <div className="rounded-md border border-[#D0D5DD] bg-[#F9FAFB] px-3 py-2 text-sm text-[#344054]">
+              <span className="font-medium text-[#101828]">Total payment:</span>{" "}
+              NGN {Number.isFinite(paymentRequestTotal) ? paymentRequestTotal.toLocaleString() : "0"}
             </div>
             <div>
               <Label htmlFor="job-payment-note">Note (optional)</Label>
@@ -1054,8 +1162,8 @@ export default function ArtisanRequestsPanel({
               onClick={handleRequestPayment}
               disabled={
                 requestPaymentMutation.isPending ||
-                !paymentRequestAmount.trim() ||
-                Number(paymentRequestAmount) <= 0
+                !Number.isFinite(paymentRequestTotal) ||
+                paymentRequestTotal <= 0
               }
             >
               {requestPaymentMutation.isPending ? "Sending..." : "Send payment request"}
@@ -1131,6 +1239,97 @@ export default function ArtisanRequestsPanel({
         </DialogContent>
       </Dialog>
 
+
+
+      {/* Job Provider Change Dialog */}
+      <Dialog
+        open={Boolean(jobReassignRequest)}
+        onOpenChange={(open) => {
+          if (open) return;
+          if (reassignJobProviderMutation.isPending) return;
+          setJobReassignRequest(null);
+          setJobReassignProviderId("");
+          setJobReassignReason("");
+          setJobReassignEvidence("");
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-indigo-500" />
+              Change job provider
+            </DialogTitle>
+            <DialogDescription>
+              Update the task owner after payment. Reason and evidence are required for audit.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>New Provider</Label>
+              <Select value={jobReassignProviderId} onValueChange={setJobReassignProviderId}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="Choose a provider..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {providers
+                    .filter((p) => p.id !== jobReassignRequest?.providerId)
+                    .map((provider) => (
+                      <SelectItem key={provider.id} value={provider.id}>
+                        <div className="flex items-center gap-2">
+                          <User className="w-4 h-4" />
+                          <span>{provider.name}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Reason</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="Explain why the current provider should be changed"
+                value={jobReassignReason}
+                onChange={(event) => setJobReassignReason(event.target.value)}
+              />
+            </div>
+            <div>
+              <Label>Evidence</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="Add supporting evidence (incident details, call log reference, report link, etc.)"
+                value={jobReassignEvidence}
+                onChange={(event) => setJobReassignEvidence(event.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setJobReassignRequest(null);
+                setJobReassignProviderId("");
+                setJobReassignReason("");
+                setJobReassignEvidence("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSubmitJobReassign}
+              disabled={
+                reassignJobProviderMutation.isPending ||
+                !jobReassignProviderId ||
+                jobReassignReason.trim().length < 5 ||
+                jobReassignEvidence.trim().length < 3
+              }
+            >
+              {reassignJobProviderMutation.isPending ? "Updating..." : "Change provider"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Complete Request Dialog */}
       <Dialog open={Boolean(completeRequest)} onOpenChange={() => setCompleteRequest(null)}>
         <DialogContent>
@@ -1145,7 +1344,7 @@ export default function ArtisanRequestsPanel({
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Billed Amount (₦)</Label>
+              <Label>Billed Amount (NGN)</Label>
               <Input
                 type="number"
                 className="mt-1"

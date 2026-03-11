@@ -258,7 +258,7 @@ export const AdminAPI = {
     }) => adminFetch("/api/admin/bridge/service-requests", { query: params }),
     updateServiceRequest: (id: string, data: any) =>
       adminFetch(`/api/service-requests/${id}`, { method: "PATCH", json: data }),
-    requestJobPayment: async (id: string, data?: { amount?: string; providerId?: string; note?: string }) => {
+    requestJobPayment: async (id: string, data?: { amount?: string; materialCost?: number; serviceCost?: number; providerId?: string; note?: string }) => {
       try {
         return await adminFetch(`/api/admin/service-requests/${id}/request-payment`, {
           method: "POST",
@@ -274,7 +274,11 @@ export const AdminAPI = {
             paymentStatus: "pending",
             paymentRequestedAt: new Date().toISOString(),
             ...(data?.providerId ? { providerId: data.providerId } : {}),
-            ...(data?.amount ? { billedAmount: data.amount } : {}),
+            ...(data?.amount
+              ? { billedAmount: data.amount }
+              : Number.isFinite(Number(data?.materialCost || 0) + Number(data?.serviceCost || 0))
+                ? { billedAmount: String(Number(data?.materialCost || 0) + Number(data?.serviceCost || 0)) }
+                : {}),
           },
         });
       }
@@ -297,6 +301,15 @@ export const AdminAPI = {
           },
         });
       }
+    },
+    reassignJobProvider: async (
+      id: string,
+      data: { providerId: string; reason: string; evidence: string },
+    ) => {
+      return await adminFetch(`/api/admin/service-requests/${id}/reassign-job-provider`, {
+        method: "POST",
+        json: data,
+      });
     },
     getUsers: (params?: { role?: string; search?: string; status?: string }) =>
       adminFetch("/api/admin/bridge/users", { query: params }),
