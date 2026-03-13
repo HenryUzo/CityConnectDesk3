@@ -177,6 +177,27 @@ async function ensureServiceRequestsColumns() {
   `);
 
   await db.execute(sql`
+    ALTER TABLE service_requests
+      ADD COLUMN IF NOT EXISTS category_label text,
+      ADD COLUMN IF NOT EXISTS issue_type text,
+      ADD COLUMN IF NOT EXISTS area_affected text,
+      ADD COLUMN IF NOT EXISTS quantity_label text,
+      ADD COLUMN IF NOT EXISTS time_window_label text,
+      ADD COLUMN IF NOT EXISTS photos_count integer,
+      ADD COLUMN IF NOT EXISTS address_line text,
+      ADD COLUMN IF NOT EXISTS estate_name text,
+      ADD COLUMN IF NOT EXISTS state_name text,
+      ADD COLUMN IF NOT EXISTS lga_name text,
+      ADD COLUMN IF NOT EXISTS payment_purpose text,
+      ADD COLUMN IF NOT EXISTS consultancy_fee numeric(10,2),
+      ADD COLUMN IF NOT EXISTS material_cost numeric(10,2),
+      ADD COLUMN IF NOT EXISTS service_cost numeric(10,2),
+      ADD COLUMN IF NOT EXISTS requested_total numeric(10,2),
+      ADD COLUMN IF NOT EXISTS assigned_inspector_id varchar(255),
+      ADD COLUMN IF NOT EXISTS assigned_job_provider_id varchar(255);
+  `);
+
+  await db.execute(sql`
     DO $$
     BEGIN
       IF EXISTS (
@@ -854,7 +875,7 @@ async function seedCityMartBanners() {
         'Food items',
         'Shop now',
         'primary',
-        '₦299,000',
+        'â‚¦299,000',
         'Just',
         'Only!',
         'Groceries',
@@ -870,7 +891,7 @@ async function seedCityMartBanners() {
         'Google Pixel 6 Pro',
         'Bid Now',
         'dark',
-        '₦450,000',
+        'â‚¦450,000',
         'Starting from',
         null,
         'Electronics',
@@ -918,7 +939,7 @@ async function seedCityMartBanners() {
         'MacBook Pro',
         'Shop now',
         'primary',
-        '₦2,499,000',
+        'â‚¦2,499,000',
         'Just',
         'Only!',
         'Electronics',
@@ -975,7 +996,7 @@ async function seedRequestConfigDefaults() {
   `);
 }
 
-// ── Marketplace V2 tables ──
+// â”€â”€ Marketplace V2 tables â”€â”€
 async function ensureMarketplaceV2Tables() {
   // Enum types (CREATE TYPE IF NOT EXISTS workaround)
   for (const [name, values] of Object.entries({
@@ -1176,7 +1197,7 @@ let bootPromise = (async () => {
     process.exit(1);
   }
 
-  // Global error handler — do NOT throw/rethrow
+  // Global error handler â€” do NOT throw/rethrow
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err?.status || err?.statusCode || 500;
     const message = err?.message || "Internal Server Error";
@@ -1248,7 +1269,7 @@ let bootPromise = (async () => {
     console.error('[SERVER ERROR]', err);
   });
   server.on('listening', () => {
-    log(`✓ Server is now listening on ${host}:${port}`);
+    log(`âœ“ Server is now listening on ${host}:${port}`);
     console.log("[TIMESTAMP] Server listening at " + new Date().toISOString());
   });
   

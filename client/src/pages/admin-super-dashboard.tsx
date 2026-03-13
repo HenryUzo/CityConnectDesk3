@@ -1,4 +1,4 @@
-﻿import {
+import {
   useState,
   useEffect,
   useCallback,
@@ -49,6 +49,7 @@ import formatDate from "@/utils/formatDate";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
+import ServiceRequestDetailPage from "@/components/admin/ServiceRequestDetailPage";
 import AdminRequestQuestions from "@/pages/admin-request-questions";
 
 import {
@@ -7133,6 +7134,7 @@ const DashboardStats = () => {
 export default function AdminSuperDashboard() {
   const { user, token, sessionChecked, selectedEstateId, setSelectedEstateId } = useAdminAuth();
   const [location, setLocation] = useLocation();
+  const [requestActionTarget, setRequestActionTarget] = useState<{ id: string; action: string } | null>(null);
   const activeTab = (() => {
     if (
       location.startsWith("/admin-dashboard/request-questions") ||
@@ -7144,6 +7146,12 @@ export default function AdminSuperDashboard() {
     const pathPart = location.split("/")[2] || "dashboard";
     return String(pathPart).split("?")[0].split("#")[0] || "dashboard";
   })();
+  const requestIdFromPath = (() => {
+    if (!location.startsWith("/admin-dashboard/requests/")) return "";
+    const parts = location.split("/");
+    return String(parts[3] || "").split("?")[0].split("#")[0];
+  })();
+
   const setActiveTab = (tab: string) => {
     if (tab === "request-questions") {
       setLocation("/admin-dashboard/request-questions");
@@ -7657,13 +7665,44 @@ export default function AdminSuperDashboard() {
             {activeTab === "pricing-rules" && <PricingRulesPanel />}
             {activeTab === "provider-matching" && <ProviderMatchingPanel />}
             {activeTab === "analytics" && <AnalyticsPanel orderStats={orderStats} />}
-            {["requests", "artisanRequests"].includes(activeTab) && (
-              <ArtisanRequestsPanel
-                selectedEstateId={selectedEstateId}
-                estates={estateList}
-                onSelectEstate={handleEstateSelection}
-              />
-            )}
+            {["requests", "artisanRequests"].includes(activeTab) &&
+              (requestIdFromPath ? (
+                <>
+                  <ServiceRequestDetailPage
+                    requestId={requestIdFromPath}
+                    onBack={() => setLocation("/admin-dashboard/requests")}
+                    onRequestPayment={() =>
+                      setRequestActionTarget({ id: requestIdFromPath, action: "request-payment" })
+                    }
+                    onAssignProvider={() =>
+                      setRequestActionTarget({ id: requestIdFromPath, action: "assign-provider" })
+                    }
+                    onAssignForJob={() =>
+                      setRequestActionTarget({ id: requestIdFromPath, action: "assign-for-job" })
+                    }
+                    onChangeProvider={() =>
+                      setRequestActionTarget({ id: requestIdFromPath, action: "change-provider" })
+                    }
+                    onChangeInspector={() =>
+                      setRequestActionTarget({ id: requestIdFromPath, action: "change-inspector" })
+                    }
+                  />
+                  <ArtisanRequestsPanel
+                    selectedEstateId={selectedEstateId}
+                    estates={estateList}
+                    onSelectEstate={handleEstateSelection}
+                    hideList
+                    actionTarget={requestActionTarget}
+                    onActionHandled={() => setRequestActionTarget(null)}
+                  />
+                </>
+              ) : (
+                <ArtisanRequestsPanel
+                  selectedEstateId={selectedEstateId}
+                  estates={estateList}
+                  onSelectEstate={handleEstateSelection}
+                />
+              ))}
 
             {/* Removed generic under-development placeholder section */}
           </div>
@@ -9631,6 +9670,22 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
     return /^[\p{Emoji}]+$/u.test(cleaned) ? cleaned : "";
   };
 
+  const normalizeCategoryKey = (value?: string | null) => String(value || "").trim().toLowerCase();
+
+  const resolveCategoryKey = (value: string) => {
+    const match = categoriesList.find((category: any) =>
+      category?.id === value || category?._id === value || category?.key === value
+    );
+    const key = match?.key || value;
+    return normalizeCategoryKey(key);
+  };
+
+  const normalizeProviderCategories = (values: string[] | undefined | null) => {
+    if (!Array.isArray(values)) return [];
+    const mapped = values.map((entry) => resolveCategoryKey(entry)).filter(Boolean);
+    return Array.from(new Set(mapped));
+  };
+
   const [serviceAssignment, setServiceAssignment] = useState({
     requestId: "",
     providerId: "",
@@ -9856,7 +9911,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                                     size="sm"
                                     onClick={() => {
                                       setSelectedProviderForCategory(provider);
-                                      setSelectedCategories(provider.categories || []);
+                                      setSelectedCategories(normalizeProviderCategories(provider.categories));
                                       setShowCategoryDialog(true);
                                     }}
                                   >
@@ -9947,7 +10002,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                                 className="flex-1 text-xs h-8"
                                 onClick={() => {
                                   setSelectedProviderForCategory(provider);
-                                  setSelectedCategories(provider.categories || []);
+                                  setSelectedCategories(normalizeProviderCategories(provider.categories));
                                   setShowCategoryDialog(true);
                                 }}
                               >
@@ -10334,28 +10389,32 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
               )}
               <div className="grid grid-cols-3 gap-3">
                 {categoriesList.length > 0 ? (
-                  categoriesList.map((category: any) => (
-                    <div key={category.id || category._id} className="flex items-center space-x-2">
-                      <Checkbox
-                        id={`category-${category.id || category._id}`}
-                        checked={selectedCategories.includes(category.id) || selectedCategories.includes(category._id) || selectedCategories.includes(category.key)}
-                        onCheckedChange={(checked) => {
-                          const categoryId = category.id || category._id;
-                          if (checked) {
-                            setSelectedCategories([...selectedCategories, categoryId]);
-                          } else {
-                            setSelectedCategories(selectedCategories.filter((c) => c !== categoryId && c !== category._id && c !== category.key));
-                          }
-                        }}
-                      />
-                      <label
-                        htmlFor={`category-${category.id || category._id}`}
-                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                      >
-                        {safeEmoji(category.emoji)} {category.name}
-                      </label>
-                    </div>
-                  ))
+                  categoriesList.map((category: any) => {
+                    const categoryKey = category.key || category.id || category._id;
+                    const normalizedKey = normalizeCategoryKey(categoryKey);
+                    const isChecked = selectedCategories.includes(normalizedKey);
+                    return (
+                      <div key={categoryKey} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`category-${categoryKey}`}
+                          checked={isChecked}
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              setSelectedCategories([...new Set([...selectedCategories, normalizedKey])]);
+                            } else {
+                              setSelectedCategories(selectedCategories.filter((c) => c !== normalizedKey));
+                            }
+                          }}
+                        />
+                        <label
+                          htmlFor={`category-${categoryKey}`}
+                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                        >
+                          {safeEmoji(category.emoji)} {category.name}
+                        </label>
+                      </div>
+                    );
+                  })
                 ) : (
                   <div className="text-sm text-muted-foreground">No categories available.</div>
                 )}
@@ -10387,7 +10446,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                       const providerId = selectedProviderForCategory.id || selectedProviderForCategory._id;
                       assignCategoriesToProviderMutation.mutate({
                         providerId,
-                        categories: selectedCategories,
+                        categories: selectedCategories.map(normalizeCategoryKey),
                       });
                     }
                   }}

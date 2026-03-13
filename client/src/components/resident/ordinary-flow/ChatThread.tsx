@@ -67,7 +67,7 @@ interface ChatThreadProps {
 
 export function ChatThread({ items }: ChatThreadProps) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-2.5">
       {items.map((item) => {
         if (item.kind === "system") {
           return <SystemMessage key={item.id} text={item.text} />;

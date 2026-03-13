@@ -14,14 +14,14 @@ export function SystemEventCard({
   countdownLabel,
 }: SystemEventCardProps) {
   return (
-    <div className="rounded-xl border border-[#DCE4EE] bg-[#F8FAFC] p-3">
+    <div className="rounded-xl border border-[#DCE4EE] bg-[#F8FAFC] p-2.5">
       <div className="flex items-start gap-2.5">
         <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#D0D5DD] bg-white text-[#667085]">
           <Bot className="h-3.5 w-3.5" />
         </div>
-        <div className="min-w-0 space-y-1.5">
-          <p className="text-[13px] font-semibold text-[#1D2939]">{title}</p>
-          <p className="text-[13px] leading-5 text-[#475467]">{body}</p>
+        <div className="min-w-0 space-y-1">
+          <p className="text-[12px] font-semibold text-[#1D2939]">{title}</p>
+          <p className="text-[12px] leading-5 text-[#475467]">{body}</p>
           {(scheduleLabel || countdownLabel) ? (
             <div className="flex flex-wrap items-center gap-2">
               {scheduleLabel ? (

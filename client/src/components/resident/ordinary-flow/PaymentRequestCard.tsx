@@ -25,7 +25,7 @@ export function PaymentRequestCard({
   isDeclining,
 }: PaymentRequestCardProps) {
   return (
-    <div className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-3">
+    <div className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-2.5">
       <div className="flex items-start gap-2.5">
         <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#B2DDFF] bg-white text-[#1570EF]">
           <Wallet className="h-3.5 w-3.5" />
@@ -38,7 +38,7 @@ export function PaymentRequestCard({
             </span>
           </div>
 
-          <p className="text-xl font-semibold text-[#101828]">{amountLabel}</p>
+          <p className="text-lg font-semibold text-[#101828]">{amountLabel}</p>
 
           {note ? <p className="whitespace-pre-line text-[12px] leading-5 text-[#475467]">{note}</p> : null}
 

@@ -20,14 +20,14 @@ export function ConsultancyReportCard({
   timestamp,
 }: ConsultancyReportCardProps) {
   return (
-    <div className="rounded-xl border border-[#D0D5DD] bg-white p-4 shadow-sm">
+    <div className="rounded-xl border border-[#D0D5DD] bg-white p-3 shadow-sm">
       <div className="flex items-start gap-2.5">
         <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#D0D5DD] bg-[#F9FAFB] text-[#475467]">
           <ClipboardList className="h-4 w-4" />
         </div>
-        <div className="min-w-0 flex-1 space-y-3">
+        <div className="min-w-0 flex-1 space-y-2.5">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-[14px] font-semibold text-[#101828]">Consultancy report</p>
+            <p className="text-[13px] font-semibold text-[#101828]">Consultancy report</p>
             {inspectionDate ? (
               <span className="inline-flex items-center rounded-full border border-[#D0D5DD] bg-[#F9FAFB] px-2 py-0.5 text-[11px] text-[#344054]">
                 {inspectionDate}
@@ -35,7 +35,7 @@ export function ConsultancyReportCard({
             ) : null}
           </div>
 
-          <div className="space-y-2 text-[13px] text-[#344054]">
+          <div className="space-y-2 text-[12px] text-[#344054]">
             <p>
               <span className="font-semibold text-[#101828]">Actual issue:</span> {actualIssue}
             </p>

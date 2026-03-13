@@ -425,8 +425,8 @@ function ChipButton({
 function ChatPrompt({ text, status = "active" }: { text: string; status?: "active" | "answered" }) {
   if (status === "answered") {
     return (
-      <div className="flex items-center gap-2 text-[16px] leading-[24px] font-semibold text-[#475467]">
-        <span className="inline-flex h-12 w-12 items-center justify-center text-[#475467] opacity-80">
+      <div className="flex items-center gap-2 text-[14px] leading-[20px] font-semibold text-[#475467]">
+        <span className="inline-flex h-9 w-9 items-center justify-center text-[#475467] opacity-80">
           <AIAnsweredBotIcon />
         </span>
         <span>{text}</span>
@@ -435,11 +435,11 @@ function ChatPrompt({ text, status = "active" }: { text: string; status?: "activ
   }
 
   return (
-    <div className="flex items-center gap-3">
-      <div className="h-10 w-10 shrink-0 rounded-full bg-[#ECFDF3] text-[#027A48] flex items-center justify-center border border-[#D1FADF] animate-pulse">
+    <div className="flex items-center gap-2.5">
+      <div className="h-9 w-9 shrink-0 rounded-full bg-[#ECFDF3] text-[#027A48] flex items-center justify-center border border-[#D1FADF]">
         <AIAskBotIcon />
       </div>
-      <div className="rounded-[999px] bg-[#ECFDF3] px-6 py-[14px] text-[18px] leading-[24px] text-[#065F46] font-semibold max-w-[720px]">
+      <div className="max-w-[680px] rounded-[999px] bg-[#ECFDF3] px-4 py-2 text-[14px] leading-[20px] text-[#065F46] font-semibold">
         {text}
       </div>
     </div>
@@ -588,6 +588,7 @@ export default function OrdinaryConversationFlow() {
 
   const [estateName, setEstateName] = useState("");
   const [estateResidenceMode, setEstateResidenceMode] = useState<"estate" | "outside">("estate");
+  const [hasConfirmedEstateResidence, setHasConfirmedEstateResidence] = useState(false);
   const [estateSearch, setEstateSearch] = useState("");
   const [residentState, setResidentState] = useState("");
   const [residentLga, setResidentLga] = useState("");
@@ -606,6 +607,10 @@ export default function OrdinaryConversationFlow() {
   const openedRequestFromQueryRef = useRef<string | null>(null);
   const skipCategoryResetRef = useRef(false);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+  const estateSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const stateSelectTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const addressTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const addressSectionRef = useRef<HTMLDivElement | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [loadingRequestId, setLoadingRequestId] = useState<string | null>(null);
   const [pendingPrefill, setPendingPrefill] = useState(false);
@@ -642,6 +647,7 @@ export default function OrdinaryConversationFlow() {
     setNotes("");
     setAttachments([]);
     setPersistedAttachmentCount(null);
+    setHasConfirmedEstateResidence(false);
   }, [selectedCategoryValue]);
 
   useEffect(() => {
@@ -695,23 +701,41 @@ export default function OrdinaryConversationFlow() {
   }, [residentState]);
 
   const isLocationComplete = useMemo(() => {
+    if (!hasConfirmedEstateResidence) return false;
     if (estateResidenceMode === "outside") {
       return Boolean(residentState && residentLga && address.trim());
     }
-    return Boolean((estateName || address).trim());
-  }, [estateResidenceMode, residentState, residentLga, estateName, address]);
+    return Boolean(estateName && address.trim());
+  }, [
+    hasConfirmedEstateResidence,
+    estateResidenceMode,
+    residentState,
+    residentLga,
+    estateName,
+    address,
+  ]);
 
   const locationMissingHint = useMemo(() => {
     if (isLocationComplete) return "";
+    if (!hasConfirmedEstateResidence) return "Select yes or no to continue";
     if (estateResidenceMode === "outside") {
       if (!residentState) return "Select your state";
       if (!residentLga) return "Select your LGA";
       if (!address.trim()) return "Enter your address";
     } else {
-      if (!(estateName || address).trim()) return "Select an estate or enter an address";
+      if (!estateName) return "Select your estate";
+      if (!address.trim()) return "Enter your address";
     }
     return "Complete the fields above to continue";
-  }, [isLocationComplete, estateResidenceMode, residentState, residentLga, address, estateName]);
+  }, [
+    isLocationComplete,
+    hasConfirmedEstateResidence,
+    estateResidenceMode,
+    residentState,
+    residentLga,
+    address,
+    estateName,
+  ]);
 
   const wizardSteps = useMemo<WizardStep[]>(() => {
     const followUps: WizardStep[] = categoryProfile.followUps.map((f) => ({
@@ -724,7 +748,7 @@ export default function OrdinaryConversationFlow() {
       {
         id: "location",
         kind: "location",
-        prompt: "Which estate do you reside?",
+        prompt: "Do you live in a CityConnect estate?",
       },
       {
         id: "urgency",
@@ -769,11 +793,30 @@ export default function OrdinaryConversationFlow() {
     ];
   }, [categoryProfile]);
 
+  const focusAddressField = () => {
+    requestAnimationFrame(() => {
+      if (addressSectionRef.current) {
+        addressSectionRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      addressTextareaRef.current?.focus();
+    });
+  };
+
+  const focusNextLocationField = (mode: "estate" | "outside") => {
+    requestAnimationFrame(() => {
+      if (mode === "estate") {
+        estateSearchInputRef.current?.focus();
+      } else {
+        stateSelectTriggerRef.current?.focus();
+      }
+    });
+  };
+
   const intakeLocationLabel = () => {
     const base =
       estateResidenceMode === "outside"
         ? [address, residentLga, residentState].filter(Boolean).join(", ") || "Not provided"
-        : estateName || address || "Not provided";
+        : [estateName, address].filter(Boolean).join(", ") || "Not provided";
     if (!unit.trim()) return base;
     return `${base} - Unit ${unit.trim()}`;
   };
@@ -851,6 +894,7 @@ export default function OrdinaryConversationFlow() {
     setResidentState("");
     setResidentLga("");
     setEstateResidenceMode("estate");
+    setHasConfirmedEstateResidence(false);
     setActiveRequestId(null);
   };
 
@@ -887,8 +931,16 @@ export default function OrdinaryConversationFlow() {
     }));
     setNotes(parsedDetails.notes || "");
     setAddress(request?.location || parsedDetails.location || "");
-    setEstateResidenceMode("outside");
-    setEstateName("");
+    setHasConfirmedEstateResidence(true);
+    const locationSource = String(request?.location || parsedDetails.location || "");
+    const matchedEstate = estates.find((estate: any) => locationSource.includes(String(estate?.name || "")));
+    if (matchedEstate) {
+      setEstateResidenceMode("estate");
+      setEstateName(String(matchedEstate.name || ""));
+    } else {
+      setEstateResidenceMode("outside");
+      setEstateName("");
+    }
     setResidentState("");
     setResidentLga("");
     setUnit("");
@@ -1042,11 +1094,25 @@ export default function OrdinaryConversationFlow() {
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "");
 
+    const primaryFollowUpId = categoryProfile.followUps[0]?.id;
+    const primaryFollowUpAnswer = primaryFollowUpId ? wizardAnswers[primaryFollowUpId] : "";
+
     const draft = {
       categoryKey: categoryKeyCandidate || "maintenance_repair",
       categoryLabel: selectedCategoryLabel || String(selectedCategory?.name ?? ""),
       urgency,
+      issueType: wizardAnswers.issue_type || "",
+      areaAffected: primaryFollowUpAnswer || "",
+      quantityLabel: wizardAnswers.quantity || "",
+      timeWindowLabel: wizardAnswers.time_window || "",
+      notes: notes.trim(),
       location: intakeLocationLabel(),
+      addressLine: address.trim(),
+      estateName: estateResidenceMode === "estate" ? estateName : "",
+      stateName: estateResidenceMode === "outside" ? residentState : "",
+      lgaName: estateResidenceMode === "outside" ? residentLga : "",
+      unit: unit.trim(),
+      residenceMode: estateResidenceMode,
       description: descriptionParts.join("\n"),
       attachmentsCount: effectiveAttachmentCount,
     };
@@ -1602,7 +1668,7 @@ export default function OrdinaryConversationFlow() {
           />
         </div>
         <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-l-[40px] border border-[#E4E7EC]/60 bg-[#F8FAFC] shadow-[inset_0_1px_0_rgba(255,255,255,0.4)]">
-          <div className="border-b border-[#EAECF0] bg-white px-5 py-2.5">
+          <div className="border-b border-[#EAECF0] bg-white px-4 sm:px-6 lg:px-10 py-2.5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-[24px] font-semibold tracking-[-0.02em] text-[#101828]">
@@ -1675,11 +1741,11 @@ export default function OrdinaryConversationFlow() {
           ) : null}
 
           {stage === "wizard" ? (
-            <div className="mx-auto flex h-full max-w-5xl min-h-0 flex-col gap-2 px-5 pb-3 pt-2">
+            <div className="mx-auto flex h-full max-w-[1100px] min-h-0 w-full flex-col gap-1.5 px-4 sm:px-6 lg:px-10 pb-2 pt-1.5">
               <div className="flex min-h-0 flex-1 flex-col">
                     <div
                       className={cn(
-                        "city-scrollbar overflow-y-auto px-1 pb-1",
+                        "city-scrollbar overflow-y-auto overscroll-contain px-1 pb-2 pr-2 scroll-smooth",
                         shouldPrioritizeInteractiveStep ? "hidden" : "min-h-0 flex-1",
                       )}
                     >
@@ -1708,139 +1774,178 @@ export default function OrdinaryConversationFlow() {
                           )}
                         >
                         <ChatPrompt text={currentStep.prompt} />
+                        <p className="text-[12px] text-[#667085]">This helps us match nearby providers faster.</p>
                         {currentStep.kind === "location" ? (
                           <div className="space-y-3">
                             <div className="rounded-2xl border border-[#EAECF0] bg-[#f9fafb] p-4 space-y-3">
-                              <input
-                                value={estateSearch}
-                                onChange={(event) => setEstateSearch(event.target.value)}
-                                placeholder="Search estate"
-                                className="w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
-                              />
                               <div className="flex flex-wrap gap-2">
-                                {filteredEstates.slice(0, 8).map((estate) => (
-                                  <button
-                                    key={estate.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setEstateResidenceMode("estate");
-                                      setEstateName(estate.name);
-                                      setResidentState("");
-                                      setResidentLga("");
-                                    }}
-                                    className={cn(
-                                      "rounded-xl border px-4 py-2 text-sm font-semibold transition",
-                                      estateResidenceMode === "estate" && estateName === estate.name
-                                        ? "border-[#039855] bg-[#ECFDF3] text-[#027A48]"
-                                        : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#f9fafb]",
-                                    )}
-                                  >
-                                    {estate.name}
-                                  </button>
-                                ))}
-                                <button
-                                  type="button"
+                                <ChipButton
+                                  label="Yes"
+                                  selected={hasConfirmedEstateResidence && estateResidenceMode === "estate"}
+                                  selectedClassName="border-[#039855] bg-[#ECFDF3] text-[#027A48]"
                                   onClick={() => {
+                                    setHasConfirmedEstateResidence(true);
+                                    setEstateResidenceMode("estate");
+                                    setResidentState("");
+                                    setResidentLga("");
+                                    focusNextLocationField("estate");
+                                  }}
+                                />
+                                <ChipButton
+                                  label="No"
+                                  selected={hasConfirmedEstateResidence && estateResidenceMode === "outside"}
+                                  selectedClassName="border-[#039855] bg-[#ECFDF3] text-[#027A48]"
+                                  onClick={() => {
+                                    setHasConfirmedEstateResidence(true);
                                     setEstateResidenceMode("outside");
                                     setEstateName("");
                                     setUnit("");
+                                    focusNextLocationField("outside");
                                   }}
-                                  className={cn(
-                                    "rounded-xl border px-4 py-2 text-sm font-semibold transition",
-                                    estateResidenceMode === "outside"
-                                      ? "border-[#039855] bg-[#ECFDF3] text-[#027A48]"
-                                      : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#f9fafb]",
-                                  )}
-                                >
-                                  I don't stay in an estate
-                                </button>
+                                />
                               </div>
                             </div>
 
-                            <ChatPrompt
-                              text={
-                                estateResidenceMode === "outside"
-                                  ? "Where do you stay?"
-                                  : "To not get lost, give me more specifics."
-                              }
-                            />
-
-                            <div className="rounded-2xl border border-[#EAECF0] bg-[#f9fafb] p-4 space-y-3">
-                              {estateResidenceMode === "outside" ? (
-                                <div className="grid gap-3 md:grid-cols-2">
-                                  <div>
-                                    <p className="text-[12px] text-[#667085] mb-2">State</p>
-                                    <Select
-                                      value={residentState || ""}
-                                      onValueChange={(value) => {
-                                        setResidentState(value);
-                                        setResidentLga("");
-                                      }}
-                                    >
-                                      <SelectTrigger className="w-full bg-white">
-                                        <SelectValue placeholder="Select state" />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {STATE_OPTIONS.map((stateOption) => (
-                                          <SelectItem key={stateOption} value={stateOption}>
-                                            {stateOption}
-                                          </SelectItem>
+                            {hasConfirmedEstateResidence ? (
+                              <>
+                                <ChatPrompt
+                                  text={estateResidenceMode === "outside" ? "Select state/LGA" : "Select your estate"}
+                                />
+                                <div className="rounded-2xl border border-[#EAECF0] bg-[#f9fafb] p-4 space-y-3">
+                                  {estateResidenceMode === "outside" ? (
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                      <div>
+                                        <p className="text-[12px] text-[#667085] mb-2">State</p>
+                                        <Select
+                                          value={residentState || ""}
+                                          onValueChange={(value) => {
+                                            setResidentState(value);
+                                            setResidentLga("");
+                                          }}
+                                        >
+                                          <SelectTrigger ref={stateSelectTriggerRef} className="w-full bg-white">
+                                            <SelectValue placeholder="Select state" />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {STATE_OPTIONS.map((stateOption) => (
+                                              <SelectItem key={stateOption} value={stateOption}>
+                                                {stateOption}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                      <div>
+                                        <p className="text-[12px] text-[#667085] mb-2">LGA</p>
+                                        <Select
+                                          value={residentLga || ""}
+                                          onValueChange={(value) => {
+                                            setResidentLga(value);
+                                            focusAddressField();
+                                          }}
+                                          disabled={!residentState}
+                                        >
+                                          <SelectTrigger ref={stateSelectTriggerRef} className="w-full bg-white">
+                                            <SelectValue
+                                              placeholder={residentState ? "Select LGA" : "Select state first"}
+                                            />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {availableLgas.map((lga) => (
+                                              <SelectItem key={lga} value={lga}>
+                                                {lga}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <input
+                                        ref={estateSearchInputRef}
+                                        value={estateSearch}
+                                        onChange={(event) => setEstateSearch(event.target.value)}
+                                        placeholder="Search estate"
+                                        className="w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
+                                      />
+                                      <div className="flex flex-wrap gap-2">
+                                        {filteredEstates.slice(0, 8).map((estate) => (
+                                          <button
+                                            key={estate.id}
+                                            type="button"
+                                            onClick={() => {
+                                              setEstateResidenceMode("estate");
+                                              setEstateName(estate.name);
+                                              setResidentState("");
+                                              setResidentLga("");
+                                              focusAddressField();
+                                            }}
+                                            className={cn(
+                                              "rounded-xl border px-4 py-2 text-sm font-semibold transition",
+                                              estateResidenceMode === "estate" && estateName === estate.name
+                                                ? "border-[#039855] bg-[#ECFDF3] text-[#027A48]"
+                                                : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#f9fafb]",
+                                            )}
+                                          >
+                                            {estate.name}
+                                          </button>
                                         ))}
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                  <div>
-                                    <p className="text-[12px] text-[#667085] mb-2">LGA</p>
-                                    <Select
-                                      value={residentLga || ""}
-                                      onValueChange={(value) => setResidentLga(value)}
-                                      disabled={!residentState}
-                                    >
-                                      <SelectTrigger className="w-full bg-white">
-                                        <SelectValue placeholder={residentState ? "Select LGA" : "Select state first"} />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {availableLgas.map((lga) => (
-                                          <SelectItem key={lga} value={lga}>
-                                            {lga}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                  <div className="md:col-span-2">
-                                    <p className="text-[12px] text-[#667085] mb-2">Address</p>
-                                    <textarea
-                                      value={address}
-                                      onChange={(e) => setAddress(e.target.value)}
-                                      placeholder="Enter your address"
-                                      className="min-h-[110px] w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
-                                    />
-                                  </div>
+                                      </div>
+                                    </>
+                                  )}
                                 </div>
-                              ) : (
-                                <div className="space-y-3">
-                                  <div>
-                                    <p className="text-[12px] text-[#667085] mb-2">Address</p>
-                                    <textarea
-                                      value={address}
-                                      onChange={(e) => setAddress(e.target.value)}
-                                      placeholder="Enter your address"
-                                      className="min-h-[110px] w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
+                                {(estateResidenceMode === "outside"
+                                  ? Boolean(residentState && residentLga)
+                                  : Boolean(estateName)) ? (
+                                  <>
+                                    <ChatPrompt
+                                      text={
+                                        estateResidenceMode === "outside"
+                                          ? "Enter your address."
+                                          : "Enter your address/unit."
+                                      }
                                     />
-                                  </div>
-                                  <div>
-                                    <p className="text-[12px] text-[#667085] mb-2">Unit / Apartment number</p>
-                                    <input
-                                      value={unit}
-                                      onChange={(e) => setUnit(e.target.value)}
-                                      placeholder="Enter unit/apartment number"
-                                      className="w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
+                                    <div ref={addressSectionRef} className="rounded-2xl border border-[#EAECF0] bg-[#f9fafb] p-4 space-y-3">
+                                      {estateResidenceMode === "outside" ? (
+                                        <div>
+                                          <p className="text-[12px] text-[#667085] mb-2">Address</p>
+                                          <textarea
+                                            ref={addressTextareaRef}
+                                            value={address}
+                                            onChange={(e) => setAddress(e.target.value)}
+                                            placeholder="Enter your address"
+                                            className="min-h-[110px] w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
+                                          />
+                                        </div>
+                                      ) : (
+                                        <div className="space-y-3">
+                                          <div>
+                                            <p className="text-[12px] text-[#667085] mb-2">Address</p>
+                                            <textarea
+                                              ref={addressTextareaRef}
+                                              value={address}
+                                              onChange={(e) => setAddress(e.target.value)}
+                                              placeholder="Enter your address"
+                                              className="min-h-[110px] w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
+                                            />
+                                          </div>
+                                          <div>
+                                            <p className="text-[12px] text-[#667085] mb-2">Unit / Apartment number</p>
+                                            <input
+                                              value={unit}
+                                              onChange={(e) => setUnit(e.target.value)}
+                                              placeholder="Enter unit/apartment number"
+                                              className="w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
+                                            />
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </>
+                                ) : null}
+                              </>
+                            ) : null}
                             {locationMissingHint ? (
                               <p className="text-[13px] text-[#667085]">{locationMissingHint}</p>
                             ) : null}
@@ -1985,6 +2090,7 @@ export default function OrdinaryConversationFlow() {
           {stage === "wizard" ? (
             canMessageAssignedProvider ? (
               <MessageComposer
+                variant="citybuddy"
                 label={`Message ${providerDisplayName}`}
                 value={residentMessageDraft}
                 onChange={setResidentMessageDraft}
@@ -1997,7 +2103,7 @@ export default function OrdinaryConversationFlow() {
               />
             ) : (
               <div className="border-t border-[#EAECF0] bg-white px-5 py-2.5">
-                <div className="mx-auto max-w-5xl rounded-xl border border-[#EAECF0] bg-[#F9FAFB] p-2.5">
+                <div className="mx-auto max-w-[1100px] rounded-xl border border-[#EAECF0] bg-[#F9FAFB] p-2.5">
                   <p className="text-xs text-[#475467]">
                     Your provider has not been assigned yet. Chat opens immediately once assignment happens.
                   </p>
@@ -2126,7 +2232,7 @@ export default function OrdinaryConversationFlow() {
                   <div className="flex flex-wrap gap-2">
                     {canBookConsultancy ? (
                       <Button className="rounded-full" onClick={handleBookConsultancy}>
-                        Book for consultancy · NGN 6,500
+                        Book for consultancy ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· NGN 6,500
                       </Button>
                     ) : (
                       <Button className="rounded-full" variant="secondary" disabled>

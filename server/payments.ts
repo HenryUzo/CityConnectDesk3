@@ -51,14 +51,28 @@ async function ensureConsultancyServiceRequest(params: {
 
   const created = await storage.createServiceRequest({
     category: category as any,
+    categoryLabel:
+      String(consultancy.categoryLabel || "").trim() ||
+      category.replace(/_/g, " "),
     description,
     residentId: params.userId,
     budget: "Consultancy",
     urgency: urgency as any,
+    issueType: String((consultancy as any).issueType || "").trim() || null,
+    areaAffected: String((consultancy as any).areaAffected || "").trim() || null,
+    quantityLabel: String((consultancy as any).quantityLabel || "").trim() || null,
+    timeWindowLabel: String((consultancy as any).timeWindowLabel || "").trim() || null,
     location,
+    addressLine: String((consultancy as any).addressLine || location).trim() || location,
+    estateName: String((consultancy as any).estateName || "").trim() || null,
+    stateName: String((consultancy as any).stateName || "").trim() || null,
+    lgaName: String((consultancy as any).lgaName || "").trim() || null,
+    specialInstructions: String((consultancy as any).notes || "").trim() || null,
+    photosCount: Number((consultancy as any).attachmentsCount || 0) || 0,
+    paymentPurpose: "Consultancy / inspection",
     status: "pending_inspection" as any,
     paymentStatus: "pending",
-  });
+  } as any);
 
   return created?.id ?? null;
 }

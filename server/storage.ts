@@ -57,6 +57,7 @@ import type {
   User as PrismaUser,
 } from "@prisma/client";
 import { randomUUID } from "crypto";
+import { buildStructuredServiceRequestFields } from "./serviceRequestDetail";
 
 const SHARED_USER_ROLES = [
   "resident",
@@ -478,9 +479,10 @@ export class DatabaseStorage implements IStorage {
   
   // Service Requests
   async createServiceRequest(request: InsertServiceRequest): Promise<ServiceRequest> {
+    const structured = buildStructuredServiceRequestFields(request as any);
     const [serviceRequest] = await db
       .insert(serviceRequests)
-      .values(request)
+      .values({ ...(request as any), ...structured })
       .returning();
     return serviceRequest;
   }
@@ -679,7 +681,7 @@ export class DatabaseStorage implements IStorage {
     return { bill, items };
   }
 
-  // --- MESSAGING (admin ↔ provider ↔ resident) ---
+  // --- MESSAGING (admin ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â provider ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â resident) ---
   async addRequestMessage(
     requestId: string,
     senderId: string,
@@ -728,8 +730,13 @@ export class DatabaseStorage implements IStorage {
     }
 
     if (filters?.category) {
-      // we'll come back to this field (see #2 below)
-      conditions.push(sql`${users.categories} @> ARRAY[${filters.category}]::varchar[]`);
+      const category = filters.category;
+      conditions.push(
+        or(
+          sql`${users.categories} @> ARRAY[${category}]::varchar[]`,
+          eq(users.serviceCategory, category)
+        )
+      );
     }
 
     return await db
@@ -782,9 +789,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateServiceRequest(id: string, updates: Partial<ServiceRequest>): Promise<ServiceRequest | undefined> {
+    const currentRequest = await this.getServiceRequest(id);
+    if (!currentRequest) return undefined;
+    const structured = buildStructuredServiceRequestFields({ ...(currentRequest as any), ...(updates as any) });
     const [request] = await db
       .update(serviceRequests)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...(updates as any), ...structured, updatedAt: new Date() })
       .where(eq(serviceRequests.id, id))
       .returning();
     return request || undefined;

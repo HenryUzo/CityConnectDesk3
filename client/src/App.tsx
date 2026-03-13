@@ -126,6 +126,11 @@ function Router() {
           <AdminSuperDashboard />
         </AdminAuthProvider>
       </Route>
+      <Route path="/admin-dashboard/requests/:requestId">
+        <AdminAuthProvider>
+          <AdminSuperDashboard />
+        </AdminAuthProvider>
+      </Route>
       <Route path="/admin-dashboard/:section?">
         <AdminAuthProvider>
           <AdminSuperDashboard />

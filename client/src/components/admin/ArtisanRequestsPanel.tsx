@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Dialog,
   DialogContent,
@@ -31,7 +33,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { AdminAPI } from "@/lib/adminApi";
+import { AdminAPI, adminApiRequest } from "@/lib/adminApi";
 import { useToast } from "@/hooks/use-toast";
 import { formatServiceRequestStatusLabel } from "@/lib/serviceRequestStatus";
 import { 
@@ -95,6 +97,13 @@ interface Provider {
   email?: string;
   phone?: string;
   serviceCategory?: string;
+  categories?: string[];
+  metadata?: Record<string, unknown> | null;
+  avatarUrl?: string | null;
+  profileImage?: string | null;
+  company?: string | null;
+  rating?: string | number | null;
+  experience?: number | null;
   isApproved?: boolean;
   isAvailable?: boolean;
 }
@@ -103,6 +112,9 @@ interface ArtisanRequestsPanelProps {
   selectedEstateId: string | null;
   estates: any[];
   onSelectEstate: (estateId: string | null) => void;
+  hideList?: boolean;
+  actionTarget?: { id: string; action: string } | null;
+  onActionHandled?: () => void;
 }
 
 const STATUS_COLORS: Record<RequestStatus, string> = {
@@ -145,21 +157,62 @@ function formatNgnAmount(value: number) {
   return `NGN ${value.toLocaleString()}`;
 }
 
+function normalizeCategoryKey(value?: string | null) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function providerMatchesCategory(provider: Provider, category?: string | null) {
+  const normalized = normalizeCategoryKey(category);
+  if (!normalized) return true;
+  const categories = Array.isArray(provider.categories)
+    ? provider.categories.map((c) => normalizeCategoryKey(c)).filter(Boolean)
+    : [];
+  if (categories.includes(normalized)) return true;
+  const serviceCategory = normalizeCategoryKey(provider.serviceCategory);
+  return serviceCategory ? serviceCategory === normalized : false;
+}
+
+function getProviderAvatar(provider: Provider) {
+  if (provider.avatarUrl) return provider.avatarUrl;
+  if (provider.profileImage) return provider.profileImage;
+  const metadata = provider.metadata && typeof provider.metadata === "object"
+    ? (provider.metadata as Record<string, unknown>)
+    : null;
+  const fromMetadata =
+    (typeof metadata?.avatarUrl === "string" && metadata.avatarUrl) ||
+    (typeof metadata?.profileImageUrl === "string" && metadata.profileImageUrl) ||
+    (typeof metadata?.profilePicture === "string" && metadata.profilePicture) ||
+    (typeof metadata?.profileImage === "string" && metadata.profileImage) ||
+    null;
+  return fromMetadata || null;
+}
+
+function getInitials(name?: string | null) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  const [first, second] = parts;
+  return `${first[0] || ""}${second ? second[0] : ""}`.toUpperCase();
+}
+
 export default function ArtisanRequestsPanel({
   selectedEstateId,
   estates,
   onSelectEstate,
+  hideList = false,
+  actionTarget,
+  onActionHandled,
 }: ArtisanRequestsPanelProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  
+  const [location, setLocation] = useLocation();
+
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<RequestStatus | "all">("all");
   const enabled = true;
 
   // Modal states
-  const [viewRequest, setViewRequest] = useState<ServiceRequest | null>(null);
   const [assignRequest, setAssignRequest] = useState<ServiceRequest | null>(null);
+  const [assignMode, setAssignMode] = useState<"inspection" | "job">("inspection");
   const [selectedProviderId, setSelectedProviderId] = useState<string>("");
   const [reassignRequest, setReassignRequest] = useState<ServiceRequest | null>(null);
   const [jobReassignRequest, setJobReassignRequest] = useState<ServiceRequest | null>(null);
@@ -176,6 +229,7 @@ export default function ArtisanRequestsPanel({
   const [cancelRequest, setCancelRequest] = useState<ServiceRequest | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
+  const actionHandledRef = useRef<{ id: string; action: string } | null>(null);
 
   const estateOptions = [
     { value: "__all__", label: "All estates" },
@@ -207,25 +261,26 @@ export default function ArtisanRequestsPanel({
     placeholderData: (prev) => prev,
   });
 
+  const providerCategory = normalizeCategoryKey(
+    assignRequest?.category || reassignRequest?.category || jobReassignRequest?.category || ""
+  );
+
   // Fetch available providers
-  const { data: providersData } = useQuery<Provider[]>({
-    queryKey: ["admin.providers"],
-    queryFn: () => AdminAPI.providers.getAll({ isApproved: true }),
+  const { data: providersData, isFetching: providersLoading } = useQuery<Provider[]>({
+    queryKey: ["admin.providers", providerCategory],
+    queryFn: () =>
+      AdminAPI.providers.getAll({
+        approved: true,
+        ...(providerCategory ? { category: providerCategory } : {}),
+      }),
     enabled: Boolean(assignRequest || reassignRequest || jobReassignRequest),
   });
 
   const providers = useMemo(() => {
     const list = providersData ?? [];
-    // Filter providers by category if request has a category
-    const requestCategory =
-      assignRequest?.category || reassignRequest?.category || jobReassignRequest?.category;
-    if (requestCategory) {
-      return list.filter(
-        (p) => !p.serviceCategory || p.serviceCategory === requestCategory
-      );
-    }
-    return list;
-  }, [providersData, assignRequest, reassignRequest, jobReassignRequest]);
+    if (!providerCategory) return list;
+    return list.filter((provider) => providerMatchesCategory(provider, providerCategory));
+  }, [providersData, providerCategory]);
 
   // Update request mutation
   const updateRequestMutation = useMutation({
@@ -304,19 +359,130 @@ export default function ArtisanRequestsPanel({
     );
   }, [data, q]);
 
+  const openRequestAction = (
+    target: ServiceRequest,
+    actionValue: string,
+    requestIdValue: string,
+    pathname?: string,
+    clearLocation = true
+  ) => {
+    if (actionValue === "request-payment") {
+      handleOpenRequestPayment(target);
+    } else if (actionValue === "assign-provider" || actionValue === "assign-for-job") {
+      setAssignMode(actionValue === "assign-for-job" ? "job" : "inspection");
+      setAssignRequest(target);
+      setSelectedProviderId("");
+      setAdminNotes("");
+    } else if (actionValue === "change-inspector") {
+      setReassignRequest(target);
+      setSelectedProviderId("");
+      setAdminNotes("");
+    } else if (actionValue === "change-provider") {
+      handleOpenJobReassign(target);
+    }
+
+    actionHandledRef.current = { id: requestIdValue, action: actionValue };
+    if (clearLocation && pathname) {
+      setLocation(pathname);
+    }
+  };
+
+  useEffect(() => {
+    const search = typeof window !== "undefined" ? window.location.search : "";
+    const queryString = search ? search.slice(1) : (location.includes("?") ? location.split("?")[1] : "");
+    const params = new URLSearchParams(queryString);
+    const action = params.get("action");
+    const pathname = typeof window !== "undefined" ? window.location.pathname : location.split("?")[0];
+    const requestIdParam =
+      params.get("requestId") ||
+      (pathname.startsWith("/admin-dashboard/requests/")
+        ? pathname.split("/")[3]
+        : "");
+
+    const runAction = (actionValue: string, requestIdValue: string, clearLocation: boolean) => {
+      const target = requests.find((r) => r.id === requestIdValue);
+      if (target) {
+        openRequestAction(target, actionValue, requestIdValue, pathname, clearLocation);
+        return undefined;
+      }
+
+      let cancelled = false;
+      adminApiRequest("GET", `/api/service-requests/${requestIdValue}`)
+        .then((request: any) => {
+          if (cancelled || !request) return;
+          openRequestAction(request as ServiceRequest, actionValue, requestIdValue, pathname, clearLocation);
+        })
+        .catch(() => undefined);
+
+      return () => {
+        cancelled = true;
+      };
+    };
+
+    if (actionTarget?.id && actionTarget?.action) {
+      const cleanup = runAction(actionTarget.action, actionTarget.id, false);
+      onActionHandled?.();
+      return () => {
+        if (typeof cleanup === "function") cleanup();
+      };
+    }
+
+    if (!action || !requestIdParam) return undefined;
+
+    if (
+      actionHandledRef.current &&
+      actionHandledRef.current.id === requestIdParam &&
+      actionHandledRef.current.action === action
+    ) {
+      return undefined;
+    }
+
+    const cleanup = runAction(action, requestIdParam, true);
+    return () => {
+      if (typeof cleanup === "function") cleanup();
+    };
+  }, [actionTarget, location, onActionHandled, requests, setLocation]);
+
   // Action handlers
   const handleAssignProvider = () => {
     if (!assignRequest || !selectedProviderId) return;
+    const isJobAssignment = assignMode === "job";
+
+    if (isJobAssignment) {
+      const paymentRequestedAt = assignRequest.paymentRequestedAt;
+      const paymentStatus = String(assignRequest.paymentStatus || "").toLowerCase();
+      if (!paymentRequestedAt) {
+        toast({
+          title: "Payment required",
+          description: "Request payment from the resident before assigning for job.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (paymentStatus !== "paid") {
+        toast({
+          title: "Payment not completed",
+          description: "Resident payment must be completed before assigning for job.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     updateRequestMutation.mutate({
       id: assignRequest.id,
       updates: {
         providerId: selectedProviderId,
-        status: "assigned",
+        status: isJobAssignment ? "assigned_for_job" : "assigned",
         assignedAt: new Date(),
+        assignedInspectorId: isJobAssignment ? null : selectedProviderId,
+        assignedJobProviderId: isJobAssignment ? selectedProviderId : null,
+        approvedForJobAt: isJobAssignment ? new Date() : undefined,
         adminNotes: adminNotes || undefined,
       },
     });
     setAssignRequest(null);
+    setAssignMode("inspection");
     setSelectedProviderId("");
     setAdminNotes("");
   };
@@ -328,6 +494,7 @@ export default function ArtisanRequestsPanel({
       id: reassignRequest.id,
       updates: {
         providerId: selectedProviderId,
+        assignedInspectorId: selectedProviderId,
         status: "assigned",
         assignedAt: new Date(),
         adminNotes: `${reassignRequest.adminNotes || ""}\n[Reassigned from provider ${previousProviderId} on ${new Date().toLocaleString()}]${adminNotes ? `\nReason: ${adminNotes}` : ""}`.trim(),
@@ -513,7 +680,8 @@ export default function ArtisanRequestsPanel({
 
   return (
     <>
-      <Card className="p-0">
+      {!hideList && (
+    <Card className="p-0">
         <div
           className="relative h-32 w-full overflow-hidden rounded-t-xl"
           style={{
@@ -723,7 +891,7 @@ export default function ArtisanRequestsPanel({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => setViewRequest(r)}
+                    onClick={() => setLocation(`/admin-dashboard/requests/${r.id}`)}
                     className="h-8 whitespace-nowrap"
                   >
                     View
@@ -828,195 +996,28 @@ export default function ArtisanRequestsPanel({
         )}
       </CardContent>
     </Card>
-
-      {/* View Request Dialog */}
-      <Dialog open={Boolean(viewRequest)} onOpenChange={() => setViewRequest(null)}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="capitalize">
-              {viewRequest?.category?.replaceAll("_", " ")} Request
-            </DialogTitle>
-            <DialogDescription>
-              Request ID: {viewRequest?.id}
-            </DialogDescription>
-          </DialogHeader>
-          {viewRequest && (
-            <div className="space-y-4">
-              {/* Status & Urgency */}
-              <div className="flex items-center gap-2">
-                <Badge
-                  variant="outline"
-                  className={`${STATUS_COLORS[viewRequest.status]}`}
-                >
-                  {formatServiceRequestStatusLabel(viewRequest.status, viewRequest.category)}
-                </Badge>
-                {viewRequest.urgency && (
-                  <Badge className={URGENCY_COLORS[viewRequest.urgency]}>
-                    {viewRequest.urgency}
-                  </Badge>
-                )}
-              </div>
-
-              {/* Description */}
-              <div>
-                <Label className="text-xs text-muted-foreground">Description</Label>
-                <p className="mt-1">{viewRequest.description}</p>
-              </div>
-
-              {/* Location */}
-              {viewRequest.location && (
-                <div>
-                  <Label className="text-xs text-muted-foreground">Location</Label>
-                  <p className="mt-1 flex items-center gap-1">
-                    <MapPin className="w-4 h-4" />
-                    {viewRequest.location}
-                  </p>
-                </div>
-              )}
-
-              {/* Special Instructions */}
-              {viewRequest.specialInstructions && (
-                <div>
-                  <Label className="text-xs text-muted-foreground">Special Instructions</Label>
-                  <p className="mt-1">{viewRequest.specialInstructions}</p>
-                </div>
-              )}
-
-              {/* Timeline */}
-              <div className="border rounded-lg p-4 space-y-3">
-                <Label className="text-sm font-medium">Timeline</Label>
-                <div className="space-y-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <Calendar className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-muted-foreground">Created:</span>
-                    <span>{formatDate(viewRequest.createdAt)}</span>
-                  </div>
-                  {viewRequest.assignedAt && (
-                    <div className="flex items-center gap-2">
-                      <UserCheck className="w-4 h-4 text-blue-500" />
-                      <span className="text-muted-foreground">Assigned:</span>
-                      <span>{formatDate(viewRequest.assignedAt)}</span>
-                    </div>
-                  )}
-                  {viewRequest.paymentRequestedAt && (
-                    <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-amber-500" />
-                      <span className="text-muted-foreground">Payment requested:</span>
-                      <span>{formatDate(viewRequest.paymentRequestedAt)}</span>
-                    </div>
-                  )}
-                  {viewRequest.approvedForJobAt && (
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-indigo-500" />
-                      <span className="text-muted-foreground">Approved for job:</span>
-                      <span>{formatDate(viewRequest.approvedForJobAt)}</span>
-                    </div>
-                  )}
-                  {viewRequest.closedAt && (
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-green-500" />
-                      <span className="text-muted-foreground">Closed:</span>
-                      <span>{formatDate(viewRequest.closedAt)}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Provider Advice */}
-              {(() => {
-                const report = readConsultancyReport(viewRequest.consultancyReport);
-                if (!report) return null;
-                return (
-                  <div className="border rounded-lg p-4 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label className="text-sm font-medium">Provider advice (consultancy report)</Label>
-                      <Badge variant="outline" className="border-[#B2DDFF] bg-[#EFF8FF] text-[#175CD3]">
-                        Submitted
-                      </Badge>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">Inspection date</p>
-                        <p>{report.inspectionDate ? formatDate(report.inspectionDate) : "Not set"}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">Submitted</p>
-                        <p>{report.submittedAt ? formatDate(report.submittedAt) : "Not set"}</p>
-                      </div>
-                      <div className="space-y-1 md:col-span-2">
-                        <p className="text-xs text-muted-foreground">Actual issue</p>
-                        <p>{report.actualIssue || "Not provided"}</p>
-                      </div>
-                      <div className="space-y-1 md:col-span-2">
-                        <p className="text-xs text-muted-foreground">Cause of issue</p>
-                        <p>{report.causeOfIssue || "Not provided"}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">Material cost</p>
-                        <p>{formatNgnAmount(report.materialCost)}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">Service cost</p>
-                        <p>{formatNgnAmount(report.serviceCost)}</p>
-                      </div>
-                      <div className="space-y-1 md:col-span-2">
-                        <p className="text-xs text-muted-foreground">Total recommendation</p>
-                        <p className="font-medium">{formatNgnAmount(report.totalRecommendation)}</p>
-                      </div>
-                      <div className="space-y-1 md:col-span-2">
-                        <p className="text-xs text-muted-foreground">Preventive recommendation</p>
-                        <p>{report.preventiveRecommendation || "Not provided"}</p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Billing */}
-              {viewRequest.billedAmount && Number(viewRequest.billedAmount) > 0 && (
-                <div>
-                  <Label className="text-xs text-muted-foreground">Billed Amount</Label>
-                  <p className="mt-1 text-lg font-semibold">
-                    NGN {Number(viewRequest.billedAmount).toLocaleString()}
-                  </p>
-                </div>
-              )}
-
-              {/* Admin Notes */}
-              {viewRequest.adminNotes && (
-                <div>
-                  <Label className="text-xs text-muted-foreground">Admin Notes</Label>
-                  <p className="mt-1 whitespace-pre-wrap text-sm bg-muted p-2 rounded">
-                    {viewRequest.adminNotes}
-                  </p>
-                </div>
-              )}
-
-              {/* Close Reason */}
-              {viewRequest.closeReason && (
-                <div>
-                  <Label className="text-xs text-muted-foreground">Close Reason</Label>
-                  <p className="mt-1">{viewRequest.closeReason}</p>
-                </div>
-              )}
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setViewRequest(null)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+    )}
 
       {/* Assign Provider Dialog */}
-      <Dialog open={Boolean(assignRequest)} onOpenChange={() => setAssignRequest(null)}>
+      <Dialog
+        open={Boolean(assignRequest)}
+        onOpenChange={() => {
+          setAssignRequest(null);
+          setAssignMode("inspection");
+          setSelectedProviderId("");
+          setAdminNotes("");
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Assign Provider</DialogTitle>
+            <DialogTitle>{assignMode === "job" ? "Assign Job Provider" : "Assign Inspector"}</DialogTitle>
             <DialogDescription>
-              Select a provider to handle this{" "}
-              {assignRequest?.category?.replaceAll("_", " ")} request.
+              {assignMode === "job"
+                ? "Select the provider who will own the job after payment."
+                : "Select the provider who will carry out the inspection."}
+              {assignRequest?.category
+                ? ` Category: ${assignRequest.category.replaceAll("_", " ")}.`
+                : ""}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -1030,27 +1031,79 @@ export default function ArtisanRequestsPanel({
                   <SelectValue placeholder="Choose a provider..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {providers.length > 0 ? (
-                    providers.map((provider) => (
-                      <SelectItem key={provider.id} value={provider.id}>
-                        <div className="flex items-center gap-2">
-                          <User className="w-4 h-4" />
-                          <span>{provider.name}</span>
-                          {provider.serviceCategory && (
-                            <Badge variant="secondary" className="text-xs ml-2">
-                              {provider.serviceCategory.replaceAll("_", " ")}
-                            </Badge>
-                          )}
-                        </div>
-                      </SelectItem>
-                    ))
+                  {providersLoading ? (
+                    <SelectItem value="loading" disabled>
+                      Loading providers...
+                    </SelectItem>
+                  ) : providers.length > 0 ? (
+                    providers.map((provider) => {
+                      const avatarSrc = getProviderAvatar(provider);
+                      const categoryLabel =
+                        provider.serviceCategory || provider.categories?.[0] || providerCategory;
+                      const metaParts = [
+                        provider.company,
+                        provider.experience != null ? `${provider.experience} yrs` : null,
+                        provider.rating != null && provider.rating !== ""
+                          ? `? ${Number(provider.rating).toFixed(1)}`
+                          : null,
+                      ].filter(Boolean);
+
+                      return (
+                        <SelectItem key={provider.id} value={provider.id}>
+                          <div className="flex w-full items-center gap-3">
+                            <Avatar className="h-8 w-8">
+                              <AvatarImage src={avatarSrc || undefined} alt={provider.name} />
+                              <AvatarFallback className="text-[11px]">
+                                {getInitials(provider.name)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-slate-900">
+                                {provider.name}
+                              </p>
+                              {metaParts.length ? (
+                                <p className="truncate text-[11px] text-slate-500">
+                                  {metaParts.join(" - ")}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="ml-auto flex items-center gap-2">
+                              {categoryLabel ? (
+                                <Badge variant="secondary" className="text-[10px] capitalize">
+                                  {categoryLabel.replaceAll("_", " ")}
+                                </Badge>
+                              ) : null}
+                              {provider.isAvailable !== undefined ? (
+                                <Badge
+                                  variant="outline"
+                                  className={
+                                    provider.isAvailable
+                                      ? "border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700"
+                                      : "border-slate-200 bg-slate-50 text-[10px] text-slate-600"
+                                  }
+                                >
+                                  {provider.isAvailable ? "Available" : "Busy"}
+                                </Badge>
+                              ) : null}
+                            </div>
+                          </div>
+                        </SelectItem>
+                      );
+                    })
                   ) : (
                     <SelectItem value="none" disabled>
-                      No providers available
+                      {providerCategory
+                        ? "No providers match this category"
+                        : "No providers available"}
                     </SelectItem>
                   )}
                 </SelectContent>
               </Select>
+              <p className="mt-2 text-xs text-slate-500">
+                {providerCategory
+                  ? `Showing providers linked to ${providerCategory.replaceAll("_", " ")}.`
+                  : "Showing all approved providers."}
+              </p>
             </div>
             <div>
               <Label>Admin Notes (optional)</Label>
@@ -1063,14 +1116,22 @@ export default function ArtisanRequestsPanel({
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAssignRequest(null)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAssignRequest(null);
+                setAssignMode("inspection");
+                setSelectedProviderId("");
+                setAdminNotes("");
+              }}
+            >
               Cancel
             </Button>
             <Button
               onClick={handleAssignProvider}
               disabled={!selectedProviderId || updateRequestMutation.isPending}
             >
-              {updateRequestMutation.isPending ? "Assigning..." : "Assign Provider"}
+              {updateRequestMutation.isPending ? "Assigning..." : assignMode === "job" ? "Assign for job" : "Assign inspector"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1202,16 +1263,79 @@ export default function ArtisanRequestsPanel({
                   <SelectValue placeholder="Choose a new provider..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {providers
-                    .filter((p) => p.id !== reassignRequest?.providerId)
-                    .map((provider) => (
-                      <SelectItem key={provider.id} value={provider.id}>
-                        <div className="flex items-center gap-2">
-                          <User className="w-4 h-4" />
-                          <span>{provider.name}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
+                  {providersLoading ? (
+                    <SelectItem value="loading" disabled>
+                      Loading providers...
+                    </SelectItem>
+                  ) : (
+                    (() => {
+                      const availableProviders = providers.filter(
+                        (provider) => provider.id !== reassignRequest?.providerId
+                      );
+                      if (!availableProviders.length) {
+                        return (
+                          <SelectItem value="none" disabled>
+                            No other providers match this category
+                          </SelectItem>
+                        );
+                      }
+
+                      return availableProviders.map((provider) => {
+                        const avatarSrc = getProviderAvatar(provider);
+                        const categoryLabel =
+                          provider.serviceCategory || provider.categories?.[0] || providerCategory;
+                        const metaParts = [
+                          provider.company,
+                          provider.experience != null ? `${provider.experience} yrs` : null,
+                          provider.rating != null && provider.rating !== ""
+                            ? `? ${Number(provider.rating).toFixed(1)}`
+                            : null,
+                        ].filter(Boolean);
+
+                        return (
+                          <SelectItem key={provider.id} value={provider.id}>
+                            <div className="flex w-full items-center gap-3">
+                              <Avatar className="h-8 w-8">
+                                <AvatarImage src={avatarSrc || undefined} alt={provider.name} />
+                                <AvatarFallback className="text-[11px]">
+                                  {getInitials(provider.name)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-medium text-slate-900">
+                                  {provider.name}
+                                </p>
+                                {metaParts.length ? (
+                                  <p className="truncate text-[11px] text-slate-500">
+                                    {metaParts.join(" - ")}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <div className="ml-auto flex items-center gap-2">
+                                {categoryLabel ? (
+                                  <Badge variant="secondary" className="text-[10px] capitalize">
+                                    {categoryLabel.replaceAll("_", " ")}
+                                  </Badge>
+                                ) : null}
+                                {provider.isAvailable !== undefined ? (
+                                  <Badge
+                                    variant="outline"
+                                    className={
+                                      provider.isAvailable
+                                        ? "border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700"
+                                        : "border-slate-200 bg-slate-50 text-[10px] text-slate-600"
+                                    }
+                                  >
+                                    {provider.isAvailable ? "Available" : "Busy"}
+                                  </Badge>
+                                ) : null}
+                              </div>
+                            </div>
+                          </SelectItem>
+                        );
+                      });
+                    })()
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -1271,16 +1395,79 @@ export default function ArtisanRequestsPanel({
                   <SelectValue placeholder="Choose a provider..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {providers
-                    .filter((p) => p.id !== jobReassignRequest?.providerId)
-                    .map((provider) => (
-                      <SelectItem key={provider.id} value={provider.id}>
-                        <div className="flex items-center gap-2">
-                          <User className="w-4 h-4" />
-                          <span>{provider.name}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
+                  {providersLoading ? (
+                    <SelectItem value="loading" disabled>
+                      Loading providers...
+                    </SelectItem>
+                  ) : (
+                    (() => {
+                      const availableProviders = providers.filter(
+                        (provider) => provider.id !== jobReassignRequest?.providerId
+                      );
+                      if (!availableProviders.length) {
+                        return (
+                          <SelectItem value="none" disabled>
+                            No other providers match this category
+                          </SelectItem>
+                        );
+                      }
+
+                      return availableProviders.map((provider) => {
+                        const avatarSrc = getProviderAvatar(provider);
+                        const categoryLabel =
+                          provider.serviceCategory || provider.categories?.[0] || providerCategory;
+                        const metaParts = [
+                          provider.company,
+                          provider.experience != null ? `${provider.experience} yrs` : null,
+                          provider.rating != null && provider.rating !== ""
+                            ? `? ${Number(provider.rating).toFixed(1)}`
+                            : null,
+                        ].filter(Boolean);
+
+                        return (
+                          <SelectItem key={provider.id} value={provider.id}>
+                            <div className="flex w-full items-center gap-3">
+                              <Avatar className="h-8 w-8">
+                                <AvatarImage src={avatarSrc || undefined} alt={provider.name} />
+                                <AvatarFallback className="text-[11px]">
+                                  {getInitials(provider.name)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-medium text-slate-900">
+                                  {provider.name}
+                                </p>
+                                {metaParts.length ? (
+                                  <p className="truncate text-[11px] text-slate-500">
+                                    {metaParts.join(" - ")}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <div className="ml-auto flex items-center gap-2">
+                                {categoryLabel ? (
+                                  <Badge variant="secondary" className="text-[10px] capitalize">
+                                    {categoryLabel.replaceAll("_", " ")}
+                                  </Badge>
+                                ) : null}
+                                {provider.isAvailable !== undefined ? (
+                                  <Badge
+                                    variant="outline"
+                                    className={
+                                      provider.isAvailable
+                                        ? "border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700"
+                                        : "border-slate-200 bg-slate-50 text-[10px] text-slate-600"
+                                    }
+                                  >
+                                    {provider.isAvailable ? "Available" : "Busy"}
+                                  </Badge>
+                                ) : null}
+                              </div>
+                            </div>
+                          </SelectItem>
+                        );
+                      });
+                    })()
+                  )}
                 </SelectContent>
               </Select>
             </div>

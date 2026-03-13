@@ -23,6 +23,7 @@ interface MessageComposerProps {
   onAttachFiles?: (files: File[]) => void;
   onRemoveAttachment?: (attachmentId: string) => void;
   onShareLocation?: () => void;
+  variant?: "default" | "citybuddy";
 }
 
 export function MessageComposer({
@@ -37,6 +38,7 @@ export function MessageComposer({
   onAttachFiles,
   onRemoveAttachment,
   onShareLocation,
+  variant = "default",
 }: MessageComposerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -132,37 +134,172 @@ export function MessageComposer({
     };
   }, []);
 
+  const canSend = !disabled && (!!value.trim() || attachments.length > 0) && !isSending;
+
+  const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (!disabled) setDragActive(true);
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (!disabled) setDragActive(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragActive(false);
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragActive(false);
+    if (disabled) return;
+    const droppedFiles = Array.from(event.dataTransfer.files || []).filter((file) =>
+      file.type.startsWith("image/") || file.type.startsWith("audio/"),
+    );
+    attachFiles(droppedFiles);
+  };
+
+  const attachmentsPreview = attachments.length > 0 ? (
+    <div className="flex flex-wrap gap-2">
+      {attachments.map((attachment) => (
+        <div
+          key={attachment.id}
+          className="group relative overflow-hidden rounded-lg border border-[#D0D5DD] bg-[#F9FAFB] p-1.5"
+        >
+          {attachment.kind === "audio" || attachment.mimeType?.startsWith("audio/") ? (
+            <div className="w-[190px] space-y-1">
+              <audio controls src={attachment.previewUrl} className="h-9 w-full" />
+              <p className="truncate text-[11px] text-[#475467]">{attachment.name}</p>
+            </div>
+          ) : (
+            <img src={attachment.previewUrl} alt={attachment.name} className="h-12 w-12 object-cover" />
+          )}
+          <button
+            type="button"
+            className="absolute right-1 top-1 hidden rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white group-hover:block"
+            onClick={() => onRemoveAttachment?.(attachment.id)}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+    </div>
+  ) : null;
+
+  if (variant === "citybuddy") {
+    return (
+      <div className="border-t border-[#EAECF0] bg-[#F8FAFC] px-4 sm:px-6 lg:px-10 pb-3 pt-2">
+        <div className="mx-auto w-full max-w-[1100px] space-y-2">
+          <p className="text-[11px] font-medium text-[#667085]">{label}</p>
+
+          {attachmentsPreview}
+
+          <div
+            className={cn(
+              "relative rounded-xl border border-[#D0D5DD] bg-white p-2.5 transition-colors",
+              dragActive && "border-dashed border-[#039855] bg-[#ECFDF3]/35",
+              disabled && "opacity-70",
+            )}
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <textarea
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              placeholder={placeholder}
+              className="min-h-[90px] max-h-[160px] w-full resize-y bg-transparent pr-12 text-[13px] leading-5 text-[#344054] placeholder:text-[#98A2B3] focus:outline-none"
+              disabled={disabled}
+            />
+
+            <button
+              type="button"
+              onClick={onSend}
+              disabled={!canSend}
+              className={cn(
+                "absolute bottom-3 right-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-[#039855] text-white shadow-[0px_1px_2px_0px_rgba(16,24,40,0.05)] transition",
+                "hover:bg-[#027A48] disabled:cursor-not-allowed disabled:bg-[#A6F4C5]",
+              )}
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 border-[#D0D5DD] bg-white px-2 text-[11px] text-[#344054]"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled}
+            >
+              <ImagePlus className="h-3.5 w-3.5" />
+              Add image
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 border-[#D0D5DD] bg-white px-2 text-[11px] text-[#344054]"
+              onClick={onShareLocation}
+              disabled={disabled}
+            >
+              <MapPin className="h-3.5 w-3.5" />
+              Share location
+            </Button>
+            <Button
+              type="button"
+              variant={isRecording ? "default" : "outline"}
+              size="sm"
+              className="h-7 gap-1 border-[#D0D5DD] bg-white px-2 text-[11px] data-[recording=true]:bg-rose-600 data-[recording=true]:text-white"
+              data-recording={isRecording}
+              onClick={() => {
+                if (isRecording) {
+                  stopRecording();
+                  return;
+                }
+                void startRecording();
+              }}
+              disabled={disabled}
+            >
+              <Mic className={cn("h-3.5 w-3.5", isRecording ? "text-white" : "text-[#344054]")} />
+              {isRecording ? "Stop recording" : "Voice note"}
+            </Button>
+            {dragActive ? (
+              <span className="text-[11px] font-medium text-[#027A48]">Drop image/audio to attach</span>
+            ) : null}
+            {isRecording ? <span className="text-[11px] font-medium text-rose-600">Recording...</span> : null}
+            {recorderError ? <span className="text-[11px] text-rose-600">{recorderError}</span> : null}
+            {isSending ? <span className="text-[11px] text-[#667085]">Sending...</span> : null}
+          </div>
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,audio/*"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            const files = Array.from(event.target.files || []);
+            attachFiles(files);
+            event.target.value = "";
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="border-t border-[#EAECF0] bg-[#F8FAFC] px-5 py-2">
       <div className="mx-auto max-w-5xl space-y-2">
         <p className="text-xs font-medium text-[#475467]">{label}</p>
 
-        {attachments.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {attachments.map((attachment) => (
-              <div
-                key={attachment.id}
-                className="group relative overflow-hidden rounded-lg border border-[#D0D5DD] bg-[#F9FAFB] p-1.5"
-              >
-                {(attachment.kind === "audio" || attachment.mimeType?.startsWith("audio/")) ? (
-                  <div className="w-[190px] space-y-1">
-                    <audio controls src={attachment.previewUrl} className="w-full h-9" />
-                    <p className="truncate text-[11px] text-[#475467]">{attachment.name}</p>
-                  </div>
-                ) : (
-                  <img src={attachment.previewUrl} alt={attachment.name} className="h-12 w-12 object-cover" />
-                )}
-                <button
-                  type="button"
-                  className="absolute right-1 top-1 hidden rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white group-hover:block"
-                  onClick={() => onRemoveAttachment?.(attachment.id)}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : null}
+        {attachmentsPreview}
 
         <div
           className={cn(
@@ -170,27 +307,10 @@ export function MessageComposer({
             dragActive && "border-dashed border-[#039855] bg-[#ECFDF3]/35",
             disabled && "opacity-70",
           )}
-          onDragEnter={(event) => {
-            event.preventDefault();
-            if (!disabled) setDragActive(true);
-          }}
-          onDragOver={(event) => {
-            event.preventDefault();
-            if (!disabled) setDragActive(true);
-          }}
-          onDragLeave={(event) => {
-            event.preventDefault();
-            setDragActive(false);
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            setDragActive(false);
-            if (disabled) return;
-            const droppedFiles = Array.from(event.dataTransfer.files || []).filter((file) =>
-              file.type.startsWith("image/") || file.type.startsWith("audio/"),
-            );
-            attachFiles(droppedFiles);
-          }}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
         >
           <textarea
             value={value}
@@ -241,24 +361,20 @@ export function MessageComposer({
                 <Mic className={cn("h-4 w-4", isRecording ? "text-white" : "text-[#344054]")} />
                 {isRecording ? "Stop recording" : "Voice note"}
               </Button>
-              {dragActive ? (
-                <span className="text-xs font-medium text-[#027A48]">Drop image/audio to attach</span>
-              ) : null}
-              {isRecording ? (
-                <span className="text-xs font-medium text-rose-600">Recording...</span>
-              ) : null}
-              {recorderError ? (
-                <span className="text-xs text-rose-600">{recorderError}</span>
-              ) : null}
+              {dragActive ? <span className="text-xs font-medium text-[#027A48]">Drop image/audio to attach</span> : null}
+              {isRecording ? <span className="text-xs font-medium text-rose-600">Recording...</span> : null}
+              {recorderError ? <span className="text-xs text-rose-600">{recorderError}</span> : null}
             </div>
 
             <Button
               type="button"
               onClick={onSend}
-              disabled={disabled || (!value.trim() && attachments.length === 0) || isSending}
+              disabled={!canSend}
               className="h-8 rounded-full bg-[#039855] px-4 text-xs hover:bg-[#027A48]"
             >
-              {isSending ? "Sending..." : (
+              {isSending ? (
+                "Sending..."
+              ) : (
                 <>
                   <Send className="mr-2 h-4 w-4" />
                   Send

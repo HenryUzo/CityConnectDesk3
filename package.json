@@ -24,7 +24,8 @@
     "prisma:migrate": "prisma migrate dev --name init-or-update-schema",
     "db:seed": "tsx prisma/seed.ts",
     "dev:create-request": "tsx scripts/createSampleRequest.ts",
-    "db:ensure-session": "tsx scripts/ensureSessionTable.ts"
+    "db:ensure-session": "tsx scripts/ensureSessionTable.ts",
+    "db:clear-requests": "tsx scripts/clearServiceRequests.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

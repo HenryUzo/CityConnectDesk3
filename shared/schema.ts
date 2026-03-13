@@ -146,7 +146,7 @@ export const storeApprovalStatusEnum = pgEnum("store_approval_status", [
   "rejected",
 ]);
 
-// ── Marketplace V2 enums ──
+// â”€â”€ Marketplace V2 enums â”€â”€
 export const cartStatusEnum = pgEnum("cart_status", [
   "active",
   "checked_out",
@@ -388,11 +388,11 @@ export const categories = pgTable("categories", {
   estateId: varchar("estate_id").references(() => estates.id),
   name: text("name").notNull(),
   key: text("key").notNull(),
-  // Optional emoji for category display (e.g., 🔌)
+  // Optional emoji for category display (e.g., ðŸ”Œ)
   emoji: text("emoji"),
   description: text("description"),
   icon: text("icon"),
-  tag: text("tag").notNull().default("Facility Management 🏗️"),
+  tag: text("tag").notNull().default("Facility Management ðŸ—ï¸"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -601,7 +601,7 @@ export const orders = pgTable("orders", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// ── Marketplace V2: Inventory ──
+// â”€â”€ Marketplace V2: Inventory â”€â”€
 export const inventory = pgTable("inventory", {
   id: varchar("id")
     .primaryKey()
@@ -620,7 +620,7 @@ export const inventory = pgTable("inventory", {
   uniqueStoreProduct: sql`UNIQUE (${table.storeId}, ${table.productId})`,
 }));
 
-// ── Marketplace V2: Carts ──
+// â”€â”€ Marketplace V2: Carts â”€â”€
 export const carts = pgTable("carts", {
   id: varchar("id")
     .primaryKey()
@@ -654,7 +654,7 @@ export const cartItems = pgTable("cart_items", {
   uniqueCartProduct: sql`UNIQUE (${table.cartId}, ${table.productId})`,
 }));
 
-// ── Marketplace V2: Parent Orders (umbrella) ──
+// â”€â”€ Marketplace V2: Parent Orders (umbrella) â”€â”€
 export const parentOrders = pgTable("parent_orders", {
   id: varchar("id")
     .primaryKey()
@@ -670,7 +670,7 @@ export const parentOrders = pgTable("parent_orders", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// ── Marketplace V2: Store Orders (one per store per parent order) ──
+// â”€â”€ Marketplace V2: Store Orders (one per store per parent order) â”€â”€
 export const storeOrders = pgTable("store_orders", {
   id: varchar("id")
     .primaryKey()
@@ -708,7 +708,7 @@ export const storeOrderItems = pgTable("store_order_items", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// ── Marketplace V2: Payments ──
+// â”€â”€ Marketplace V2: Payments â”€â”€
 export const marketplacePayments = pgTable("marketplace_payments", {
   id: varchar("id")
     .primaryKey()
@@ -725,7 +725,7 @@ export const marketplacePayments = pgTable("marketplace_payments", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// ── Marketplace V2: Refunds (store-level) ──
+// â”€â”€ Marketplace V2: Refunds (store-level) â”€â”€
 export const refunds = pgTable("refunds", {
   id: varchar("id")
     .primaryKey()
@@ -863,6 +863,23 @@ export const serviceRequests = pgTable("service_requests", {
   consultancyReport: jsonb("consultancy_report"),
   consultancyReportSubmittedAt: timestamp("consultancy_report_submitted_at"),
   consultancyReportSubmittedBy: varchar("consultancy_report_submitted_by").references(() => users.id),
+  categoryLabel: text("category_label"),
+  issueType: text("issue_type"),
+  areaAffected: text("area_affected"),
+  quantityLabel: text("quantity_label"),
+  timeWindowLabel: text("time_window_label"),
+  photosCount: integer("photos_count"),
+  addressLine: text("address_line"),
+  estateName: text("estate_name"),
+  stateName: text("state_name"),
+  lgaName: text("lga_name"),
+  paymentPurpose: text("payment_purpose"),
+  consultancyFee: decimal("consultancy_fee", { precision: 10, scale: 2 }),
+  materialCost: decimal("material_cost", { precision: 10, scale: 2 }),
+  serviceCost: decimal("service_cost", { precision: 10, scale: 2 }),
+  requestedTotal: decimal("requested_total", { precision: 10, scale: 2 }),
+  assignedInspectorId: varchar("assigned_inspector_id").references(() => users.id),
+  assignedJobProviderId: varchar("assigned_job_provider_id").references(() => users.id),
   closedAt: timestamp("closed_at"),
   closeReason: text("close_reason"),
   billedAmount: decimal("billed_amount", { precision: 10, scale: 2 }).default(
@@ -1376,7 +1393,7 @@ export const impersonationSessionsRelations = relations(impersonationSessions, (
   }),
 }));
 
-// ── Marketplace V2 relations ──
+// â”€â”€ Marketplace V2 relations â”€â”€
 export const inventoryRelations = relations(inventory, ({ one }) => ({
   store: one(stores, { fields: [inventory.storeId], references: [stores.id] }),
   product: one(marketplaceItems, { fields: [inventory.productId], references: [marketplaceItems.id] }),
@@ -1554,7 +1571,7 @@ export type InsertBroadcastMessage = z.infer<typeof insertBroadcastMessageSchema
 export type ImpersonationSession = typeof impersonationSessions.$inferSelect;
 export type InsertImpersonationSession = z.infer<typeof insertImpersonationSessionSchema>;
 
-// ── Marketplace V2 types ──
+// â”€â”€ Marketplace V2 types â”€â”€
 export type Cart = typeof carts.$inferSelect;
 export type CartItem = typeof cartItems.$inferSelect;
 export type Inventory = typeof inventory.$inferSelect;

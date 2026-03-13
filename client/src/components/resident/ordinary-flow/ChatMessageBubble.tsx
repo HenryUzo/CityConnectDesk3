@@ -28,13 +28,13 @@ export function ChatMessageBubble({ role, text, attachmentUrl, timestamp }: Chat
 
   return (
     <div className={cn("flex w-full", isResident ? "justify-end" : "justify-start")}>
-      <div className="max-w-[68%] space-y-1.5">
+      <div className="max-w-[76%] space-y-1">
         <div
           className={cn(
-            "rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm",
+            "rounded-xl px-3 py-2.5 text-[13px] leading-5 shadow-sm",
             isResident
               ? "rounded-br-md bg-[#039855] text-white shadow-[0_6px_16px_-12px_rgba(3,152,85,0.8)]"
-              : "rounded-bl-md border border-[#E4E7EC] bg-[#FFFFFF] text-[#1D2939]",
+              : "rounded-bl-md border border-[#E4E7EC] bg-[#FCFCFD] text-[#1D2939]",
           )}
         >
           {hasText ? <p className="whitespace-pre-wrap">{text}</p> : null}
@@ -70,7 +70,7 @@ export function ChatMessageBubble({ role, text, attachmentUrl, timestamp }: Chat
           ) : null}
         </div>
         {timestamp ? (
-          <p className={cn("px-1 text-[11px] text-[#98A2B3]", isResident ? "text-right" : "text-left")}>
+          <p className={cn("px-1 text-[10px] text-[#98A2B3]", isResident ? "text-right" : "text-left")}>
             {new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
           </p>
         ) : null}
