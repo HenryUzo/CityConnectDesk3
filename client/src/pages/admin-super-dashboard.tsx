@@ -14,7 +14,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import {
   adminApiRequest,
-  setAdminToken,
+  clearLegacyAdminAuthStorage,
   setCurrentEstate,
   getCurrentEstate,
 } from "@/lib/adminApi";
@@ -397,7 +397,6 @@ const normalizeAdminUser = (rawUser: any): AdminUser | null => {
 const AdminAuthContext = createContext<
   | {
       user: AdminUser | null;
-      token: string | null;
       selectedEstateId: string | null;
       setSelectedEstateId: (id: string | null) => void;
       login: (email: string, password: string) => Promise<any>;
@@ -422,16 +421,14 @@ interface AdminAuthProviderProps {
 
 export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
   const [user, setUser] = useState<AdminUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
   const [selectedEstateId, setSelectedEstateId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [, setLocation] = useLocation();
 
-  // Update global token reference when token changes
   useEffect(() => {
-    setAdminToken(token);
-  }, [token]);
+    clearLegacyAdminAuthStorage();
+  }, []);
 
   // Update global estate context when selectedEstateId changes
   useEffect(() => {
@@ -455,25 +452,6 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     }
   }, [user]);
 
-  // Listen for auth failure events from adminApiRequest
-  useEffect(() => {
-    const handleAuthFailure = () => {
-      logout();
-    };
-    window.addEventListener("admin-auth-failed", handleAuthFailure);
-    return () =>
-      window.removeEventListener("admin-auth-failed", handleAuthFailure);
-  }, []);
-
-  // Auto-refresh token on mount if refresh token exists
-  useEffect(() => {
-    const refreshTokenFromStorage = sessionStorage.getItem(
-      "admin_refresh_token",
-    );
-    if (refreshTokenFromStorage && !token) {
-      refreshToken();
-    }
-  }, []);
 
   const bootstrapRanRef = useRef(false);
   useEffect(() => {
@@ -512,42 +490,6 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
     };
   }, [sessionChecked]);
 
-  const refreshToken = async () => {
-    const refreshTokenValue = sessionStorage.getItem("admin_refresh_token");
-    if (!refreshTokenValue) return;
-
-    try {
-      const response: any = await adminApiRequest(
-        "POST",
-        "/api/admin/auth/refresh",
-        {
-          refreshToken: refreshTokenValue,
-        },
-      );
-
-      // Race-proof: Set tokens immediately
-      setAdminToken(response.accessToken);
-      setToken(response.accessToken);
-      const normalizedUser = normalizeAdminUser(response.user);
-      setUser(normalizedUser);
-      sessionStorage.setItem("admin_refresh_token", response.refreshToken);
-
-      // Restore estate selection if user has memberships
-      const memberships = normalizedUser?.memberships || [];
-      const isSuperAdmin =
-        normalizedUser?.globalRole === "super_admin" ||
-        normalizedUser?.role === "super_admin";
-      if (!isSuperAdmin && memberships.length > 0 && !selectedEstateId) {
-        const firstEstate = memberships[0].estateId;
-        setSelectedEstateId(firstEstate);
-      }
-      setSessionChecked(true);
-    } catch (error) {
-      // Refresh failed, clear tokens and redirect to login
-      logout();
-    }
-  };
-
   const login = async (email: string, password: string) => {
     setIsLoading(true);
     try {
@@ -557,24 +499,8 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
           { username: email, password },
         );
 
-        // Support two response shapes:
-        // 1) token-based: { accessToken, refreshToken, user }
-        // 2) session-based: user object returned directly
-        const userObj = response?.user || response;
-        const accessToken = response?.accessToken ?? null;
-        const refreshToken = response?.refreshToken ?? null;
-
-        // Race-proof: Set tokens immediately if present
-        if (accessToken) {
-          setAdminToken(accessToken);
-          setToken(accessToken);
-          sessionStorage.setItem("admin_access_token", accessToken);
-        }
-        if (refreshToken) {
-          sessionStorage.setItem("admin_refresh_token", refreshToken);
-        }
-
-        const normalizedUser = normalizeAdminUser(userObj);
+        const normalizedUser = normalizeAdminUser(response?.user || response);
+        clearLegacyAdminAuthStorage();
         setUser(normalizedUser);
 
         // Auto-select first estate for tenant scoping
@@ -597,16 +523,11 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
   };
 
   const logout = () => {
-    // Clear tokens everywhere
-    setAdminToken(null);               // <- ensures adminApi stops sending Authorization
-    setToken(null);
+    void adminApiRequest("POST", "/api/logout").catch(() => undefined);
+    clearLegacyAdminAuthStorage();
     setUser(null);
     setSelectedEstateId(null);
     setSessionChecked(true);
-
-    sessionStorage.removeItem("admin_refresh_token");
-    sessionStorage.removeItem("admin_access_token");
-    localStorage.removeItem("admin_jwt");
 
     // Bounce back to login
     setLocation("/");
@@ -615,14 +536,13 @@ export const AdminAuthProvider = ({ children }: AdminAuthProviderProps) => {
 
   const contextValue = useMemo(() => ({
     user,
-    token,
     selectedEstateId,
     setSelectedEstateId,
     login,
     logout,
     isLoading,
     sessionChecked,
-  }), [user, token, selectedEstateId, isLoading, sessionChecked]);
+  }), [user, selectedEstateId, isLoading, sessionChecked]);
 
   return (
     <AdminAuthContext.Provider value={contextValue}>
@@ -752,7 +672,7 @@ const AdminSidebar = ({
   if (isSuperAdmin) {
     menuItems.push(
       { id: "ai-conversations", label: "AI Conversations", icon: MessageSquare },
-      { id: "ai-conversation-flow", label: "AI Conversation Flow", icon: Settings },
+      { id: "ai-conversation-flow", label: "Approved Categories", icon: Settings },
       { id: "ai-prepared-requests", label: "AI Prepared Requests", icon: MessageSquare },
       { id: "request-questions", label: "Request Questions", icon: Settings },
       { id: "pricing-rules", label: "Pricing Rules", icon: Tags },
@@ -1043,7 +963,7 @@ const AiPreparedRequestsPanel = () => {
   );
 };
 
-// AI Conversation Flow Settings Panel
+// Approved Categories Panel
 interface AiFlowSetting {
   id: string;
   categoryKey: string;
@@ -1246,7 +1166,7 @@ const AiConversationFlowPanel = () => {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>AI Conversation Flow</CardTitle>
+          <CardTitle>Approved Categories</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">Super admin access required.</p>
@@ -1261,9 +1181,9 @@ const AiConversationFlowPanel = () => {
         <CardHeader>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle>AI Conversation Flow Settings</CardTitle>
+              <CardTitle>Approved Categories</CardTitle>
               <CardDescription>
-                Manage categories displayed on the resident dashboard and customize AI conversations for each category.
+                Manage approved categories shown in resident ordinary conversation flow and AI chat entry points.
               </CardDescription>
             </div>
             <div className="flex gap-2">
@@ -1288,7 +1208,7 @@ const AiConversationFlowPanel = () => {
           {isLoading ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : error ? (
-            <p className="text-sm text-destructive">Failed to load AI conversation flow settings.</p>
+            <p className="text-sm text-destructive">Failed to load approved categories.</p>
           ) : settings.length === 0 ? (
             <div className="py-10 text-center">
               <p className="text-sm text-muted-foreground">
@@ -1433,7 +1353,7 @@ const AiConversationFlowPanel = () => {
               {editingItem ? "Edit Category" : "Create New Category"}
             </DialogTitle>
             <DialogDescription>
-              Configure how this category appears on the resident dashboard and customize the AI conversation flow.
+              Configure how this category appears on resident ordinary conversation flow and AI chat.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -7132,7 +7052,7 @@ const DashboardStats = () => {
 
 // Main Admin Dashboard Component
 export default function AdminSuperDashboard() {
-  const { user, token, sessionChecked, selectedEstateId, setSelectedEstateId } = useAdminAuth();
+  const { user, sessionChecked, selectedEstateId, setSelectedEstateId } = useAdminAuth();
   const [location, setLocation] = useLocation();
   const [requestActionTarget, setRequestActionTarget] = useState<{ id: string; action: string } | null>(null);
   const activeTab = (() => {
@@ -7388,7 +7308,9 @@ export default function AdminSuperDashboard() {
                 <Menu className="w-4 h-4" />
               </Button>
               <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
-                {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
+                {activeTab === "ai-conversation-flow"
+                  ? "Approved Categories"
+                  : activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
               </h1>
               <div className="flex items-center space-x-2">
                 {isSuperAdmin && (
@@ -9197,6 +9119,13 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
     queryFn: () => adminApiRequest("GET", "/api/admin/bridge/service-requests"),
     enabled: isCompanyMembersPage,
   });
+  const { data: approvedCategorySettings = [] } = useQuery({
+    queryKey: ["/api/admin/ai-conversation-flow"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/ai-conversation-flow"),
+    enabled: isCompanyMembersPage,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
   const companyProviders = Array.isArray(companyProvidersRaw) && selectedCompanyForMembers
     ? companyProvidersRaw.filter((provider: any) => companyMatchesProvider(provider, selectedCompanyForMembers))
     : [];
@@ -9633,6 +9562,16 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
   const totalProviders = companyProviders.length;
   const approvedProviders = companyProviders.filter((p: any) => p.isApproved).length;
   const pendingApprovalsCount = pendingProviderRequests.length;
+  const resolveServiceRequestCategoryKey = (req: any) => {
+    const categoryKey = String(req?.category || "").trim().toLowerCase();
+    const inferredKey = String(req?.categoryLabel || req?.issueType || "").trim().toLowerCase();
+    if (categoryKey && categoryKey !== "maintenance_repair") return categoryKey;
+    return inferredKey || categoryKey;
+  };
+  const resolveServiceRequestCategoryLabel = (req: any) => {
+    const value = String(req?.categoryLabel || req?.issueType || req?.category || "").trim();
+    return value ? value.replaceAll("_", " ") : "Service request";
+  };
   const avgRating =
     totalProviders > 0
       ? (
@@ -9645,7 +9584,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
     return status !== "completed" && status !== "cancelled";
   });
   const maintenanceRequests = companyRequests.filter((req: any) => {
-    const category = String(req.category || "").toLowerCase();
+    const category = resolveServiceRequestCategoryKey(req);
     return category.includes("maintenance");
   });
   const activityEvents = companyRequests
@@ -9670,20 +9609,101 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
     return /^[\p{Emoji}]+$/u.test(cleaned) ? cleaned : "";
   };
 
-  const normalizeCategoryKey = (value?: string | null) => String(value || "").trim().toLowerCase();
+  const normalizeCategoryKey = (value?: string | null) =>
+    String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+
+  const approvedCategoryOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return (Array.isArray(approvedCategorySettings) ? approvedCategorySettings : [])
+      .filter((row: any) => row && row.isEnabled !== false)
+      .sort((a: any, b: any) => Number(a?.displayOrder || 0) - Number(b?.displayOrder || 0))
+      .map((row: any) => {
+        const key = normalizeCategoryKey(row?.categoryKey || row?.categoryName || row?.id);
+        return {
+          id: String(row?.id || key),
+          key,
+          name: String(row?.categoryName || row?.categoryKey || key),
+          emoji: safeEmoji(row?.emoji),
+        };
+      })
+      .filter((item) => {
+        if (!item.key) return false;
+        if (seen.has(item.key)) return false;
+        seen.add(item.key);
+        return true;
+      });
+  }, [approvedCategorySettings]);
+
+  const fallbackCategoryOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return (Array.isArray(categoriesList) ? categoriesList : [])
+      .map((row: any) => {
+        const key = normalizeCategoryKey(row?.key || row?.name || row?.id || row?._id);
+        return {
+          id: String(row?.id || row?._id || key),
+          key,
+          name: String(row?.name || row?.key || key),
+          emoji: safeEmoji(row?.emoji),
+        };
+      })
+      .filter((item) => {
+        if (!item.key) return false;
+        if (seen.has(item.key)) return false;
+        seen.add(item.key);
+        return true;
+      });
+  }, [categoriesList]);
+
+  const categoryOptions = approvedCategoryOptions.length > 0 ? approvedCategoryOptions : fallbackCategoryOptions;
+
+  const categoryOptionByKey = useMemo(() => {
+    const map = new Map<string, { id: string; key: string; name: string; emoji: string }>();
+    categoryOptions.forEach((category) => map.set(category.key, category));
+    fallbackCategoryOptions.forEach((category) => {
+      if (!map.has(category.key)) map.set(category.key, category);
+    });
+    return map;
+  }, [categoryOptions, fallbackCategoryOptions]);
 
   const resolveCategoryKey = (value: string) => {
-    const match = categoriesList.find((category: any) =>
-      category?.id === value || category?._id === value || category?.key === value
+    const normalizedValue = normalizeCategoryKey(value);
+    if (normalizedValue && categoryOptionByKey.has(normalizedValue)) {
+      return normalizedValue;
+    }
+    const matchFromList = categoriesList.find(
+      (category: any) =>
+        category?.id === value ||
+        category?._id === value ||
+        normalizeCategoryKey(category?.key) === normalizedValue,
     );
-    const key = match?.key || value;
-    return normalizeCategoryKey(key);
+    const fallbackKey = normalizeCategoryKey(matchFromList?.key || matchFromList?.name || value);
+    return fallbackKey || normalizedValue;
+  };
+
+  const resolveCategoryMeta = (value?: string | null) => {
+    const key = resolveCategoryKey(String(value || ""));
+    return categoryOptionByKey.get(key) || null;
   };
 
   const normalizeProviderCategories = (values: string[] | undefined | null) => {
     if (!Array.isArray(values)) return [];
     const mapped = values.map((entry) => resolveCategoryKey(entry)).filter(Boolean);
     return Array.from(new Set(mapped));
+  };
+
+  const getProviderCategoryKeys = (provider: any) => {
+    const values: string[] = [];
+    if (Array.isArray(provider?.categories)) {
+      values.push(...provider.categories.map((entry: unknown) => String(entry || "")));
+    }
+    if (provider?.serviceCategory) {
+      values.push(String(provider.serviceCategory));
+    }
+    return normalizeProviderCategories(values);
   };
 
   const [serviceAssignment, setServiceAssignment] = useState({
@@ -9860,6 +9880,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                         companyProviders.map((provider: any) => {
                           const providerId = provider.id || provider._id;
                           const rating = provider.rating ? Number(provider.rating).toFixed(1) : "N/A";
+                          const providerCategoryKeys = getProviderCategoryKeys(provider);
                           return (
                             <TableRow key={providerId}>
                               <TableCell className="font-medium">{provider.name || provider.email}</TableCell>
@@ -9872,22 +9893,22 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                               </TableCell>
                               <TableCell>
                                 <div className="flex flex-wrap gap-1">
-                                  {provider.categories && provider.categories.length > 0 ? (
-                                    provider.categories.slice(0, 3).map((categoryId: string) => {
-                                      const category = categoriesList.find((c: any) => c.id === categoryId || c._id === categoryId || c.key === categoryId);
+                                  {providerCategoryKeys.length > 0 ? (
+                                    providerCategoryKeys.slice(0, 3).map((categoryId: string) => {
+                                      const category = resolveCategoryMeta(categoryId);
                                       const emoji = safeEmoji(category?.emoji);
                                       return (
                                         <Badge key={categoryId} variant="outline" className="text-xs">
-                                          {category ? `${emoji} ${category.name}`.trim() : categoryId}
+                                          {category ? `${emoji} ${category.name}`.trim() : categoryId.replaceAll("_", " ")}
                                         </Badge>
                                       );
                                     })
                                   ) : (
                                     <span className="text-xs text-muted-foreground">None</span>
                                   )}
-                                  {provider.categories && provider.categories.length > 3 && (
+                                  {providerCategoryKeys.length > 3 && (
                                     <Badge variant="secondary" className="text-xs">
-                                      +{provider.categories.length - 3}
+                                      +{providerCategoryKeys.length - 3}
                                     </Badge>
                                   )}
                                 </div>
@@ -9911,7 +9932,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                                     size="sm"
                                     onClick={() => {
                                       setSelectedProviderForCategory(provider);
-                                      setSelectedCategories(normalizeProviderCategories(provider.categories));
+                                      setSelectedCategories(getProviderCategoryKeys(provider));
                                       setShowCategoryDialog(true);
                                     }}
                                   >
@@ -9944,6 +9965,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                       companyProviders.map((provider: any) => {
                         const providerId = provider.id || provider._id;
                         const rating = provider.rating ? Number(provider.rating).toFixed(1) : "N/A";
+                        const providerCategoryKeys = getProviderCategoryKeys(provider);
                         return (
                           <div key={providerId} className="border rounded-lg p-4 space-y-3 hover:bg-muted/50 transition-colors">
                             <div className="space-y-1">
@@ -9962,22 +9984,22 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                             <div className="space-y-1">
                               <div className="text-xs font-medium text-muted-foreground">Categories</div>
                               <div className="flex flex-wrap gap-1">
-                                {provider.categories && provider.categories.length > 0 ? (
-                                  provider.categories.slice(0, 2).map((categoryId: string) => {
-                                    const category = categoriesList.find((c: any) => c.id === categoryId || c._id === categoryId || c.key === categoryId);
+                                {providerCategoryKeys.length > 0 ? (
+                                  providerCategoryKeys.slice(0, 2).map((categoryId: string) => {
+                                    const category = resolveCategoryMeta(categoryId);
                                     const emoji = safeEmoji(category?.emoji);
                                     return (
                                       <Badge key={categoryId} variant="outline" className="text-xs">
-                                        {category ? `${emoji} ${category.name}`.trim() : categoryId}
+                                        {category ? `${emoji} ${category.name}`.trim() : categoryId.replaceAll("_", " ")}
                                       </Badge>
                                     );
                                   })
                                 ) : (
                                   <span className="text-xs text-muted-foreground">None</span>
                                 )}
-                                {provider.categories && provider.categories.length > 2 && (
+                                {providerCategoryKeys.length > 2 && (
                                   <Badge variant="secondary" className="text-xs">
-                                    +{provider.categories.length - 2}
+                                    +{providerCategoryKeys.length - 2}
                                   </Badge>
                                 )}
                               </div>
@@ -10002,7 +10024,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                                 className="flex-1 text-xs h-8"
                                 onClick={() => {
                                   setSelectedProviderForCategory(provider);
-                                  setSelectedCategories(normalizeProviderCategories(provider.categories));
+                                  setSelectedCategories(getProviderCategoryKeys(provider));
                                   setShowCategoryDialog(true);
                                 }}
                               >
@@ -10044,7 +10066,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                   openCompanyRequests.slice(0, 6).map((req: any) => (
                     <div key={req.id} className="flex items-center justify-between rounded-lg border border-border p-3">
                       <div>
-                        <div className="font-medium">{req.category || "Service Request"}</div>
+                        <div className="font-medium">{resolveServiceRequestCategoryLabel(req)}</div>
                         <div className="text-xs text-muted-foreground">
                           {req.description || "No description"}
                         </div>
@@ -10077,7 +10099,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                           <Badge variant="outline">{req.status || "pending"}</Badge>
                         </div>
                         <div className="text-xs text-muted-foreground mt-1">
-                          {req.category || "Service request"} - Rating {provider?.rating ?? "N/A"}
+                          {resolveServiceRequestCategoryLabel(req)} - Rating {provider?.rating ?? "N/A"}
                         </div>
                       </div>
                     );
@@ -10225,7 +10247,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                         {unassignedRequests.length > 0 ? (
                           unassignedRequests.map((req: any) => (
                             <SelectItem key={req.id} value={req.id}>
-                              {req.category || "Service request"}
+                              {resolveServiceRequestCategoryLabel(req)}
                             </SelectItem>
                           ))
                         ) : (
@@ -10365,22 +10387,20 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
             <DialogHeader>
               <DialogTitle>Assign Service Categories</DialogTitle>
               <DialogDescription>
-                Select service categories for {selectedProviderForCategory?.name || selectedProviderForCategory?.email}
+                Select approved categories for {selectedProviderForCategory?.name || selectedProviderForCategory?.email}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              {selectedProviderForCategory?.categories && selectedProviderForCategory.categories.length > 0 && (
+              {selectedProviderForCategory && getProviderCategoryKeys(selectedProviderForCategory).length > 0 && (
                 <div className="bg-muted p-3 rounded-lg">
                   <div className="text-sm font-medium mb-2">Currently Assigned Categories:</div>
                   <div className="flex flex-wrap gap-2">
-                    {selectedProviderForCategory.categories.map((categoryId: string) => {
-                      const category = categoriesList.find((c: any) => 
-                        c.id === categoryId || c._id === categoryId || c.key === categoryId
-                      );
+                    {getProviderCategoryKeys(selectedProviderForCategory).map((categoryId: string) => {
+                      const category = resolveCategoryMeta(categoryId);
                       const emoji = safeEmoji(category?.emoji);
                       return (
                         <Badge key={categoryId} variant="outline" className="text-xs">
-                          {category ? `${emoji} ${category.name}`.trim() : categoryId}
+                          {category ? `${emoji} ${category.name}`.trim() : categoryId.replaceAll("_", " ")}
                         </Badge>
                       );
                     })}
@@ -10388,10 +10408,10 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                 </div>
               )}
               <div className="grid grid-cols-3 gap-3">
-                {categoriesList.length > 0 ? (
-                  categoriesList.map((category: any) => {
-                    const categoryKey = category.key || category.id || category._id;
-                    const normalizedKey = normalizeCategoryKey(categoryKey);
+                {categoryOptions.length > 0 ? (
+                  categoryOptions.map((category: any) => {
+                    const categoryKey = category.key;
+                    const normalizedKey = normalizeCategoryKey(category.key);
                     const isChecked = selectedCategories.includes(normalizedKey);
                     return (
                       <div key={categoryKey} className="flex items-center space-x-2">
@@ -10416,7 +10436,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                     );
                   })
                 ) : (
-                  <div className="text-sm text-muted-foreground">No categories available.</div>
+                  <div className="text-sm text-muted-foreground">No approved categories available.</div>
                 )}
               </div>
             </div>

@@ -321,7 +321,8 @@ export function useStoreOrders(storeId: string | null, status?: string) {
       return res.json();
     },
     enabled: !!storeId,
-    staleTime: 15_000,
+    staleTime: 10_000,
+    refetchInterval: storeId ? 20_000 : false,
   });
 }
 
@@ -334,7 +335,8 @@ export function useStoreOrderDetail(storeId: string | null, orderId: string | nu
       return res.json();
     },
     enabled: !!storeId && !!orderId,
-    staleTime: 15_000,
+    staleTime: 10_000,
+    refetchInterval: storeId && orderId ? 20_000 : false,
   });
 }
 
@@ -350,8 +352,12 @@ export function useUpdateStoreOrderStatus(storeId: string) {
       );
       return res.json();
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/marketplace/store", storeId, "orders"] });
+    onSuccess: async (_, variables) => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["/api/marketplace/store", storeId, "orders"] }),
+        qc.invalidateQueries({ queryKey: ["/api/marketplace/store", storeId, "orders", variables.orderId] }),
+        qc.invalidateQueries({ queryKey: ["/api/provider/stores", storeId, "orders"] }),
+      ]);
     },
   });
 }
@@ -365,7 +371,8 @@ export function useStoreInventory(storeId: string | null) {
       return res.json();
     },
     enabled: !!storeId,
-    staleTime: 30_000,
+    staleTime: 20_000,
+    refetchInterval: storeId ? 45_000 : false,
   });
 }
 
@@ -389,8 +396,12 @@ export function useUpdateInventory(storeId: string) {
       );
       return res.json();
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/marketplace/store", storeId, "inventory"] });
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["/api/marketplace/store", storeId, "inventory"] }),
+        qc.invalidateQueries({ queryKey: ["/api/provider/stores", storeId, "items"] }),
+        qc.invalidateQueries({ queryKey: ["provider-marketplace-items"] }),
+      ]);
     },
   });
 }

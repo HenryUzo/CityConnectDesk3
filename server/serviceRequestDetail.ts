@@ -177,7 +177,16 @@ export function buildServiceRequestDetailViewModel(
     (status === "assigned_for_inspection" ? firstText(request.providerId) : "");
   const jobProviderId =
     structured.assignedJobProviderId ||
-    (["assigned_for_job", "assigned_for_maintenance", "in_progress", "completed"].includes(status)
+    (
+      [
+        "assigned_for_job",
+        "assigned_for_maintenance",
+        "in_progress",
+        "work_completed_pending_resident",
+        "disputed",
+        "rework_required",
+        "completed",
+      ].includes(status)
       ? firstText(request.providerId)
       : "");
   const ownerType = jobProviderId

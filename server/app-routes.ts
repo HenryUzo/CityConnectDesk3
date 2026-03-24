@@ -3,7 +3,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { storage } from "./storage";
 import { db } from "./db";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   aiConversationFlowSettings,
   aiSessionAttachments,
@@ -15,6 +15,7 @@ import {
   memberships,
   requestConversationSettings,
   requestQuestions,
+  serviceRequestCancellationCases,
 } from "@shared/schema";
 import { requireAuth, requireResident } from "./auth-middleware";
 import { ollamaChat } from "./ai/ollama";
@@ -22,8 +23,27 @@ import { safeParseJsonFromText } from "./ai/safe-json";
 import { getProviderMatches } from "./providers/matching";
 import { generateGeminiContent } from "./ai/geminiClient";
 import { IMAGE_LIMITS, validateDataUrl } from "./utils/validate-dataurl";
+import { backfillApprovedCategoriesFromServiceCategories } from "./approvedCategorySync";
 
 const router = Router();
+
+const CANCELLATION_REVIEW_REQUIRED_STATUSES = new Set([
+  "assigned",
+  "assigned_for_inspection",
+  "assigned_for_job",
+  "in_progress",
+  "work_completed_pending_resident",
+  "disputed",
+  "rework_required",
+  "completed",
+]);
+
+function normalizeServiceRequestStatusKey(value: unknown) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .trim();
+}
 
 // Legacy dev-login endpoint - DEPRECATED - Use /api/auth/login instead
 router.post("/dev-login", async (req: Request, res: Response) => {
@@ -89,9 +109,26 @@ const ConversationUpdateSchema = z.object({
   status: z.enum(["active", "closed"]),
 });
 
+function maskConsultancyReportUntilApproved<T extends Record<string, any>>(request: T): T {
+  const paymentStatus = String(request?.paymentStatus || "").toLowerCase();
+  const canRevealReport =
+    Boolean(request?.paymentRequestedAt) ||
+    ["paid", "cancelled", "failed", "unpaid"].includes(paymentStatus);
+
+  if (canRevealReport) return request;
+
+  return {
+    ...request,
+    consultancyReport: null,
+    consultancyReportSubmittedAt: null,
+    consultancyReportSubmittedBy: null,
+  };
+}
+
 // Public endpoint: Get enabled categories for resident category selection
 router.get("/categories", async (req: Request, res: Response) => {
   try {
+    await backfillApprovedCategoriesFromServiceCategories();
     const categories = await db
       .select()
       .from(aiConversationFlowSettings)
@@ -1296,10 +1333,54 @@ router.get("/service-requests/mine", requireAuth, async (req: Request, res: Resp
     }
 
     const all = await storage.getAllServiceRequests();
-    const mine = all.filter((r: any) => r.residentId === userId);
+    const mine = all
+      .filter((r: any) => r.residentId === userId)
+      .sort((a: any, b: any) => {
+        const left = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        const right = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        return left - right;
+      });
+    const limitRaw = Number(req.query.limit);
+    const limited =
+      Number.isFinite(limitRaw) && limitRaw > 0 ? mine.slice(0, Math.floor(limitRaw)) : mine;
 
-    console.log(`[app] /service-requests/mine -> userId=${userId} count=${mine.length}`);
-    return res.json(mine);
+    const requestIds = limited.map((item: any) => String(item.id || "").trim()).filter(Boolean);
+    const openCases = requestIds.length
+      ? await db
+          .select({
+            id: serviceRequestCancellationCases.id,
+            requestId: serviceRequestCancellationCases.requestId,
+            status: serviceRequestCancellationCases.status,
+            reasonCode: serviceRequestCancellationCases.reasonCode,
+            createdAt: serviceRequestCancellationCases.createdAt,
+            updatedAt: serviceRequestCancellationCases.updatedAt,
+          })
+          .from(serviceRequestCancellationCases)
+          .where(
+            and(
+              inArray(serviceRequestCancellationCases.requestId, requestIds as any),
+              inArray(serviceRequestCancellationCases.status, ["requested", "under_review"] as any),
+            ),
+          )
+      : [];
+    const caseByRequestId = new Map<string, (typeof openCases)[number]>();
+    for (const cancellationCase of openCases) {
+      const key = String(cancellationCase.requestId || "");
+      if (!key || caseByRequestId.has(key)) continue;
+      caseByRequestId.set(key, cancellationCase);
+    }
+
+    console.log(`[app] /service-requests/mine -> userId=${userId} count=${limited.length}`);
+    return res.json(
+      limited.map((item: any) => {
+        const cancellationCase = caseByRequestId.get(String(item.id || ""));
+        return {
+          ...maskConsultancyReportUntilApproved(item),
+          cancellationCase: cancellationCase || null,
+          isCancellationUnderReview: Boolean(cancellationCase),
+        };
+      }),
+    );
   } catch (e: any) {
     console.error("GET /service-requests/mine error", e);
     res.status(500).json({ error: e.message });
@@ -1516,10 +1597,27 @@ router.get("/service-requests/:id", requireAuth, async (req: Request, res: Respo
           avatarUrl: providerAvatarUrl,
         }
       : null;
+    const latestCancellationCase = await storage.getLatestCancellationCaseForRequest(row.id);
 
     return res.json({
-      ...row,
+      ...maskConsultancyReportUntilApproved(row),
       provider,
+      cancellationCase: latestCancellationCase
+        ? {
+            id: latestCancellationCase.id,
+            status: latestCancellationCase.status,
+            reasonCode: latestCancellationCase.reasonCode,
+            reasonDetail: latestCancellationCase.reasonDetail,
+            preferredResolution: latestCancellationCase.preferredResolution,
+            adminDecision: latestCancellationCase.adminDecision,
+            adminNote: latestCancellationCase.adminNote,
+            refundDecision: latestCancellationCase.refundDecision,
+            refundAmount: latestCancellationCase.refundAmount,
+            resolvedAt: latestCancellationCase.resolvedAt,
+            createdAt: latestCancellationCase.createdAt,
+            updatedAt: latestCancellationCase.updatedAt,
+          }
+        : null,
     });
   } catch (e: any) {
     console.error("GET /service-requests/:id error", e);
@@ -1538,6 +1636,14 @@ router.delete("/service-requests/:id", requireAuth, requireResident, async (req:
     const existing = await storage.getServiceRequest(req.params.id);
     if (!existing) return res.status(404).json({ error: "Service request not found" });
     if (existing.residentId !== userId) return res.status(403).json({ error: "Forbidden" });
+    const statusKey = normalizeServiceRequestStatusKey(existing.status);
+    if (CANCELLATION_REVIEW_REQUIRED_STATUSES.has(statusKey)) {
+      return res.status(409).json({
+        error:
+          "This request is assigned or active. Submit a cancellation request with reason for admin review.",
+        requiresCancellationReview: true,
+      });
+    }
 
     const cancelled = await storage.cancelServiceRequest(req.params.id, userId);
     if (!cancelled) return res.status(404).json({ error: "Service request not found" });
@@ -1607,23 +1713,6 @@ router.post("/wallet/spend", requireAuth, async (req: Request, res: Response) =>
   }
 });
 
-// Get recent service requests for resident
-router.get("/service-requests/mine", requireAuth, async (req: Request, res: Response) => {
-  try {
-    const userId = req.auth?.userId;
-    if (!userId) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    const limit = parseInt(req.query.limit as string) || 5;
-    const requests = await storage.getServiceRequestsByResident(userId);
-    res.json(requests.slice(0, limit));
-  } catch (error: any) {
-    console.error("GET /service-requests/mine error", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Resident dashboard stats endpoint
 router.get("/dashboard/stats", requireAuth, async (req: Request, res: Response) => {
   try {
@@ -1637,7 +1726,12 @@ router.get("/dashboard/stats", requireAuth, async (req: Request, res: Response) 
     // Calculate stats from service requests
     const completedRequests = requests.filter((r: any) => r.status === "completed");
     const activeContracts = requests.filter((r: any) => 
-      r.status === "in_progress" || r.status === "assigned" || r.status === "assigned_for_job"
+      r.status === "in_progress" ||
+      r.status === "assigned" ||
+      r.status === "assigned_for_job" ||
+      r.status === "work_completed_pending_resident" ||
+      r.status === "disputed" ||
+      r.status === "rework_required"
     );
     const pendingRequests = requests.filter((r: any) => r.status === "pending");
     

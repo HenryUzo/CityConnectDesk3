@@ -4,7 +4,10 @@ import type { Wallet } from "@prisma/client";
 import { storage } from "./storage";
 import { verifyPaystackTransaction } from "./paystack";
 import { Prisma } from "@prisma/client";
-import { normalizeCategoryKey, resolveServiceRequestCategory } from "./serviceCategoryResolver";
+import {
+  normalizeCategoryKey,
+  tryResolveServiceRequestCategory,
+} from "./serviceCategoryResolver";
 
 type CreatePendingTxArgs = {
   userId: string;
@@ -35,7 +38,11 @@ async function ensureConsultancyServiceRequest(params: {
   const consultancy = meta?.consultancyRequest;
   if (!consultancy || typeof consultancy !== "object") return null;
 
-  const category = resolveServiceRequestCategory(consultancy.categoryKey || "", consultancy.categoryLabel || "");
+  const category = tryResolveServiceRequestCategory(
+    consultancy.categoryKey || "",
+    consultancy.categoryLabel || "",
+  );
+  if (!category) return null;
   const urgencyInput = normalizeCategoryKey(consultancy.urgency || "");
   const urgency =
     urgencyInput === "emergency" ||

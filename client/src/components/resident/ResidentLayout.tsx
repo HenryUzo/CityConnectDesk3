@@ -4,7 +4,6 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { 
   Home, 
-  Wrench, 
   ShoppingBag, 
   ClipboardList, 
   Settings,
@@ -82,19 +81,6 @@ export function ResidentLayout({ title, children }: ResidentLayoutProps) {
               />
               <LayoutGrid className="w-5 h-5 text-white" />
               <span className="font-medium">Dashboard</span>
-            </a>
-          </Link>
-
-          <Link href="/resident/requests/new">
-            <a
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg mb-2 transition-colors ${
-                isActive("/resident/requests/new") || isActive("/book-artisan")
-                  ? "bg-emerald-700/80"
-                  : "hover:bg-emerald-800/50"
-              }`}
-            >
-              <Wrench className="w-5 h-5 text-white" />
-              <span className="font-medium">Book a Service</span>
             </a>
           </Link>
 

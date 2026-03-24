@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Calendar,
   CheckCircle2,
@@ -19,6 +19,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
 
 interface ServiceRequestDetailPageProps {
   requestId: string;
@@ -121,6 +124,20 @@ type RequestDetail = {
   rawAnswers?: {
     description?: string;
   } | null;
+  cancellationCase?: {
+    id: string;
+    status?: string | null;
+    reasonCode?: string | null;
+    reasonDetail?: string | null;
+    preferredResolution?: string | null;
+    adminDecision?: string | null;
+    adminNote?: string | null;
+    refundDecision?: string | null;
+    refundAmount?: string | number | null;
+    resolvedAt?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+  } | null;
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -132,6 +149,9 @@ const STATUS_COLORS: Record<string, string> = {
   assigned_for_job: "border-blue-200 bg-blue-50 text-blue-700",
   assigned_for_maintenance: "border-emerald-200 bg-emerald-50 text-emerald-700",
   in_progress: "border-blue-200 bg-blue-50 text-blue-700",
+  work_completed_pending_resident: "border-cyan-200 bg-cyan-50 text-cyan-700",
+  disputed: "border-rose-200 bg-rose-50 text-rose-700",
+  rework_required: "border-amber-200 bg-amber-50 text-amber-700",
   completed: "border-emerald-200 bg-emerald-50 text-emerald-700",
   cancelled: "border-rose-200 bg-rose-50 text-rose-700",
 };
@@ -156,6 +176,22 @@ function formatNgnAmount(value?: number | string | null) {
   return `NGN ${amount.toLocaleString()}`;
 }
 
+function normalizeCategoryKey(value?: string | null) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function resolveCategoryForStatus(data?: RequestDetail | null) {
+  if (!data) return "";
+  const categoryKey = normalizeCategoryKey(data.category);
+  const inferred = normalizeCategoryKey(data.categoryLabel || data.requestSummary?.issueType || "");
+  if (categoryKey && categoryKey !== "maintenance_repair") return categoryKey;
+  return inferred || categoryKey;
+}
+
 function InfoRow({ label, value }: { label: string; value?: string | null }) {
   return (
     <div>
@@ -174,9 +210,43 @@ export default function ServiceRequestDetailPage({
   onChangeProvider,
   onChangeInspector,
 }: ServiceRequestDetailPageProps) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { data, isLoading } = useQuery<RequestDetail>({
     queryKey: ["admin-service-request", requestId],
     queryFn: () => adminApiRequest("GET", `/api/service-requests/${requestId}`),
+  });
+  const [reviewNote, setReviewNote] = useState("");
+  const [refundDecision, setRefundDecision] = useState<"none" | "full" | "partial">("none");
+  const [refundAmount, setRefundAmount] = useState("");
+
+  const reviewCancellationMutation = useMutation({
+    mutationFn: async (payload: {
+      action: "under_review" | "approve" | "reject";
+      note: string;
+      refundDecision?: "none" | "full" | "partial";
+      refundAmount?: number;
+    }) => {
+      if (!data?.cancellationCase?.id) throw new Error("No cancellation case found");
+      return adminApiRequest("PATCH", `/api/admin/cancellation-cases/${data.cancellationCase.id}`, payload);
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-service-request", requestId] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+      setReviewNote("");
+      setRefundDecision("none");
+      setRefundAmount("");
+      toast({ title: "Cancellation case updated" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Update failed",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    },
   });
 
   const statusTone = STATUS_COLORS[data?.status || ""] || "border-slate-200 bg-slate-50 text-slate-700";
@@ -189,6 +259,73 @@ export default function ServiceRequestDetailPage({
     const name = data.currentOwner.user?.name?.trim();
     return name ? `${data.currentOwner.label}: ${name}` : data.currentOwner.label;
   }, [data?.currentOwner]);
+
+  const openCancellationCase =
+    data?.cancellationCase &&
+    ["requested", "under_review"].includes(String(data.cancellationCase.status || "").toLowerCase())
+      ? data.cancellationCase
+      : null;
+
+  const handleMarkCancellationUnderReview = () => {
+    const note = reviewNote.trim();
+    if (note.length < 3) {
+      toast({
+        title: "Review note required",
+        description: "Provide a short review note.",
+        variant: "destructive",
+      });
+      return;
+    }
+    reviewCancellationMutation.mutate({
+      action: "under_review",
+      note,
+      refundDecision: "none",
+    });
+  };
+
+  const handleApproveCancellation = () => {
+    const note = reviewNote.trim();
+    if (note.length < 3) {
+      toast({
+        title: "Decision note required",
+        description: "Provide a clear decision note.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const parsedRefundAmount = Number(refundAmount || 0);
+    if (refundDecision === "partial" && (!Number.isFinite(parsedRefundAmount) || parsedRefundAmount <= 0)) {
+      toast({
+        title: "Invalid partial refund",
+        description: "Enter a valid partial refund amount greater than zero.",
+        variant: "destructive",
+      });
+      return;
+    }
+    reviewCancellationMutation.mutate({
+      action: "approve",
+      note,
+      refundDecision,
+      refundAmount: refundDecision === "partial" ? parsedRefundAmount : undefined,
+    });
+  };
+
+  const handleRejectCancellation = () => {
+    const note = reviewNote.trim();
+    if (note.length < 3) {
+      toast({
+        title: "Decision note required",
+        description: "Provide a clear rejection reason.",
+        variant: "destructive",
+      });
+      return;
+    }
+    reviewCancellationMutation.mutate({
+      action: "reject",
+      note,
+      refundDecision: "none",
+    });
+  };
 
   if (isLoading) {
     return <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">Loading request details...</div>;
@@ -206,7 +343,7 @@ export default function ServiceRequestDetailPage({
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-2xl font-semibold text-slate-950">{data.title || data.categoryLabel || "Service Request"}</h1>
               <Badge variant="outline" className={cn("capitalize", statusTone)}>
-                {formatServiceRequestStatusLabel(data.status, data.category)}
+                {formatServiceRequestStatusLabel(data.status, resolveCategoryForStatus(data))}
               </Badge>
               {data.urgency ? (
                 <Badge variant="outline" className={cn("capitalize", urgencyTone)}>
@@ -342,6 +479,106 @@ export default function ServiceRequestDetailPage({
               <div className="flex items-center gap-2"><ClipboardList className="h-4 w-4 text-slate-400" />Current owner: {ownerLabel}</div>
             </CardContent>
           </Card>
+
+          {data.cancellationCase ? (
+            <Card>
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-base font-semibold text-slate-900">Cancellation Review</h2>
+                  <Badge
+                    variant="outline"
+                    className={
+                      ["requested", "under_review"].includes(String(data.cancellationCase.status || "").toLowerCase())
+                        ? "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700"
+                        : String(data.cancellationCase.status || "").toLowerCase() === "approved"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-rose-200 bg-rose-50 text-rose-700"
+                    }
+                  >
+                    {String(data.cancellationCase.status || "requested").replace(/_/g, " ")}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm text-slate-700">
+                <InfoRow label="Reason code" value={data.cancellationCase.reasonCode || "Not set"} />
+                <InfoRow label="Reason detail" value={data.cancellationCase.reasonDetail || "Not set"} />
+                <InfoRow
+                  label="Preferred resolution"
+                  value={String(data.cancellationCase.preferredResolution || "Not set").replace(/_/g, " ")}
+                />
+                <InfoRow label="Submitted" value={formatDate(data.cancellationCase.createdAt || null)} />
+                <InfoRow label="Admin note" value={data.cancellationCase.adminNote || "Not set"} />
+
+                {openCancellationCase ? (
+                  <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Admin decision</p>
+                    <Textarea
+                      placeholder="Add investigation notes and decision rationale..."
+                      value={reviewNote}
+                      onChange={(event) => setReviewNote(event.target.value)}
+                      className="min-h-[90px] bg-white"
+                    />
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium text-slate-600">Refund decision</p>
+                        <Select
+                          value={refundDecision}
+                          onValueChange={(value: "none" | "full" | "partial") => setRefundDecision(value)}
+                        >
+                          <SelectTrigger className="bg-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">No refund</SelectItem>
+                            <SelectItem value="full">Full refund</SelectItem>
+                            <SelectItem value="partial">Partial refund</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {refundDecision === "partial" ? (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-slate-600">Partial amount (NGN)</p>
+                          <input
+                            value={refundAmount}
+                            onChange={(event) => setRefundAmount(event.target.value)}
+                            type="number"
+                            min={0}
+                            className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm"
+                            placeholder="e.g. 25000"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleMarkCancellationUnderReview}
+                        disabled={reviewCancellationMutation.isPending}
+                      >
+                        Mark under review
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleApproveCancellation}
+                        disabled={reviewCancellationMutation.isPending}
+                      >
+                        Approve cancellation
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={handleRejectCancellation}
+                        disabled={reviewCancellationMutation.isPending}
+                      >
+                        Reject cancellation
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader className="pb-2">

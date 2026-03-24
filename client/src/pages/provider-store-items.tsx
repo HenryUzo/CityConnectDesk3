@@ -1,18 +1,38 @@
-import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { EmptyState, InlineErrorState, PageSkeleton } from "@/components/shared/page-states";
+import { ProviderMetricCard } from "@/components/provider/provider-primitives";
+import { PROVIDER_ANALYTICS_EVENTS, trackEvent } from "@/lib/analytics";
 import { useParams, Link } from "wouter";
+import { ProviderShell } from "@/components/provider/ProviderShell";
+import { DisabledActionHint } from "@/components/provider/DisabledActionHint";
+import {
+  extractApiErrorMessage,
+  getProviderStoreAccessState,
+  getStoreApprovalBadgeLabel,
+  type ProviderStoreAccessInput,
+} from "@/lib/provider-store-access";
 import {
   ArrowLeft,
   Plus,
@@ -20,19 +40,18 @@ import {
   Edit,
   Trash2,
   DollarSign,
-  X
+  X,
+  Loader2
 } from "lucide-react";
 
-type ProviderStore = {
+type ProviderStore = ProviderStoreAccessInput & {
   id: string;
   name: string;
   description?: string;
   location: string;
   phone?: string;
   email?: string;
-  membership?: { role?: string; canManageItems?: boolean; canManageOrders?: boolean };
-  isActive?: boolean;
-  approvalStatus?: string;
+  hasEstateAllocation?: boolean;
 };
 
 type StoreItem = {
@@ -80,11 +99,12 @@ const UNIT_OPTIONS = [
 
 export default function ProviderStoreItems() {
   const { storeId } = useParams<{ storeId: string }>();
-  const { user } = useAuth();
   const { toast } = useToast();
   const [isCreateItemDialogOpen, setIsCreateItemDialogOpen] = useState(false);
   const [isEditItemDialogOpen, setIsEditItemDialogOpen] = useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<StoreItem | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<StoreItem | null>(null);
   const [itemFormData, setItemFormData] = useState<ItemFormData>({
     name: "",
     description: "",
@@ -97,51 +117,145 @@ export default function ProviderStoreItems() {
   const itemImageInputRef = useRef<HTMLInputElement | null>(null);
   const editImageInputRef = useRef<HTMLInputElement | null>(null);
 
-  const extractApiErrorMessage = (error: unknown, fallback: string) => {
-    if (!(error instanceof Error)) return fallback;
-    const message = error.message || "";
-    const parts = message.split("\n");
-    const tail = parts[parts.length - 1] || "";
-    try {
-      const parsed = JSON.parse(tail);
-      return parsed.message || parsed.error || fallback;
-    } catch {
-      return message || fallback;
-    }
-  };
-
   const MAX_IMAGES = 6;
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
 
-  const readFilesAsDataUrls = (files: File[]) =>
-    Promise.all(
-      files.map(
-        (file) =>
-          new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.readAsDataURL(file);
-          }),
-      ),
-    );
+  const getDevEmailHeader = () =>
+    sessionStorage.getItem("dev_user_email") ||
+    localStorage.getItem("dev_user_email") ||
+    sessionStorage.getItem("provider_email_dev") ||
+    localStorage.getItem("provider_email_dev") ||
+    "";
+
+  const uploadStoreImage = async (file: File): Promise<string> => {
+    if (!storeId) {
+      throw new Error("Store context is missing.");
+    }
+
+    const headers: Record<string, string> = {
+      "Content-Type": file.type,
+      "x-file-name": encodeURIComponent(file.name),
+    };
+
+    const devEmail = getDevEmailHeader();
+    if (devEmail) {
+      headers["x-user-email"] = devEmail;
+    }
+
+    const response = await fetch(`/api/provider/stores/${storeId}/items/images`, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      body: file,
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || body.message || "Failed to upload image");
+    }
+
+    const payload = (await response.json()) as { url?: string };
+    const uploadedUrl = String(payload.url || "").trim();
+    if (!uploadedUrl) {
+      throw new Error("Upload completed without an image URL.");
+    }
+
+    return uploadedUrl;
+  };
 
   const handleImageUpload = async (
     files: File[],
     inputRef: { current: HTMLInputElement | null },
   ) => {
     if (files.length === 0) return;
-    const results = await readFilesAsDataUrls(files);
-    const combined = [...itemFormData.images, ...results];
-    const trimmed = combined.slice(0, MAX_IMAGES);
-    if (combined.length > MAX_IMAGES) {
+
+    const remainingSlots = Math.max(0, MAX_IMAGES - itemFormData.images.length);
+    if (remainingSlots <= 0) {
       toast({
         title: "Image limit reached",
-        description: "Only the first 6 images were kept.",
+        description: `You can upload up to ${MAX_IMAGES} images per item.`,
+        variant: "destructive",
+      });
+      if (inputRef.current) {
+        inputRef.current.value = "";
+      }
+      return;
+    }
+
+    const rejectedTypeNames: string[] = [];
+    const rejectedSizeNames: string[] = [];
+    const acceptedFiles: File[] = [];
+
+    for (const file of files) {
+      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        rejectedTypeNames.push(file.name);
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        rejectedSizeNames.push(file.name);
+        continue;
+      }
+      acceptedFiles.push(file);
+    }
+
+    const uploadQueue = acceptedFiles.slice(0, remainingSlots);
+    if (acceptedFiles.length > remainingSlots) {
+      toast({
+        title: "Image limit reached",
+        description: `Only ${remainingSlots} additional image${remainingSlots === 1 ? "" : "s"} were queued.`,
+      });
+    }
+
+    if (rejectedTypeNames.length > 0) {
+      toast({
+        title: "Unsupported image type",
+        description: `Only JPG, PNG, and WEBP are allowed. Skipped: ${rejectedTypeNames.join(", ")}.`,
         variant: "destructive",
       });
     }
-    setItemFormData((prev) => ({ ...prev, images: trimmed }));
-    if (inputRef.current) {
-      inputRef.current.value = "";
+
+    if (rejectedSizeNames.length > 0) {
+      toast({
+        title: "Image too large",
+        description: `Each image must be 5MB or less. Skipped: ${rejectedSizeNames.join(", ")}.`,
+        variant: "destructive",
+      });
+    }
+
+    if (!uploadQueue.length) {
+      if (inputRef.current) {
+        inputRef.current.value = "";
+      }
+      return;
+    }
+
+    setIsUploadingImages(true);
+    try {
+      const uploadedUrls: string[] = [];
+      for (const file of uploadQueue) {
+        const url = await uploadStoreImage(file);
+        uploadedUrls.push(url);
+      }
+
+      if (uploadedUrls.length > 0) {
+        setItemFormData((prev) => ({
+          ...prev,
+          images: [...prev.images, ...uploadedUrls].slice(0, MAX_IMAGES),
+        }));
+      }
+    } catch (error: any) {
+      toast({
+        title: "Image upload failed",
+        description: error?.message || "Unable to upload selected image(s).",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUploadingImages(false);
+      if (inputRef.current) {
+        inputRef.current.value = "";
+      }
     }
   };
 
@@ -153,6 +267,27 @@ export default function ProviderStoreItems() {
   };
 
   const handleCreateItem = () => {
+    const blockedReason = storeAccess.createItemBlockedReason;
+    if (blockedReason) {
+      trackEvent(PROVIDER_ANALYTICS_EVENTS.BLOCKED_ACTION, {
+        action: "inventory_create_item",
+        store_id: storeId || "unknown",
+        section: "store_inventory",
+      });
+      toast({
+        title: "Action blocked",
+        description: blockedReason,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (isUploadingImages) {
+      toast({
+        title: "Upload in progress",
+        description: "Please wait for image upload to complete before submitting.",
+      });
+      return;
+    }
     if (itemFormData.images.length === 0) {
       toast({
         title: "Add at least one image",
@@ -174,6 +309,27 @@ export default function ProviderStoreItems() {
 
   const handleUpdateItem = () => {
     if (!editingItem) return;
+    const blockedReason = storeAccess.inventoryUpdateBlockedReason;
+    if (blockedReason) {
+      trackEvent(PROVIDER_ANALYTICS_EVENTS.BLOCKED_ACTION, {
+        action: "inventory_update_item",
+        store_id: storeId || "unknown",
+        section: "store_inventory",
+      });
+      toast({
+        title: "Action blocked",
+        description: blockedReason,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (isUploadingImages) {
+      toast({
+        title: "Upload in progress",
+        description: "Please wait for image upload to complete before submitting.",
+      });
+      return;
+    }
     if (!itemFormData.category) {
       toast({
         title: "Select a category",
@@ -193,11 +349,16 @@ export default function ProviderStoreItems() {
       );
       return stores.find((s: ProviderStore) => s.id === storeId) || null;
     },
-    enabled: !!storeId
+    enabled: !!storeId,
+    staleTime: 60_000,
   });
+
+  const storeAccess = useMemo(() => getProviderStoreAccessState(store), [store]);
+  const canQueryInventory = Boolean(storeId) && Boolean(store) && !storeAccess.inventoryPageBlockedReason;
 
   const { data: itemCategories = [] } = useQuery<ItemCategory[]>({
     queryKey: ["/api/item-categories"],
+    staleTime: 5 * 60_000,
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/item-categories");
       if (!res.ok) {
@@ -221,8 +382,20 @@ export default function ProviderStoreItems() {
       }
       return res.json() as Promise<StoreItem[]>;
     },
-    enabled: !!storeId
+    enabled: canQueryInventory,
+    staleTime: 15_000,
+    refetchInterval: canQueryInventory ? 45_000 : false,
   });
+
+  const invalidateInventoryQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["/api/provider/stores", storeId, "items"] }),
+      queryClient.invalidateQueries({ queryKey: ["provider-marketplace-items"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/store", storeId, "inventory"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/provider/stores"] }),
+      queryClient.invalidateQueries({ queryKey: ["provider-stores"] }),
+    ]);
+  };
 
   const createItemMutation = useMutation({
     mutationFn: async (itemData: typeof itemFormData) => {
@@ -233,7 +406,12 @@ export default function ProviderStoreItems() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/provider/stores", storeId, "items"] });
+      void invalidateInventoryQueries();
+      trackEvent(PROVIDER_ANALYTICS_EVENTS.INVENTORY_ITEM_CREATED, {
+        store_id: storeId || "unknown",
+        has_images: itemFormData.images.length > 0,
+        category: itemFormData.category || "unknown",
+      });
       setIsCreateItemDialogOpen(false);
       setItemFormData({ name: "", description: "", price: "", stock: "", category: "", images: [], unitOfMeasure: "piece" });
       if (itemImageInputRef.current) {
@@ -263,7 +441,7 @@ export default function ProviderStoreItems() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/provider/stores", storeId, "items"] });
+      void invalidateInventoryQueries();
       setIsEditItemDialogOpen(false);
       setEditingItem(null);
       setItemFormData({ name: "", description: "", price: "", stock: "", category: "", images: [], unitOfMeasure: "piece" });
@@ -287,7 +465,9 @@ export default function ProviderStoreItems() {
       return await apiRequest("DELETE", `/api/provider/stores/${storeId}/items/${itemId}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/provider/stores", storeId, "items"] });
+      void invalidateInventoryQueries();
+      setIsDeleteConfirmOpen(false);
+      setDeleteCandidate(null);
       toast({
         title: "Item Deleted",
         description: "Item has been removed from the store.",
@@ -310,7 +490,7 @@ export default function ProviderStoreItems() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/provider/stores", storeId, "items"] });
+      void invalidateInventoryQueries();
       toast({
         title: "Availability Updated",
         description: "Item availability has been updated.",
@@ -327,6 +507,19 @@ export default function ProviderStoreItems() {
   });
 
   const handleEdit = (item: any) => {
+    if (storeAccess.inventoryUpdateBlockedReason) {
+      trackEvent(PROVIDER_ANALYTICS_EVENTS.BLOCKED_ACTION, {
+        action: "inventory_edit_open",
+        store_id: storeId || "unknown",
+        section: "store_inventory",
+      });
+      toast({
+        title: "Action blocked",
+        description: storeAccess.inventoryUpdateBlockedReason,
+        variant: "destructive",
+      });
+      return;
+    }
     setEditingItem(item);
     setItemFormData({
       name: item.name,
@@ -340,105 +533,139 @@ export default function ProviderStoreItems() {
     setIsEditItemDialogOpen(true);
   };
 
-  const handleDelete = (itemId: string) => {
-    if (confirm("Are you sure you want to delete this item")) {
-      deleteItemMutation.mutate(itemId);
+  const handleDeleteRequest = (item: StoreItem) => {
+    if (storeAccess.inventoryUpdateBlockedReason) {
+      trackEvent(PROVIDER_ANALYTICS_EVENTS.BLOCKED_ACTION, {
+        action: "inventory_delete_open",
+        store_id: storeId || "unknown",
+        section: "store_inventory",
+      });
+      toast({
+        title: "Action blocked",
+        description: storeAccess.inventoryUpdateBlockedReason,
+        variant: "destructive",
+      });
+      return;
     }
+    setDeleteCandidate(item);
+    setIsDeleteConfirmOpen(true);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!deleteCandidate) return;
+    if (storeAccess.inventoryUpdateBlockedReason) {
+      trackEvent(PROVIDER_ANALYTICS_EVENTS.BLOCKED_ACTION, {
+        action: "inventory_delete_confirm",
+        store_id: storeId || "unknown",
+        section: "store_inventory",
+      });
+      toast({
+        title: "Action blocked",
+        description: storeAccess.inventoryUpdateBlockedReason,
+        variant: "destructive",
+      });
+      return;
+    }
+    deleteItemMutation.mutate(deleteCandidate.id);
   };
 
   if (isLoadingStore) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <p className="text-muted-foreground">Loading store...</p>
-      </div>
+      <ProviderShell title="Store inventory" subtitle="Loading store details.">
+        <PageSkeleton rows={2} />
+      </ProviderShell>
     );
   }
 
   if (!store) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-muted-foreground mb-4">Store not found</p>
-          <Link href="/provider">
-            <Button variant="outline">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Dashboard
-            </Button>
-          </Link>
-        </div>
-      </div>
+      <ProviderShell
+        title="Store inventory"
+        subtitle="We could not find this store."
+        actions={
+          <Button asChild variant="outline">
+            <Link href="/provider/stores">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to stores
+            </Link>
+          </Button>
+        }
+      >
+        <EmptyState
+          icon={Package}
+          title="Store not found"
+          description="We could not find this store. It may have been removed or you no longer have access."
+        />
+      </ProviderShell>
     );
   }
 
-  const approvalStatus = (store.approvalStatus || "pending").toLowerCase();
-  const isApproved = approvalStatus === "approved";
-  const canManageItems = Boolean(store.membership?.canManageItems);
-  const inventoryLocked = !isApproved;
-  const roleLabel =
-    store.membership?.role === "owner"
-      ? "Owner"
-      : store.membership?.role === "manager"
-        ? "Manager"
-        : "Staff";
+  const approvalLabel = getStoreApprovalBadgeLabel(store.approvalStatus);
+  const createItemBlockedReason = storeAccess.createItemBlockedReason;
+  const inventoryUpdateBlockedReason = storeAccess.inventoryUpdateBlockedReason;
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="bg-card shadow-sm border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <Link href="/provider">
-                <Button variant="ghost" size="sm" data-testid="button-back-to-dashboard">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back to Dashboard
-                </Button>
-              </Link>
-            </div>
-            <div className="flex items-center">
-              <span className="text-sm text-muted-foreground">Managing: {store.name}</span>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
-        <div className="mb-8 flex justify-between items-start">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground mb-2" data-testid="text-store-name">
-              {store.name} - Inventory
-            </h2>
+    <ProviderShell
+      title={`${store.name} Inventory`}
+      subtitle={`${store.location} - ${storeAccess.roleLabel}`}
+      actions={
+        <Button asChild variant="outline" data-testid="button-back-to-dashboard">
+          <Link href="/provider/stores">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to stores
+          </Link>
+        </Button>
+      }
+    >
+      <div className="space-y-8">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-muted-foreground">{store.location}</p>
-              <Badge variant={isApproved ? "default" : "secondary"}>
-                {isApproved ? "Approved" : approvalStatus === "rejected" ? "Rejected" : "Pending Approval"}
+              <Badge variant={storeAccess.isApproved ? "default" : "secondary"}>{approvalLabel}</Badge>
+              <Badge variant="outline">{storeAccess.roleLabel}</Badge>
+              <Badge variant={storeAccess.hasEstateAllocation ? "secondary" : "outline"}>
+                {storeAccess.hasEstateAllocation
+                  ? `${storeAccess.estateAllocationCount} estate allocation${storeAccess.estateAllocationCount === 1 ? "" : "s"}`
+                  : "No estate allocation"}
               </Badge>
-              <Badge variant="outline">{roleLabel}</Badge>
             </div>
-            {(inventoryLocked || !canManageItems) && (
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700">
-                {inventoryLocked
-                  ? "This store is awaiting approval. Inventory management is disabled until approval."
-                  : "You have read-only access to this inventory."}
+            {storeAccess.operationsBlockedReason && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700">
+                {storeAccess.operationsBlockedReason}
               </div>
             )}
-            {itemsError && (
-              <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
-                {(itemsError as Error).message}
+            {!storeAccess.operationsBlockedReason && !storeAccess.canManageItems && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700">
+                You can view inventory but cannot add, edit, or remove items for this store.
               </div>
             )}
+            {!storeAccess.operationsBlockedReason && !storeAccess.hasEstateAllocation && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700">
+                No estate is allocated yet. You can review inventory, but adding new products is disabled.
+              </div>
+            )}
+            {itemsError ? (
+              <InlineErrorState
+                description={extractApiErrorMessage(itemsError, "Unable to load inventory")}
+              />
+            ) : null}
           </div>
           <Dialog open={isCreateItemDialogOpen} onOpenChange={setIsCreateItemDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                data-testid="button-add-item"
-                disabled={inventoryLocked || !canManageItems}
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Add Item
-              </Button>
-            </DialogTrigger>
+            {createItemBlockedReason ? (
+              <DisabledActionHint reason={createItemBlockedReason} actionName="inventory_create_blocked" metadata={{ store_id: storeId || "unknown", section: "store_inventory" }}>
+                <Button data-testid="button-add-item" disabled>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Item
+                </Button>
+              </DisabledActionHint>
+            ) : (
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-item">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Item
+                </Button>
+              </DialogTrigger>
+            )}
             <DialogContent className="w-[60vw] max-w-4xl max-h-[90vh] overflow-y-auto" aria-describedby="add-item-description">
               <DialogHeader>
                 <DialogTitle>Add New Item</DialogTitle>
@@ -449,10 +676,15 @@ export default function ProviderStoreItems() {
               <div className="grid gap-6 md:grid-cols-[1.1fr_1.4fr] py-4">
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Item Image</Label>
+                    <Label htmlFor="item-images-upload">Item Image</Label>
                     <p className="text-xs text-muted-foreground">
-                      Upload 1-6 images. {Math.max(0, MAX_IMAGES - itemFormData.images.length)} remaining.
+                      Upload 1-6 images (JPG, PNG, WEBP, max 5MB each). {Math.max(0, MAX_IMAGES - itemFormData.images.length)} remaining.
                     </p>
+                    {isUploadingImages ? (
+                      <p className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                        <Loader2 className="h-3 w-3 animate-spin" /> Uploading images...
+                      </p>
+                    ) : null}
                     {itemFormData.images.length > 0 && (
                       <div className="grid grid-cols-2 gap-2">
                         {itemFormData.images.map((src, index) => (
@@ -466,8 +698,10 @@ export default function ProviderStoreItems() {
                               type="button"
                               size="icon"
                               variant="destructive"
-                              className="absolute right-1 top-1 h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                              className="absolute right-1 top-1 h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                               onClick={() => handleRemoveImage(index)}
+                              aria-label={`Remove image ${index + 1}`}
+                              title="Remove image"
                             >
                               <X className="h-4 w-4" />
                             </Button>
@@ -476,10 +710,13 @@ export default function ProviderStoreItems() {
                       </div>
                     )}
                     <Input
+                      id="item-images-upload"
                       ref={itemImageInputRef}
                       type="file"
                       accept="image/*"
                       multiple
+                      aria-label="Upload item images"
+                      disabled={isUploadingImages}
                       onChange={(e) =>
                         handleImageUpload(Array.from(e.target.files || []), itemImageInputRef)
                       }
@@ -490,8 +727,9 @@ export default function ProviderStoreItems() {
                         variant="outline"
                         size="sm"
                         onClick={() => itemImageInputRef.current?.click()}
+                        disabled={isUploadingImages}
                       >
-                        Upload more images
+                        {isUploadingImages ? "Uploading..." : "Upload more images"}
                       </Button>
                     )}
                   </div>
@@ -551,7 +789,7 @@ export default function ProviderStoreItems() {
                         setItemFormData({ ...itemFormData, unitOfMeasure: value })
                       }
                     >
-                      <SelectTrigger data-testid="select-item-unit">
+                      <SelectTrigger data-testid="select-item-unit" aria-label="Select unit of measure">
                         <SelectValue placeholder="Select unit" />
                       </SelectTrigger>
                       <SelectContent>
@@ -569,7 +807,7 @@ export default function ProviderStoreItems() {
                       value={itemFormData.category}
                       onValueChange={(value) => setItemFormData({ ...itemFormData, category: value })}
                     >
-                      <SelectTrigger data-testid="select-item-category">
+                      <SelectTrigger data-testid="select-item-category" aria-label="Select item category">
                         <SelectValue placeholder="Select category" />
                       </SelectTrigger>
                       <SelectContent>
@@ -606,11 +844,17 @@ export default function ProviderStoreItems() {
                       !itemFormData.name ||
                       !itemFormData.price ||
                       !itemFormData.category ||
-                      createItemMutation.isPending
+                      Boolean(createItemBlockedReason) ||
+                      createItemMutation.isPending ||
+                      isUploadingImages
                     }
                     data-testid="button-submit-item"
                   >
-                    {createItemMutation.isPending ? "Adding..." : "Add Item"}
+                    {isUploadingImages
+                      ? "Uploading images..."
+                      : createItemMutation.isPending
+                        ? "Adding..."
+                        : "Add Item"}
                   </Button>
                 </div>
               </div>
@@ -618,55 +862,31 @@ export default function ProviderStoreItems() {
           </Dialog>
         </div>
 
-        {/* Stats */}
-        <div className="grid md:grid-cols-3 gap-6 mb-8">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Total Items</p>
-                  <p className="text-2xl font-bold text-foreground" data-testid="text-total-items">
-                    {items.length}
-                  </p>
-                </div>
-                <div className="bg-primary/10 p-3 rounded-lg">
-                  <Package className="w-6 h-6 text-primary" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Available Items</p>
-                  <p className="text-2xl font-bold text-foreground" data-testid="text-available-items">
-                    {items.filter((item: any) => item.isAvailable !== false).length}
-                  </p>
-                </div>
-                <div className="bg-green-100 p-3 rounded-lg">
-                  <Package className="w-6 h-6 text-green-600" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Avg Price</p>
-                  <p className="text-2xl font-bold text-foreground" data-testid="text-avg-price">
-                    NGN {items.length > 0 ? (items.reduce((sum: number, item: any) => sum + item.price, 0) / items.length).toFixed(2) : "0.00"}
-                  </p>
-                </div>
-                <div className="bg-accent/10 p-3 rounded-lg">
-                  <DollarSign className="w-6 h-6 text-accent" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+        <div className="mb-8 grid gap-6 md:grid-cols-3">
+          <ProviderMetricCard
+            title="Total items"
+            value={items.length}
+            hint="All inventory records"
+            icon={Package}
+            tone="default"
+            dataTestId="text-total-items"
+          />
+          <ProviderMetricCard
+            title="Available"
+            value={items.filter((item: any) => item.isAvailable !== false).length}
+            hint="Visible to residents"
+            icon={Package}
+            tone="success"
+            dataTestId="text-available-items"
+          />
+          <ProviderMetricCard
+            title="Average price"
+            value={`NGN ${items.length > 0 ? (items.reduce((sum: number, item: any) => sum + item.price, 0) / items.length).toFixed(2) : "0.00"}`}
+            hint="Across listed inventory"
+            icon={DollarSign}
+            tone="accent"
+            dataTestId="text-avg-price"
+          />
         </div>
 
         {/* Items List */}
@@ -676,15 +896,13 @@ export default function ProviderStoreItems() {
           </CardHeader>
           <CardContent>
             {isLoadingItems ? (
-              <div className="text-center py-8 text-muted-foreground">
-                <p>Loading items...</p>
-              </div>
+              <PageSkeleton withHeader={false} rows={3} />
             ) : items.length > 0 ? (
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {items.map((item: any) => (
                   <div
                     key={item.id}
-                    className="border border-border rounded-lg p-4 hover:shadow-md transition-shadow"
+                    className="border border-border rounded-lg p-4 transition-shadow hover:shadow-md"
                     data-testid={`item-${item.id}`}
                   >
                     {item.images?.[0] && (
@@ -725,80 +943,154 @@ export default function ProviderStoreItems() {
                       </div>
                     )}
 
-                    <div className="flex items-center justify-between pt-3 border-t border-border">
+                    <div className="flex items-center justify-between border-t border-border pt-3">
                       <div className="flex items-center space-x-2">
                         <Label htmlFor={`availability-${item.id}`} className="text-sm text-muted-foreground">
                           Available
                         </Label>
-                        <Switch
-                          id={`availability-${item.id}`}
-                          checked={item.isAvailable !== false}
-                          onCheckedChange={(checked) => 
-                            toggleAvailabilityMutation.mutate({ itemId: item.id, isAvailable: checked })
-                          }
-                          disabled={toggleAvailabilityMutation.isPending || inventoryLocked || !canManageItems}
-                          data-testid={`switch-availability-${item.id}`}
-                        />
+                        <DisabledActionHint reason={inventoryUpdateBlockedReason} actionName="inventory_update_blocked" metadata={{ store_id: storeId || "unknown", section: "store_inventory" }}>
+                          <span>
+                            <Switch
+                              id={`availability-${item.id}`}
+                              checked={item.isAvailable !== false}
+                              onCheckedChange={(checked) => {
+                                if (inventoryUpdateBlockedReason) {
+                                  toast({
+                                    title: "Action blocked",
+                                    description: inventoryUpdateBlockedReason,
+                                    variant: "destructive",
+                                  });
+                                  return;
+                                }
+                                toggleAvailabilityMutation.mutate({ itemId: item.id, isAvailable: checked });
+                              }}
+                              disabled={toggleAvailabilityMutation.isPending || Boolean(inventoryUpdateBlockedReason)}
+                              data-testid={`switch-availability-${item.id}`}
+                            />
+                          </span>
+                        </DisabledActionHint>
                       </div>
-                      {canManageItems && !inventoryLocked && (
-                        <div className="flex space-x-2">
+                      <div className="flex space-x-2">
+                        <DisabledActionHint reason={inventoryUpdateBlockedReason} actionName="inventory_update_blocked" metadata={{ store_id: storeId || "unknown", section: "store_inventory" }}>
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => handleEdit(item)}
+                            disabled={Boolean(inventoryUpdateBlockedReason)}
                             data-testid={`button-edit-${item.id}`}
+                            aria-label={`Edit ${item.name}`}
+                            title={`Edit ${item.name}`}
                           >
                             <Edit className="w-4 h-4" />
                           </Button>
+                        </DisabledActionHint>
+                        <DisabledActionHint reason={inventoryUpdateBlockedReason} actionName="inventory_update_blocked" metadata={{ store_id: storeId || "unknown", section: "store_inventory" }}>
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleDelete(item.id)}
-                            disabled={deleteItemMutation.isPending}
+                            onClick={() => handleDeleteRequest(item)}
+                            disabled={deleteItemMutation.isPending || Boolean(inventoryUpdateBlockedReason)}
                             data-testid={`button-delete-${item.id}`}
+                            aria-label={`Delete ${item.name}`}
+                            title={`Delete ${item.name}`}
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>
-                        </div>
-                      )}
+                        </DisabledActionHint>
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="text-center py-12 text-muted-foreground">
-                <Package className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                <h3 className="font-medium text-lg mb-2">No items yet</h3>
-                <p className="text-sm mb-4">Add your first item to start building your inventory</p>
-                <Button
-                  onClick={() => setIsCreateItemDialogOpen(true)}
-                  data-testid="button-add-first-item"
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add First Item
-                </Button>
-              </div>
+              <EmptyState
+                icon={Package}
+                title="No items yet"
+                description="Add your first item to start building your inventory."
+                action={
+                  <DisabledActionHint reason={createItemBlockedReason} actionName="inventory_create_blocked" metadata={{ store_id: storeId || "unknown", section: "store_inventory" }}>
+                    <Button
+                      onClick={() => {
+                        if (!createItemBlockedReason) {
+                          setIsCreateItemDialogOpen(true);
+                        }
+                      }}
+                      disabled={Boolean(createItemBlockedReason)}
+                      data-testid="button-add-first-item"
+                    >
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add First Item
+                    </Button>
+                  </DisabledActionHint>
+                }
+              />
             )}
           </CardContent>
         </Card>
       </div>
 
+      <AlertDialog
+        open={isDeleteConfirmOpen}
+        onOpenChange={(open) => {
+          setIsDeleteConfirmOpen(open);
+          if (!open) {
+            setDeleteCandidate(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this inventory item?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteCandidate
+                ? `You are about to permanently remove "${deleteCandidate.name}" from your store inventory. This action cannot be undone.`
+                : "This will permanently remove the selected inventory item. This action cannot be undone."}
+            </AlertDialogDescription>
+            {inventoryUpdateBlockedReason ? (
+              <p className="text-xs text-amber-700">{inventoryUpdateBlockedReason}</p>
+            ) : null}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={deleteItemMutation.isPending}
+              onClick={() => {
+                setDeleteCandidate(null);
+              }}
+            >
+              Keep item
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              disabled={deleteItemMutation.isPending || Boolean(inventoryUpdateBlockedReason)}
+              onClick={handleDeleteConfirm}
+            >
+              {deleteItemMutation.isPending ? "Deleting..." : "Delete item"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Edit Item Dialog */}
       <Dialog open={isEditItemDialogOpen} onOpenChange={setIsEditItemDialogOpen}>
-        <DialogContent className="w-[60vw] max-w-4xl max-h-[90vh] overflow-y-auto" aria-describedby="edit-item-description">
+        <DialogContent className="w-[60vw] max-w-4xl max-h-[90vh] overflow-y-auto" aria-describedby="edit-item-dialog-description">
         <DialogHeader>
           <DialogTitle>Edit Item</DialogTitle>
-          <DialogDescription id="edit-item-description">
+          <DialogDescription id="edit-item-dialog-description">
             Update the details of your item.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-6 md:grid-cols-[1.1fr_1.4fr] py-4">
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Item Image</Label>
+              <Label htmlFor="edit-item-images-upload">Item Image</Label>
               <p className="text-xs text-muted-foreground">
-                Upload 1-6 images. {Math.max(0, MAX_IMAGES - itemFormData.images.length)} remaining.
+                Upload 1-6 images (JPG, PNG, WEBP, max 5MB each). {Math.max(0, MAX_IMAGES - itemFormData.images.length)} remaining.
               </p>
+              {isUploadingImages ? (
+                <p className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Uploading images...
+                </p>
+              ) : null}
               {itemFormData.images.length > 0 && (
                 <div className="grid grid-cols-2 gap-2">
                   {itemFormData.images.map((src, index) => (
@@ -812,8 +1104,10 @@ export default function ProviderStoreItems() {
                         type="button"
                         size="icon"
                         variant="destructive"
-                        className="absolute right-1 top-1 h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="absolute right-1 top-1 h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                         onClick={() => handleRemoveImage(index)}
+                        aria-label={`Remove image ${index + 1}`}
+                        title="Remove image"
                       >
                         <X className="h-4 w-4" />
                       </Button>
@@ -822,10 +1116,13 @@ export default function ProviderStoreItems() {
                 </div>
               )}
               <Input
+                id="edit-item-images-upload"
                 ref={editImageInputRef}
                 type="file"
                 accept="image/*"
                 multiple
+                aria-label="Upload item images"
+                disabled={isUploadingImages}
                 onChange={(e) =>
                   handleImageUpload(Array.from(e.target.files || []), editImageInputRef)
                 }
@@ -836,8 +1133,9 @@ export default function ProviderStoreItems() {
                   variant="outline"
                   size="sm"
                   onClick={() => editImageInputRef.current?.click()}
+                  disabled={isUploadingImages}
                 >
-                  Upload more images
+                  {isUploadingImages ? "Uploading..." : "Upload more images"}
                 </Button>
               )}
             </div>
@@ -897,7 +1195,7 @@ export default function ProviderStoreItems() {
                   setItemFormData({ ...itemFormData, unitOfMeasure: value })
                 }
               >
-                <SelectTrigger data-testid="select-edit-item-unit">
+                <SelectTrigger data-testid="select-edit-item-unit" aria-label="Select unit of measure">
                   <SelectValue placeholder="Select unit" />
                 </SelectTrigger>
                 <SelectContent>
@@ -915,7 +1213,7 @@ export default function ProviderStoreItems() {
                 value={itemFormData.category}
                 onValueChange={(value) => setItemFormData({ ...itemFormData, category: value })}
               >
-                <SelectTrigger data-testid="select-edit-item-category">
+                <SelectTrigger data-testid="select-edit-item-category" aria-label="Select item category">
                   <SelectValue placeholder="Select category" />
                 </SelectTrigger>
                 <SelectContent>
@@ -952,16 +1250,24 @@ export default function ProviderStoreItems() {
                 !itemFormData.name ||
                 !itemFormData.price ||
                 !itemFormData.category ||
-                updateItemMutation.isPending
+                Boolean(inventoryUpdateBlockedReason) ||
+                updateItemMutation.isPending ||
+                isUploadingImages
               }
               data-testid="button-submit-edit-item"
             >
-              {updateItemMutation.isPending ? "Updating..." : "Update Item"}
+              {isUploadingImages
+                ? "Uploading images..."
+                : updateItemMutation.isPending
+                  ? "Updating..."
+                  : "Update Item"}
             </Button>
           </div>
         </div>
       </DialogContent>
       </Dialog>
-    </div>
+    </ProviderShell>
   );
 }
+
+

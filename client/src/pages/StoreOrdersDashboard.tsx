@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -14,6 +14,14 @@ import {
   formatKobo,
 } from "@/hooks/useCityMart";
 import { useToast } from "@/hooks/use-toast";
+import { ProviderShell } from "@/components/provider/ProviderShell";
+import { DisabledActionHint } from "@/components/provider/DisabledActionHint";
+import {
+  extractApiErrorMessage,
+  getProviderStoreAccessState,
+  getStoreApprovalBadgeLabel,
+  type ProviderStoreAccessInput,
+} from "@/lib/provider-store-access";
 import {
   ArrowLeft,
   Package,
@@ -27,17 +35,16 @@ import {
   AlertTriangle,
   Save,
 } from "lucide-react";
+import { EmptyState, InlineErrorState, PageSkeleton } from "@/components/shared/page-states";
+import { PROVIDER_ANALYTICS_EVENTS, trackEvent } from "@/lib/analytics";
 
-type ProviderStore = {
+type ProviderStore = ProviderStoreAccessInput & {
   id: string;
   name: string;
   description?: string;
   location: string;
   phone?: string;
   email?: string;
-  membership?: { role?: string; canManageItems?: boolean; canManageOrders?: boolean };
-  isActive?: boolean;
-  approvalStatus?: string;
 };
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -103,93 +110,190 @@ export default function StoreOrdersDashboard() {
       return stores.find((s) => s.id === storeId) || null;
     },
     enabled: !!storeId,
+    staleTime: 60_000,
   });
 
+  const storeAccess = useMemo(() => getProviderStoreAccessState(store), [store]);
+  const canLoadStoreOperations = Boolean(storeId) && Boolean(store) && !storeAccess.operationsBlockedReason;
+  const canLoadInventory = canLoadStoreOperations && activeTab === "inventory";
+
   // V2 orders
-  const { data: storeOrders, isLoading: ordersLoading } = useStoreOrders(storeId, statusFilter || undefined);
-  const { data: orderDetail, isLoading: detailLoading } = useStoreOrderDetail(storeId, selectedOrderId);
+  const {
+    data: storeOrders,
+    isLoading: ordersLoading,
+    error: ordersError,
+  } = useStoreOrders(canLoadStoreOperations ? storeId : null, statusFilter || undefined);
+  const {
+    data: orderDetail,
+    isLoading: detailLoading,
+    error: orderDetailError,
+  } = useStoreOrderDetail(canLoadStoreOperations ? storeId : null, selectedOrderId);
   const updateStatus = useUpdateStoreOrderStatus(storeId);
 
   // Inventory
-  const { data: inventoryData, isLoading: inventoryLoading } = useStoreInventory(activeTab === "inventory" ? storeId : null);
+  const {
+    data: inventoryData,
+    isLoading: inventoryLoading,
+    error: inventoryError,
+  } = useStoreInventory(canLoadInventory ? storeId : null);
   const updateInventory = useUpdateInventory(storeId);
 
   if (storeLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-[#039855]" />
-      </div>
+      <ProviderShell title="Store operations" subtitle="Loading store details.">
+        <PageSkeleton rows={2} />
+      </ProviderShell>
     );
   }
 
   if (!store) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-muted-foreground mb-4">Store not found</p>
-          <Link href="/provider">
-            <Button variant="outline"><ArrowLeft className="w-4 h-4 mr-2" />Back</Button>
+      <ProviderShell
+        title="Store operations"
+        subtitle="We could not find this store."
+        actions={
+          <Link href="/provider/stores">
+            <a>
+              <Button variant="outline">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back to stores
+              </Button>
+            </a>
           </Link>
-        </div>
-      </div>
+        }
+      >
+        <EmptyState
+          icon={Package}
+          title="Store not found"
+          description="We could not locate this store. It may have been removed or you no longer have access."
+        />
+      </ProviderShell>
     );
   }
 
+  const approvalLabel = getStoreApprovalBadgeLabel(store.approvalStatus);
+  const orderActionBlockedReason = storeAccess.orderUpdateBlockedReason;
+  const inventoryActionBlockedReason = storeAccess.inventoryUpdateBlockedReason;
+  const tabNavigationBlockedReason = storeAccess.operationsBlockedReason;
+
   const handleStatusUpdate = (orderId: string, newStatus: string) => {
+    if (orderActionBlockedReason) {
+      trackEvent(PROVIDER_ANALYTICS_EVENTS.BLOCKED_ACTION, {
+        action: "store_order_status_update",
+        store_id: storeId || "unknown",
+        section: "store_orders",
+      });
+      toast({ title: "Action blocked", description: orderActionBlockedReason, variant: "destructive" });
+      return;
+    }
+
+    const sourceOrder =
+      (Array.isArray(storeOrders) ? storeOrders.find((order: any) => order.id === orderId) : null) ||
+      (orderDetail && orderDetail.id === orderId ? orderDetail : null);
+    const previousStatus = String(sourceOrder?.status || "unknown");
+
     updateStatus.mutate(
       { orderId, status: newStatus },
       {
         onSuccess: () => {
+          trackEvent(PROVIDER_ANALYTICS_EVENTS.ORDER_STATUS_CHANGED, {
+            store_id: storeId || "unknown",
+            order_id: orderId,
+            from_status: previousStatus,
+            to_status: newStatus,
+          });
           toast({ title: "Status updated", description: `Order status changed to ${STATUS_CONFIG[newStatus]?.label || newStatus}` });
         },
         onError: (err: any) => {
-          toast({ title: "Error", description: err.message, variant: "destructive" });
+          toast({
+            title: "Error",
+            description: extractApiErrorMessage(err, "Unable to update order status"),
+            variant: "destructive",
+          });
         },
       }
     );
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Nav */}
-      <nav className="bg-card shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-4">
-              <Link href="/provider">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back
-                </Button>
-              </Link>
-              <span className="text-sm font-medium">{store.name}</span>
-              <Badge variant="outline">{store.membership?.role || "member"}</Badge>
-            </div>
-          </div>
+    <ProviderShell
+      title={`${store.name} Operations`}
+      subtitle={`${store.location} - ${storeAccess.roleLabel}`}
+      actions={
+        <Link href="/provider/stores">
+          <a>
+            <Button variant="outline">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to stores
+            </Button>
+          </a>
+        </Link>
+      }
+    >
+      <div className="space-y-8">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={storeAccess.isApproved ? "default" : "secondary"}>{approvalLabel}</Badge>
+          <Badge variant="outline">{storeAccess.roleLabel}</Badge>
+          <Badge variant={storeAccess.hasEstateAllocation ? "secondary" : "outline"}>
+            {storeAccess.hasEstateAllocation
+              ? `${storeAccess.estateAllocationCount} estate allocation${storeAccess.estateAllocationCount === 1 ? "" : "s"}`
+              : "No estate allocation"}
+          </Badge>
+          {!storeAccess.canManageOrders && <Badge variant="outline">Orders: read-only</Badge>}
+          {!storeAccess.canManageItems && <Badge variant="outline">Inventory: read-only</Badge>}
         </div>
-      </nav>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {storeAccess.operationsBlockedReason && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700">
+            {storeAccess.operationsBlockedReason}
+          </div>
+        )}
+        {!storeAccess.operationsBlockedReason && !storeAccess.hasEstateAllocation && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700">
+            No estate is currently allocated. You can track orders, but inventory expansion is blocked until allocation.
+          </div>
+        )}
+        {!storeAccess.operationsBlockedReason && orderActionBlockedReason && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700">
+            {orderActionBlockedReason}
+          </div>
+        )}
+        {!storeAccess.operationsBlockedReason && !orderActionBlockedReason && inventoryActionBlockedReason && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700">
+            {inventoryActionBlockedReason}
+          </div>
+        )}
+
         {/* Tabs */}
-        <div className="flex gap-1 mb-6 bg-muted/50 rounded-lg p-1 w-fit">
-          <button
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-              activeTab === "orders" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-            }`}
-            onClick={() => setActiveTab("orders")}
-          >
-            <Package className="w-4 h-4 inline mr-1.5" />
-            Orders
-          </button>
-          <button
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-              activeTab === "inventory" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-            }`}
-            onClick={() => setActiveTab("inventory")}
-          >
-            <Boxes className="w-4 h-4 inline mr-1.5" />
-            Inventory
-          </button>
+        <div className="mb-6 flex w-fit gap-1 rounded-lg bg-muted/50 p-1">
+          <DisabledActionHint reason={tabNavigationBlockedReason} actionName="store_operations_tab_switch" metadata={{ store_id: storeId || "unknown", section: "store_operations" }}>
+            <span>
+              <button
+                className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+                  activeTab === "orders" ? "bg-white text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                } ${tabNavigationBlockedReason ? "cursor-not-allowed opacity-50" : ""}`}
+                disabled={Boolean(tabNavigationBlockedReason)}
+                onClick={() => setActiveTab("orders")}
+              >
+                <Package className="mr-1.5 inline h-4 w-4" />
+                Orders
+              </button>
+            </span>
+          </DisabledActionHint>
+          <DisabledActionHint reason={tabNavigationBlockedReason} actionName="store_operations_tab_switch" metadata={{ store_id: storeId || "unknown", section: "store_operations" }}>
+            <span>
+              <button
+                className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+                  activeTab === "inventory" ? "bg-white text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                } ${tabNavigationBlockedReason ? "cursor-not-allowed opacity-50" : ""}`}
+                disabled={Boolean(tabNavigationBlockedReason)}
+                onClick={() => setActiveTab("inventory")}
+              >
+                <Boxes className="mr-1.5 inline h-4 w-4" />
+                Inventory
+              </button>
+            </span>
+          </DisabledActionHint>
         </div>
 
         {/* ── ORDERS TAB ── */}
@@ -205,6 +309,12 @@ export default function StoreOrdersDashboard() {
                   <ArrowLeft className="w-4 h-4" />
                   Back to orders
                 </button>
+
+                {orderDetailError ? (
+                  <InlineErrorState
+                    description={extractApiErrorMessage(orderDetailError, "Unable to load order details")}
+                  />
+                ) : null}
 
                 <Card>
                   <CardHeader>
@@ -287,17 +397,18 @@ export default function StoreOrdersDashboard() {
                     {NEXT_ACTIONS[orderDetail.status] && (
                       <div className="flex gap-2 pt-2">
                         {NEXT_ACTIONS[orderDetail.status].map((action) => (
-                          <Button
-                            key={action.status}
-                            variant={action.variant}
-                            onClick={() => handleStatusUpdate(orderDetail.id, action.status)}
-                            disabled={updateStatus.isPending}
-                          >
-                            {updateStatus.isPending ? (
-                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            ) : null}
-                            {action.label}
-                          </Button>
+                          <DisabledActionHint key={action.status} reason={orderActionBlockedReason} actionName="store_order_action" metadata={{ store_id: storeId || "unknown", section: "store_orders", next_status: action.status }}>
+                            <Button
+                              variant={action.variant}
+                              onClick={() => handleStatusUpdate(orderDetail.id, action.status)}
+                              disabled={updateStatus.isPending || Boolean(orderActionBlockedReason)}
+                            >
+                              {updateStatus.isPending ? (
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              ) : null}
+                              {action.label}
+                            </Button>
+                          </DisabledActionHint>
                         ))}
                       </div>
                     )}
@@ -324,16 +435,26 @@ export default function StoreOrdersDashboard() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {ordersLoading ? (
-                    <div className="flex justify-center py-12">
-                      <Loader2 className="w-6 h-6 animate-spin text-[#039855]" />
-                    </div>
+                  {ordersError ? (
+                    <InlineErrorState
+                      className="mb-4"
+                      description={extractApiErrorMessage(ordersError, "Unable to load store orders")}
+                    />
+                  ) : null}
+                  {!canLoadStoreOperations ? (
+                    <EmptyState
+                      icon={AlertTriangle}
+                      title="Store operations blocked"
+                      description="Store operations are currently blocked for this account."
+                    />
+                  ) : ordersLoading ? (
+                    <PageSkeleton withHeader={false} rows={3} />
                   ) : !storeOrders || storeOrders.length === 0 ? (
-                    <div className="text-center py-12 text-muted-foreground">
-                      <Package className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                      <p className="font-medium">No orders yet</p>
-                      <p className="text-sm mt-1">Orders will appear here when residents checkout</p>
-                    </div>
+                    <EmptyState
+                      icon={Package}
+                      title="No orders yet"
+                      description="Orders will appear here when residents checkout."
+                    />
                   ) : (
                     <div className="space-y-3">
                       {storeOrders.map((order: any) => (
@@ -380,16 +501,26 @@ export default function StoreOrdersDashboard() {
               <CardTitle>Inventory</CardTitle>
             </CardHeader>
             <CardContent>
-              {inventoryLoading ? (
-                <div className="flex justify-center py-12">
-                  <Loader2 className="w-6 h-6 animate-spin text-[#039855]" />
-                </div>
+              {inventoryError ? (
+                <InlineErrorState
+                  className="mb-4"
+                  description={extractApiErrorMessage(inventoryError, "Unable to load inventory")}
+                />
+              ) : null}
+              {!canLoadStoreOperations ? (
+                <EmptyState
+                  icon={AlertTriangle}
+                  title="Inventory access blocked"
+                  description="Inventory access is currently blocked for this store."
+                />
+              ) : inventoryLoading ? (
+                <PageSkeleton withHeader={false} rows={3} />
               ) : !inventoryData || inventoryData.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  <Boxes className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                  <p className="font-medium">No inventory records</p>
-                  <p className="text-sm mt-1">Inventory will be tracked once products are managed</p>
-                </div>
+                <EmptyState
+                  icon={Boxes}
+                  title="No inventory records"
+                  description="Inventory will be tracked once products are managed."
+                />
               ) : (
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-sm">
@@ -408,13 +539,28 @@ export default function StoreOrdersDashboard() {
                         <InventoryRow
                           key={row.id}
                           row={row}
-                          storeId={storeId}
+                          canEdit={!inventoryActionBlockedReason}
+                          disabledReason={inventoryActionBlockedReason}
                           onSave={(productId, updates) => {
+                            if (inventoryActionBlockedReason) {
+                              trackEvent(PROVIDER_ANALYTICS_EVENTS.BLOCKED_ACTION, {
+                                action: "store_inventory_update",
+                                store_id: storeId || "unknown",
+                                section: "store_operations",
+                              });
+                              toast({ title: "Action blocked", description: inventoryActionBlockedReason, variant: "destructive" });
+                              return;
+                            }
                             updateInventory.mutate(
                               { productId, ...updates },
                               {
                                 onSuccess: () => toast({ title: "Inventory updated" }),
-                                onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+                                onError: (err: any) =>
+                                  toast({
+                                    title: "Error",
+                                    description: extractApiErrorMessage(err, "Unable to update inventory"),
+                                    variant: "destructive",
+                                  }),
                               }
                             );
                           }}
@@ -428,17 +574,19 @@ export default function StoreOrdersDashboard() {
           </Card>
         )}
       </div>
-    </div>
+    </ProviderShell>
   );
 }
 
 function InventoryRow({
   row,
-  storeId,
+  canEdit,
+  disabledReason,
   onSave,
 }: {
   row: any;
-  storeId: string;
+  canEdit: boolean;
+  disabledReason?: string | null;
   onSave: (productId: string, updates: { stockQty?: number; lowStockThreshold?: number | null }) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -494,29 +642,33 @@ function InventoryRow({
             min={0}
             onChange={(e) => setThreshold(e.target.value === "" ? "" : Number(e.target.value))}
             className="w-16 border rounded px-2 py-1 text-center text-sm"
-            placeholder="—"
+            placeholder="-"
           />
         ) : (
-          <span className="text-muted-foreground">{row.lowStockThreshold ?? "—"}</span>
+          <span className="text-muted-foreground">{row.lowStockThreshold ?? "-"}</span>
         )}
       </td>
       <td className="px-4 py-3 text-center">
         {editing ? (
           <div className="flex items-center justify-center gap-1">
-            <Button
-              size="sm"
-              variant="default"
-              onClick={() => {
-                onSave(row.productId, {
-                  stockQty,
-                  lowStockThreshold: threshold === "" ? null : Number(threshold),
-                });
-                setEditing(false);
-              }}
-            >
-              <Save className="w-3 h-3 mr-1" />
-              Save
-            </Button>
+            <DisabledActionHint reason={disabledReason} actionName="store_inventory_edit" metadata={{ section: "store_inventory" }}>
+              <Button
+                size="sm"
+                variant="default"
+                disabled={!canEdit}
+                onClick={() => {
+                  if (!canEdit) return;
+                  onSave(row.productId, {
+                    stockQty,
+                    lowStockThreshold: threshold === "" ? null : Number(threshold),
+                  });
+                  setEditing(false);
+                }}
+              >
+                <Save className="w-3 h-3 mr-1" />
+                Save
+              </Button>
+            </DisabledActionHint>
             <Button size="sm" variant="ghost" onClick={() => {
               setStockQty(row.stockQty);
               setThreshold(row.lowStockThreshold ?? "");
@@ -526,9 +678,11 @@ function InventoryRow({
             </Button>
           </div>
         ) : (
-          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-            Edit
-          </Button>
+          <DisabledActionHint reason={disabledReason} actionName="store_inventory_edit" metadata={{ section: "store_inventory" }}>
+            <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+          </DisabledActionHint>
         )}
       </td>
     </tr>

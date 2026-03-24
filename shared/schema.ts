@@ -31,6 +31,9 @@ export const serviceStatusEnum = pgEnum("service_status", [
   "assigned",
   "assigned_for_job",
   "in_progress",
+  "work_completed_pending_resident",
+  "disputed",
+  "rework_required",
   "completed",
   "cancelled",
 ]);
@@ -67,6 +70,9 @@ export const serviceCategoryEnum = pgEnum("service_category", [
   "catering_services",
   "it_support",
   "maintenance_repair",
+  "general_repairs",
+  "locksmith",
+  "glass_windows",
   "packaging_solutions",
   "marketing_advertising",
   "home_tutors",
@@ -888,6 +894,71 @@ export const serviceRequests = pgTable("service_requests", {
   paymentStatus: text("payment_status").default("pending"),
 });
 
+export const serviceRequestCancellationCases = pgTable("service_request_cancellation_cases", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  requestId: varchar("request_id")
+    .notNull()
+    .references(() => serviceRequests.id, { onDelete: "cascade" }),
+  residentId: varchar("resident_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("requested"), // requested | under_review | approved | rejected | withdrawn
+  reasonCode: text("reason_code").notNull(),
+  reasonDetail: text("reason_detail").notNull(),
+  preferredResolution: text("preferred_resolution").notNull().default("full_refund"),
+  evidence: jsonb("evidence").notNull().default("[]"),
+  adminDecision: text("admin_decision"),
+  adminNote: text("admin_note"),
+  refundDecision: text("refund_decision").notNull().default("none"), // none | full | partial
+  refundAmount: decimal("refund_amount", { precision: 10, scale: 2 }),
+  assignedAdminId: varchar("assigned_admin_id").references(() => users.id),
+  providerFeedback: text("provider_feedback"),
+  companyFeedback: text("company_feedback"),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const companyTasks = pgTable("company_tasks", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id")
+    .notNull()
+    .references(() => companies.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  assigneeId: varchar("assignee_id").references(() => users.id),
+  createdBy: varchar("created_by")
+    .notNull()
+    .references(() => users.id),
+  priority: text("priority").notNull().default("medium"),
+  status: text("status").notNull().default("open"),
+  dueDate: timestamp("due_date"),
+  serviceRequestId: varchar("service_request_id").references(() => serviceRequests.id),
+  metadata: jsonb("metadata").notNull().default("{}"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const companyTaskUpdates = pgTable("company_task_updates", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  taskId: varchar("task_id")
+    .notNull()
+    .references(() => companyTasks.id),
+  authorId: varchar("author_id")
+    .notNull()
+    .references(() => users.id),
+  message: text("message").notNull(),
+  attachments: jsonb("attachments").notNull().default("[]"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Wallets table
 export const wallets = pgTable("wallets", {
   id: varchar("id")
@@ -1369,6 +1440,39 @@ export const transactionsRelations = relations(transactions, ({ one }) => ({
   }),
 }));
 
+export const companyTasksRelations = relations(companyTasks, ({ one, many }) => ({
+  company: one(companies, {
+    fields: [companyTasks.companyId],
+    references: [companies.id],
+  }),
+  assignee: one(users, {
+    fields: [companyTasks.assigneeId],
+    references: [users.id],
+    relationName: "companyTaskAssignee",
+  }),
+  creator: one(users, {
+    fields: [companyTasks.createdBy],
+    references: [users.id],
+    relationName: "companyTaskCreator",
+  }),
+  serviceRequest: one(serviceRequests, {
+    fields: [companyTasks.serviceRequestId],
+    references: [serviceRequests.id],
+  }),
+  updates: many(companyTaskUpdates),
+}));
+
+export const companyTaskUpdatesRelations = relations(companyTaskUpdates, ({ one }) => ({
+  task: one(companyTasks, {
+    fields: [companyTaskUpdates.taskId],
+    references: [companyTasks.id],
+  }),
+  author: one(users, {
+    fields: [companyTaskUpdates.authorId],
+    references: [users.id],
+  }),
+}));
+
 export const broadcastMessagesRelations = relations(broadcastMessages, ({ one }) => ({
   sender: one(users, {
     fields: [broadcastMessages.senderId],
@@ -1508,6 +1612,15 @@ export const insertServiceRequestSchema = createInsertSchema(
   updatedAt: true,
 });
 
+export const insertServiceRequestCancellationCaseSchema = createInsertSchema(
+  serviceRequestCancellationCases,
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  resolvedAt: true,
+});
+
 export const insertWalletSchema = createInsertSchema(wallets).omit({
   id: true,
   createdAt: true,
@@ -1515,6 +1628,17 @@ export const insertWalletSchema = createInsertSchema(wallets).omit({
 });
 
 export const insertTransactionSchema = createInsertSchema(transactions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertCompanyTaskSchema = createInsertSchema(companyTasks).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertCompanyTaskUpdateSchema = createInsertSchema(companyTaskUpdates).omit({
   id: true,
   createdAt: true,
 });
@@ -1553,10 +1677,18 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type ServiceRequest = typeof serviceRequests.$inferSelect;
 export type InsertServiceRequest = z.infer<typeof insertServiceRequestSchema>;
+export type ServiceRequestCancellationCase = typeof serviceRequestCancellationCases.$inferSelect;
+export type InsertServiceRequestCancellationCase = z.infer<
+  typeof insertServiceRequestCancellationCaseSchema
+>;
 export type Wallet = typeof wallets.$inferSelect;
 export type InsertWallet = z.infer<typeof insertWalletSchema>;
 export type Transaction = typeof transactions.$inferSelect;
 export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
+export type CompanyTask = typeof companyTasks.$inferSelect;
+export type InsertCompanyTask = z.infer<typeof insertCompanyTaskSchema>;
+export type CompanyTaskUpdate = typeof companyTaskUpdates.$inferSelect;
+export type InsertCompanyTaskUpdate = z.infer<typeof insertCompanyTaskUpdateSchema>;
 export type RequestMessage = typeof requestMessages.$inferSelect;
 export type InsertRequestMessage = typeof requestMessages.$inferInsert;
 export type RequestBill = typeof requestBills.$inferSelect;

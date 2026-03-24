@@ -96,6 +96,28 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     };
   }, [isProviderApprovedNotification, toast, user]);
 
+  useEffect(() => {
+    if (!user) return;
+
+    const intervalId = window.setInterval(() => {
+      void refresh().catch(() => undefined);
+    }, 90_000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refresh().catch(() => undefined);
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [refresh, user]);
+
+
   const markRead = useCallback(async (id: string) => {
     try {
       await apiRequest("PATCH", `/api/notifications/${id}/read`);

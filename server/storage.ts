@@ -16,6 +16,7 @@ import {
   transactions,
   estates,
   notifications,
+  serviceRequestCancellationCases,
   type User,
   type InsertUser,
   type ServiceRequest,
@@ -34,6 +35,8 @@ import {
   type InsertRequestBillItem,
   type Inspection,
   type InsertInspection,
+  type ServiceRequestCancellationCase,
+  type InsertServiceRequestCancellationCase,
   type DeviceAssignment,
   type Order,
   type AuditLog,
@@ -58,6 +61,8 @@ import type {
 } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { buildStructuredServiceRequestFields } from "./serviceRequestDetail";
+import { resolveNotificationTargetPath } from "./notificationTargetPath";
+import { normalizeCategoryKey, tryResolveServiceRequestCategory } from "./serviceCategoryResolver";
 
 const SHARED_USER_ROLES = [
   "resident",
@@ -501,6 +506,102 @@ export class DatabaseStorage implements IStorage {
     return request || undefined;
   }
 
+  async getCancellationCase(id: string): Promise<ServiceRequestCancellationCase | undefined> {
+    const [row] = await db
+      .select()
+      .from(serviceRequestCancellationCases)
+      .where(eq(serviceRequestCancellationCases.id, id))
+      .limit(1);
+    return row || undefined;
+  }
+
+  async getOpenCancellationCaseForRequest(
+    requestId: string,
+  ): Promise<ServiceRequestCancellationCase | undefined> {
+    const [row] = await db
+      .select()
+      .from(serviceRequestCancellationCases)
+      .where(
+        and(
+          eq(serviceRequestCancellationCases.requestId, requestId),
+          inArray(serviceRequestCancellationCases.status, ["requested", "under_review"] as any),
+        ),
+      )
+      .orderBy(desc(serviceRequestCancellationCases.createdAt))
+      .limit(1);
+    return row || undefined;
+  }
+
+  async getLatestCancellationCaseForRequest(
+    requestId: string,
+  ): Promise<ServiceRequestCancellationCase | undefined> {
+    const [row] = await db
+      .select()
+      .from(serviceRequestCancellationCases)
+      .where(eq(serviceRequestCancellationCases.requestId, requestId))
+      .orderBy(desc(serviceRequestCancellationCases.createdAt))
+      .limit(1);
+    return row || undefined;
+  }
+
+  async createCancellationCase(
+    payload: InsertServiceRequestCancellationCase,
+  ): Promise<ServiceRequestCancellationCase> {
+    const [row] = await db
+      .insert(serviceRequestCancellationCases)
+      .values({
+        ...(payload as any),
+        updatedAt: new Date(),
+      })
+      .returning();
+    return row;
+  }
+
+  async updateCancellationCase(
+    id: string,
+    updates: Partial<ServiceRequestCancellationCase>,
+  ): Promise<ServiceRequestCancellationCase | undefined> {
+    const [row] = await db
+      .update(serviceRequestCancellationCases)
+      .set({
+        ...(updates as any),
+        updatedAt: new Date(),
+      })
+      .where(eq(serviceRequestCancellationCases.id, id))
+      .returning();
+    return row || undefined;
+  }
+
+  async listCancellationCases(options?: {
+    status?: string;
+    requestId?: string;
+    residentId?: string;
+    limit?: number;
+  }): Promise<ServiceRequestCancellationCase[]> {
+    const whereParts: any[] = [];
+    if (options?.status) {
+      whereParts.push(eq(serviceRequestCancellationCases.status, options.status));
+    }
+    if (options?.requestId) {
+      whereParts.push(eq(serviceRequestCancellationCases.requestId, options.requestId));
+    }
+    if (options?.residentId) {
+      whereParts.push(eq(serviceRequestCancellationCases.residentId, options.residentId));
+    }
+    const where = whereParts.length > 1 ? and(...whereParts) : whereParts[0];
+
+    const query = db
+      .select()
+      .from(serviceRequestCancellationCases)
+      .where(where as any)
+      .orderBy(desc(serviceRequestCancellationCases.createdAt));
+
+    if (options?.limit && options.limit > 0) {
+      return await query.limit(options.limit);
+    }
+    return await query;
+  }
+
   async getServiceRequestsByResident(
     residentId: string,
     options?: { estateId?: string },
@@ -514,6 +615,7 @@ export class DatabaseStorage implements IStorage {
       .select({
         id: serviceRequests.id,
         category: serviceRequests.category,
+        categoryLabel: serviceRequests.categoryLabel,
         description: serviceRequests.description,
         status: serviceRequests.status,
         urgency: serviceRequests.urgency,
@@ -590,6 +692,9 @@ export class DatabaseStorage implements IStorage {
       | "assigned"
       | "assigned_for_job"
       | "in_progress"
+      | "work_completed_pending_resident"
+      | "disputed"
+      | "rework_required"
       | "completed"
       | "cancelled",
     closeReason?: string
@@ -729,21 +834,37 @@ export class DatabaseStorage implements IStorage {
       conditions.push(sql`${users.name} ILIKE ${'%' + filters.search + '%'}`);
     }
 
-    if (filters?.category) {
-      const category = filters.category;
-      conditions.push(
-        or(
-          sql`${users.categories} @> ARRAY[${category}]::varchar[]`,
-          eq(users.serviceCategory, category)
-        )
-      );
-    }
-
-    return await db
+    const rows = await db
       .select()
       .from(users)
       .where(and(...conditions))
       .orderBy(desc(users.createdAt));
+
+    if (!filters?.category) {
+      return rows;
+    }
+
+    const requestedCategory =
+      tryResolveServiceRequestCategory(filters.category, filters.category) ||
+      normalizeCategoryKey(filters.category);
+    if (!requestedCategory) {
+      return rows;
+    }
+
+    return rows.filter((provider: User) => {
+      const candidates = [
+        ...(Array.isArray(provider.categories) ? provider.categories : []),
+        provider.serviceCategory || "",
+      ]
+        .flatMap((entry) => String(entry || "").split(","))
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+
+      return candidates.some((entry) => {
+        const resolved = tryResolveServiceRequestCategory(entry, entry) || normalizeCategoryKey(entry);
+        return resolved === requestedCategory;
+      });
+    });
   }
 
 
@@ -1158,9 +1279,28 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createNotification(input: InsertNotification): Promise<Notification> {
+    const metadata =
+      input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
+        ? ({ ...(input.metadata as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+
+    const [recipient] = await db
+      .select({ role: users.role, globalRole: users.globalRole })
+      .from(users)
+      .where(eq(users.id, input.userId))
+      .limit(1 as any);
+    const recipientRole = String(recipient?.role || recipient?.globalRole || "").trim().toLowerCase();
+    const targetPath = resolveNotificationTargetPath({
+      role: recipientRole,
+      type: input.type,
+      metadata,
+    });
+
+    metadata.targetPath = targetPath || "/notifications";
+
     const [row] = await db
       .insert(notifications)
-      .values(input)
+      .values({ ...input, metadata })
       .returning();
     return row as any;
   }

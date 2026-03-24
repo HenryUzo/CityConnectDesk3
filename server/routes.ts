@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { raw } from "express";
 import { createServer, type Server } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import { z } from "zod";
@@ -22,6 +23,8 @@ import {
   cityMartBanners,
   transactions,
   companies,
+  companyTasks,
+  companyTaskUpdates,
   providerRequests,
   aiPreparedRequests,
   pricingRules,
@@ -29,6 +32,7 @@ import {
   orders,
   storeMembers,
   notifications,
+  serviceRequestCancellationCases,
   storeEstates,
   aiConversationFlowSettings,
   requestConversationSettings,
@@ -56,12 +60,22 @@ import {
 } from "./payments";
 import { validatePaystackSignature, verifyPaystackTransaction } from "./paystack";
 import { initializePaystackTransaction } from "./paystackService";
-import { normalizeCategoryKey, resolveServiceRequestCategory } from "./serviceCategoryResolver";
+import {
+  normalizeCategoryKey,
+  tryResolveServiceRequestCategory,
+} from "./serviceCategoryResolver";
+import {
+  backfillApprovedCategoriesFromServiceCategories,
+  removeApprovedCategoryForServiceCategory,
+  syncApprovedCategoryAfterServiceCategoryUpdate,
+  upsertApprovedCategoryFromServiceCategory,
+} from "./approvedCategorySync";
 import { buildServiceRequestDetailViewModel, buildStructuredServiceRequestFields } from "./serviceRequestDetail";
 import {
   handlePaystackVerify,
   handlePaystackWebhook,
 } from "./paystackHandlers";
+import { resolveNotificationTargetPath } from "./notificationTargetPath";
 import {
   requireAuth,
   requireResident,
@@ -72,6 +86,10 @@ import {
 import { verifyOpenAI, getDiagnosisModel } from "./openaiClient";
 import * as ai from "./ai";
 import { runDiagnosis, GEMINI_FALLBACK_DIAGNOSIS, GEMINI_SAFETY_FALLBACK, getGeminiModel } from "./ai/diagnose";
+import {
+  normalizeAndPersistInventoryImages,
+  persistInventoryImage,
+} from "./utils/inventory-image-storage";
 import { generateGeminiContent } from "./ai/geminiClient";
 import { ollamaChat } from "./ai/ollama";
 
@@ -143,8 +161,22 @@ const SERVICE_REQUEST_STATUS_KEYS = new Set([
   "assigned",
   "assigned_for_job",
   "in_progress",
+  "work_completed_pending_resident",
+  "disputed",
+  "rework_required",
   "completed",
   "cancelled",
+]);
+
+const CANCELLATION_REVIEW_REQUIRED_STATUSES = new Set([
+  "assigned",
+  "assigned_for_inspection",
+  "assigned_for_job",
+  "in_progress",
+  "work_completed_pending_resident",
+  "disputed",
+  "rework_required",
+  "completed",
 ]);
 
 function normalizeServiceRequestStatusKey(value: unknown) {
@@ -154,6 +186,73 @@ function normalizeServiceRequestStatusKey(value: unknown) {
     .trim();
 }
 
+const ResidentCancellationCaseSchema = z.object({
+  reasonCode: z
+    .string()
+    .trim()
+    .min(2, "Reason category is required")
+    .max(80),
+  reasonDetail: z
+    .string()
+    .trim()
+    .min(10, "Please provide more detail")
+    .max(2000),
+  preferredResolution: z
+    .enum(["full_refund", "partial_refund", "cancel_without_refund"])
+    .default("full_refund"),
+  evidence: z.array(z.string().trim().min(1).max(500)).max(10).optional().default([]),
+});
+
+const AdminCancellationCaseDecisionSchema = z.object({
+  action: z.enum(["under_review", "approve", "reject"]),
+  note: z.string().trim().min(3, "Admin note is required").max(2000),
+  refundDecision: z.enum(["none", "full", "partial"]).optional().default("none"),
+  refundAmount: z.preprocess((value) => {
+    if (value === undefined || value === null || value === "") return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }, z.number().min(0).optional()),
+});
+
+const REQUEST_TYPING_TTL_MS = 8_000;
+const requestTypingState = new Map<
+  string,
+  Partial<Record<"resident" | "provider" | "admin", number>>
+>();
+
+function readRequestTypingState(requestId: string) {
+  const now = Date.now();
+  const state = requestTypingState.get(requestId) || {};
+  const isFresh = (timestamp?: number) =>
+    typeof timestamp === "number" && now - timestamp <= REQUEST_TYPING_TTL_MS;
+
+  return {
+    resident: isFresh(state.resident),
+    provider: isFresh(state.provider),
+    admin: isFresh(state.admin),
+  };
+}
+
+function writeRequestTypingState(
+  requestId: string,
+  role: "resident" | "provider" | "admin",
+  isTyping: boolean,
+) {
+  const current = requestTypingState.get(requestId) || {};
+  if (isTyping) {
+    current[role] = Date.now();
+  } else {
+    delete current[role];
+  }
+
+  if (!current.resident && !current.provider && !current.admin) {
+    requestTypingState.delete(requestId);
+    return;
+  }
+
+  requestTypingState.set(requestId, current);
+}
+
 const ConsultancyReportPayloadSchema = z.object({
   inspectionDate: z.string().min(1),
   actualIssue: z.string().trim().min(3).max(2000),
@@ -161,6 +260,65 @@ const ConsultancyReportPayloadSchema = z.object({
   materialCost: z.preprocess((val) => Number(val), z.number().min(0)),
   serviceCost: z.preprocess((val) => Number(val), z.number().min(0)),
   preventiveRecommendation: z.string().trim().min(3).max(2000),
+});
+
+function formatNgn(value: unknown) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) return "0";
+  return amount.toLocaleString();
+}
+
+function buildConsultancyReportMessage(
+  report: Record<string, unknown>,
+  mode: "submitted" | "approved" = "approved",
+) {
+  const inspectionDateRaw = String(report.inspectionDate || "").trim();
+  const inspectionDate = inspectionDateRaw
+    ? new Date(inspectionDateRaw).toLocaleDateString()
+    : "Not provided";
+  const prefix =
+    mode === "approved" ? "Consultancy report approved." : "Consultancy report submitted.";
+
+  return (
+    `${prefix}\n` +
+    `Inspection date: ${inspectionDate}\n` +
+    `Issue: ${String(report.actualIssue || "Not provided")}\n` +
+    `Cause: ${String(report.causeOfIssue || "Not provided")}\n` +
+    `Recommended material cost: NGN ${formatNgn(report.materialCost)}\n` +
+    `Recommended service cost: NGN ${formatNgn(report.serviceCost)}\n` +
+    `Preventive recommendation: ${String(report.preventiveRecommendation || "Not provided")}`
+  );
+}
+
+const COMPANY_TASK_PRIORITY_VALUES = ["low", "medium", "high"] as const;
+const COMPANY_TASK_STATUS_VALUES = ["open", "in_progress", "completed", "cancelled"] as const;
+
+const CompanyTaskCreateSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(2000).optional().nullable(),
+  assigneeId: z.string().trim().optional().nullable(),
+  priority: z.enum(COMPANY_TASK_PRIORITY_VALUES).default("medium"),
+  dueDate: z.string().optional().nullable(),
+  serviceRequestId: z.string().trim().optional().nullable(),
+  metadata: z.record(z.any()).optional(),
+});
+
+const CompanyTaskUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(160).optional(),
+    description: z.string().trim().max(2000).optional().nullable(),
+    assigneeId: z.string().trim().optional().nullable(),
+    priority: z.enum(COMPANY_TASK_PRIORITY_VALUES).optional(),
+    status: z.enum(COMPANY_TASK_STATUS_VALUES).optional(),
+    dueDate: z.string().optional().nullable(),
+    serviceRequestId: z.string().trim().optional().nullable(),
+    metadata: z.record(z.any()).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "No updates provided");
+
+const CompanyTaskUpdateMessageSchema = z.object({
+  message: z.string().trim().min(1).max(4000),
+  attachments: z.array(z.string().trim().min(1)).max(10).optional(),
 });
 
 // Accept flexible inputs, normalize output types
@@ -342,6 +500,431 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   };
 
+  const parseTaskDateCandidate = (value: unknown): Date | null => {
+    if (!value) return null;
+    const date = value instanceof Date ? value : new Date(String(value));
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const formatTaskCategoryLabel = (value: unknown) =>
+    String(value || "Service request")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+
+  const resolveAssignedForJobTaskStatus = (statusValue: unknown): "open" | "in_progress" | "completed" | "cancelled" => {
+    const status = normalizeServiceRequestStatusKey(statusValue);
+    if (status === "in_progress") return "in_progress";
+    if (status === "work_completed_pending_resident") return "in_progress";
+    if (status === "disputed") return "in_progress";
+    if (status === "rework_required") return "in_progress";
+    if (status === "completed") return "completed";
+    if (status === "cancelled") return "cancelled";
+    return "open";
+  };
+
+  const resolveAssignedForJobTaskPriority = (urgencyValue: unknown): "low" | "medium" | "high" => {
+    const urgency = String(urgencyValue || "").trim().toLowerCase();
+    if (urgency === "emergency" || urgency === "high") return "high";
+    if (urgency === "low") return "low";
+    return "medium";
+  };
+
+  const resolveAssignedForJobTaskDueDate = (serviceRequest: any): Date | null =>
+    parseTaskDateCandidate(serviceRequest?.preferredTime) ||
+    parseTaskDateCandidate(serviceRequest?.assignedAt);
+
+  const upsertAssignedForJobTask = async (
+    serviceRequest: any,
+    actorId?: string | null,
+  ) => {
+    const requestId = String(serviceRequest?.id || "").trim();
+    const providerId = String(serviceRequest?.providerId || "").trim();
+    if (!requestId || !providerId) return null;
+
+    const company = await resolveCompanyForUser(providerId);
+    if (!company?.id) return null;
+
+    const dueDate = resolveAssignedForJobTaskDueDate(serviceRequest);
+    const categoryLabel = formatTaskCategoryLabel(
+      serviceRequest?.categoryLabel || serviceRequest?.category || "Service request",
+    );
+    const taskStatus = resolveAssignedForJobTaskStatus(serviceRequest?.status);
+    const priority = resolveAssignedForJobTaskPriority(serviceRequest?.urgency);
+    const taskTitle = `${categoryLabel} job`;
+    const taskDescription = [
+      "Resident request assigned for job execution.",
+      serviceRequest?.location ? `Location: ${String(serviceRequest.location)}` : null,
+      dueDate ? `Agreed date: ${dueDate.toLocaleString()}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const existingRows = await db
+      .select()
+      .from(companyTasks)
+      .where(and(eq(companyTasks.companyId, String(company.id)), eq(companyTasks.serviceRequestId, requestId)))
+      .orderBy(desc(companyTasks.createdAt));
+
+    let existingTask: any =
+      existingRows.find((task: any) => {
+        const metadata = task?.metadata;
+        if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+        return String((metadata as Record<string, unknown>).autoTaskType || "") === "assigned_for_job_execution";
+      }) || null;
+
+    const existingMetadata =
+      existingTask?.metadata &&
+      typeof existingTask.metadata === "object" &&
+      !Array.isArray(existingTask.metadata)
+        ? (existingTask.metadata as Record<string, unknown>)
+        : {};
+
+    const metadata = {
+      ...existingMetadata,
+      autoTaskType: "assigned_for_job_execution",
+      source: "service_request_status",
+      requestStatus: normalizeServiceRequestStatusKey(serviceRequest?.status),
+      agreedDate: dueDate ? dueDate.toISOString() : null,
+      lastSyncedAt: new Date().toISOString(),
+    };
+
+    if (existingTask) {
+      const [updated] = await db
+        .update(companyTasks)
+        .set({
+          title: taskTitle,
+          description: taskDescription,
+          assigneeId: providerId,
+          priority,
+          status: taskStatus,
+          dueDate,
+          serviceRequestId: requestId,
+          metadata,
+          updatedAt: new Date(),
+          completedAt: taskStatus === "completed" ? new Date() : null,
+        })
+        .where(eq(companyTasks.id, existingTask.id))
+        .returning();
+      return updated || existingTask;
+    }
+
+    const creatorId = String(actorId || company.providerId || providerId).trim() || providerId;
+    const [created] = await db
+      .insert(companyTasks)
+      .values({
+        companyId: String(company.id),
+        title: taskTitle,
+        description: taskDescription,
+        assigneeId: providerId,
+        createdBy: creatorId,
+        priority,
+        status: taskStatus,
+        dueDate,
+        serviceRequestId: requestId,
+        metadata,
+        updatedAt: new Date(),
+        completedAt: taskStatus === "completed" ? new Date() : null,
+      })
+      .returning();
+
+    return created || null;
+  };
+
+  const ASSIGNED_FOR_JOB_TASK_BACKFILL_MARKER = "assigned_for_job_provider_task_backfill_v1";
+  const NOTIFICATION_TARGET_PATH_BACKFILL_MARKER = "notification_target_path_backfill_v1";
+
+  const runAssignedForJobTaskBackfillOnce = async () => {
+    const [alreadyBackfilled] = await db
+      .select({ id: auditLogs.id })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.action, "system_backfill"),
+          eq(auditLogs.target, "assigned_for_job_provider_tasks"),
+          eq(auditLogs.targetId, ASSIGNED_FOR_JOB_TASK_BACKFILL_MARKER),
+        ),
+      )
+      .limit(1 as any);
+
+    if (alreadyBackfilled) return;
+
+    const legacyAssignedJobs = await db
+      .select()
+      .from(serviceRequests)
+      .where(and(eq(serviceRequests.status, "assigned_for_job"), isNotNull(serviceRequests.providerId)));
+
+    let processed = 0;
+    let upserted = 0;
+
+    for (const request of legacyAssignedJobs as any[]) {
+      processed += 1;
+      try {
+        const task = await upsertAssignedForJobTask(request, null);
+        if (task) upserted += 1;
+      } catch (taskError) {
+        console.error("Assigned-for-job task backfill failed for request", request?.id, taskError);
+      }
+    }
+
+    await db.insert(auditLogs).values({
+      actorId: "system",
+      action: "system_backfill",
+      target: "assigned_for_job_provider_tasks",
+      targetId: ASSIGNED_FOR_JOB_TASK_BACKFILL_MARKER,
+      meta: {
+        processed,
+        upserted,
+        completedAt: new Date().toISOString(),
+      },
+    });
+
+    console.log(
+      `[BACKFILL] assigned_for_job provider tasks completed (processed=${processed}, upserted=${upserted})`,
+    );
+  };
+
+  try {
+    await runAssignedForJobTaskBackfillOnce();
+  } catch (backfillError) {
+    console.error("Assigned-for-job provider task backfill crashed", backfillError);
+  }
+
+  const runNotificationTargetPathBackfillOnce = async () => {
+    const [alreadyBackfilled] = await db
+      .select({ id: auditLogs.id })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.action, "system_backfill"),
+          eq(auditLogs.target, "notification_target_paths"),
+          eq(auditLogs.targetId, NOTIFICATION_TARGET_PATH_BACKFILL_MARKER),
+        ),
+      )
+      .limit(1 as any);
+
+    if (alreadyBackfilled) return;
+
+    const missingTargetNotifications = await db
+      .select({
+        id: notifications.id,
+        userId: notifications.userId,
+        type: notifications.type,
+        metadata: notifications.metadata,
+      })
+      .from(notifications)
+      .where(sql`coalesce(${notifications.metadata}->>'targetPath', '') = ''`);
+
+    const userIds: string[] = Array.from(
+      new Set(
+        missingTargetNotifications
+          .map((item: any) => String(item.userId || "").trim())
+          .filter(Boolean),
+      ),
+    );
+
+    const userRows = userIds.length
+      ? await db
+          .select({
+            id: users.id,
+            role: users.role,
+            globalRole: users.globalRole,
+          })
+          .from(users)
+          .where(inArray(users.id, userIds))
+      : [];
+
+    const rolesByUserId = new Map<string, string>();
+    for (const row of userRows as any[]) {
+      rolesByUserId.set(row.id, String(row.role || row.globalRole || "").trim().toLowerCase());
+    }
+
+    let processed = 0;
+    let updated = 0;
+    for (const notification of missingTargetNotifications as any[]) {
+      processed += 1;
+      const rawMetadata =
+        notification.metadata &&
+        typeof notification.metadata === "object" &&
+        !Array.isArray(notification.metadata)
+          ? ({ ...(notification.metadata as Record<string, unknown>) } as Record<string, unknown>)
+          : {};
+
+      const role = rolesByUserId.get(String(notification.userId || "").trim()) || "";
+      const targetPath =
+        resolveNotificationTargetPath({
+          role,
+          type: notification.type,
+          metadata: rawMetadata,
+        }) || "/notifications";
+
+      rawMetadata.targetPath = targetPath;
+      await db
+        .update(notifications)
+        .set({ metadata: rawMetadata })
+        .where(eq(notifications.id, notification.id));
+      updated += 1;
+    }
+
+    await db.insert(auditLogs).values({
+      actorId: "system",
+      action: "system_backfill",
+      target: "notification_target_paths",
+      targetId: NOTIFICATION_TARGET_PATH_BACKFILL_MARKER,
+      meta: {
+        processed,
+        updated,
+        completedAt: new Date().toISOString(),
+      },
+    });
+
+    console.log(
+      `[BACKFILL] notification target paths completed (processed=${processed}, updated=${updated})`,
+    );
+  };
+
+  try {
+    await runNotificationTargetPathBackfillOnce();
+  } catch (backfillError) {
+    console.error("Notification target path backfill crashed", backfillError);
+  }
+
+  const WORK_COMPLETION_SLA_HOURS = Math.max(
+    1,
+    Number(process.env.WORK_COMPLETION_SLA_HOURS || 72),
+  );
+  const WORK_COMPLETION_SLA_SWEEP_MS = Math.max(
+    60_000,
+    Number(process.env.WORK_COMPLETION_SLA_SWEEP_MS || 15 * 60 * 1000),
+  );
+
+  let workCompletionSlaSweepRunning = false;
+  const runWorkCompletionSlaSweep = async (options?: {
+    requestId?: string | null;
+    forceEligible?: boolean;
+    cutoffHours?: number | null;
+  }) => {
+    if (workCompletionSlaSweepRunning) {
+      return {
+        completedCount: 0,
+        running: true,
+      };
+    }
+    workCompletionSlaSweepRunning = true;
+    let completedCount = 0;
+    try {
+      const rawRequestId = String(options?.requestId || "").trim();
+      const requestId = rawRequestId || null;
+      const forceEligible = Boolean(options?.forceEligible);
+      const rawCutoffHours = options?.cutoffHours;
+      const requestedCutoffHours =
+        rawCutoffHours === null || rawCutoffHours === undefined ? Number.NaN : Number(rawCutoffHours);
+      const cutoffHours =
+        Number.isFinite(requestedCutoffHours) && requestedCutoffHours >= 0
+          ? requestedCutoffHours
+          : WORK_COMPLETION_SLA_HOURS;
+      const cutoff = new Date(Date.now() - cutoffHours * 60 * 60 * 1000);
+
+      let whereClause: any = eq(serviceRequests.status, "work_completed_pending_resident");
+      if (!forceEligible) {
+        whereClause = and(whereClause, lte(serviceRequests.updatedAt, cutoff));
+      }
+      if (requestId) {
+        whereClause = and(whereClause, eq(serviceRequests.id, requestId));
+      }
+      const pendingRows = await db
+        .select()
+        .from(serviceRequests)
+        .where(whereClause);
+
+      if (!pendingRows.length) {
+        return {
+          completedCount: 0,
+          running: false,
+          cutoffHours,
+        };
+      }
+
+      const io = app.get("io") as SocketIOServer | undefined;
+
+      for (const row of pendingRows as any[]) {
+        const closeReason = `Auto-completed after ${WORK_COMPLETION_SLA_HOURS}h without resident response.`;
+        const adminNote = `[SLA auto-complete ${new Date().toISOString()}] ${closeReason}`;
+        const updated = await storage.updateServiceRequest(String(row.id), {
+          status: "completed" as any,
+          closedAt: new Date(),
+          closeReason,
+          adminNotes: `${row.adminNotes ? `${row.adminNotes}\n` : ""}${adminNote}`,
+        } as any);
+        if (!updated) continue;
+
+        completedCount += 1;
+
+        try {
+          await upsertAssignedForJobTask(updated, null);
+        } catch (taskError) {
+          console.error("Failed to sync SLA auto-completed task status", taskError);
+        }
+
+        if (updated.residentId) {
+          const residentNotification = await storage.createNotification({
+            userId: updated.residentId,
+            title: "Request auto-completed",
+            message: `The job was auto-completed after ${WORK_COMPLETION_SLA_HOURS}h without response.`,
+            type: "info",
+            metadata: {
+              requestId: updated.id,
+              kind: "job_delivery_auto_completed",
+            },
+          });
+          io?.to(`user-${updated.residentId}`).emit("notification:new", residentNotification);
+        }
+
+        if (updated.providerId) {
+          const providerNotification = await storage.createNotification({
+            userId: updated.providerId,
+            title: "Request auto-completed",
+            message: `Resident confirmation window elapsed (${WORK_COMPLETION_SLA_HOURS}h). Request was auto-completed.`,
+            type: "info",
+            metadata: {
+              requestId: updated.id,
+              kind: "job_delivery_auto_completed",
+            },
+          });
+          io?.to(`user-${updated.providerId}`).emit("notification:new", providerNotification);
+        }
+
+        emitServiceRequestUpdate(app, updated, "status");
+      }
+
+      if (completedCount > 0) {
+        console.log(
+          `[SLA] Auto-completed ${completedCount} request(s) waiting for resident confirmation (>=${WORK_COMPLETION_SLA_HOURS}h)`,
+        );
+      }
+      return {
+        completedCount,
+        running: false,
+        cutoffHours,
+      };
+    } catch (error) {
+      console.error("Work-completion SLA sweep crashed", error);
+      return {
+        completedCount,
+        running: false,
+        cutoffHours: WORK_COMPLETION_SLA_HOURS,
+      };
+    } finally {
+      workCompletionSlaSweepRunning = false;
+    }
+  };
+
+  void runWorkCompletionSlaSweep();
+  setInterval(() => {
+    void runWorkCompletionSlaSweep();
+  }, WORK_COMPLETION_SLA_SWEEP_MS);
+
 
   const finalizeServiceRequestAfterPayment = async (
     expressApp: { get: (name: string) => unknown },
@@ -360,7 +943,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const currentStatus = normalizeServiceRequestStatusKey(currentRequest.status);
     const canAutoAssignForJob =
       Boolean(currentRequest.providerId) &&
-      !["assigned_for_job", "in_progress", "completed", "cancelled"].includes(currentStatus);
+      ![
+        "assigned_for_job",
+        "in_progress",
+        "work_completed_pending_resident",
+        "disputed",
+        "rework_required",
+        "completed",
+        "cancelled",
+      ].includes(currentStatus);
 
     const updates: Record<string, unknown> = {};
     if (String(currentRequest.paymentStatus || "").toLowerCase() !== "paid") {
@@ -392,6 +983,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const io = expressApp.get("io") as SocketIOServer | undefined;
     if (canAutoAssignForJob) {
+      try {
+        await upsertAssignedForJobTask(updatedRequest, updatedRequest.approvedForJobBy as string | null | undefined);
+      } catch (taskError) {
+        console.error("Failed to upsert assigned-for-job task after payment", taskError);
+      }
+
       if (updatedRequest.residentId) {
         const residentNotification = await storage.createNotification({
           userId: updatedRequest.residentId,
@@ -842,6 +1439,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const enrichServiceRequestPresentation = (request: any) => {
+    const structured = buildStructuredServiceRequestFields(request as any);
+    return {
+      ...request,
+      categoryLabel:
+        String(request?.categoryLabel || "").trim() ||
+        String(structured.categoryLabel || "").trim(),
+      issueType:
+        String(request?.issueType || "").trim() ||
+        String(structured.issueType || "").trim(),
+    };
+  };
+
   app.get("/api/service-requests", requireAuth, async (req, res, next) => {
     try {
       const userId = req.auth!.userId;
@@ -863,7 +1473,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         requests = await storage.getAllServiceRequests();
       }
 
-      res.json(requests || []);
+      res.json((requests || []).map((request: any) => enrichServiceRequestPresentation(request)));
     } catch (error) {
       next(error);
     }
@@ -919,6 +1529,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (updates.status) {
         updates.status = nextStatus;
       }
+      const openCancellationCase = await storage.getOpenCancellationCaseForRequest(id);
+      if (
+        openCancellationCase &&
+        updates.status &&
+        nextStatus !== currentStatus &&
+        !(isAdminActor && nextStatus === "cancelled")
+      ) {
+        return res.status(409).json({
+          message: "This request is under cancellation review and cannot change status yet.",
+          cancellationCaseId: openCancellationCase.id,
+        });
+      }
 
       const changedKeys = new Set(Object.keys(updates));
       const adminOnlyKeys = new Set([
@@ -961,6 +1583,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (updates.status && nextStatus !== "cancelled") {
           return res.status(403).json({ message: "Residents can only cancel their request" });
         }
+        if (
+          updates.status === "cancelled" &&
+          CANCELLATION_REVIEW_REQUIRED_STATUSES.has(currentStatus)
+        ) {
+          return res.status(409).json({
+            message:
+              "Cancellation review is required for assigned or active jobs. Submit a cancellation request with your reason.",
+            requiresCancellationReview: true,
+          });
+        }
       }
 
       if (isAssignedProvider && !isAdminActor && !isResidentOwner) {
@@ -969,8 +1601,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return res.status(403).json({ message: `Providers cannot update ${key}` });
           }
         }
-        if (updates.status && !["in_progress", "completed"].includes(nextStatus)) {
-          return res.status(403).json({ message: "Providers can only move requests to in_progress or completed" });
+        if (updates.status && !["in_progress", "work_completed_pending_resident"].includes(nextStatus)) {
+          return res
+            .status(403)
+            .json({ message: "Providers can only move requests to in_progress or work_completed_pending_resident" });
         }
       }
 
@@ -982,7 +1616,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!isAdminActor) {
           return res.status(403).json({ message: "Only admin can change assigned provider" });
         }
-        const lockedStatuses = new Set(["assigned_for_job", "in_progress", "completed", "cancelled"]);
+        const lockedStatuses = new Set([
+          "assigned_for_job",
+          "in_progress",
+          "work_completed_pending_resident",
+          "disputed",
+          "rework_required",
+          "completed",
+          "cancelled",
+        ]);
         if (lockedStatuses.has(currentStatus) && nextStatus !== "assigned") {
           return res
             .status(400)
@@ -1055,22 +1697,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (nextStatus === "in_progress") {
         const fromStatus = currentStatus;
-        if (!["assigned_for_job", "in_progress"].includes(fromStatus)) {
+        if (!["assigned_for_job", "rework_required", "in_progress"].includes(fromStatus)) {
           return res.status(400).json({
             message: "Request must be assigned for job before work can start",
           });
         }
+        updates.closedAt = null;
+      }
+
+      if (nextStatus === "work_completed_pending_resident") {
+        if (!isAdminActor && !isAssignedProvider) {
+          return res.status(403).json({ message: "Only admin or assigned provider can mark work as completed" });
+        }
+        if (currentStatus !== "in_progress" && currentStatus !== "work_completed_pending_resident") {
+          return res.status(400).json({
+            message: "Only requests in progress can be moved to resident confirmation",
+          });
+        }
+        updates.closedAt = null;
+      }
+
+      if (nextStatus === "disputed") {
+        if (!isAdminActor) {
+          return res.status(403).json({ message: "Only admin can move requests to disputed via this endpoint" });
+        }
+        if (!["work_completed_pending_resident", "disputed"].includes(currentStatus)) {
+          return res.status(400).json({
+            message: "Request must be awaiting resident confirmation before dispute review",
+          });
+        }
+        updates.closedAt = null;
+      }
+
+      if (nextStatus === "rework_required") {
+        if (!isAdminActor) {
+          return res.status(403).json({ message: "Only admin can mark a dispute as rework required" });
+        }
+        if (!["work_completed_pending_resident", "disputed", "rework_required"].includes(currentStatus)) {
+          return res.status(400).json({
+            message: "Only delivery-review requests can be marked as rework required",
+          });
+        }
+        updates.closedAt = null;
       }
 
       if (nextStatus === "completed") {
-        if (currentStatus !== "in_progress" && currentStatus !== "completed") {
+        if (
+          currentStatus !== "in_progress" &&
+          currentStatus !== "work_completed_pending_resident" &&
+          currentStatus !== "completed"
+        ) {
           return res.status(400).json({
-            message: "Only requests in progress can be marked as completed",
+            message: "Only in-progress or resident-confirmation requests can be marked as completed",
           });
         }
-        if (!isAdminActor && isAssignedProvider && currentStatus !== "in_progress") {
+        if (!isAdminActor && isAssignedProvider) {
           return res.status(400).json({
-            message: "Provider can only complete a request that is already in progress",
+            message: "Providers cannot directly complete requests; resident confirmation is required",
           });
         }
         updates.closedAt = updates.closedAt || new Date();
@@ -1084,6 +1767,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!serviceRequest) {
         return res.status(404).json({ message: "Service request not found" });
       }
+      const previousProviderId = String(currentRequest.providerId || "").trim();
+      const nextProviderId = String(serviceRequest.providerId || "").trim();
 
       if (isAdminActor && updates.paymentStatus === "pending" && currentRequest.residentId) {
         const notification = await storage.createNotification({
@@ -1098,6 +1783,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         const io = req.app.get("io") as SocketIOServer | undefined;
         io?.to(`user-${currentRequest.residentId}`).emit("notification:new", notification);
+
+        const providerUserId = String(updates.providerId || currentRequest.providerId || "").trim();
+        if (providerUserId) {
+          const providerNotification = await storage.createNotification({
+            userId: providerUserId,
+            title: "Report approved for resident payment",
+            message: "Admin/company reviewed your report and sent the payment request to the resident.",
+            type: "info",
+            metadata: {
+              requestId: currentRequest.id,
+              kind: "consultancy_report_approved",
+            },
+          });
+          io?.to(`user-${providerUserId}`).emit("notification:new", providerNotification);
+        }
+
+        const reportObject =
+          serviceRequest.consultancyReport && typeof serviceRequest.consultancyReport === "object"
+            ? ({ ...(serviceRequest.consultancyReport as any) } as Record<string, unknown>)
+            : null;
+        if (reportObject) {
+          reportObject.reviewStatus = "approved";
+          reportObject.reviewedByAdminAt = new Date().toISOString();
+          if (actorId) reportObject.reviewedByAdminId = actorId;
+          await storage.updateServiceRequest(currentRequest.id, {
+            consultancyReport: reportObject as any,
+          });
+          const reportMessage = buildConsultancyReportMessage(reportObject, "approved");
+          const reportInserted = await storage.addRequestMessage(
+            currentRequest.id,
+            actorId,
+            "admin",
+            reportMessage,
+          );
+          const reportParticipants = new Set<string>();
+          if (currentRequest.residentId) reportParticipants.add(currentRequest.residentId);
+          if (updates.providerId || currentRequest.providerId) {
+            reportParticipants.add(String(updates.providerId || currentRequest.providerId));
+          }
+          for (const participantUserId of reportParticipants) {
+            io?.to(`user-${participantUserId}`).emit("request-message:new", {
+              requestId: currentRequest.id,
+              message: reportInserted,
+            });
+          }
+        }
 
         const effectiveAmount = updates.billedAmount ?? currentRequest.billedAmount;
         const paymentMessage =
@@ -1123,9 +1854,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      if (nextStatus === "assigned_for_job") {
-        const io = req.app.get("io") as SocketIOServer | undefined;
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const providerAssignmentActivated =
+        Boolean(nextProviderId) &&
+        (nextStatus === "assigned" || currentStatus !== "assigned") &&
+        nextStatus !== "assigned_for_job" &&
+        (nextStatus === "assigned" || nextProviderId !== previousProviderId);
 
+      if (providerAssignmentActivated && serviceRequest.residentId) {
+        const residentNotification = await storage.createNotification({
+          userId: serviceRequest.residentId,
+          title: "Provider assigned",
+          message: "A provider has been assigned to your request.",
+          type: "info",
+          metadata: {
+            requestId: serviceRequest.id,
+            kind: "request_status",
+            targetPath: `/resident/requests/ordinary?requestId=${encodeURIComponent(serviceRequest.id)}`,
+          },
+        });
+        io?.to(`user-${serviceRequest.residentId}`).emit("notification:new", residentNotification);
+      }
+
+      const taskSyncedStatuses = new Set([
+        "assigned_for_job",
+        "in_progress",
+        "work_completed_pending_resident",
+        "disputed",
+        "rework_required",
+        "completed",
+        "cancelled",
+      ]);
+      if (taskSyncedStatuses.has(nextStatus)) {
+        try {
+          await upsertAssignedForJobTask(serviceRequest, actorId);
+        } catch (taskError) {
+          console.error("Failed to sync assigned-for-job task", taskError);
+        }
+      }
+
+      if (nextStatus === "assigned_for_job") {
         if (serviceRequest.residentId) {
           const residentNotification = await storage.createNotification({
             userId: serviceRequest.residentId,
@@ -1152,6 +1920,95 @@ export async function registerRoutes(app: Express): Promise<Server> {
             },
           });
           io?.to(`user-${serviceRequest.providerId}`).emit("notification:new", providerNotification);
+        }
+      }
+
+      if (nextStatus === "work_completed_pending_resident" && currentStatus !== "work_completed_pending_resident") {
+        const senderRole = isAssignedProvider && !isAdminActor ? "provider" : "admin";
+        const statusMessage = "Work marked as completed. Resident confirmation is now required.";
+        const inserted = await storage.addRequestMessage(serviceRequest.id, actorId, senderRole, statusMessage);
+        const participantIds = new Set<string>();
+        if (serviceRequest.residentId) participantIds.add(serviceRequest.residentId);
+        if (serviceRequest.providerId) participantIds.add(serviceRequest.providerId);
+        for (const participantUserId of participantIds) {
+          io?.to(`user-${participantUserId}`).emit("request-message:new", {
+            requestId: serviceRequest.id,
+            message: inserted,
+          });
+        }
+
+        if (serviceRequest.residentId) {
+          const residentNotification = await storage.createNotification({
+            userId: serviceRequest.residentId,
+            title: "Confirm job delivery",
+            message: "Provider marked this job as done. Confirm delivery or raise an issue.",
+            type: "info",
+            metadata: {
+              requestId: serviceRequest.id,
+              kind: "job_delivery_confirmation_requested",
+            },
+          });
+          io?.to(`user-${serviceRequest.residentId}`).emit("notification:new", residentNotification);
+        }
+
+        if (serviceRequest.providerId) {
+          const providerNotification = await storage.createNotification({
+            userId: serviceRequest.providerId,
+            title: "Waiting for resident confirmation",
+            message: "The resident has been asked to confirm delivery.",
+            type: "info",
+            metadata: {
+              requestId: serviceRequest.id,
+              kind: "job_delivery_waiting_resident",
+            },
+          });
+          io?.to(`user-${serviceRequest.providerId}`).emit("notification:new", providerNotification);
+        }
+      }
+
+      if (nextStatus === "disputed" && currentStatus !== "disputed") {
+        if (serviceRequest.providerId) {
+          const providerNotification = await storage.createNotification({
+            userId: serviceRequest.providerId,
+            title: "Resident raised a dispute",
+            message: "This job is under dispute review. Wait for admin direction.",
+            type: "warning",
+            metadata: {
+              requestId: serviceRequest.id,
+              kind: "job_delivery_disputed",
+            },
+          });
+          io?.to(`user-${serviceRequest.providerId}`).emit("notification:new", providerNotification);
+        }
+      }
+
+      if (nextStatus === "rework_required" && currentStatus !== "rework_required") {
+        if (serviceRequest.providerId) {
+          const providerNotification = await storage.createNotification({
+            userId: serviceRequest.providerId,
+            title: "Rework required",
+            message: "Admin requested rework on this job. Resume work and update progress.",
+            type: "info",
+            metadata: {
+              requestId: serviceRequest.id,
+              kind: "job_rework_required",
+            },
+          });
+          io?.to(`user-${serviceRequest.providerId}`).emit("notification:new", providerNotification);
+        }
+
+        if (serviceRequest.residentId) {
+          const residentNotification = await storage.createNotification({
+            userId: serviceRequest.residentId,
+            title: "Rework approved",
+            message: "Admin reviewed your issue and requested provider rework.",
+            type: "info",
+            metadata: {
+              requestId: serviceRequest.id,
+              kind: "job_rework_started",
+            },
+          });
+          io?.to(`user-${serviceRequest.residentId}`).emit("notification:new", residentNotification);
         }
       }
 
@@ -1200,7 +2057,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         estateId: estateId ? estateId : undefined,
       });
 
-      res.json({ data: requests });
+      res.json({ data: requests.map((request: any) => enrichServiceRequestPresentation(request)) });
     } catch (error) {
       console.error("Failed to fetch my service requests", error);
       res.status(500).json({ message: "Unable to load service requests" });
@@ -1217,11 +2074,411 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existing) return res.status(404).json({ message: "Service request not found" });
       if (existing.residentId !== userId) return res.status(403).json({ message: "Forbidden" });
 
+      const statusKey = normalizeServiceRequestStatusKey(existing.status);
+      if (CANCELLATION_REVIEW_REQUIRED_STATUSES.has(statusKey)) {
+        return res.status(409).json({
+          message:
+            "This request is already assigned/active. Submit a cancellation request so admin can review and resolve refunds if required.",
+          requiresCancellationReview: true,
+        });
+      }
+
       const cancelled = await storage.cancelServiceRequest(id, userId);
       if (!cancelled) return res.status(404).json({ message: "Service request not found" });
 
       res.json({ ok: true, status: cancelled.status });
     } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/service-requests/:id/cancellation-cases", requireAuth, async (req, res, next) => {
+    try {
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!actorId || actorRole !== "resident") {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const requestId = String(req.params.id || "").trim();
+      if (!requestId) return res.status(400).json({ message: "Invalid request id" });
+
+      const request = await storage.getServiceRequest(requestId);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+      if (request.residentId !== actorId) return res.status(403).json({ message: "Forbidden" });
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      if (!CANCELLATION_REVIEW_REQUIRED_STATUSES.has(statusKey)) {
+        return res.status(400).json({
+          message: "This request can be cancelled directly. Review workflow is required only for assigned/active jobs.",
+          directCancelAllowed: true,
+        });
+      }
+
+      const existingOpenCase = await storage.getOpenCancellationCaseForRequest(requestId);
+      if (existingOpenCase) {
+        return res.status(409).json({
+          message: "A cancellation request is already under review for this job.",
+          case: existingOpenCase,
+        });
+      }
+
+      const parsed = ResidentCancellationCaseSchema.parse(req.body || {});
+      const createdCase = await storage.createCancellationCase({
+        requestId,
+        residentId: actorId,
+        status: "requested",
+        reasonCode: parsed.reasonCode,
+        reasonDetail: parsed.reasonDetail,
+        preferredResolution: parsed.preferredResolution,
+        evidence: parsed.evidence as any,
+        refundDecision: "none",
+      } as any);
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const reasonLabel = parsed.reasonCode.replace(/_/g, " ");
+      const caseMessage =
+        `Resident requested cancellation.\n` +
+        `Reason: ${reasonLabel}\n` +
+        `Details: ${parsed.reasonDetail}`;
+      const inserted = await storage.addRequestMessage(requestId, actorId, "resident", caseMessage);
+
+      const participantIds = new Set<string>();
+      if (request.residentId) participantIds.add(request.residentId);
+      if (request.providerId) participantIds.add(request.providerId);
+      for (const participantUserId of participantIds) {
+        io?.to(`user-${participantUserId}`).emit("request-message:new", {
+          requestId,
+          message: inserted,
+        });
+      }
+
+      const [adminUsers, residentUser, providerUser] = await Promise.all([
+        db
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            and(
+              inArray(users.role, ["admin", "super_admin", "estate_admin"] as any),
+              eq(users.isActive, true),
+            ),
+          ),
+        storage.getUser(request.residentId),
+        request.providerId ? storage.getUser(request.providerId) : Promise.resolve(undefined),
+      ]);
+
+      for (const adminUser of adminUsers) {
+        const adminNotification = await storage.createNotification({
+          userId: adminUser.id,
+          title: "Cancellation request submitted",
+          message: "A resident submitted a cancellation request requiring admin review.",
+          type: "warning",
+          metadata: {
+            requestId,
+            kind: "request_cancellation_submitted",
+            cancellationCaseId: createdCase.id,
+          },
+        });
+        io?.to(`user-${adminUser.id}`).emit("notification:new", adminNotification);
+      }
+
+      const residentNotification = await storage.createNotification({
+        userId: request.residentId,
+        title: "Cancellation request received",
+        message: "Admin will review your cancellation request and update you shortly.",
+        type: "info",
+        metadata: {
+          requestId,
+          kind: "request_cancellation_submitted",
+          cancellationCaseId: createdCase.id,
+        },
+      });
+      io?.to(`user-${request.residentId}`).emit("notification:new", residentNotification);
+
+      if (request.providerId) {
+        const providerNotification = await storage.createNotification({
+          userId: request.providerId,
+          title: "Resident requested cancellation",
+          message: "This request is under admin cancellation review.",
+          type: "warning",
+          metadata: {
+            requestId,
+            kind: "request_cancellation_under_review",
+            cancellationCaseId: createdCase.id,
+          },
+        });
+        io?.to(`user-${request.providerId}`).emit("notification:new", providerNotification);
+      }
+
+      await storage.createAuditLog({
+        actorId,
+        action: "service_request_cancellation_requested",
+        target: "service_request",
+        targetId: requestId,
+        meta: {
+          caseId: createdCase.id,
+          requestStatus: statusKey,
+          reasonCode: parsed.reasonCode,
+          reasonDetail: parsed.reasonDetail,
+          residentName: residentUser?.name || null,
+          providerName: providerUser?.name || null,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent") ?? "",
+      });
+
+      return res.status(201).json({ case: createdCase });
+    } catch (error: any) {
+      if (error?.issues) {
+        return res.status(400).json({
+          message: "Validation error",
+          details: error.issues,
+        });
+      }
+      next(error);
+    }
+  });
+
+  app.get("/api/admin/cancellation-cases", requireAuth, async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const statusFilter = String(req.query.status || "").trim().toLowerCase();
+      const requestId = String(req.query.requestId || "").trim();
+      const whereParts: any[] = [];
+      if (statusFilter) whereParts.push(eq(serviceRequestCancellationCases.status, statusFilter));
+      if (requestId) whereParts.push(eq(serviceRequestCancellationCases.requestId, requestId));
+      const where = whereParts.length > 1 ? and(...whereParts) : whereParts[0];
+
+      const rows = await db
+        .select({
+          id: serviceRequestCancellationCases.id,
+          requestId: serviceRequestCancellationCases.requestId,
+          residentId: serviceRequestCancellationCases.residentId,
+          status: serviceRequestCancellationCases.status,
+          reasonCode: serviceRequestCancellationCases.reasonCode,
+          reasonDetail: serviceRequestCancellationCases.reasonDetail,
+          preferredResolution: serviceRequestCancellationCases.preferredResolution,
+          evidence: serviceRequestCancellationCases.evidence,
+          adminDecision: serviceRequestCancellationCases.adminDecision,
+          adminNote: serviceRequestCancellationCases.adminNote,
+          refundDecision: serviceRequestCancellationCases.refundDecision,
+          refundAmount: serviceRequestCancellationCases.refundAmount,
+          assignedAdminId: serviceRequestCancellationCases.assignedAdminId,
+          providerFeedback: serviceRequestCancellationCases.providerFeedback,
+          companyFeedback: serviceRequestCancellationCases.companyFeedback,
+          resolvedAt: serviceRequestCancellationCases.resolvedAt,
+          createdAt: serviceRequestCancellationCases.createdAt,
+          updatedAt: serviceRequestCancellationCases.updatedAt,
+          requestStatus: serviceRequests.status,
+          requestCategory: serviceRequests.category,
+          requestCategoryLabel: serviceRequests.categoryLabel,
+          residentName: users.name,
+        })
+        .from(serviceRequestCancellationCases)
+        .leftJoin(serviceRequests, eq(serviceRequestCancellationCases.requestId, serviceRequests.id))
+        .leftJoin(users, eq(serviceRequestCancellationCases.residentId, users.id))
+        .where(where as any)
+        .orderBy(desc(serviceRequestCancellationCases.createdAt));
+
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/admin/cancellation-cases/:id", requireAuth, async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const actorId = req.auth?.userId ?? req.user?.id;
+      if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+
+      const caseId = String(req.params.id || "").trim();
+      if (!caseId) return res.status(400).json({ message: "Invalid case id" });
+
+      const parsed = AdminCancellationCaseDecisionSchema.parse(req.body || {});
+      const caseRow = await storage.getCancellationCase(caseId);
+      if (!caseRow) return res.status(404).json({ message: "Cancellation case not found" });
+
+      const request = await storage.getServiceRequest(caseRow.requestId);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const isResolved = ["approved", "rejected", "withdrawn"].includes(String(caseRow.status || ""));
+      if (isResolved && parsed.action !== "under_review") {
+        return res.status(409).json({ message: "This cancellation case has already been resolved." });
+      }
+
+      let nextCaseStatus = caseRow.status;
+      if (parsed.action === "under_review") nextCaseStatus = "under_review";
+      if (parsed.action === "approve") nextCaseStatus = "approved";
+      if (parsed.action === "reject") nextCaseStatus = "rejected";
+
+      const refundDecision = parsed.action === "approve" ? parsed.refundDecision : "none";
+      const refundAmount =
+        parsed.action === "approve" && parsed.refundDecision === "partial"
+          ? parsed.refundAmount ?? 0
+          : parsed.action === "approve" && parsed.refundDecision === "full"
+            ? Number(request.billedAmount || 0)
+            : null;
+
+      const updatedCase = await storage.updateCancellationCase(caseId, {
+        status: nextCaseStatus as any,
+        adminDecision: parsed.action === "approve" ? "approved" : parsed.action === "reject" ? "rejected" : null,
+        adminNote: parsed.note,
+        assignedAdminId: actorId,
+        refundDecision: refundDecision as any,
+        refundAmount: refundAmount == null ? null : String(refundAmount),
+        resolvedAt: parsed.action === "approve" || parsed.action === "reject" ? new Date() : null,
+      } as any);
+      if (!updatedCase) {
+        return res.status(404).json({ message: "Cancellation case not found" });
+      }
+
+      if (parsed.action === "approve") {
+        const nextPaymentStatus =
+          refundDecision === "full" || refundDecision === "partial"
+            ? "refunded"
+            : "cancelled";
+        await storage.updateServiceRequest(request.id, {
+          status: "cancelled" as any,
+          closedAt: new Date(),
+          closeReason: `Cancelled after admin review: ${parsed.note}`,
+          paymentStatus: nextPaymentStatus,
+        } as any);
+
+        const message =
+          refundDecision === "none"
+            ? "Admin approved cancellation. Request is now cancelled."
+            : refundDecision === "full"
+              ? "Admin approved cancellation and full refund processing."
+              : `Admin approved cancellation and partial refund processing (NGN ${Number(
+                  refundAmount || 0,
+                ).toLocaleString()}).`;
+        const inserted = await storage.addRequestMessage(request.id, actorId, "admin", message);
+        const participants = [request.residentId, request.providerId].filter(Boolean) as string[];
+        for (const userId of participants) {
+          io?.to(`user-${userId}`).emit("request-message:new", {
+            requestId: request.id,
+            message: inserted,
+          });
+        }
+
+        const residentNotification = await storage.createNotification({
+          userId: request.residentId,
+          title: "Cancellation approved",
+          message:
+            refundDecision === "none"
+              ? "Admin approved your cancellation request."
+              : "Admin approved your cancellation request and initiated refund handling.",
+          type: "success",
+          metadata: {
+            requestId: request.id,
+            kind: "request_cancellation_approved",
+            cancellationCaseId: caseId,
+          },
+        });
+        io?.to(`user-${request.residentId}`).emit("notification:new", residentNotification);
+
+        if (request.providerId) {
+          const providerNotification = await storage.createNotification({
+            userId: request.providerId,
+            title: "Request cancelled by admin",
+            message: "Admin approved resident cancellation for this request.",
+            type: "warning",
+            metadata: {
+              requestId: request.id,
+              kind: "request_cancellation_approved",
+              cancellationCaseId: caseId,
+            },
+          });
+          io?.to(`user-${request.providerId}`).emit("notification:new", providerNotification);
+        }
+      } else if (parsed.action === "reject") {
+        const inserted = await storage.addRequestMessage(
+          request.id,
+          actorId,
+          "admin",
+          `Admin rejected cancellation request. Reason: ${parsed.note}`,
+        );
+        const participants = [request.residentId, request.providerId].filter(Boolean) as string[];
+        for (const userId of participants) {
+          io?.to(`user-${userId}`).emit("request-message:new", {
+            requestId: request.id,
+            message: inserted,
+          });
+        }
+
+        const residentNotification = await storage.createNotification({
+          userId: request.residentId,
+          title: "Cancellation rejected",
+          message: "Admin reviewed and rejected your cancellation request.",
+          type: "warning",
+          metadata: {
+            requestId: request.id,
+            kind: "request_cancellation_rejected",
+            cancellationCaseId: caseId,
+          },
+        });
+        io?.to(`user-${request.residentId}`).emit("notification:new", residentNotification);
+
+        if (request.providerId) {
+          const providerNotification = await storage.createNotification({
+            userId: request.providerId,
+            title: "Cancellation rejected",
+            message: "Admin rejected the resident cancellation request. Continue service delivery.",
+            type: "info",
+            metadata: {
+              requestId: request.id,
+              kind: "request_cancellation_rejected",
+              cancellationCaseId: caseId,
+            },
+          });
+          io?.to(`user-${request.providerId}`).emit("notification:new", providerNotification);
+        }
+      } else {
+        const residentNotification = await storage.createNotification({
+          userId: request.residentId,
+          title: "Cancellation under review",
+          message: "Admin is actively reviewing your cancellation request.",
+          type: "info",
+          metadata: {
+            requestId: request.id,
+            kind: "request_cancellation_under_review",
+            cancellationCaseId: caseId,
+          },
+        });
+        io?.to(`user-${request.residentId}`).emit("notification:new", residentNotification);
+      }
+
+      await storage.createAuditLog({
+        actorId,
+        action: "service_request_cancellation_case_updated",
+        target: "service_request_cancellation_case",
+        targetId: caseId,
+        meta: {
+          requestId: request.id,
+          action: parsed.action,
+          refundDecision,
+          refundAmount: refundAmount ?? null,
+          note: parsed.note,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent") ?? "",
+      });
+
+      return res.json({ case: updatedCase });
+    } catch (error: any) {
+      if (error?.issues) {
+        return res.status(400).json({
+          message: "Validation error",
+          details: error.issues,
+        });
+      }
       next(error);
     }
   });
@@ -1264,6 +2521,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         request.residentId === userId ||
         request.providerId === userId;
       if (!canAccess) return res.status(403).json({ message: "Forbidden" });
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      const isPrivileged = userRole === "admin" || userRole === "super_admin" || userRole === "estate_admin";
+      if (["cancelled", "completed"].includes(statusKey) && !isPrivileged) {
+        return res.status(409).json({ message: "Conversation is closed for this request" });
+      }
 
       const parsed = z
         .object({
@@ -1330,6 +2593,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.status(201).json(inserted);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/service-requests/:id/typing", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      const userRole = req.auth?.role ?? req.user?.role;
+      if (!userId || !userRole) return res.status(401).json({ message: "Unauthorized" });
+
+      const request = await storage.getServiceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+      const openCancellationCase = await storage.getOpenCancellationCaseForRequest(request.id);
+      if (openCancellationCase) {
+        return res.status(409).json({
+          message: "This request is under cancellation review and is temporarily on hold.",
+          cancellationCaseId: openCancellationCase.id,
+        });
+      }
+
+      const canAccess =
+        userRole === "admin" ||
+        userRole === "super_admin" ||
+        request.residentId === userId ||
+        request.providerId === userId;
+      if (!canAccess) return res.status(403).json({ message: "Forbidden" });
+
+      res.json({
+        requestId: req.params.id,
+        ...readRequestTypingState(req.params.id),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/service-requests/:id/typing", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      const userRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!userId || !userRole) return res.status(401).json({ message: "Unauthorized" });
+
+      const request = await storage.getServiceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+      const openCancellationCase = await storage.getOpenCancellationCaseForRequest(request.id);
+      if (openCancellationCase) {
+        return res.status(409).json({
+          message: "This request is under cancellation review and cannot be confirmed yet.",
+          cancellationCaseId: openCancellationCase.id,
+        });
+      }
+
+      const canAccess =
+        userRole === "admin" ||
+        userRole === "super_admin" ||
+        request.residentId === userId ||
+        request.providerId === userId;
+      if (!canAccess) return res.status(403).json({ message: "Forbidden" });
+
+      const parsed = z
+        .object({
+          isTyping: z.boolean(),
+        })
+        .parse(req.body || {});
+
+      const senderRole: "resident" | "provider" | "admin" =
+        userRole === "provider"
+          ? "provider"
+          : userRole === "admin" || userRole === "super_admin" || userRole === "estate_admin"
+            ? "admin"
+            : "resident";
+
+      writeRequestTypingState(req.params.id, senderRole, parsed.isTyping);
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const participantIds = new Set<string>();
+      if (request.residentId) participantIds.add(request.residentId);
+      if (request.providerId) participantIds.add(request.providerId);
+      for (const participantUserId of participantIds) {
+        if (participantUserId === userId) continue;
+        io?.to(`user-${participantUserId}`).emit("request-typing", {
+          requestId: req.params.id,
+          userId,
+          senderRole,
+          isTyping: parsed.isTyping,
+          at: new Date().toISOString(),
+        });
+      }
+
+      res.json({
+        requestId: req.params.id,
+        senderRole,
+        isTyping: parsed.isTyping,
+      });
     } catch (error) {
       next(error);
     }
@@ -1558,6 +2916,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userId) return res.status(401).json({ message: "Unauthorized" });
       const result = await storage.markAllNotificationsRead(userId);
       res.json({ ok: true, updated: result.updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/service-requests/sla/work-completion/sweep", requireAuth, async (req, res, next) => {
+    try {
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      const isAdminActor = actorRole === "admin" || actorRole === "super_admin" || actorRole === "estate_admin";
+      if (!isAdminActor) {
+        return res.status(403).json({ message: "Only admin can trigger SLA sweep" });
+      }
+
+      const sweep = await runWorkCompletionSlaSweep({
+        requestId: String(req.body?.requestId || "").trim() || null,
+        forceEligible: Boolean(req.body?.forceEligible),
+        cutoffHours:
+          req.body?.cutoffHours === undefined || req.body?.cutoffHours === null
+            ? null
+            : Number(req.body?.cutoffHours),
+      });
+      res.json({ ok: true, ...sweep });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/service-requests/:id/sla/backdate", requireAuth, async (req, res, next) => {
+    try {
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      const isAdminActor = actorRole === "admin" || actorRole === "super_admin" || actorRole === "estate_admin";
+      if (!isAdminActor) {
+        return res.status(403).json({ message: "Only admin can backdate SLA timestamps" });
+      }
+
+      const runtimeMode = String(process.env.NODE_ENV || "").toLowerCase();
+      if (runtimeMode === "production") {
+        return res.status(404).json({ message: "Not found" });
+      }
+
+      const { id } = req.params;
+      const existing = await storage.getServiceRequest(id);
+      if (!existing) return res.status(404).json({ message: "Service request not found" });
+
+      const rawHoursAgo = Number(req.body?.hoursAgo);
+      const fallbackHoursAgo = WORK_COMPLETION_SLA_HOURS + 1;
+      const hoursAgo = Number.isFinite(rawHoursAgo) && rawHoursAgo > 0 ? rawHoursAgo : fallbackHoursAgo;
+      const backdatedAt = new Date(Date.now() - hoursAgo * 60 * 60 * 1000);
+
+      const [updated] = await db
+        .update(serviceRequests)
+        .set({ updatedAt: backdatedAt })
+        .where(eq(serviceRequests.id, id))
+        .returning({
+          id: serviceRequests.id,
+          updatedAt: serviceRequests.updatedAt,
+          status: serviceRequests.status,
+        });
+
+      if (!updated) return res.status(404).json({ message: "Service request not found" });
+      res.json({
+        ok: true,
+        id: updated.id,
+        status: updated.status,
+        updatedAt: updated.updatedAt,
+        hoursAgo,
+      });
     } catch (error) {
       next(error);
     }
@@ -2213,6 +3638,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET all AI conversation flow settings
   app.get("/api/admin/ai-conversation-flow", requireAuth, requireSuperAdmin, async (req, res, next) => {
     try {
+      await backfillApprovedCategoriesFromServiceCategories();
       const settings = await db
         .select()
         .from(aiConversationFlowSettings)
@@ -2660,6 +4086,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           title: "New Update on Your Request",
           message: "An admin left an update on your request.",
           type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "request_status",
+            targetPath: `/resident/requests/ordinary?requestId=${encodeURIComponent(updated.id)}`,
+          },
         });
         const io = req.app.get("io") as SocketIOServer | undefined;
         io?.to(`user-${updated.residentId}`).emit("notification:new", notification);
@@ -2707,6 +4138,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           title: "Provider Assigned",
           message: "A provider has been assigned to your request.",
           type: "info",
+          metadata: {
+            requestId: serviceRequest.id,
+            kind: "request_status",
+            targetPath: `/resident/requests/ordinary?requestId=${encodeURIComponent(serviceRequest.id)}`,
+          },
         });
         const io = req.app.get("io") as SocketIOServer | undefined;
         io?.to(`user-${serviceRequest.residentId}`).emit("notification:new", notification);
@@ -2758,7 +4194,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const statusKey = normalizeServiceRequestStatusKey(request.status);
-      if (["assigned_for_job", "in_progress", "completed", "cancelled"].includes(statusKey)) {
+      if (
+        [
+          "assigned_for_job",
+          "in_progress",
+          "work_completed_pending_resident",
+          "disputed",
+          "rework_required",
+          "completed",
+          "cancelled",
+        ].includes(statusKey)
+      ) {
         return res.status(400).json({
           message: "Payment request can only be raised before the request is assigned for job",
         });
@@ -2805,6 +4251,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       report.serviceCost = serviceCost;
       report.totalRecommendation = totalFromBreakdown;
       report.reviewedByAdminAt = new Date().toISOString();
+      report.reviewStatus = "approved";
       if (actorId) {
         report.reviewedByAdminId = actorId;
       }
@@ -2830,6 +4277,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (actorId) {
+        const reportMessage = buildConsultancyReportMessage(report, "approved");
+        const reportCardMessage = await storage.addRequestMessage(
+          updated.id,
+          actorId,
+          "admin",
+          reportMessage,
+        );
+
         const paymentMessage =
           `Service payment requested: NGN ${Number(amountText).toLocaleString()}.` +
           (payload.note ? ` ${payload.note}` : "");
@@ -2844,6 +4299,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (updated.residentId) participantIds.add(updated.residentId);
         if (updated.providerId) participantIds.add(updated.providerId);
         for (const participantUserId of participantIds) {
+          io?.to(`user-${participantUserId}`).emit("request-message:new", {
+            requestId: updated.id,
+            message: reportCardMessage,
+          });
           io?.to(`user-${participantUserId}`).emit("request-message:new", {
             requestId: updated.id,
             message: inserted,
@@ -2864,6 +4323,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         const io = req.app.get("io") as SocketIOServer | undefined;
         io?.to(`user-${updated.residentId}`).emit("notification:new", notification);
+      }
+
+      if (updated.providerId) {
+        const providerNotification = await storage.createNotification({
+          userId: updated.providerId,
+          title: "Report approved for resident payment",
+          message: "Admin/company reviewed your report and sent the payment request to the resident.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "consultancy_report_approved",
+          },
+        });
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        io?.to(`user-${updated.providerId}`).emit("notification:new", providerNotification);
       }
 
       emitServiceRequestUpdate(req.app, updated, "status");
@@ -2906,7 +4380,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const statusKey = normalizeServiceRequestStatusKey(request.status);
-      if (!["assigned_for_job", "in_progress"].includes(statusKey)) {
+      if (!["assigned_for_job", "in_progress", "work_completed_pending_resident", "disputed", "rework_required"].includes(statusKey)) {
         return res.status(400).json({
           message: "Provider change is only allowed after job assignment",
         });
@@ -2945,6 +4419,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!updated) {
         return res.status(404).json({ message: "Service request not found" });
+      }
+
+      try {
+        await upsertAssignedForJobTask(updated, actorId);
+      } catch (taskError) {
+        console.error("Failed to upsert reassigned job task", taskError);
       }
 
       const reassignMessage =
@@ -3033,7 +4513,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const statusKey = normalizeServiceRequestStatusKey(request.status);
-      if (["assigned_for_job", "in_progress", "completed", "cancelled"].includes(statusKey)) {
+      if (
+        [
+          "assigned_for_job",
+          "in_progress",
+          "work_completed_pending_resident",
+          "disputed",
+          "rework_required",
+          "completed",
+          "cancelled",
+        ].includes(statusKey)
+      ) {
         return res.status(400).json({ message: "Payment decline is no longer allowed for this request status" });
       }
 
@@ -3053,6 +4543,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : "[Payment declined] Resident declined the payment request.";
       const updated = await storage.updateServiceRequest(id, {
         paymentStatus: "cancelled",
+        status: "cancelled",
+        closedAt: new Date(),
+        closeReason: payload.reason
+          ? `Resident declined payment request: ${payload.reason}`
+          : "Resident declined payment request",
         adminNotes: `${request.adminNotes ? `${request.adminNotes}\n` : ""}${note}`,
       } as any);
 
@@ -3061,8 +4556,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const messageText = payload.reason
-        ? `Payment request declined. Reason: ${payload.reason}`
-        : "Payment request declined.";
+        ? `Payment request declined. Request closed. Reason: ${payload.reason}`
+        : "Payment request declined. Request closed.";
       const senderRole = isAdminActor ? "admin" : "resident";
       const inserted = await storage.addRequestMessage(id, actorId, senderRole, messageText);
 
@@ -3081,7 +4576,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const providerNotification = await storage.createNotification({
           userId: updated.providerId,
           title: "Resident declined payment",
-          message: "The resident declined the current payment request.",
+          message: "The resident declined the payment request. The request is now closed.",
           type: "info",
           metadata: {
             requestId: updated.id,
@@ -3093,6 +4588,374 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       emitServiceRequestUpdate(req.app, updated, "status");
       return res.json({ success: true, message: "Payment request declined", request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/service-requests/:id/work-completed", requireAuth, async (req, res, next) => {
+    try {
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!actorId || !actorRole) return res.status(401).json({ message: "Unauthorized" });
+
+      const request = await storage.getServiceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+      const openCancellationCase = await storage.getOpenCancellationCaseForRequest(request.id);
+      if (openCancellationCase) {
+        return res.status(409).json({
+          message: "This request is under cancellation review and cannot open a delivery dispute now.",
+          cancellationCaseId: openCancellationCase.id,
+        });
+      }
+
+      const isAdminActor = actorRole === "admin" || actorRole === "super_admin" || actorRole === "estate_admin";
+      const isAssignedProvider = actorRole === "provider" && request.providerId === actorId;
+      if (!isAdminActor && !isAssignedProvider) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      if (statusKey !== "in_progress") {
+        return res.status(400).json({ message: "Only in-progress requests can be marked as work completed" });
+      }
+
+      const updated = await storage.updateServiceRequest(request.id, {
+        status: "work_completed_pending_resident" as any,
+        closedAt: null,
+      } as any);
+      if (!updated) return res.status(404).json({ message: "Service request not found" });
+
+      try {
+        await upsertAssignedForJobTask(updated, actorId);
+      } catch (taskError) {
+        console.error("Failed to sync work-completed task status", taskError);
+      }
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const senderRole = isAssignedProvider ? "provider" : "admin";
+      const messageText = "Work marked as completed. Resident confirmation is now required.";
+      const inserted = await storage.addRequestMessage(updated.id, actorId, senderRole, messageText);
+      const participantIds = new Set<string>();
+      if (updated.residentId) participantIds.add(updated.residentId);
+      if (updated.providerId) participantIds.add(updated.providerId);
+      for (const participantUserId of participantIds) {
+        io?.to(`user-${participantUserId}`).emit("request-message:new", {
+          requestId: updated.id,
+          message: inserted,
+        });
+      }
+
+      if (updated.residentId) {
+        const residentNotification = await storage.createNotification({
+          userId: updated.residentId,
+          title: "Confirm job delivery",
+          message: "Provider marked this job as done. Confirm delivery or raise an issue.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "job_delivery_confirmation_requested",
+          },
+        });
+        io?.to(`user-${updated.residentId}`).emit("notification:new", residentNotification);
+      }
+
+      if (updated.providerId) {
+        const providerNotification = await storage.createNotification({
+          userId: updated.providerId,
+          title: "Waiting for resident confirmation",
+          message: "The resident has been asked to confirm delivery.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "job_delivery_waiting_resident",
+          },
+        });
+        io?.to(`user-${updated.providerId}`).emit("notification:new", providerNotification);
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      return res.json({ success: true, message: "Work marked as completed", request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/service-requests/:id/confirm-delivery", requireAuth, async (req, res, next) => {
+    try {
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!actorId || !actorRole) return res.status(401).json({ message: "Unauthorized" });
+
+      const request = await storage.getServiceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+
+      const isResidentOwner = request.residentId === actorId;
+      const isAdminActor = actorRole === "admin" || actorRole === "super_admin" || actorRole === "estate_admin";
+      if (!isResidentOwner && !isAdminActor) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      if (statusKey !== "work_completed_pending_resident") {
+        return res.status(400).json({ message: "This request is not awaiting resident confirmation" });
+      }
+
+      const updated = await storage.updateServiceRequest(request.id, {
+        status: "completed" as any,
+        closedAt: new Date(),
+        closeReason: isResidentOwner ? "Resident confirmed delivery" : "Admin confirmed delivery",
+      } as any);
+      if (!updated) return res.status(404).json({ message: "Service request not found" });
+
+      try {
+        await upsertAssignedForJobTask(updated, actorId);
+      } catch (taskError) {
+        console.error("Failed to sync confirmed-delivery task status", taskError);
+      }
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const senderRole = isResidentOwner ? "resident" : "admin";
+      const messageText = isResidentOwner
+        ? "Resident confirmed job delivery. Request is completed."
+        : "Admin confirmed job delivery. Request is completed.";
+      const inserted = await storage.addRequestMessage(updated.id, actorId, senderRole, messageText);
+      const participantIds = new Set<string>();
+      if (updated.residentId) participantIds.add(updated.residentId);
+      if (updated.providerId) participantIds.add(updated.providerId);
+      for (const participantUserId of participantIds) {
+        io?.to(`user-${participantUserId}`).emit("request-message:new", {
+          requestId: updated.id,
+          message: inserted,
+        });
+      }
+
+      if (updated.providerId) {
+        const providerNotification = await storage.createNotification({
+          userId: updated.providerId,
+          title: "Resident confirmed delivery",
+          message: "Job delivery was confirmed. The request is now completed.",
+          type: "success",
+          metadata: {
+            requestId: updated.id,
+            kind: "job_delivery_confirmed",
+          },
+        });
+        io?.to(`user-${updated.providerId}`).emit("notification:new", providerNotification);
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      return res.json({ success: true, message: "Delivery confirmed", request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/service-requests/:id/dispute-delivery", requireAuth, async (req, res, next) => {
+    try {
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!actorId || !actorRole) return res.status(401).json({ message: "Unauthorized" });
+
+      const request = await storage.getServiceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+
+      const isResidentOwner = request.residentId === actorId;
+      const isAdminActor = actorRole === "admin" || actorRole === "super_admin" || actorRole === "estate_admin";
+      if (!isResidentOwner && !isAdminActor) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      if (statusKey !== "work_completed_pending_resident") {
+        return res.status(400).json({ message: "This request is not awaiting resident confirmation" });
+      }
+
+      const payload = z
+        .object({
+          reason: z.string().trim().min(5).max(1000),
+        })
+        .parse(req.body || {});
+
+      const note = `[Delivery disputed ${new Date().toISOString()}] ${payload.reason}`;
+      const updated = await storage.updateServiceRequest(request.id, {
+        status: "disputed" as any,
+        closedAt: null,
+        closeReason: null,
+        adminNotes: `${request.adminNotes ? `${request.adminNotes}\n` : ""}${note}`,
+      } as any);
+      if (!updated) return res.status(404).json({ message: "Service request not found" });
+
+      try {
+        await upsertAssignedForJobTask(updated, actorId);
+      } catch (taskError) {
+        console.error("Failed to sync disputed-delivery task status", taskError);
+      }
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const senderRole = isResidentOwner ? "resident" : "admin";
+      const messageText = `Delivery disputed: ${payload.reason}`;
+      const inserted = await storage.addRequestMessage(updated.id, actorId, senderRole, messageText);
+      const participantIds = new Set<string>();
+      if (updated.residentId) participantIds.add(updated.residentId);
+      if (updated.providerId) participantIds.add(updated.providerId);
+      for (const participantUserId of participantIds) {
+        io?.to(`user-${participantUserId}`).emit("request-message:new", {
+          requestId: updated.id,
+          message: inserted,
+        });
+      }
+
+      if (updated.providerId) {
+        const providerNotification = await storage.createNotification({
+          userId: updated.providerId,
+          title: "Resident raised a dispute",
+          message: "Job delivery is disputed and awaiting admin review.",
+          type: "warning",
+          metadata: {
+            requestId: updated.id,
+            kind: "job_delivery_disputed",
+          },
+        });
+        io?.to(`user-${updated.providerId}`).emit("notification:new", providerNotification);
+      }
+
+      const reviewerUsers = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(
+          or(
+            eq(users.role, "admin"),
+            eq(users.role, "estate_admin"),
+            eq(users.role, "super_admin"),
+            eq(users.globalRole, "super_admin"),
+          ),
+        );
+      const reviewerIds = new Set<string>();
+      for (const reviewer of reviewerUsers) {
+        if (reviewer?.id) reviewerIds.add(String(reviewer.id));
+      }
+      for (const reviewerId of reviewerIds) {
+        const reviewerNotification = await storage.createNotification({
+          userId: reviewerId,
+          title: "Delivery dispute requires review",
+          message: "A resident disputed job delivery. Review and decide next action.",
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "job_delivery_dispute_review",
+          },
+        });
+        io?.to(`user-${reviewerId}`).emit("notification:new", reviewerNotification);
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      return res.json({ success: true, message: "Delivery dispute submitted", request: updated });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/service-requests/:id/resolve-dispute", async (req, res, next) => {
+    try {
+      if (
+        !req.isAuthenticated() ||
+        (
+          req.user?.role !== "admin" &&
+          req.user?.role !== "estate_admin" &&
+          req.user?.globalRole !== "super_admin"
+        )
+      ) {
+        return res.status(401).json({ message: "Unauthorized - Admin only" });
+      }
+
+      const actorId = req.auth?.userId ?? req.user?.id;
+      if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+
+      const request = await storage.getServiceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Service request not found" });
+
+      const statusKey = normalizeServiceRequestStatusKey(request.status);
+      if (statusKey !== "disputed") {
+        return res.status(400).json({ message: "Only disputed requests can be resolved" });
+      }
+
+      const payload = z
+        .object({
+          resolution: z.enum(["rework_required", "completed", "cancelled"]),
+          note: z.string().trim().max(1000).optional(),
+        })
+        .parse(req.body || {});
+
+      const statusNote =
+        payload.resolution === "rework_required"
+          ? "Dispute resolved: rework required."
+          : payload.resolution === "completed"
+            ? "Dispute resolved: marked completed."
+            : "Dispute resolved: request cancelled.";
+      const closeReason =
+        payload.resolution === "cancelled"
+          ? payload.note || "Cancelled during dispute resolution"
+          : payload.resolution === "completed"
+            ? payload.note || "Completed during dispute resolution"
+            : null;
+
+      const updated = await storage.updateServiceRequest(request.id, {
+        status: payload.resolution as any,
+        closedAt: payload.resolution === "completed" || payload.resolution === "cancelled" ? new Date() : null,
+        closeReason,
+        adminNotes: `${request.adminNotes ? `${request.adminNotes}\n` : ""}[Dispute resolution] ${statusNote}${payload.note ? ` Note: ${payload.note}` : ""}`,
+      } as any);
+      if (!updated) return res.status(404).json({ message: "Service request not found" });
+
+      try {
+        await upsertAssignedForJobTask(updated, actorId);
+      } catch (taskError) {
+        console.error("Failed to sync dispute-resolution task status", taskError);
+      }
+
+      const io = req.app.get("io") as SocketIOServer | undefined;
+      const inserted = await storage.addRequestMessage(updated.id, actorId, "admin", statusNote + (payload.note ? ` ${payload.note}` : ""));
+      const participantIds = new Set<string>();
+      if (updated.residentId) participantIds.add(updated.residentId);
+      if (updated.providerId) participantIds.add(updated.providerId);
+      for (const participantUserId of participantIds) {
+        io?.to(`user-${participantUserId}`).emit("request-message:new", {
+          requestId: updated.id,
+          message: inserted,
+        });
+      }
+
+      if (updated.residentId) {
+        const residentNotification = await storage.createNotification({
+          userId: updated.residentId,
+          title: "Dispute reviewed",
+          message: statusNote,
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "job_delivery_dispute_resolved",
+          },
+        });
+        io?.to(`user-${updated.residentId}`).emit("notification:new", residentNotification);
+      }
+
+      if (updated.providerId) {
+        const providerNotification = await storage.createNotification({
+          userId: updated.providerId,
+          title: "Dispute reviewed",
+          message: statusNote,
+          type: "info",
+          metadata: {
+            requestId: updated.id,
+            kind: "job_delivery_dispute_resolved",
+          },
+        });
+        io?.to(`user-${updated.providerId}`).emit("notification:new", providerNotification);
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      return res.json({ success: true, message: "Dispute resolved", request: updated });
     } catch (error) {
       next(error);
     }
@@ -3111,6 +4974,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - Admin only" });
       }
 
+      const actorId = req.auth?.userId ?? req.user?.id;
       const { id } = req.params;
       const payload = z
         .object({
@@ -3141,12 +5005,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         providerId,
         status: "assigned_for_job" as any,
         approvedForJobAt: new Date(),
-        approvedForJobBy: req.user?.id,
+        approvedForJobBy: actorId,
         assignedAt: request.assignedAt || new Date(),
       });
 
       if (!updated) {
         return res.status(404).json({ message: "Service request not found" });
+      }
+
+      try {
+        await upsertAssignedForJobTask(updated, actorId);
+      } catch (taskError) {
+        console.error("Failed to upsert approved job task", taskError);
       }
 
       const io = req.app.get("io") as SocketIOServer | undefined;
@@ -3250,10 +5120,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let createdServiceRequestId: string | undefined;
       if (payload.consultancyRequest) {
-        const category = resolveServiceRequestCategory(
+        const category = tryResolveServiceRequestCategory(
           payload.consultancyRequest.categoryKey || "",
           payload.consultancyRequest.categoryLabel || "",
         );
+        if (!category) {
+          return res
+            .status(400)
+            .json({ message: "Invalid consultancy category. Please re-select a category and try again." });
+        }
         const urgencyInput = normalizeCategoryKey(payload.consultancyRequest.urgency || "");
         const urgency =
           urgencyInput === "emergency" || urgencyInput === "high" || urgencyInput === "medium" || urgencyInput === "low"
@@ -3392,14 +5267,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         reference: txReference,
       });
     } catch (error: any) {
+      const status =
+        typeof error?.status === "number" && error.status >= 400 && error.status < 600
+          ? error.status
+          : 500;
+
       console.error("Paystack init error:", {
         message: error?.message,
-        status: error?.status,
+        status,
+        code: error?.code,
+        details: error?.details,
         stack: error?.stack,
       });
-      return res.status(500).json({ 
+
+      return res.status(status).json({
         error: error?.message || "Unable to initialize Paystack payment at this time.",
-        details: process.env.NODE_ENV === "development" ? error?.message : undefined,
+        code: error?.code,
+        details:
+          process.env.NODE_ENV === "development"
+            ? error?.details || error?.message
+            : undefined,
       });
     }
   });
@@ -3597,10 +5484,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const meta: any = responseTx?.meta as any;
         if (meta?.consultancyRequest && req.user?.id) {
           try {
-            const category = resolveServiceRequestCategory(
+            const category = tryResolveServiceRequestCategory(
               meta.consultancyRequest.categoryKey || "",
               meta.consultancyRequest.categoryLabel || "",
             );
+            if (!category) {
+              throw new Error("Invalid consultancy category metadata");
+            }
             const urgencyInput = normalizeCategoryKey(meta.consultancyRequest.urgency || "");
             const urgency =
               urgencyInput === "emergency" ||
@@ -3738,7 +5628,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
           })
         : list;
 
-      res.json(filtered);
+      const requestIds = filtered.map((request) => String(request.id || "").trim()).filter(Boolean);
+      const openCases = requestIds.length
+        ? await db
+            .select({
+              id: serviceRequestCancellationCases.id,
+              requestId: serviceRequestCancellationCases.requestId,
+              status: serviceRequestCancellationCases.status,
+              reasonCode: serviceRequestCancellationCases.reasonCode,
+              createdAt: serviceRequestCancellationCases.createdAt,
+              updatedAt: serviceRequestCancellationCases.updatedAt,
+            })
+            .from(serviceRequestCancellationCases)
+            .where(
+              and(
+                inArray(serviceRequestCancellationCases.requestId, requestIds as any),
+                inArray(serviceRequestCancellationCases.status, ["requested", "under_review"] as any),
+              ),
+            )
+        : [];
+      const caseByRequestId = new Map<string, (typeof openCases)[number]>();
+      for (const cancellationCase of openCases) {
+        const key = String(cancellationCase.requestId || "");
+        if (!key || caseByRequestId.has(key)) continue;
+        caseByRequestId.set(key, cancellationCase);
+      }
+
+      res.json(
+        filtered.map((request) => {
+          const cancellationCase = caseByRequestId.get(String(request.id || ""));
+          return {
+            ...request,
+            cancellationCase: cancellationCase || null,
+            isCancellationUnderReview: Boolean(cancellationCase),
+          };
+        }),
+      );
     } catch (error) {
       next(error);
     }
@@ -3790,6 +5715,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { id } = req.params;
       const updates: any = { ...req.body, updatedAt: new Date() };
+      if (Array.isArray(req.body?.categories)) {
+        const normalizedCategories: string[] = Array.from(
+          new Set<string>(
+            (req.body.categories as unknown[])
+              .map((entry) => normalizeCategoryKey(String(entry || "")))
+              .filter((entry): entry is string => Boolean(entry)),
+          ),
+        );
+        updates.categories = normalizedCategories;
+
+        const explicitServiceCategory =
+          typeof req.body?.serviceCategory === "string"
+            ? normalizeCategoryKey(req.body.serviceCategory)
+            : "";
+        const resolvedExplicitServiceCategory = explicitServiceCategory
+          ? tryResolveServiceRequestCategory(explicitServiceCategory, explicitServiceCategory)
+          : null;
+        const resolvedFromCategories =
+          normalizedCategories
+            .map((entry) => tryResolveServiceRequestCategory(entry, entry))
+            .find((entry): entry is string => Boolean(entry)) || null;
+
+        updates.serviceCategory = resolvedExplicitServiceCategory || resolvedFromCategories || null;
+      } else if (typeof req.body?.serviceCategory === "string") {
+        const normalizedServiceCategory = normalizeCategoryKey(req.body.serviceCategory);
+        updates.serviceCategory =
+          tryResolveServiceRequestCategory(normalizedServiceCategory, normalizedServiceCategory) || null;
+      }
       if (req.body?.password) {
         updates.password = await hashPassword(req.body.password);
       }
@@ -4220,6 +6173,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [srAssignedInspection],
         [srAssignedForJob],
         [srInProgress],
+        [srWorkCompletedPendingResident],
+        [srDisputed],
+        [srReworkRequired],
         [srCompleted],
         [srCancelled],
       ] =
@@ -4248,6 +6204,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           db
             .select({ c: count() })
             .from(serviceRequests)
+            .where(eq(serviceRequests.status, "work_completed_pending_resident")),
+          db
+            .select({ c: count() })
+            .from(serviceRequests)
+            .where(eq(serviceRequests.status, "disputed")),
+          db
+            .select({ c: count() })
+            .from(serviceRequests)
+            .where(eq(serviceRequests.status, "rework_required")),
+          db
+            .select({ c: count() })
+            .from(serviceRequests)
             .where(eq(serviceRequests.status, "completed")),
           db
             .select({ c: count() })
@@ -4270,6 +6238,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           assigned: Number(srAssignedInspection?.c ?? 0),
           assignedForJob: Number(srAssignedForJob?.c ?? 0),
           inProgress: Number(srInProgress?.c ?? 0),
+          awaitingResidentConfirmation: Number(srWorkCompletedPendingResident?.c ?? 0),
+          disputed: Number(srDisputed?.c ?? 0),
+          reworkRequired: Number(srReworkRequired?.c ?? 0),
           completed: Number(srCompleted?.c ?? 0),
           cancelled: Number(srCancelled?.c ?? 0),
         },
@@ -4392,7 +6363,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         providerId?: string;
       };
 
-      const all = await storage.getAllServiceRequests();
+      const all = (await storage.getAllServiceRequests()).map((request) => {
+        const structured = buildStructuredServiceRequestFields(request as any);
+        return {
+          ...request,
+          categoryLabel:
+            String((request as any).categoryLabel || "").trim() ||
+            String(structured.categoryLabel || "").trim(),
+          issueType:
+            String((request as any).issueType || "").trim() ||
+            String(structured.issueType || "").trim(),
+        };
+      });
 
       const filtered = all.filter((request) => {
         let matches = true;
@@ -4419,6 +6401,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             request.id,
             request.description,
             request.category,
+            (request as any).categoryLabel,
+            (request as any).issueType,
             request.residentId,
             request.providerId,
             (request as any).location,
@@ -4432,7 +6416,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return matches;
       });
 
-      res.json(filtered);
+      const requestIds = filtered.map((request) => String(request.id || "").trim()).filter(Boolean);
+      const openCases = requestIds.length
+        ? await db
+            .select({
+              id: serviceRequestCancellationCases.id,
+              requestId: serviceRequestCancellationCases.requestId,
+              status: serviceRequestCancellationCases.status,
+              reasonCode: serviceRequestCancellationCases.reasonCode,
+              reasonDetail: serviceRequestCancellationCases.reasonDetail,
+              preferredResolution: serviceRequestCancellationCases.preferredResolution,
+              adminDecision: serviceRequestCancellationCases.adminDecision,
+              adminNote: serviceRequestCancellationCases.adminNote,
+              refundDecision: serviceRequestCancellationCases.refundDecision,
+              refundAmount: serviceRequestCancellationCases.refundAmount,
+              createdAt: serviceRequestCancellationCases.createdAt,
+              updatedAt: serviceRequestCancellationCases.updatedAt,
+            })
+            .from(serviceRequestCancellationCases)
+            .where(
+              and(
+                inArray(serviceRequestCancellationCases.requestId, requestIds as any),
+                inArray(serviceRequestCancellationCases.status, ["requested", "under_review"] as any),
+              ),
+            )
+        : [];
+      const openCaseByRequestId = new Map<string, (typeof openCases)[number]>();
+      for (const cancellationCase of openCases) {
+        const key = String(cancellationCase.requestId || "").trim();
+        if (!key || openCaseByRequestId.has(key)) continue;
+        openCaseByRequestId.set(key, cancellationCase);
+      }
+
+      res.json(
+        filtered.map((request) => {
+          const openCancellationCase = openCaseByRequestId.get(String(request.id || "").trim()) || null;
+          return {
+            ...request,
+            cancellationCase: openCancellationCase,
+            isCancellationUnderReview: Boolean(openCancellationCase),
+          };
+        }),
+      );
     } catch (error) {
       next(error);
     }
@@ -4705,6 +6730,315 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .orderBy(asc(users.name));
 
         res.json(rows);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    const parseTaskDueDate = (value: unknown): Date | null => {
+      if (value === undefined || value === null || String(value).trim() === "") return null;
+      const parsed = new Date(String(value));
+      if (Number.isNaN(parsed.getTime())) {
+        const error = new Error("Invalid due date");
+        (error as any).status = 400;
+        throw error;
+      }
+      return parsed;
+    };
+
+    const toCompanyUserMatchers = (company: any) => {
+      const matchers = [] as any[];
+      const companyId = String(company?.id || "").trim();
+      const companyName = String(company?.name || "").trim();
+      if (companyId) matchers.push(eq(users.company, companyId));
+      if (companyName) matchers.push(eq(users.company, companyName));
+      return matchers;
+    };
+
+    const ensureAssignableProvider = async (company: any, assigneeId?: string | null) => {
+      const normalizedAssigneeId = String(assigneeId || "").trim();
+      if (!normalizedAssigneeId) return null;
+
+      const matchers = toCompanyUserMatchers(company);
+      const [provider] = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          role: users.role,
+          isActive: users.isActive,
+        })
+        .from(users)
+        .where(
+          and(
+            eq(users.id, normalizedAssigneeId),
+            eq(users.role, "provider" as any),
+            ...(matchers.length ? [or(...matchers)] : []),
+          ),
+        )
+        .limit(1 as any);
+
+      if (!provider) {
+        const error = new Error("Assignee must be an active provider in this company");
+        (error as any).status = 400;
+        throw error;
+      }
+      return provider;
+    };
+
+    const hydrateCompanyTasks = async (companyId: string, whereClauses: any[] = []) => {
+      const tasks = await db
+        .select()
+        .from(companyTasks)
+        .where(and(eq(companyTasks.companyId, companyId), ...whereClauses))
+        .orderBy(desc(companyTasks.createdAt));
+
+      if (!tasks.length) return [];
+
+      const userIds: string[] = Array.from(
+        new Set(
+          tasks
+            .flatMap((task: any) => [task.assigneeId, task.createdBy])
+            .filter((id: any): id is string => Boolean(id)),
+        ),
+      );
+
+      const userRows = userIds.length
+        ? await db
+            .select({
+              id: users.id,
+              name: users.name,
+              email: users.email,
+              phone: users.phone,
+              isActive: users.isActive,
+            })
+            .from(users)
+            .where(inArray(users.id, userIds))
+        : [];
+
+      const userMap = new Map(userRows.map((row: any) => [row.id, row]));
+      const taskIds: string[] = tasks.map((task: any) => String(task.id));
+
+      const updateRows = taskIds.length
+        ? await db
+            .select()
+            .from(companyTaskUpdates)
+            .where(inArray(companyTaskUpdates.taskId, taskIds))
+            .orderBy(asc(companyTaskUpdates.createdAt))
+        : [];
+
+      const updatesByTask = new Map<string, any[]>();
+      for (const update of updateRows as any[]) {
+        const bucket = updatesByTask.get(update.taskId) || [];
+        bucket.push({
+          ...update,
+          attachments: Array.isArray(update.attachments) ? update.attachments : [],
+          author: update.authorId ? userMap.get(update.authorId) ?? null : null,
+        });
+        updatesByTask.set(update.taskId, bucket);
+      }
+
+      return tasks.map((task: any) => ({
+        ...task,
+        assignee: task.assigneeId ? userMap.get(task.assigneeId) ?? null : null,
+        creator: task.createdBy ? userMap.get(task.createdBy) ?? null : null,
+        updates: updatesByTask.get(task.id) || [],
+      }));
+    };
+
+    app.get("/api/company/tasks", requireAuth, async (req, res, next) => {
+      try {
+        const { company } = await resolveCompanyAccess(req);
+        if (!company) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (company.isActive === false) {
+          return res.status(403).json({ message: "Company pending approval" });
+        }
+
+        const filters: any[] = [];
+        const status = String(req.query.status || "").trim().toLowerCase();
+        if (status && status !== "all") {
+          filters.push(eq(companyTasks.status, status));
+        }
+
+        const assigneeId = String(req.query.assigneeId || "").trim();
+        if (assigneeId) {
+          filters.push(eq(companyTasks.assigneeId, assigneeId));
+        }
+
+        const search = String(req.query.search || "").trim();
+        if (search) {
+          filters.push(
+            or(
+              ilike(companyTasks.title, `%${search}%`),
+              ilike(companyTasks.description, `%${search}%`),
+            ),
+          );
+        }
+
+        const items = await hydrateCompanyTasks(String(company.id), filters);
+        res.json(items);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/company/tasks", requireAuth, async (req, res, next) => {
+      try {
+        const { userId, company, isOwner } = await resolveCompanyAccess(req);
+        if (!company || !userId) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (!isOwner) {
+          return res.status(401).json({ message: "Only company owner can create tasks" });
+        }
+        if (company.isActive === false) {
+          return res.status(403).json({ message: "Company pending approval" });
+        }
+
+        const payload = CompanyTaskCreateSchema.parse(req.body || {});
+        const dueDate = parseTaskDueDate(payload.dueDate);
+        const assignee = await ensureAssignableProvider(company, payload.assigneeId);
+
+        const [created] = await db
+          .insert(companyTasks)
+          .values({
+            companyId: String(company.id),
+            title: payload.title,
+            description: payload.description || null,
+            assigneeId: assignee?.id || null,
+            createdBy: userId,
+            priority: payload.priority,
+            status: "open",
+            dueDate,
+            serviceRequestId: payload.serviceRequestId || null,
+            metadata: payload.metadata || {},
+            updatedAt: new Date(),
+          })
+          .returning();
+
+        const [hydrated] = await hydrateCompanyTasks(String(company.id), [eq(companyTasks.id, created.id)]);
+        res.status(201).json(hydrated || created);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.patch("/api/company/tasks/:taskId", requireAuth, async (req, res, next) => {
+      try {
+        const { userId, company, isOwner } = await resolveCompanyAccess(req);
+        if (!company || !userId) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (!isOwner) {
+          return res.status(401).json({ message: "Only company owner can edit tasks" });
+        }
+
+        const { taskId } = req.params;
+        const [existing] = await db
+          .select()
+          .from(companyTasks)
+          .where(and(eq(companyTasks.id, taskId), eq(companyTasks.companyId, String(company.id))))
+          .limit(1 as any);
+
+        if (!existing) {
+          return res.status(404).json({ message: "Task not found" });
+        }
+
+        const payload = CompanyTaskUpdateSchema.parse(req.body || {});
+        const updates: Record<string, any> = { updatedAt: new Date() };
+
+        if (payload.title !== undefined) updates.title = payload.title;
+        if (payload.description !== undefined) updates.description = payload.description || null;
+        if (payload.priority !== undefined) updates.priority = payload.priority;
+        if (payload.status !== undefined) {
+          updates.status = payload.status;
+          updates.completedAt = payload.status === "completed" ? new Date() : null;
+        }
+        if (payload.dueDate !== undefined) updates.dueDate = parseTaskDueDate(payload.dueDate);
+        if (payload.serviceRequestId !== undefined) updates.serviceRequestId = payload.serviceRequestId || null;
+        if (payload.metadata !== undefined) updates.metadata = payload.metadata || {};
+
+        if (payload.assigneeId !== undefined) {
+          const assignee = await ensureAssignableProvider(company, payload.assigneeId);
+          updates.assigneeId = assignee?.id || null;
+        }
+
+        const [updated] = await db
+          .update(companyTasks)
+          .set(updates)
+          .where(eq(companyTasks.id, taskId))
+          .returning();
+
+        const [hydrated] = await hydrateCompanyTasks(String(company.id), [eq(companyTasks.id, updated.id)]);
+        res.json(hydrated || updated);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.delete("/api/company/tasks/:taskId", requireAuth, async (req, res, next) => {
+      try {
+        const { company, isOwner } = await resolveCompanyAccess(req);
+        if (!company) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+        if (!isOwner) {
+          return res.status(401).json({ message: "Only company owner can delete tasks" });
+        }
+
+        const { taskId } = req.params;
+        const [deleted] = await db
+          .delete(companyTasks)
+          .where(and(eq(companyTasks.id, taskId), eq(companyTasks.companyId, String(company.id))))
+          .returning({ id: companyTasks.id });
+
+        if (!deleted) {
+          return res.status(404).json({ message: "Task not found" });
+        }
+
+        res.json({ success: true, id: deleted.id });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/company/tasks/:taskId/updates", requireAuth, async (req, res, next) => {
+      try {
+        const { userId, company } = await resolveCompanyAccess(req);
+        if (!company || !userId) {
+          return res.status(403).json({ message: "No company found for user" });
+        }
+
+        const { taskId } = req.params;
+        const [task] = await db
+          .select()
+          .from(companyTasks)
+          .where(and(eq(companyTasks.id, taskId), eq(companyTasks.companyId, String(company.id))))
+          .limit(1 as any);
+
+        if (!task) {
+          return res.status(404).json({ message: "Task not found" });
+        }
+
+        const payload = CompanyTaskUpdateMessageSchema.parse(req.body || {});
+        const [created] = await db
+          .insert(companyTaskUpdates)
+          .values({
+            taskId,
+            authorId: userId,
+            message: payload.message,
+            attachments: payload.attachments || [],
+          })
+          .returning();
+
+        await db
+          .update(companyTasks)
+          .set({ updatedAt: new Date() })
+          .where(eq(companyTasks.id, taskId));
+
+        res.status(201).json(created);
       } catch (error) {
         next(error);
       }
@@ -5064,6 +7398,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
       storeId: z.string().min(1, "Store ID is required"),
     });
 
+    const companyInventoryImageUploadParser = raw({
+      type: ["image/jpeg", "image/png", "image/webp"],
+      limit: "5mb",
+    });
+
+    app.post(
+      "/api/company/stores/:storeId/inventory/images",
+      requireAuth,
+      companyInventoryImageUploadParser,
+      async (req, res, next) => {
+        try {
+          const { userId, company, isOwner } = await resolveCompanyAccess(req);
+          if (!company || !userId) {
+            return res.status(403).json({ message: "No company found for user" });
+          }
+          if (company.isActive === false) {
+            return res.status(403).json({ message: "Company pending approval" });
+          }
+
+          const { storeId } = req.params;
+          const [store] = await db
+            .select()
+            .from(stores)
+            .where(eq(stores.id, storeId))
+            .limit(1 as any);
+
+          if (!store || store.companyId !== company.id) {
+            return res.status(403).json({ message: "Store not in your company" });
+          }
+          if (store.approvalStatus === "pending") {
+            return res.status(403).json({
+              message: "Store awaiting approval. Images can be uploaded once approved.",
+            });
+          }
+          if (store.approvalStatus === "rejected") {
+            return res.status(403).json({
+              message: "Store was rejected. Images cannot be uploaded.",
+            });
+          }
+
+          const [membership] = await db
+            .select({
+              canManageItems: storeMembers.canManageItems,
+              isActive: storeMembers.isActive,
+            })
+            .from(storeMembers)
+            .where(
+              and(
+                eq(storeMembers.storeId, storeId),
+                eq(storeMembers.userId, userId),
+                eq(storeMembers.isActive, true),
+              ),
+            )
+            .limit(1 as any);
+
+          if (!isOwner && !membership?.canManageItems) {
+            return res.status(401).json({ message: "Unauthorized" });
+          }
+
+          const rawContentType = String(req.headers["content-type"] || "");
+          const mimeType = rawContentType.split(";")[0].trim().toLowerCase();
+          if (!Buffer.isBuffer(req.body) || !req.body.length) {
+            return res.status(400).json({ message: "Image file is required" });
+          }
+
+          const uploaded = await persistInventoryImage({
+            buffer: req.body,
+            mimeType,
+            storeId,
+            uploaderId: userId,
+          });
+
+          return res.status(201).json(uploaded);
+        } catch (error) {
+          next(error);
+        }
+      },
+    );
+
     app.get("/api/company/stores/:storeId/inventory", requireAuth, async (req, res, next) => {
       try {
         const { userId, company } = await resolveCompanyAccess(req);
@@ -5184,6 +7597,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           storeId,
         });
 
+        const normalizedImages = await normalizeAndPersistInventoryImages({
+          images: parsed.images,
+          storeId,
+          uploaderId: userId,
+        });
+
         const [created] = await db
           .insert(marketplaceItems)
           .values({
@@ -5197,7 +7616,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             category: parsed.category,
             subcategory: parsed.subcategory,
             stock: parsed.stock as any,
-            images: parsed.images,
+            images: normalizedImages,
             unitOfMeasure: parsed.unitOfMeasure,
             isActive: parsed.isActive ?? true,
           })
@@ -5273,9 +7692,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           const updates = updateMarketplaceItemSchema.partial().parse(req.body);
+          const normalizedImages = await normalizeAndPersistInventoryImages({
+            images: updates.images,
+            storeId,
+            uploaderId: userId,
+          });
+          const updatePayload: Record<string, unknown> = {
+            ...updates,
+            updatedAt: new Date(),
+          };
+          if (normalizedImages !== undefined) {
+            updatePayload.images = normalizedImages;
+          }
+
           const [updated] = await db
             .update(marketplaceItems)
-            .set({ ...updates, updatedAt: new Date() })
+            .set(updatePayload)
             .where(eq(marketplaceItems.id, itemId))
             .returning();
 
@@ -5803,6 +8235,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const parsed = insertCategorySchema.parse(req.body);
       const [created] = await db.insert(categories).values(parsed).returning();
+      if (created.scope === "global") {
+        try {
+          await upsertApprovedCategoryFromServiceCategory({
+            id: String(created.id),
+            name: String(created.name),
+            key: String(created.key),
+            emoji: created.emoji ?? null,
+            description: created.description ?? null,
+            isActive: created.isActive !== false,
+          });
+        } catch (syncError) {
+          console.error("Failed to sync approved category after create:", syncError);
+        }
+      }
       // Broadcast category creation to SSE listeners
       try {
         // sendSseEvent is defined earlier in this file
@@ -5824,6 +8270,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
+      const [before] = await db
+        .select()
+        .from(categories)
+        .where(eq(categories.id, id))
+        .limit(1);
+      if (!before) {
+        return res.status(404).json({ message: "Category not found" });
+      }
       const updates = {
         ...req.body,
         updatedAt: new Date(),
@@ -5835,8 +8289,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(eq(categories.id, id))
         .returning();
 
-      if (!updated) {
-        return res.status(404).json({ message: "Category not found" });
+      const beforeGlobal = before.scope === "global";
+      const afterGlobal = updated.scope === "global";
+      try {
+        if (beforeGlobal && afterGlobal) {
+          await syncApprovedCategoryAfterServiceCategoryUpdate(
+            {
+              id: String(before.id),
+              name: String(before.name),
+              key: String(before.key),
+              emoji: before.emoji ?? null,
+              description: before.description ?? null,
+              isActive: before.isActive !== false,
+            },
+            {
+              id: String(updated.id),
+              name: String(updated.name),
+              key: String(updated.key),
+              emoji: updated.emoji ?? null,
+              description: updated.description ?? null,
+              isActive: updated.isActive !== false,
+            },
+          );
+        } else if (!beforeGlobal && afterGlobal) {
+          await upsertApprovedCategoryFromServiceCategory({
+            id: String(updated.id),
+            name: String(updated.name),
+            key: String(updated.key),
+            emoji: updated.emoji ?? null,
+            description: updated.description ?? null,
+            isActive: updated.isActive !== false,
+          });
+        } else if (beforeGlobal && !afterGlobal) {
+          await removeApprovedCategoryForServiceCategory({
+            id: String(before.id),
+            name: String(before.name),
+            key: String(before.key),
+            emoji: before.emoji ?? null,
+            description: before.description ?? null,
+            isActive: before.isActive !== false,
+          });
+        }
+      } catch (syncError) {
+        console.error("Failed to sync approved category after update:", syncError);
       }
 
       try {
@@ -5866,6 +8361,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!deleted || deleted.length === 0) {
         return res.status(404).json({ message: "Category not found" });
+      }
+      if (deleted[0].scope === "global") {
+        try {
+          await removeApprovedCategoryForServiceCategory({
+            id: String(deleted[0].id),
+            name: String(deleted[0].name),
+            key: String(deleted[0].key),
+            emoji: deleted[0].emoji ?? null,
+            description: deleted[0].description ?? null,
+            isActive: deleted[0].isActive !== false,
+          });
+        } catch (syncError) {
+          console.error("Failed to sync approved category after delete:", syncError);
+        }
       }
 
       try {
@@ -6426,6 +8935,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const parsed = MarketplaceItemAdminSchema.parse(req.body);
+      const normalizedImages = await normalizeAndPersistInventoryImages({
+        images: parsed.images,
+        storeId: parsed.storeId || "admin-marketplace",
+        uploaderId: String(req.auth?.userId || req.user?.id || "admin"),
+      });
       const [created] = await db
         .insert(marketplaceItems)
         .values({
@@ -6439,7 +8953,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           category: parsed.category,
           subcategory: parsed.subcategory,
           stock: parsed.stock as any,
-          images: parsed.images,
+          images: normalizedImages,
           isActive: parsed.isActive ?? true,
         })
         .returning();
@@ -6460,18 +8974,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const updates = updateMarketplaceItemSchema.partial().parse(req.body);
 
-      const [updated] = await db
-        .update(marketplaceItems)
-        .set({
-          ...updates,
-          updatedAt: new Date(),
-        })
+      const [existingItem] = await db
+        .select({ storeId: marketplaceItems.storeId })
+        .from(marketplaceItems)
         .where(eq(marketplaceItems.id, id))
-        .returning();
+        .limit(1 as any);
 
-      if (!updated) {
+      if (!existingItem) {
         return res.status(404).json({ message: "Marketplace item not found" });
       }
+
+      const normalizedImages = await normalizeAndPersistInventoryImages({
+        images: updates.images,
+        storeId: String(updates.storeId || existingItem.storeId || "admin-marketplace"),
+        uploaderId: String(req.auth?.userId || req.user?.id || "admin"),
+      });
+
+      const updatePayload: Record<string, unknown> = {
+        ...updates,
+        updatedAt: new Date(),
+      };
+      if (normalizedImages !== undefined) {
+        updatePayload.images = normalizedImages;
+      }
+
+      const [updated] = await db
+        .update(marketplaceItems)
+        .set(updatePayload)
+        .where(eq(marketplaceItems.id, id))
+        .returning();
 
       res.json(updated);
     } catch (error) {
@@ -6877,7 +9408,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Service request not found" });
       }
 
-      res.json(request);
+      const latestCancellationCase = await storage.getLatestCancellationCaseForRequest(id);
+      res.json({
+        ...request,
+        cancellationCase: latestCancellationCase || null,
+      });
     } catch (error) {
       console.error("Error fetching service request for admin:", error);
       next(error);
@@ -6943,11 +9478,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         (statusKey === "assigned_for_inspection" ? request.providerId : null);
       const jobProviderId =
         request.assignedJobProviderId ||
-        (["assigned_for_job", "assigned_for_maintenance", "in_progress", "completed"].includes(statusKey)
+        (
+          [
+            "assigned_for_job",
+            "assigned_for_maintenance",
+            "in_progress",
+            "work_completed_pending_resident",
+            "disputed",
+            "rework_required",
+            "completed",
+          ].includes(statusKey)
           ? request.providerId
           : null);
 
-      const [resident, provider, inspector, jobProvider, estate] = await Promise.all([
+      const [resident, provider, inspector, jobProvider, estate, latestCancellationCase] = await Promise.all([
         request.residentId ? storage.getUser(request.residentId) : Promise.resolve(undefined),
         request.providerId ? storage.getUser(request.providerId) : Promise.resolve(undefined),
         inspectorId ? storage.getUser(inspectorId) : Promise.resolve(undefined),
@@ -6960,6 +9504,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               .limit(1)
               .then((rows: Array<{ id: string; name: string | null }>) => rows[0])
           : Promise.resolve(undefined),
+        storage.getLatestCancellationCaseForRequest(id),
       ]);
 
       const detail = buildServiceRequestDetailViewModel(request as any, {
@@ -7008,7 +9553,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         estate: estate || null,
       });
 
-      res.json(detail);
+      res.json({
+        ...detail,
+        cancellationCase: latestCancellationCase
+          ? {
+              id: latestCancellationCase.id,
+              status: latestCancellationCase.status,
+              reasonCode: latestCancellationCase.reasonCode,
+              reasonDetail: latestCancellationCase.reasonDetail,
+              preferredResolution: latestCancellationCase.preferredResolution,
+              adminDecision: latestCancellationCase.adminDecision,
+              adminNote: latestCancellationCase.adminNote,
+              refundDecision: latestCancellationCase.refundDecision,
+              refundAmount: latestCancellationCase.refundAmount,
+              resolvedAt: latestCancellationCase.resolvedAt,
+              createdAt: latestCancellationCase.createdAt,
+              updatedAt: latestCancellationCase.updatedAt,
+            }
+          : null,
+      });
     } catch (error) {
       console.error("Error fetching service request:", error);
       next(error);
@@ -7445,6 +10008,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     socket.on("join", (userId: string) => {
       if (!userId) return;
       socket.join(`user-${userId}`);
+    });
+
+    socket.on("request-typing", async (payload?: {
+      requestId?: string;
+      userId?: string;
+      senderRole?: "resident" | "provider" | "admin";
+      isTyping?: boolean;
+    }) => {
+      try {
+        const requestId = String(payload?.requestId || "").trim();
+        const senderUserId = String(payload?.userId || "").trim();
+        const senderRole = String(payload?.senderRole || "").trim().toLowerCase();
+        const isTyping = Boolean(payload?.isTyping);
+
+        if (!requestId) return;
+        if (!["resident", "provider", "admin"].includes(senderRole)) return;
+
+        const [request] = await db
+          .select({
+            id: serviceRequests.id,
+            residentId: serviceRequests.residentId,
+            providerId: serviceRequests.providerId,
+          })
+          .from(serviceRequests)
+          .where(eq(serviceRequests.id, requestId))
+          .limit(1 as any);
+
+        if (!request) return;
+
+        const participantIds = new Set<string>();
+        if (request.residentId) participantIds.add(String(request.residentId));
+        if (request.providerId) participantIds.add(String(request.providerId));
+
+        for (const participantUserId of participantIds) {
+          if (senderUserId && participantUserId === senderUserId) continue;
+          io.to(`user-${participantUserId}`).emit("request-typing", {
+            requestId,
+            userId: senderUserId,
+            senderRole,
+            isTyping,
+            at: new Date().toISOString(),
+          });
+        }
+      } catch (error) {
+        console.error("request-typing socket error:", error);
+      }
     });
   });
   return httpServer;}

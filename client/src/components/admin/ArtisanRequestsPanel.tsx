@@ -54,12 +54,17 @@ type RequestStatus =
   | "assigned"
   | "assigned_for_job"
   | "in_progress"
+  | "work_completed_pending_resident"
+  | "disputed"
+  | "rework_required"
   | "completed"
   | "cancelled";
 
 interface ServiceRequest {
   id: string;
   category: string;
+  categoryLabel?: string;
+  issueType?: string;
   description: string;
   status: RequestStatus;
   providerId?: string;
@@ -89,6 +94,20 @@ interface ServiceRequest {
   consultancyReportSubmittedAt?: string;
   closedAt?: string;
   closeReason?: string;
+  cancellationCase?: {
+    id?: string;
+    status?: string;
+    reasonCode?: string;
+    reasonDetail?: string;
+    preferredResolution?: string;
+    adminDecision?: string | null;
+    adminNote?: string | null;
+    refundDecision?: string;
+    refundAmount?: string | number | null;
+    createdAt?: string;
+    updatedAt?: string;
+  } | null;
+  isCancellationUnderReview?: boolean;
 }
 
 interface Provider {
@@ -123,6 +142,9 @@ const STATUS_COLORS: Record<RequestStatus, string> = {
   assigned: "bg-purple-50 text-purple-700 border-purple-200",
   assigned_for_job: "bg-indigo-50 text-indigo-700 border-indigo-200",
   in_progress: "bg-blue-50 text-blue-700 border-blue-200",
+  work_completed_pending_resident: "bg-cyan-50 text-cyan-700 border-cyan-200",
+  disputed: "bg-rose-50 text-rose-700 border-rose-200",
+  rework_required: "bg-amber-50 text-amber-700 border-amber-200",
   completed: "bg-green-50 text-green-700 border-green-200",
   cancelled: "bg-red-50 text-red-700 border-red-200",
 };
@@ -158,7 +180,51 @@ function formatNgnAmount(value: number) {
 }
 
 function normalizeCategoryKey(value?: string | null) {
-  return String(value || "").trim().toLowerCase();
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function formatCategoryLabel(value?: string | null) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.replaceAll("_", " ");
+}
+
+function normalizeStatusKey(value?: string | null) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function resolveRequestCategoryKey(request?: ServiceRequest | null) {
+  if (!request) return "";
+  const categoryKey = normalizeCategoryKey(request.category);
+  const inferredKey = normalizeCategoryKey(request.categoryLabel || request.issueType || "");
+  if (categoryKey && categoryKey !== "maintenance_repair") return categoryKey;
+  return inferredKey || categoryKey;
+}
+
+function resolveRequestCategoryDisplay(request?: ServiceRequest | null) {
+  const display = formatCategoryLabel(request?.categoryLabel || request?.issueType || request?.category || "");
+  return display || "Request";
+}
+
+function formatReasonCode(value?: string | null) {
+  const text = String(value || "").trim();
+  if (!text) return "Not provided";
+  return text.replaceAll("_", " ");
+}
+
+function resolveOpenCancellationCase(request?: ServiceRequest | null) {
+  if (!request?.cancellationCase) return null;
+  const status = normalizeStatusKey(request.cancellationCase.status || "");
+  if (!status) return null;
+  if (status !== "requested" && status !== "under_review") return null;
+  return request.cancellationCase;
 }
 
 function providerMatchesCategory(provider: Provider, category?: string | null) {
@@ -228,6 +294,12 @@ export default function ArtisanRequestsPanel({
   const [paymentRequestNote, setPaymentRequestNote] = useState("");
   const [cancelRequest, setCancelRequest] = useState<ServiceRequest | null>(null);
   const [cancelReason, setCancelReason] = useState("");
+  const [cancellationReviewRequest, setCancellationReviewRequest] = useState<ServiceRequest | null>(null);
+  const [cancellationReviewNote, setCancellationReviewNote] = useState("");
+  const [cancellationReviewRefundDecision, setCancellationReviewRefundDecision] = useState<
+    "none" | "full" | "partial"
+  >("none");
+  const [cancellationReviewRefundAmount, setCancellationReviewRefundAmount] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const actionHandledRef = useRef<{ id: string; action: string } | null>(null);
 
@@ -262,7 +334,9 @@ export default function ArtisanRequestsPanel({
   });
 
   const providerCategory = normalizeCategoryKey(
-    assignRequest?.category || reassignRequest?.category || jobReassignRequest?.category || ""
+    resolveRequestCategoryKey(assignRequest) ||
+      resolveRequestCategoryKey(reassignRequest) ||
+      resolveRequestCategoryKey(jobReassignRequest)
   );
 
   // Fetch available providers
@@ -279,7 +353,9 @@ export default function ArtisanRequestsPanel({
   const providers = useMemo(() => {
     const list = providersData ?? [];
     if (!providerCategory) return list;
-    return list.filter((provider) => providerMatchesCategory(provider, providerCategory));
+    const matched = list.filter((provider) => providerMatchesCategory(provider, providerCategory));
+    // Keep backend-filtered results if local normalization mismatches legacy category aliases.
+    return matched.length > 0 ? matched : list;
   }, [providersData, providerCategory]);
 
   // Update request mutation
@@ -347,6 +423,66 @@ export default function ArtisanRequestsPanel({
     },
   });
 
+  const resolveDisputeMutation = useMutation({
+    mutationFn: async ({
+      id,
+      resolution,
+      note,
+    }: {
+      id: string;
+      resolution: "rework_required" | "completed" | "cancelled";
+      note?: string;
+    }) => {
+      return await adminApiRequest("POST", `/api/admin/service-requests/${id}/resolve-dispute`, {
+        resolution,
+        note,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] });
+      toast({ title: "Dispute resolved" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to resolve dispute",
+        description: error.message || "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const resolveCancellationCaseMutation = useMutation({
+    mutationFn: async ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: {
+        action: "under_review" | "approve" | "reject";
+        note: string;
+        refundDecision?: "none" | "full" | "partial";
+        refundAmount?: number;
+      };
+    }) => {
+      return await AdminAPI.bridge.resolveCancellationCase(id, payload);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] });
+      toast({ title: "Cancellation case updated" });
+      setCancellationReviewRequest(null);
+      setCancellationReviewNote("");
+      setCancellationReviewRefundDecision("none");
+      setCancellationReviewRefundAmount("");
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to update cancellation case",
+        description: error.message || "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
   const requests = useMemo<ServiceRequest[]>(() => {
     const list = data ?? [];
     const needle = q.trim().toLowerCase();
@@ -354,6 +490,8 @@ export default function ArtisanRequestsPanel({
     return list.filter(
       (r) =>
         r.description?.toLowerCase().includes(needle) ||
+        r.categoryLabel?.toLowerCase().includes(needle) ||
+        r.issueType?.toLowerCase().includes(needle) ||
         r.category?.toLowerCase().includes(needle) ||
         r.id?.toLowerCase().includes(needle)
     );
@@ -368,6 +506,11 @@ export default function ArtisanRequestsPanel({
   ) => {
     if (actionValue === "request-payment") {
       handleOpenRequestPayment(target);
+    } else if (actionValue === "review-cancellation") {
+      setCancellationReviewRequest(target);
+      setCancellationReviewNote("");
+      setCancellationReviewRefundDecision("none");
+      setCancellationReviewRefundAmount("");
     } else if (actionValue === "assign-provider" || actionValue === "assign-for-job") {
       setAssignMode(actionValue === "assign-for-job" ? "job" : "inspection");
       setAssignRequest(target);
@@ -442,6 +585,62 @@ export default function ArtisanRequestsPanel({
       if (typeof cleanup === "function") cleanup();
     };
   }, [actionTarget, location, onActionHandled, requests, setLocation]);
+
+  const openCancellationReview = (request: ServiceRequest) => {
+    setCancellationReviewRequest(request);
+    setCancellationReviewNote("");
+    setCancellationReviewRefundDecision("none");
+    setCancellationReviewRefundAmount("");
+  };
+
+  const submitCancellationReview = (action: "under_review" | "approve" | "reject") => {
+    const activeCase = resolveOpenCancellationCase(cancellationReviewRequest);
+    if (!activeCase?.id) {
+      toast({
+        title: "Cancellation case not available",
+        description: "Refresh the list and try again.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const note = cancellationReviewNote.trim();
+    if (note.length < 3) {
+      toast({
+        title: "Decision note required",
+        description: "Add a short note before continuing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const partialAmount = Number(cancellationReviewRefundAmount || 0);
+    if (
+      action === "approve" &&
+      cancellationReviewRefundDecision === "partial" &&
+      (!Number.isFinite(partialAmount) || partialAmount <= 0)
+    ) {
+      toast({
+        title: "Invalid refund amount",
+        description: "Enter a partial refund amount greater than zero.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    resolveCancellationCaseMutation.mutate({
+      id: activeCase.id,
+      payload: {
+        action,
+        note,
+        refundDecision: action === "approve" ? cancellationReviewRefundDecision : "none",
+        refundAmount:
+          action === "approve" && cancellationReviewRefundDecision === "partial"
+            ? partialAmount
+            : undefined,
+      },
+    });
+  };
 
   // Action handlers
   const handleAssignProvider = () => {
@@ -752,6 +951,9 @@ export default function ArtisanRequestsPanel({
             <option value="assigned">Assigned for inspection</option>
             <option value="assigned_for_job">Assigned for job</option>
             <option value="in_progress">In Progress</option>
+            <option value="work_completed_pending_resident">Awaiting resident confirmation</option>
+            <option value="disputed">Disputed</option>
+            <option value="rework_required">Rework required</option>
             <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
           </select>
@@ -791,6 +993,8 @@ export default function ArtisanRequestsPanel({
               const consultancyReport = readConsultancyReport(r.consultancyReport);
               const hasConsultancyReport =
                 Boolean(r.consultancyReportSubmittedAt) || Boolean(consultancyReport);
+              const openCancellationCase = resolveOpenCancellationCase(r);
+              const cancellationReviewStatus = normalizeStatusKey(openCancellationCase?.status || "");
 
               return (
                 <div
@@ -800,14 +1004,14 @@ export default function ArtisanRequestsPanel({
                 {/* Header */}
                 <div className="flex items-start justify-between gap-3">
                   <div className="font-semibold text-base capitalize">
-                    {r.category?.replaceAll("_", " ") || "Request"}
+                    {resolveRequestCategoryDisplay(r)}
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     <Badge
                       variant="outline"
                       className={`border px-2 py-1 text-xs capitalize ${STATUS_COLORS[r.status]}`}
                     >
-                      {formatServiceRequestStatusLabel(r.status, r.category)}
+                      {formatServiceRequestStatusLabel(r.status, resolveRequestCategoryKey(r))}
                     </Badge>
                     {r.urgency && (
                       <Badge
@@ -817,6 +1021,20 @@ export default function ArtisanRequestsPanel({
                         {r.urgency}
                       </Badge>
                     )}
+                    {openCancellationCase ? (
+                      <Badge
+                        variant="outline"
+                        className={
+                          cancellationReviewStatus === "under_review"
+                            ? "border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-700"
+                            : "border-rose-200 bg-rose-50 px-2 py-0.5 text-xs text-rose-700"
+                        }
+                      >
+                        {cancellationReviewStatus === "under_review"
+                          ? "Cancellation under review"
+                          : "Cancellation requested"}
+                      </Badge>
+                    ) : null}
                   </div>
                 </div>
 
@@ -824,6 +1042,33 @@ export default function ArtisanRequestsPanel({
                 <p className="text-sm text-muted-foreground line-clamp-2">
                   {r.description}
                 </p>
+
+                {openCancellationCase ? (
+                  <div className="rounded-lg border border-rose-200 bg-rose-50/60 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-rose-700">
+                        Cancellation review
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 border-rose-200 bg-white px-2 text-[11px] text-rose-700 hover:bg-rose-100"
+                        onClick={() => openCancellationReview(r)}
+                      >
+                        Review
+                      </Button>
+                    </div>
+                    <p className="mt-2 text-xs text-rose-800">
+                      <span className="font-medium">Reason:</span>{" "}
+                      {formatReasonCode(openCancellationCase.reasonCode)}
+                    </p>
+                    {openCancellationCase.reasonDetail ? (
+                      <p className="mt-1 line-clamp-2 text-xs text-rose-700">
+                        {openCancellationCase.reasonDetail}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 {/* Provider advice (consultancy report) */}
                 {consultancyReport ? (
@@ -960,7 +1205,7 @@ export default function ArtisanRequestsPanel({
                     </>
                   )}
 
-                  {/* In Progress: Complete (admin can still change provider with evidence) */}
+                  {/* In Progress: manual admin complete (provider normally marks work complete first) */}
                   {r.status === "in_progress" && (
                     <>
                       <Button size="sm" onClick={() => setCompleteRequest(r)} className="h-8 whitespace-nowrap">
@@ -977,8 +1222,93 @@ export default function ArtisanRequestsPanel({
                     </>
                   )}
 
+                  {r.status === "rework_required" && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleStartWork(r)}
+                        className="h-8 whitespace-nowrap"
+                      >
+                        Resume rework
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleOpenJobReassign(r)}
+                        className="h-8 whitespace-nowrap"
+                      >
+                        Change provider
+                      </Button>
+                    </>
+                  )}
+
+                  {r.status === "work_completed_pending_resident" && (
+                    <>
+                      <Button size="sm" onClick={() => setCompleteRequest(r)} className="h-8 whitespace-nowrap">
+                        Complete override
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() =>
+                          updateRequestMutation.mutate({
+                            id: r.id,
+                            updates: { status: "rework_required" },
+                          })
+                        }
+                        className="h-8 whitespace-nowrap"
+                      >
+                        Require rework
+                      </Button>
+                    </>
+                  )}
+
+                  {r.status === "disputed" && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          resolveDisputeMutation.mutate({
+                            id: r.id,
+                            resolution: "rework_required",
+                            note: "Admin requested rework after dispute review.",
+                          });
+                        }}
+                        className="h-8 whitespace-nowrap"
+                      >
+                        Resolve to rework
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          resolveDisputeMutation.mutate({
+                            id: r.id,
+                            resolution: "completed",
+                            note: "Admin resolved dispute as completed.",
+                          });
+                        }}
+                        className="h-8 whitespace-nowrap"
+                      >
+                        Resolve to complete
+                      </Button>
+                    </>
+                  )}
+
+                  {openCancellationCase ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => openCancellationReview(r)}
+                      className="h-8 whitespace-nowrap border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                    >
+                      Review cancellation
+                    </Button>
+                  ) : null}
+
                   {/* Cancel option for non-completed/cancelled */}
-                  {!["completed", "cancelled"].includes(r.status) && (
+                  {!["completed", "cancelled"].includes(r.status) && !openCancellationCase && (
                     <Button
                       size="sm"
                       variant="ghost"
@@ -1015,8 +1345,10 @@ export default function ArtisanRequestsPanel({
               {assignMode === "job"
                 ? "Select the provider who will own the job after payment."
                 : "Select the provider who will carry out the inspection."}
-              {assignRequest?.category
-                ? ` Category: ${assignRequest.category.replaceAll("_", " ")}.`
+              {formatCategoryLabel(assignRequest?.categoryLabel || assignRequest?.issueType || assignRequest?.category || "")
+                ? ` Category: ${formatCategoryLabel(
+                    assignRequest?.categoryLabel || assignRequest?.issueType || assignRequest?.category || ""
+                  )}.`
                 : ""}
             </DialogDescription>
           </DialogHeader>
@@ -1517,6 +1849,136 @@ export default function ArtisanRequestsPanel({
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={Boolean(cancellationReviewRequest)}
+        onOpenChange={(open) => {
+          if (open) return;
+          if (resolveCancellationCaseMutation.isPending) return;
+          setCancellationReviewRequest(null);
+          setCancellationReviewNote("");
+          setCancellationReviewRefundDecision("none");
+          setCancellationReviewRefundAmount("");
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-rose-500" />
+              Cancellation review
+            </DialogTitle>
+            <DialogDescription>
+              Review resident cancellation request and decide the resolution.
+            </DialogDescription>
+          </DialogHeader>
+          {(() => {
+            const activeCase = resolveOpenCancellationCase(cancellationReviewRequest);
+            if (!activeCase) {
+              return (
+                <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-600">
+                  No open cancellation case found for this request.
+                </div>
+              );
+            }
+
+            return (
+              <div className="space-y-4">
+                <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm">
+                  <p className="font-medium text-rose-800">
+                    {resolveRequestCategoryDisplay(cancellationReviewRequest)} request
+                  </p>
+                  <p className="mt-1 text-rose-700">
+                    <span className="font-medium">Reason:</span> {formatReasonCode(activeCase.reasonCode)}
+                  </p>
+                  {activeCase.reasonDetail ? (
+                    <p className="mt-1 text-rose-700">{activeCase.reasonDetail}</p>
+                  ) : null}
+                  {activeCase.preferredResolution ? (
+                    <p className="mt-1 text-rose-700">
+                      <span className="font-medium">Preferred resolution:</span>{" "}
+                      {formatReasonCode(activeCase.preferredResolution)}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div>
+                  <Label htmlFor="cancellation-review-note">Admin note</Label>
+                  <Textarea
+                    id="cancellation-review-note"
+                    className="mt-1"
+                    placeholder="Document your investigation and decision."
+                    value={cancellationReviewNote}
+                    onChange={(event) => setCancellationReviewNote(event.target.value)}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <Label htmlFor="cancellation-refund-decision">Refund decision</Label>
+                    <Select
+                      value={cancellationReviewRefundDecision}
+                      onValueChange={(value) =>
+                        setCancellationReviewRefundDecision(value as "none" | "full" | "partial")
+                      }
+                    >
+                      <SelectTrigger id="cancellation-refund-decision" className="mt-1">
+                        <SelectValue placeholder="Select refund decision" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No refund</SelectItem>
+                        <SelectItem value="full">Full refund</SelectItem>
+                        <SelectItem value="partial">Partial refund</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="cancellation-refund-amount">Partial refund amount (NGN)</Label>
+                    <Input
+                      id="cancellation-refund-amount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className="mt-1"
+                      value={cancellationReviewRefundAmount}
+                      onChange={(event) => setCancellationReviewRefundAmount(event.target.value)}
+                      disabled={cancellationReviewRefundDecision !== "partial"}
+                      placeholder="e.g. 15000"
+                    />
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          <DialogFooter className="flex flex-wrap gap-2 sm:justify-between">
+            <Button
+              variant="outline"
+              onClick={() => submitCancellationReview("under_review")}
+              disabled={
+                resolveCancellationCaseMutation.isPending ||
+                normalizeStatusKey(resolveOpenCancellationCase(cancellationReviewRequest)?.status || "") ===
+                  "under_review"
+              }
+            >
+              Mark under review
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => submitCancellationReview("reject")}
+                disabled={resolveCancellationCaseMutation.isPending}
+              >
+                Reject
+              </Button>
+              <Button
+                onClick={() => submitCancellationReview("approve")}
+                disabled={resolveCancellationCaseMutation.isPending}
+              >
+                Approve cancellation
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Complete Request Dialog */}
       <Dialog open={Boolean(completeRequest)} onOpenChange={() => setCompleteRequest(null)}>
         <DialogContent>
@@ -1526,7 +1988,7 @@ export default function ArtisanRequestsPanel({
               Complete Request
             </DialogTitle>
             <DialogDescription>
-              Mark this {completeRequest?.category?.replaceAll("_", " ")} request as completed.
+              Mark this {resolveRequestCategoryDisplay(completeRequest)} request as completed.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

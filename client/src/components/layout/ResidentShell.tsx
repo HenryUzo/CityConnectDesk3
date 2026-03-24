@@ -20,7 +20,7 @@ export default function ResidentShell({
   const [, navigate] = useLocation();
 
   const navProps = {
-    onBookServiceClick: () => navigate("/resident/requests/new"),
+    onBookServiceClick: () => navigate("/resident/requests/ordinary"),
     onNavigateToHomepage: () => navigate("/resident"),
     onNavigateToSettings: () => navigate("/resident/settings"),
     onNavigateToMarketplace: () => navigate("/resident/citymart"),

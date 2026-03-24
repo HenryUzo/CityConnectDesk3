@@ -1,21 +1,29 @@
-import { Router } from "express";
+import { Router, raw } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import { db } from "./db";
 import { 
   stores, 
   storeMembers,
   marketplaceItems,
+  itemCategories,
   companies,
+  companyTasks,
+  companyTaskUpdates,
   users,
   memberships,
   orders,
   storeEstates,
+  estates,
   insertMarketplaceItemSchema
 } from "@shared/schema";
-import { eq, and, or, like, desc } from "drizzle-orm";
+import { eq, and, or, like, ilike, desc, asc, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { storage } from "./storage";
 import { requireAuth, requireProvider } from "./auth-middleware";
+import {
+  normalizeAndPersistInventoryImages,
+  persistInventoryImage,
+} from "./utils/inventory-image-storage";
 
 const router = Router();
 
@@ -29,6 +37,15 @@ const ConsultancyReportSchema = z.object({
   materialCost: z.preprocess((val) => Number(val), z.number().min(0)),
   serviceCost: z.preprocess((val) => Number(val), z.number().min(0)),
   preventiveRecommendation: z.string().trim().min(3).max(2000),
+});
+
+const ProviderTaskStatusSchema = z.object({
+  status: z.enum(["open", "in_progress", "completed", "cancelled"]),
+});
+
+const ProviderTaskUpdateSchema = z.object({
+  message: z.string().trim().min(1).max(4000),
+  attachments: z.array(z.string().trim().min(1)).max(10).optional(),
 });
 
 const normalizeStatusKey = (value: unknown) =>
@@ -88,52 +105,71 @@ router.post("/service-requests/:id/consultancy-report", async (req: any, res) =>
       return res.status(404).json({ error: "Service request not found" });
     }
 
-    const summaryMessage =
-      `Consultancy report submitted.\n` +
-      `Inspection date: ${inspectionDate.toLocaleDateString()}\n` +
-      `Issue: ${payload.actualIssue}\n` +
-      `Cause: ${payload.causeOfIssue}\n` +
-      `Recommended material cost: NGN ${payload.materialCost.toLocaleString()}\n` +
-      `Recommended service cost: NGN ${payload.serviceCost.toLocaleString()}\n` +
-      `Preventive recommendation: ${payload.preventiveRecommendation}`;
-
-    const inserted = await storage.addRequestMessage(
-      requestId,
-      providerId,
-      "provider",
-      summaryMessage,
-    );
-
     const io = req.app.get("io") as SocketIOServer | undefined;
-    const participantIds = new Set<string>();
-    if (updated.residentId) participantIds.add(updated.residentId);
-    if (updated.providerId) participantIds.add(updated.providerId);
-    for (const participantUserId of participantIds) {
-      io?.to(`user-${participantUserId}`).emit("request-message:new", {
-        requestId,
-        message: inserted,
-      });
-      io?.to(`user-${participantUserId}`).emit("service-request:updated", {
-        type: "status",
-        requestId,
-        request: updated,
-        at: new Date().toISOString(),
-      });
+    const reviewerIds = new Set<string>();
+    const reviewerUsers = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        or(
+          eq(users.role, "admin"),
+          eq(users.role, "estate_admin"),
+          eq(users.role, "super_admin"),
+          eq(users.globalRole, "super_admin"),
+        ),
+      );
+    for (const reviewer of reviewerUsers) {
+      if (reviewer?.id) reviewerIds.add(String(reviewer.id));
     }
 
-    if (updated.residentId) {
+    const linkedCompanyId = String((updated as any).companyId || "").trim();
+    if (linkedCompanyId) {
+      const [companyRow] = await db
+        .select({ id: companies.id, providerId: companies.providerId })
+        .from(companies)
+        .where(eq(companies.id, linkedCompanyId))
+        .limit(1 as any);
+      if (companyRow?.providerId) {
+        reviewerIds.add(String(companyRow.providerId));
+      }
+    }
+
+    if (updated.residentId) reviewerIds.delete(String(updated.residentId));
+    if (updated.providerId) reviewerIds.delete(String(updated.providerId));
+    reviewerIds.delete(String(providerId));
+
+    for (const reviewerId of reviewerIds) {
       const notification = await storage.createNotification({
-        userId: updated.residentId,
-        title: "Consultancy report added",
-        message: "Your provider submitted an inspection report for this request.",
+        userId: reviewerId,
+        title: "Consultancy report awaiting review",
+        message: "A provider submitted a report. Review and approve before resident payment can be requested.",
         type: "info",
         metadata: {
           requestId,
-          kind: "consultancy_report",
+          kind: "consultancy_report_review",
         },
       });
-      io?.to(`user-${updated.residentId}`).emit("notification:new", notification);
+      io?.to(`user-${reviewerId}`).emit("notification:new", notification);
     }
+
+    const providerNotification = await storage.createNotification({
+      userId: providerId,
+      title: "Report submitted for approval",
+      message: "Your consultancy report is now pending company/admin review.",
+      type: "info",
+      metadata: {
+        requestId,
+        kind: "consultancy_report_submitted",
+      },
+    });
+    io?.to(`user-${providerId}`).emit("notification:new", providerNotification);
+
+    io?.to(`user-${providerId}`).emit("service-request:updated", {
+      type: "status",
+      requestId,
+      request: updated,
+      at: new Date().toISOString(),
+    });
 
     return res.status(201).json({ success: true, report, request: updated });
   } catch (error: any) {
@@ -144,7 +180,7 @@ router.post("/service-requests/:id/consultancy-report", async (req: any, res) =>
   }
 });
 
-// GET /api/provider/company - Get the provider's owned company (ONLY companies they created)
+// GET /api/provider/company - Get company context for provider route guards/shell
 router.get("/company", async (req: any, res) => {
   try {
     const providerId = req.auth?.userId;
@@ -152,22 +188,350 @@ router.get("/company", async (req: any, res) => {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    // Only return companies where this provider is the OWNER (provider_id)
-    // Providers should NOT be able to access companies they're merely assigned to
-    const rows = await db
-      .select()
-      .from(companies)
-      .where(eq(companies.providerId, providerId))
-      .limit(1);
-    const company = rows[0] ?? null;
+    // Prefer explicit company linkage on the provider profile.
+    // Fall back to ownership lookup for legacy records.
+    const provider = await storage.getUser(providerId).catch(() => undefined);
+    const companyRef = String(provider?.company || "").trim();
+
+    let company =
+      (
+        await (companyRef
+          ? db
+              .select()
+              .from(companies)
+              .where(or(eq(companies.id, companyRef), eq(companies.name, companyRef)))
+              .limit(1)
+          : db.select().from(companies).where(eq(companies.providerId, providerId)).limit(1))
+      )[0] ?? null;
+
+    if (!company && companyRef) {
+      company =
+        (
+          await db
+            .select()
+            .from(companies)
+            .where(eq(companies.providerId, providerId))
+            .limit(1)
+        )[0] ?? null;
+    }
 
     if (!company) {
       return res.json(null);
     }
 
-    res.json(company);
+    res.json({
+      ...company,
+      isOwner: String(company.providerId || "") === String(providerId),
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+const resolveProviderCompany = async (providerId: string) => {
+  const provider = await storage.getUser(providerId).catch(() => undefined);
+  const companyRef = String(provider?.company || "").trim();
+
+  let company =
+    (
+      await (companyRef
+        ? db
+            .select()
+            .from(companies)
+            .where(or(eq(companies.id, companyRef), eq(companies.name, companyRef)))
+            .limit(1)
+        : db.select().from(companies).where(eq(companies.providerId, providerId)).limit(1))
+    )[0] ?? null;
+
+  if (!company && companyRef) {
+    company =
+      (
+        await db
+          .select()
+          .from(companies)
+          .where(eq(companies.providerId, providerId))
+          .limit(1)
+      )[0] ?? null;
+  }
+
+  return company;
+};
+
+router.get("/tasks", async (req: any, res) => {
+  try {
+    const providerId = req.auth?.userId;
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const company = await resolveProviderCompany(providerId);
+    const statusFilter = String(req.query.status || "").trim().toLowerCase();
+    const filters: any[] = [eq(companyTasks.assigneeId, providerId)];
+
+    if (company?.id) {
+      filters.push(eq(companyTasks.companyId, String(company.id)));
+    }
+
+    if (statusFilter && statusFilter !== "all") {
+      filters.push(eq(companyTasks.status, statusFilter));
+    }
+
+    const taskRows = await db
+      .select()
+      .from(companyTasks)
+      .where(and(...filters))
+      .orderBy(desc(companyTasks.createdAt));
+
+    if (!taskRows.length) {
+      return res.json([]);
+    }
+
+    const userIds: string[] = Array.from(
+      new Set(
+        taskRows
+          .flatMap((task: any) => [task.createdBy, task.assigneeId])
+          .filter((id: any): id is string => Boolean(id)),
+      ),
+    );
+
+    const usersById = new Map<string, any>();
+    if (userIds.length) {
+      const relatedUsers = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          phone: users.phone,
+          isActive: users.isActive,
+        })
+        .from(users)
+        .where(inArray(users.id, userIds));
+      for (const row of relatedUsers as any[]) {
+        usersById.set(row.id, row);
+      }
+    }
+
+    const taskIds: string[] = taskRows.map((task: any) => String(task.id));
+    const updateRows = await db
+      .select()
+      .from(companyTaskUpdates)
+      .where(inArray(companyTaskUpdates.taskId, taskIds))
+      .orderBy(asc(companyTaskUpdates.createdAt));
+
+    const updatesByTask = new Map<string, any[]>();
+    for (const update of updateRows as any[]) {
+      const bucket = updatesByTask.get(update.taskId) || [];
+      bucket.push({
+        ...update,
+        attachments: Array.isArray(update.attachments) ? update.attachments : [],
+        author: usersById.get(update.authorId) ?? null,
+      });
+      updatesByTask.set(update.taskId, bucket);
+    }
+
+    const payload = taskRows.map((task: any) => ({
+      ...task,
+      creator: usersById.get(task.createdBy) ?? null,
+      assignee: task.assigneeId ? usersById.get(task.assigneeId) ?? null : null,
+      updates: updatesByTask.get(task.id) || [],
+    }));
+
+    res.json(payload);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Failed to fetch provider tasks" });
+  }
+});
+
+router.patch("/tasks/:taskId", async (req: any, res) => {
+  try {
+    const providerId = req.auth?.userId;
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { taskId } = req.params;
+    const [task] = await db
+      .select()
+      .from(companyTasks)
+      .where(and(eq(companyTasks.id, taskId), eq(companyTasks.assigneeId, providerId)))
+      .limit(1 as any);
+
+    if (!task) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    const payload = ProviderTaskStatusSchema.parse(req.body || {});
+    const updates: Record<string, any> = {
+      status: payload.status,
+      updatedAt: new Date(),
+      completedAt: payload.status === "completed" ? new Date() : null,
+    };
+
+    const [updated] = await db
+      .update(companyTasks)
+      .set(updates)
+      .where(eq(companyTasks.id, taskId))
+      .returning();
+
+    res.json(updated);
+  } catch (error: any) {
+    if (error?.name === "ZodError") {
+      return res.status(400).json({ error: "Validation error", details: error.errors });
+    }
+    res.status(500).json({ error: error.message || "Failed to update task" });
+  }
+});
+
+router.post("/tasks/:taskId/updates", async (req: any, res) => {
+  try {
+    const providerId = req.auth?.userId;
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { taskId } = req.params;
+    const [task] = await db
+      .select()
+      .from(companyTasks)
+      .where(and(eq(companyTasks.id, taskId), eq(companyTasks.assigneeId, providerId)))
+      .limit(1 as any);
+
+    if (!task) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    const payload = ProviderTaskUpdateSchema.parse(req.body || {});
+    const [created] = await db
+      .insert(companyTaskUpdates)
+      .values({
+        taskId,
+        authorId: providerId,
+        message: payload.message,
+        attachments: payload.attachments || [],
+      })
+      .returning();
+
+    await db
+      .update(companyTasks)
+      .set({ updatedAt: new Date() })
+      .where(eq(companyTasks.id, taskId));
+
+    res.status(201).json(created);
+  } catch (error: any) {
+    if (error?.name === "ZodError") {
+      return res.status(400).json({ error: "Validation error", details: error.errors });
+    }
+    res.status(500).json({ error: error.message || "Failed to add task update" });
+  }
+});
+
+// GET /api/provider/marketplace/stores - Provider-safe read-only marketplace stores
+router.get("/marketplace/stores", async (_req: any, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: stores.id,
+        name: stores.name,
+        location: stores.location,
+        logo: stores.logo,
+      })
+      .from(stores)
+      .where(and(eq(stores.isActive, true), eq(stores.approvalStatus, "approved")))
+      .orderBy(asc(stores.name));
+
+    res.json(rows);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Failed to fetch marketplace stores" });
+  }
+});
+
+// GET /api/provider/marketplace/categories - Provider-safe read-only categories
+router.get("/marketplace/categories", async (_req: any, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: itemCategories.id,
+        name: itemCategories.name,
+      })
+      .from(itemCategories)
+      .where(eq(itemCategories.isActive, true))
+      .orderBy(asc(itemCategories.name));
+
+    res.json(rows);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Failed to fetch marketplace categories" });
+  }
+});
+
+// GET /api/provider/marketplace/items - Provider-safe read-only marketplace catalog
+router.get("/marketplace/items", async (req: any, res) => {
+  try {
+    const { search, category, storeId, page = "1", limit = "24" } = req.query as Record<string, string>;
+
+    const pageNumber = Math.max(1, Number.parseInt(page || "1", 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number.parseInt(limit || "24", 10) || 24));
+    const offset = (pageNumber - 1) * pageSize;
+
+    const conditions: any[] = [
+      eq(marketplaceItems.isActive, true),
+      eq(stores.isActive, true),
+      eq(stores.approvalStatus, "approved"),
+    ];
+
+    if (storeId?.trim()) {
+      conditions.push(eq(marketplaceItems.storeId, storeId.trim()));
+    }
+    if (category?.trim()) {
+      conditions.push(eq(marketplaceItems.category, category.trim()));
+    }
+    if (search?.trim()) {
+      conditions.push(
+        or(
+          ilike(marketplaceItems.name, `%${search.trim()}%`),
+          ilike(marketplaceItems.description, `%${search.trim()}%`)
+        )
+      );
+    }
+
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(marketplaceItems)
+      .innerJoin(stores, eq(stores.id, marketplaceItems.storeId))
+      .where(and(...conditions));
+
+    const rows = await db
+      .select({
+        id: marketplaceItems.id,
+        name: marketplaceItems.name,
+        description: marketplaceItems.description,
+        price: marketplaceItems.price,
+        currency: marketplaceItems.currency,
+        unitOfMeasure: marketplaceItems.unitOfMeasure,
+        category: marketplaceItems.category,
+        subcategory: marketplaceItems.subcategory,
+        stock: marketplaceItems.stock,
+        images: marketplaceItems.images,
+        isActive: marketplaceItems.isActive,
+        createdAt: marketplaceItems.createdAt,
+        storeId: marketplaceItems.storeId,
+        storeName: stores.name,
+        storeLocation: stores.location,
+      })
+      .from(marketplaceItems)
+      .innerJoin(stores, eq(stores.id, marketplaceItems.storeId))
+      .where(and(...conditions))
+      .orderBy(desc(marketplaceItems.createdAt))
+      .limit(pageSize)
+      .offset(offset);
+
+    res.json({
+      items: rows,
+      total: count,
+      page: pageNumber,
+      totalPages: Math.ceil(count / pageSize),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Failed to fetch marketplace items" });
   }
 });
 
@@ -272,25 +636,56 @@ router.get("/stores", async (req: any, res) => {
 
     const memberships = await db.select({
       membership: storeMembers,
-      store: stores
+      store: stores,
     })
-    .from(storeMembers)
-    .innerJoin(stores, eq(storeMembers.storeId, stores.id))
-    .where(
-      and(
-        eq(storeMembers.userId, providerId),
-        eq(storeMembers.isActive, true)
-      )
-    );
+      .from(storeMembers)
+      .innerJoin(stores, eq(storeMembers.storeId, stores.id))
+      .where(
+        and(
+          eq(storeMembers.userId, providerId),
+          eq(storeMembers.isActive, true),
+        ),
+      );
 
-    res.json(memberships.map((m: any) => ({
-      ...m.store,
-      membership: {
-        role: m.membership.role,
-        canManageItems: m.membership.canManageItems,
-        canManageOrders: m.membership.canManageOrders
+    const storeIds = memberships.map((m: any) => m.store.id).filter(Boolean);
+    const allocationRows = storeIds.length
+      ? await db
+          .select({
+            storeId: storeEstates.storeId,
+            estateId: storeEstates.estateId,
+            estateName: estates.name,
+          })
+          .from(storeEstates)
+          .leftJoin(estates, eq(storeEstates.estateId, estates.id))
+          .where(inArray(storeEstates.storeId, storeIds))
+      : [];
+
+    const allocationMap = new Map<string, { count: number; names: string[] }>();
+    for (const row of allocationRows) {
+      const existing = allocationMap.get(row.storeId) || { count: 0, names: [] };
+      existing.count += 1;
+      if (row.estateName && !existing.names.includes(row.estateName)) {
+        existing.names.push(row.estateName);
       }
-    })));
+      allocationMap.set(row.storeId, existing);
+    }
+
+    res.json(
+      memberships.map((m: any) => {
+        const allocation = allocationMap.get(m.store.id);
+        return {
+          ...m.store,
+          estateAllocationCount: allocation?.count || 0,
+          estateNames: allocation?.names || [],
+          hasEstateAllocation: (allocation?.count || 0) > 0 || Boolean(m.store.estateId),
+          membership: {
+            role: m.membership.role,
+            canManageItems: m.membership.canManageItems,
+            canManageOrders: m.membership.canManageOrders,
+          },
+        };
+      }),
+    );
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -352,6 +747,49 @@ router.post("/stores", async (req: any, res) => {
       return res.status(400).json({ error: "Validation error", details: error.errors });
     }
     res.status(500).json({ error: error.message });
+  }
+});
+
+const inventoryImageUploadParser = raw({
+  type: ["image/jpeg", "image/png", "image/webp"],
+  limit: "5mb",
+});
+
+// POST /api/provider/stores/:id/items/images - Upload inventory image and return a clean URL reference
+router.post("/stores/:id/items/images", verifyStoreAccess, inventoryImageUploadParser, async (req: any, res) => {
+  try {
+    const storeId = String(req.params.id || "").trim();
+    const providerId = String(req.auth?.userId || "").trim();
+    const membership = req.storeMembership;
+
+    if (!providerId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    if (!membership?.canManageItems) {
+      return res.status(403).json({ error: "You don't have permission to manage items for this store" });
+    }
+
+    const approvedStore = await ensureStoreApproved(storeId, res);
+    if (!approvedStore) return;
+
+    const rawContentType = String(req.headers["content-type"] || "");
+    const mimeType = rawContentType.split(";")[0].trim().toLowerCase();
+
+    if (!Buffer.isBuffer(req.body) || !req.body.length) {
+      return res.status(400).json({ error: "Image file is required" });
+    }
+
+    const uploaded = await persistInventoryImage({
+      buffer: req.body,
+      mimeType,
+      storeId,
+      uploaderId: providerId,
+    });
+
+    return res.status(201).json(uploaded);
+  } catch (error: any) {
+    return res.status(400).json({ error: error?.message || "Failed to upload image" });
   }
 });
 
@@ -447,6 +885,11 @@ router.post("/stores/:id/items", verifyStoreAccess, async (req: any, res) => {
     });
 
     const validated = createItemSchema.parse(req.body);
+    const normalizedImages = await normalizeAndPersistInventoryImages({
+      images: validated.images,
+      storeId,
+      uploaderId: providerId,
+    });
 
     // Create item (use first allocated estate)
     const [newItem] = await db.insert(marketplaceItems).values({
@@ -458,7 +901,7 @@ router.post("/stores/:id/items", verifyStoreAccess, async (req: any, res) => {
       category: validated.category,
       subcategory: validated.subcategory,
       stock: validated.stock,
-      images: validated.images,
+      images: normalizedImages,
       estateId: storeEstate.estateId, // Use first allocated estate
       storeId: storeId,
       vendorId: providerId,
@@ -515,6 +958,11 @@ router.patch("/stores/:storeId/items/:itemId", verifyStoreAccess, async (req: an
     });
 
     const validated = updateItemSchema.parse(req.body);
+    const normalizedImages = await normalizeAndPersistInventoryImages({
+      images: validated.images,
+      storeId,
+      uploaderId: String(req.auth?.userId || ""),
+    });
 
     // Build update object
     const updateData: any = {
@@ -527,7 +975,7 @@ router.patch("/stores/:storeId/items/:itemId", verifyStoreAccess, async (req: an
     if (validated.subcategory !== undefined) updateData.subcategory = validated.subcategory;
     if (validated.stock !== undefined) updateData.stock = validated.stock;
     if (validated.unitOfMeasure !== undefined) updateData.unitOfMeasure = validated.unitOfMeasure;
-    if (validated.images !== undefined) updateData.images = validated.images;
+    if (normalizedImages !== undefined) updateData.images = normalizedImages;
     if (validated.isActive !== undefined) updateData.isActive = validated.isActive;
 
     // Update item
@@ -591,6 +1039,17 @@ router.delete("/stores/:storeId/items/:itemId", verifyStoreAccess, async (req: a
 router.get("/stores/:id/orders", verifyStoreAccess, async (req: any, res) => {
   try {
     const storeId = req.params.id;
+    const membership = req.storeMembership;
+    if (!membership?.canManageOrders) {
+      return res.status(403).json({
+        error: "Orders access restricted",
+        message: "Your role can view this store but cannot manage orders.",
+      });
+    }
+
+    const approvedStore = await ensureStoreApproved(storeId, res);
+    if (!approvedStore) return;
+
     const rows = await db
       .select({
         order: orders,
@@ -739,3 +1198,4 @@ router.post("/company-registration", async (req: any, res) => {
 });
 
 export default router;
+

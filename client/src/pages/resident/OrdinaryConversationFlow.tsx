@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { io } from "socket.io-client";
@@ -7,6 +7,7 @@ import Nav from "@/components/layout/Nav";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 import { useMyEstates } from "@/hooks/useMyEstates";
 import useCategories from "@/hooks/useCategories";
+import { useAiConversationFlowSettings } from "@/hooks/useAiConversationFlowSettings";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,11 +18,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { MainWrapSelectCategory } from "@/components/resident/CityBuddyChat";
 import { RequestsSidebar } from "@/components/resident/RequestsSidebar";
 import { ProviderHeader } from "@/components/resident/ordinary-flow/ProviderHeader";
 import { RequestProgressTracker } from "@/components/resident/ordinary-flow/RequestProgressTracker";
 import { ChatThread, type ThreadItem } from "@/components/resident/ordinary-flow/ChatThread";
+import { TypingPresenceIndicator } from "@/components/resident/ordinary-flow/TypingPresenceIndicator";
 import { SystemMessage } from "@/components/resident/ordinary-flow/SystemMessage";
 import {
   MessageComposer,
@@ -96,9 +106,26 @@ type RequestProvider = {
   avatarUrl?: string | null;
 };
 
+type CancellationCaseSummary = {
+  id: string;
+  status?: string | null;
+  reasonCode?: string | null;
+  reasonDetail?: string | null;
+  preferredResolution?: string | null;
+  adminDecision?: string | null;
+  adminNote?: string | null;
+  refundDecision?: string | null;
+  refundAmount?: string | number | null;
+  resolvedAt?: string | Date | null;
+  createdAt?: string | Date | null;
+  updatedAt?: string | Date | null;
+};
+
 type ActiveServiceRequest = {
   id: string;
+  residentId?: string | null;
   category?: string;
+  categoryLabel?: string | null;
   description?: string | null;
   location?: string | null;
   urgency?: string | null;
@@ -122,6 +149,7 @@ type ActiveServiceRequest = {
   assignedAt?: string | Date | null;
   updatedAt?: string | Date | null;
   provider?: RequestProvider | null;
+  cancellationCase?: CancellationCaseSummary | null;
 };
 
 type ParsedRequestDetails = {
@@ -146,14 +174,98 @@ type ServiceRequestUpdateSocketPayload = {
   at?: string;
 };
 
+type RequestTypingSocketPayload = {
+  requestId: string;
+  userId: string;
+  senderRole: "resident" | "provider" | "admin";
+  isTyping: boolean;
+  at?: string;
+};
+
+type OrdinaryConversationDraftSnapshot = {
+  version: 1;
+  updatedAt: string;
+  stage: FlowStage;
+  selectedCategoryValue: string;
+  categorySelectSearch: string;
+  estateName: string;
+  estateResidenceMode: "estate" | "outside";
+  hasConfirmedEstateResidence: boolean;
+  estateSearch: string;
+  residentState: string;
+  residentLga: string;
+  address: string;
+  unit: string;
+  urgency: string;
+  wizardIndex: number;
+  wizardAnswers: Record<string, string>;
+  notes: string;
+};
+
+const ORDINARY_FLOW_DRAFT_STORAGE_PREFIX = "ordinary_flow_draft_v1";
+
+function parseOrdinaryConversationDraftSnapshot(
+  raw: string | null,
+): OrdinaryConversationDraftSnapshot | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<OrdinaryConversationDraftSnapshot> | null;
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const stageValue: FlowStage =
+      parsed.stage === "wizard" || parsed.stage === "summary" ? parsed.stage : "intake";
+    const estateResidenceMode = parsed.estateResidenceMode === "outside" ? "outside" : "estate";
+    const wizardAnswers =
+      parsed.wizardAnswers && typeof parsed.wizardAnswers === "object" && !Array.isArray(parsed.wizardAnswers)
+        ? Object.entries(parsed.wizardAnswers).reduce<Record<string, string>>((acc, [key, value]) => {
+            if (!key) return acc;
+            acc[key] = String(value ?? "");
+            return acc;
+          }, {})
+        : {};
+    const hasLocationAnswer = Boolean(String(wizardAnswers.location || "").trim());
+    const parsedResidenceMode = parsed.estateResidenceMode === "outside" ? "outside" : "estate";
+    const inferredResidenceMode =
+      hasLocationAnswer &&
+      (String(parsed.residentState || "").trim() || String(parsed.residentLga || "").trim())
+        ? "outside"
+        : parsedResidenceMode;
+
+    return {
+      version: 1,
+      updatedAt: String(parsed.updatedAt || new Date().toISOString()),
+      stage: stageValue,
+      selectedCategoryValue: String(parsed.selectedCategoryValue || ""),
+      categorySelectSearch: String(parsed.categorySelectSearch || ""),
+      estateName: String(parsed.estateName || ""),
+      estateResidenceMode: inferredResidenceMode,
+      hasConfirmedEstateResidence:
+        Boolean(parsed.hasConfirmedEstateResidence) || hasLocationAnswer,
+      estateSearch: String(parsed.estateSearch || ""),
+      residentState: String(parsed.residentState || ""),
+      residentLga: String(parsed.residentLga || ""),
+      address: String(parsed.address || ""),
+      unit: String(parsed.unit || ""),
+      urgency: String(parsed.urgency || ""),
+      wizardIndex: Math.max(0, Number(parsed.wizardIndex || 0)),
+      wizardAnswers,
+      notes: String(parsed.notes || ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
 const URGENCY_OPTIONS = [
   { value: "emergency", label: "Emergency", tone: "border-rose-200 text-rose-700 bg-rose-50" },
   { value: "high", label: "High", tone: "border-amber-200 text-amber-700 bg-amber-50" },
   { value: "medium", label: "Medium", tone: "border-slate-200 text-slate-700 bg-slate-50" },
   { value: "low", label: "Low", tone: "border-emerald-200 text-emerald-700 bg-emerald-50" },
 ];
+type UrgencyValue = (typeof URGENCY_OPTIONS)[number]["value"];
 
 const STATE_OPTIONS = ["Lagos", "Ogun", "Abuja (FCT)", "Oyo"];
+const BOT_PROMPT_DELAY_MS = 3000;
 
 const LGA_BY_STATE: Record<string, string[]> = {
   Lagos: ["Alimosho", "Ikeja", "Eti-Osa", "Surulere", "Yaba", "Kosofe"],
@@ -161,6 +273,17 @@ const LGA_BY_STATE: Record<string, string[]> = {
   "Abuja (FCT)": ["Abuja Municipal", "Bwari", "Gwagwalada", "Kuje"],
   Oyo: ["Ibadan North", "Ibadan South-West", "Ogbomosho North", "Egbeda"],
 };
+
+const CANCELLATION_REVIEW_REQUIRED_STATUSES = new Set([
+  "assigned",
+  "assigned_for_inspection",
+  "assigned_for_job",
+  "in_progress",
+  "work_completed_pending_resident",
+  "disputed",
+  "rework_required",
+  "completed",
+]);
 
 const DEFAULT_QUANTITY_OPTIONS = ["1", "2-3", "4-6", "7+"];
 const DEFAULT_TIME_WINDOWS = ["Today", "Within 3 days", "This week", "Flexible"];
@@ -192,6 +315,21 @@ const CHIP_STYLES =
 
 function normalizeKey(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function normalizeCategoryKey(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeStatusKey(value: unknown) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .trim();
 }
 
 function buildCategoryProfile(categoryName: string): CategoryProfile {
@@ -425,9 +563,11 @@ function ChipButton({
 function ChatPrompt({ text, status = "active" }: { text: string; status?: "active" | "answered" }) {
   if (status === "answered") {
     return (
-      <div className="flex items-center gap-2 text-[14px] leading-[20px] font-semibold text-[#475467]">
-        <span className="inline-flex h-9 w-9 items-center justify-center text-[#475467] opacity-80">
-          <AIAnsweredBotIcon />
+      <div className="flex items-center gap-2.5 text-[14px] leading-[20px] font-semibold text-[#475467]">
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#F2F4F7] text-[#667085]">
+          <span className="origin-center scale-[0.52]">
+            <AIAnsweredBotIcon />
+          </span>
         </span>
         <span>{text}</span>
       </div>
@@ -435,15 +575,64 @@ function ChatPrompt({ text, status = "active" }: { text: string; status?: "activ
   }
 
   return (
-    <div className="flex items-center gap-2.5">
-      <div className="h-9 w-9 shrink-0 rounded-full bg-[#ECFDF3] text-[#027A48] flex items-center justify-center border border-[#D1FADF]">
+    <div className="flex items-start gap-2.5 sm:gap-3">
+      <div className="relative mt-0.5 flex h-10 w-12 shrink-0 items-center justify-center overflow-visible">
         <AIAskBotIcon />
       </div>
-      <div className="max-w-[680px] rounded-[999px] bg-[#ECFDF3] px-4 py-2 text-[14px] leading-[20px] text-[#065F46] font-semibold">
+      <div className="max-w-[680px] rounded-[999px] bg-[#ECFDF3] px-4 py-2.5 text-[14px] leading-[20px] text-[#065F46] font-semibold">
         {text}
       </div>
     </div>
   );
+}
+
+function WizardTypingIndicator() {
+  return (
+    <div className="flex items-center gap-2.5 sm:gap-3">
+      <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-visible">
+        <AIAskBotIcon />
+      </div>
+      <div className="inline-flex items-center gap-1.5 rounded-[999px] bg-[#ECFDF3] px-4 py-2.5">
+        <span className="h-2 w-2 rounded-full bg-[#12B76A] animate-bounce [animation-delay:-0.3s]" />
+        <span className="h-2 w-2 rounded-full bg-[#12B76A] animate-bounce [animation-delay:-0.15s]" />
+        <span className="h-2 w-2 rounded-full bg-[#12B76A] animate-bounce" />
+      </div>
+    </div>
+  );
+}
+
+function WizardAnswerBubble({ text }: { text: string }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[78%] rounded-2xl rounded-br-[8px] bg-[#039855] px-4 py-2 text-[14px] font-semibold leading-[20px] text-white shadow-[0_10px_20px_-14px_rgba(3,152,85,0.8)]">
+        {text}
+      </div>
+    </div>
+  );
+}
+
+function UrgencyIcon({ value }: { value: UrgencyValue }) {
+  if (value === "emergency") {
+    return (
+      <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#D92D20] text-[15px] font-bold leading-none text-white">
+        !
+      </span>
+    );
+  }
+
+  if (value === "high") {
+    return (
+      <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#F79009] text-[15px] font-bold leading-none text-white">
+        !
+      </span>
+    );
+  }
+
+  if (value === "medium") {
+    return <span className="inline-flex h-7 w-7 rounded-full border border-[#FEC84B] bg-[#FDB022]" />;
+  }
+
+  return <span className="inline-flex h-7 w-7 rounded-full border border-[#3CCB7F] bg-[#17B26A]" />;
 }
 
 function formatCategoryLabel(value: string) {
@@ -542,7 +731,7 @@ function parseRequestDescription(description: string | null | undefined): Parsed
 
 function parseConsultancyReportMessage(text: string) {
   const source = String(text || "").trim();
-  const hasConsultancyPrefix = /^consultancy report submitted\./i.test(source);
+  const hasConsultancyPrefix = /^consultancy report (submitted|approved)\./i.test(source);
   const hasReportFields =
     /inspection date:/i.test(source) &&
     /issue:/i.test(source) &&
@@ -573,8 +762,36 @@ export default function OrdinaryConversationFlow() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { data: estates = [] } = useMyEstates();
-  const { categories, isLoading: categoriesLoading } = useCategories({ scope: "global", kind: "service" });
+  const { settings: approvedCategorySettings, isLoading: approvedCategoriesLoading } =
+    useAiConversationFlowSettings();
+  const { categories: fallbackCategories, isLoading: fallbackCategoriesLoading } = useCategories({
+    scope: "global",
+    kind: "service",
+  });
   const CONSULTANCY_DRAFT_KEY = "citybuddy_consultancy_draft";
+  const ordinaryDraftStorageKey = useMemo(
+    () => `${ORDINARY_FLOW_DRAFT_STORAGE_PREFIX}:${user?.id || "anonymous"}`,
+    [user?.id],
+  );
+
+  const categories = useMemo(() => {
+    if (approvedCategorySettings.length > 0) {
+      return approvedCategorySettings
+        .filter((setting) => setting.isEnabled)
+        .sort((a, b) => a.displayOrder - b.displayOrder)
+        .map((setting) => ({
+          id: setting.id,
+          key: setting.categoryKey,
+          name: setting.categoryName,
+          emoji: setting.emoji || "",
+          description: setting.description || undefined,
+          providerCount: 0,
+        }));
+    }
+    return fallbackCategories;
+  }, [approvedCategorySettings, fallbackCategories]);
+
+  const categoriesLoading = approvedCategoriesLoading || fallbackCategoriesLoading;
 
   const queryParams = useMemo(() => {
     const queryString = location.includes("?") ? location.split("?")[1] : "";
@@ -599,10 +816,12 @@ export default function OrdinaryConversationFlow() {
   const [urgency, setUrgency] = useState("");
 
   const [wizardIndex, setWizardIndex] = useState(0);
+  const [isWizardBotThinking, setIsWizardBotThinking] = useState(false);
   const [wizardAnswers, setWizardAnswers] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
   const [attachments, setAttachments] = useState<Array<{ id: string; name: string; dataUrl: string }>>([]);
   const [persistedAttachmentCount, setPersistedAttachmentCount] = useState<number | null>(null);
+  const wizardPromptTimerRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const openedRequestFromQueryRef = useRef<string | null>(null);
   const skipCategoryResetRef = useRef(false);
@@ -614,10 +833,205 @@ export default function OrdinaryConversationFlow() {
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [loadingRequestId, setLoadingRequestId] = useState<string | null>(null);
   const [pendingPrefill, setPendingPrefill] = useState(false);
-  const [isTopSectionCollapsed, setIsTopSectionCollapsed] = useState(false);
+  const [isProviderDetailsCollapsed, setIsProviderDetailsCollapsed] = useState(true);
   const [residentMessageDraft, setResidentMessageDraft] = useState("");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
+  const [isPeerTyping, setIsPeerTyping] = useState(false);
   const [isStartingJobPayment, setIsStartingJobPayment] = useState(false);
+  const [isCategoryRequiredDialogOpen, setIsCategoryRequiredDialogOpen] = useState(false);
+  const [isCancelRequestDialogOpen, setIsCancelRequestDialogOpen] = useState(false);
+  const [cancelReasonCode, setCancelReasonCode] = useState("");
+  const [cancelReasonDetail, setCancelReasonDetail] = useState("");
+  const [cancelPreferredResolution, setCancelPreferredResolution] = useState<
+    "full_refund" | "partial_refund" | "cancel_without_refund"
+  >("full_refund");
+  const [isConfirmDeliveryDialogOpen, setIsConfirmDeliveryDialogOpen] = useState(false);
+  const [isRaiseIssueDialogOpen, setIsRaiseIssueDialogOpen] = useState(false);
+  const [raiseIssueReason, setRaiseIssueReason] = useState("");
+  const [draftSavedAt, setDraftSavedAt] = useState<string>(() => new Date().toISOString());
+  const [storedDraftSnapshot, setStoredDraftSnapshot] = useState<OrdinaryConversationDraftSnapshot | null>(null);
+  const restoreStageAfterCategorySelectionRef = useRef<FlowStage | null>(null);
+  const restoreWizardIndexAfterCategorySelectionRef = useRef<number | null>(null);
+  const draftHydratedRef = useRef(false);
+  const socketRef = useRef<ReturnType<typeof io> | null>(null);
+  const selfTypingRef = useRef(false);
+  const selfTypingStopTimerRef = useRef<number | null>(null);
+  const peerTypingClearTimerRef = useRef<number | null>(null);
+
+  const clearWizardPromptTimer = useCallback(() => {
+    if (wizardPromptTimerRef.current !== null) {
+      window.clearTimeout(wizardPromptTimerRef.current);
+      wizardPromptTimerRef.current = null;
+    }
+  }, []);
+
+  const queueWizardStepAdvance = useCallback(
+    (nextIndex: number) => {
+      if (nextIndex === wizardIndex) return;
+      clearWizardPromptTimer();
+      setIsWizardBotThinking(true);
+      wizardPromptTimerRef.current = window.setTimeout(() => {
+        setWizardIndex(nextIndex);
+        setIsWizardBotThinking(false);
+        wizardPromptTimerRef.current = null;
+      }, BOT_PROMPT_DELAY_MS);
+    },
+    [clearWizardPromptTimer, wizardIndex],
+  );
+
+  const clearSelfTypingStopTimer = useCallback(() => {
+    if (selfTypingStopTimerRef.current !== null) {
+      window.clearTimeout(selfTypingStopTimerRef.current);
+      selfTypingStopTimerRef.current = null;
+    }
+  }, []);
+
+  const clearPeerTypingClearTimer = useCallback(() => {
+    if (peerTypingClearTimerRef.current !== null) {
+      window.clearTimeout(peerTypingClearTimerRef.current);
+      peerTypingClearTimerRef.current = null;
+    }
+  }, []);
+
+  const emitTypingState = useCallback(
+    (requestId: string, isTyping: boolean) => {
+      if (!requestId) return;
+      const socket = socketRef.current;
+      if (socket) {
+        socket.emit("request-typing", {
+          requestId,
+          userId: String(user?.id || ""),
+          senderRole: "resident",
+          isTyping,
+        });
+      }
+      void residentFetch(`/api/service-requests/${requestId}/typing`, {
+        method: "POST",
+        json: { isTyping },
+      }).catch(() => undefined);
+    },
+    [user?.id],
+  );
+
+  const stopSelfTyping = useCallback(
+    (requestId?: string | null) => {
+      clearSelfTypingStopTimer();
+      const targetRequestId = String(requestId || activeRequestId || "").trim();
+      if (!targetRequestId) return;
+      if (!selfTypingRef.current) return;
+      selfTypingRef.current = false;
+      emitTypingState(targetRequestId, false);
+    },
+    [activeRequestId, clearSelfTypingStopTimer, emitTypingState],
+  );
+
+  const handleResidentComposerChange = useCallback(
+    (nextValue: string) => {
+      setResidentMessageDraft(nextValue);
+      if (!activeRequestId) return;
+
+      if (!nextValue.trim()) {
+        stopSelfTyping(activeRequestId);
+        return;
+      }
+
+      if (!selfTypingRef.current) {
+        selfTypingRef.current = true;
+        emitTypingState(activeRequestId, true);
+      }
+
+      clearSelfTypingStopTimer();
+      selfTypingStopTimerRef.current = window.setTimeout(() => {
+        stopSelfTyping(activeRequestId);
+      }, 1800);
+    },
+    [
+      activeRequestId,
+      clearSelfTypingStopTimer,
+      emitTypingState,
+      stopSelfTyping,
+    ],
+  );
+
+  const readOrdinaryDraftSnapshot = (): OrdinaryConversationDraftSnapshot | null => {
+    try {
+      const raw = localStorage.getItem(ordinaryDraftStorageKey);
+      return parseOrdinaryConversationDraftSnapshot(raw);
+    } catch {
+      return null;
+    }
+  };
+
+  const clearOrdinaryDraftSnapshot = useCallback(() => {
+    try {
+      localStorage.removeItem(ordinaryDraftStorageKey);
+    } catch {
+      // ignore storage errors
+    }
+    setStoredDraftSnapshot(null);
+  }, [ordinaryDraftStorageKey]);
+
+  const applyOrdinaryDraftSnapshot = (snapshot: OrdinaryConversationDraftSnapshot) => {
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    skipCategoryResetRef.current = true;
+    setActiveRequestId(null);
+    setStage(snapshot.selectedCategoryValue ? snapshot.stage : "intake");
+    setSelectedCategoryValue(snapshot.selectedCategoryValue || "");
+    setCategorySelectSearch(snapshot.categorySelectSearch || "");
+    setWizardIndex(Math.max(0, snapshot.wizardIndex || 0));
+    setWizardAnswers(snapshot.wizardAnswers || {});
+    setNotes(snapshot.notes || "");
+    setAttachments([]);
+    setPersistedAttachmentCount(null);
+    setUrgency(snapshot.urgency || "");
+    setAddress(snapshot.address || "");
+    setUnit(snapshot.unit || "");
+    setEstateName(snapshot.estateName || "");
+    setEstateResidenceMode(snapshot.estateResidenceMode === "outside" ? "outside" : "estate");
+    setHasConfirmedEstateResidence(Boolean(snapshot.hasConfirmedEstateResidence));
+    setEstateSearch(snapshot.estateSearch || "");
+    setResidentState(snapshot.residentState || "");
+    setResidentLga(snapshot.residentLga || "");
+    setPendingPrefill(false);
+    setDraftSavedAt(snapshot.updatedAt || new Date().toISOString());
+    setStoredDraftSnapshot(snapshot);
+  };
+
+  useEffect(() => {
+    draftHydratedRef.current = false;
+    setStoredDraftSnapshot(null);
+  }, [ordinaryDraftStorageKey]);
+
+  useEffect(() => {
+    return () => {
+      clearWizardPromptTimer();
+    };
+  }, [clearWizardPromptTimer]);
+
+  useEffect(() => {
+    return () => {
+      stopSelfTyping(activeRequestId);
+      clearPeerTypingClearTimer();
+      setIsPeerTyping(false);
+    };
+  }, [activeRequestId, clearPeerTypingClearTimer, stopSelfTyping]);
+
+  useEffect(() => {
+    if (draftHydratedRef.current) return;
+    if (requestIdFromSearch) {
+      draftHydratedRef.current = true;
+      return;
+    }
+
+    const snapshot = readOrdinaryDraftSnapshot();
+    if (snapshot) {
+      applyOrdinaryDraftSnapshot(snapshot);
+    } else {
+      setStoredDraftSnapshot(null);
+    }
+    draftHydratedRef.current = true;
+  }, [ordinaryDraftStorageKey, requestIdFromSearch]);
 
   useEffect(() => {
     if (!categories.length) return;
@@ -631,7 +1045,7 @@ export default function OrdinaryConversationFlow() {
         return name.toLowerCase() === categoryFromSearch.toLowerCase() || key.toLowerCase() === categoryFromSearch.toLowerCase();
       });
       if (match) {
-        setSelectedCategoryValue(String(match.id ?? match.key ?? match.name));
+        setSelectedCategoryValue(String(match.key ?? match.id ?? match.name));
         return;
       }
     }
@@ -642,31 +1056,46 @@ export default function OrdinaryConversationFlow() {
       skipCategoryResetRef.current = false;
       return;
     }
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
     setWizardIndex(0);
     setWizardAnswers({});
     setNotes("");
     setAttachments([]);
     setPersistedAttachmentCount(null);
     setHasConfirmedEstateResidence(false);
-  }, [selectedCategoryValue]);
+  }, [clearWizardPromptTimer, selectedCategoryValue]);
 
   useEffect(() => {
     if (selectedCategoryValue && stage === "intake") {
+      clearWizardPromptTimer();
+      setIsWizardBotThinking(false);
       setStage("wizard");
       setWizardIndex(0);
     }
-  }, [selectedCategoryValue, stage]);
+  }, [clearWizardPromptTimer, selectedCategoryValue, stage]);
 
-  const selectedCategoryLabel = useMemo(() => {
-    if (!selectedCategoryValue) return "";
+  const selectedCategory = useMemo<any | null>(() => {
+    if (!selectedCategoryValue) return null;
     const match = categories.find((cat: any) => {
       const id = String(cat?.id ?? "");
       const key = String(cat?.key ?? "");
       const name = String(cat?.name ?? "");
       return selectedCategoryValue === id || selectedCategoryValue === key || selectedCategoryValue === name;
     });
-    return String(match?.name ?? match?.key ?? selectedCategoryValue);
+    return match || null;
   }, [categories, selectedCategoryValue]);
+
+  const selectedCategoryLabel = useMemo(() => {
+    if (!selectedCategoryValue) return "";
+    return String(selectedCategory?.name ?? selectedCategory?.key ?? selectedCategoryValue);
+  }, [selectedCategory, selectedCategoryValue]);
+
+  const selectedCategoryKey = useMemo(() => {
+    return normalizeCategoryKey(
+      String(selectedCategory?.key ?? selectedCategoryValue ?? selectedCategoryLabel),
+    );
+  }, [selectedCategory, selectedCategoryValue, selectedCategoryLabel]);
 
   const handleSelectCategoryFromGrid = (categoryName: string) => {
     const match = categories.find((cat: any) => {
@@ -677,10 +1106,26 @@ export default function OrdinaryConversationFlow() {
         key.toLowerCase() === categoryName.toLowerCase()
       );
     });
-    const value = String(match?.id ?? match?.key ?? match?.name ?? categoryName);
+    const value = String(match?.key ?? match?.id ?? match?.name ?? categoryName);
     const label = String(match?.name ?? match?.key ?? categoryName);
+    const restoreStage = restoreStageAfterCategorySelectionRef.current;
+    const restoreWizardIndex = restoreWizardIndexAfterCategorySelectionRef.current;
+    restoreStageAfterCategorySelectionRef.current = null;
+    restoreWizardIndexAfterCategorySelectionRef.current = null;
+
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
     setSelectedCategoryValue(value);
     setWizardAnswers((prev) => ({ ...prev, category_select: label }));
+    if (restoreStage === "summary") {
+      setStage("summary");
+      return;
+    }
+    if (typeof restoreWizardIndex === "number" && Number.isFinite(restoreWizardIndex)) {
+      setWizardIndex(Math.max(0, restoreWizardIndex));
+      setStage("wizard");
+      return;
+    }
     setWizardIndex(0);
     setStage("wizard");
   };
@@ -793,6 +1238,18 @@ export default function OrdinaryConversationFlow() {
     ];
   }, [categoryProfile]);
 
+  useEffect(() => {
+    if (!wizardSteps.length) {
+      clearWizardPromptTimer();
+      setIsWizardBotThinking(false);
+      if (wizardIndex !== 0) setWizardIndex(0);
+      return;
+    }
+    if (wizardIndex > wizardSteps.length - 1) {
+      setWizardIndex(wizardSteps.length - 1);
+    }
+  }, [clearWizardPromptTimer, wizardSteps, wizardIndex]);
+
   const focusAddressField = () => {
     requestAnimationFrame(() => {
       if (addressSectionRef.current) {
@@ -841,13 +1298,121 @@ export default function OrdinaryConversationFlow() {
       return { prompt: step.prompt, answer };
     });
 
+  const persistCurrentDraftSnapshot = useCallback(() => {
+    const hasDraftData = Boolean(
+      selectedCategoryValue ||
+        categorySelectSearch.trim() ||
+        hasConfirmedEstateResidence ||
+        estateName.trim() ||
+        estateSearch.trim() ||
+        residentState.trim() ||
+        residentLga.trim() ||
+        address.trim() ||
+        unit.trim() ||
+        urgency.trim() ||
+        notes.trim() ||
+        Object.keys(wizardAnswers).length,
+    );
+
+    if (!hasDraftData) {
+      clearOrdinaryDraftSnapshot();
+      return null;
+    }
+
+    const nowIso = new Date().toISOString();
+    const sanitizedAnswers = Object.entries(wizardAnswers).reduce<Record<string, string>>(
+      (acc, [key, value]) => {
+        if (!key) return acc;
+        const normalized = String(value ?? "");
+        if (!normalized.trim()) return acc;
+        acc[key] = normalized;
+        return acc;
+      },
+      {},
+    );
+
+    const snapshot: OrdinaryConversationDraftSnapshot = {
+      version: 1,
+      updatedAt: nowIso,
+      stage: selectedCategoryValue ? stage : "intake",
+      selectedCategoryValue: String(selectedCategoryValue || ""),
+      categorySelectSearch: String(categorySelectSearch || ""),
+      estateName: String(estateName || ""),
+      estateResidenceMode,
+      hasConfirmedEstateResidence:
+        hasConfirmedEstateResidence || Boolean(String(sanitizedAnswers.location || "").trim()),
+      estateSearch: String(estateSearch || ""),
+      residentState: String(residentState || ""),
+      residentLga: String(residentLga || ""),
+      address: String(address || ""),
+      unit: String(unit || ""),
+      urgency: String(urgency || ""),
+      wizardIndex: Math.max(0, Number(wizardIndex || 0)),
+      wizardAnswers: sanitizedAnswers,
+      notes: String(notes || ""),
+    };
+
+    try {
+      localStorage.setItem(ordinaryDraftStorageKey, JSON.stringify(snapshot));
+    } catch {
+      // ignore storage errors
+    }
+    setStoredDraftSnapshot(snapshot);
+    setDraftSavedAt(nowIso);
+    return snapshot;
+  }, [
+    address,
+    categorySelectSearch,
+    clearOrdinaryDraftSnapshot,
+    estateName,
+    estateResidenceMode,
+    estateSearch,
+    hasConfirmedEstateResidence,
+    notes,
+    ordinaryDraftStorageKey,
+    residentLga,
+    residentState,
+    selectedCategoryValue,
+    stage,
+    unit,
+    urgency,
+    wizardAnswers,
+    wizardIndex,
+  ]);
+
+  useEffect(() => {
+    if (!draftHydratedRef.current) return;
+    if (activeRequestId) return;
+    persistCurrentDraftSnapshot();
+  }, [
+    activeRequestId,
+    address,
+    categorySelectSearch,
+    estateName,
+    estateResidenceMode,
+    estateSearch,
+    hasConfirmedEstateResidence,
+    notes,
+    ordinaryDraftStorageKey,
+    residentLga,
+    residentState,
+    selectedCategoryValue,
+    stage,
+    unit,
+    urgency,
+    wizardAnswers,
+    wizardIndex,
+    persistCurrentDraftSnapshot,
+  ]);
+
   const handleSelectChip = (stepId: string, value: string) => {
+    if (isWizardBotThinking) return;
     if (stepId === "urgency") {
       setUrgency(value);
     }
     setWizardAnswers((prev) => ({ ...prev, [stepId]: value }));
     const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
-    setWizardIndex(nextIndex);
+    queueWizardStepAdvance(nextIndex);
   };
 
   const handleUploadClick = () => fileInputRef.current?.click();
@@ -879,6 +1444,9 @@ export default function OrdinaryConversationFlow() {
   };
 
   const resetFlowForNewRequest = () => {
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    clearOrdinaryDraftSnapshot();
     setStage("intake");
     setSelectedCategoryValue("");
     setCategorySelectSearch("");
@@ -896,11 +1464,78 @@ export default function OrdinaryConversationFlow() {
     setEstateResidenceMode("estate");
     setHasConfirmedEstateResidence(false);
     setActiveRequestId(null);
+    setDraftSavedAt(new Date().toISOString());
+  };
+
+  const handleCancelRequest = async () => {
+    if (!activeRequestId) {
+      resetFlowForNewRequest();
+      return;
+    }
+
+    const statusKey = normalizeStatusKey(activeRequestLive?.status || "");
+    if (CANCELLATION_REVIEW_REQUIRED_STATUSES.has(statusKey)) {
+      if (hasOpenCancellationReview) {
+        toast({
+          title: "Already under review",
+          description: "Your cancellation request is already waiting for admin decision.",
+        });
+        return;
+      }
+      setIsCancelRequestDialogOpen(true);
+      return;
+    }
+
+    try {
+      await residentFetch(`/api/service-requests/${activeRequestId}`, {
+        method: "DELETE",
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["my-recent-requests"] }),
+        queryClient.invalidateQueries({ queryKey: ["resident-active-request", activeRequestId] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+      toast({
+        title: "Request cancelled",
+        description: "Your request has been cancelled.",
+      });
+      resetFlowForNewRequest();
+    } catch (error: any) {
+      const message = String(error?.message || "");
+      if (/requiresCancellationReview|assigned or active|under review|409/i.test(message)) {
+        setIsCancelRequestDialogOpen(true);
+        return;
+      }
+      toast({
+        title: "Cancel failed",
+        description: message || "Could not cancel request",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleChangeCategory = () => {
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    clearOrdinaryDraftSnapshot();
+    setStage("intake");
+    setSelectedCategoryValue("");
+    setCategorySelectSearch("");
+    setWizardIndex(0);
+    setWizardAnswers({});
+    setNotes("");
+    setAttachments([]);
+    setPersistedAttachmentCount(null);
+    setUrgency("");
+    setActiveRequestId(null);
+    setDraftSavedAt(new Date().toISOString());
   };
 
   const jumpToWizard = (stepId: string) => {
     const idx = wizardSteps.findIndex((s) => s.id === stepId);
     if (idx >= 0) {
+      clearWizardPromptTimer();
+      setIsWizardBotThinking(false);
       setStage("wizard");
       setWizardIndex(idx);
     }
@@ -913,9 +1548,11 @@ export default function OrdinaryConversationFlow() {
       parsedDetails.urgency ||
       String(request?.urgency || "");
 
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
     setActiveRequestId(request?.id || null);
     skipCategoryResetRef.current = true;
-    setSelectedCategoryValue(request?.category || "");
+    setSelectedCategoryValue(request?.categoryLabel || request?.category || "");
     setUrgency(urgencyLabel);
     setWizardAnswers((prev) => ({
       ...prev,
@@ -923,7 +1560,9 @@ export default function OrdinaryConversationFlow() {
       urgency: urgencyLabel,
       issue_type:
         parsedDetails.issueType ||
-        (request?.category ? formatCategoryLabel(request.category) : prev.issue_type),
+        (request?.categoryLabel || request?.category
+          ? formatCategoryLabel(request?.categoryLabel || request?.category || "")
+          : prev.issue_type),
       quantity: parsedDetails.quantity || prev.quantity,
       time_window:
         parsedDetails.timeWindow ||
@@ -953,14 +1592,20 @@ export default function OrdinaryConversationFlow() {
   const handleOpenRecentRequest = async (requestId: string) => {
     if (requestId === draftSessionId) {
       setActiveRequestId(null);
-      setStage("wizard");
+      const snapshot = storedDraftSnapshot ?? readOrdinaryDraftSnapshot();
+      if (snapshot) {
+        applyOrdinaryDraftSnapshot(snapshot);
+      } else {
+        resetFlowForNewRequest();
+      }
       return;
+    }
+    if (!activeRequestId) {
+      persistCurrentDraftSnapshot();
     }
     try {
       setLoadingRequestId(requestId);
-      const res = await fetch(`/api/app/service-requests/${requestId}`);
-      if (!res.ok) throw new Error(`Failed to load request (${res.status})`);
-      const data = await res.json();
+      const data = await residentFetch(`/api/app/service-requests/${requestId}`);
       hydrateFromRequest(data);
     } catch (error) {
       console.error("Failed to load request", error);
@@ -1008,6 +1653,7 @@ export default function OrdinaryConversationFlow() {
     const providerName = activeRequestLive.provider?.name || "Assigned consultant";
     const providerRole = formatCategoryLabel(
       activeRequestLive.provider?.serviceCategory ||
+        activeRequestLive.categoryLabel ||
         activeRequestLive.category ||
         selectedCategoryLabel ||
         wizardAnswers.issue_type ||
@@ -1048,9 +1694,11 @@ export default function OrdinaryConversationFlow() {
       return !wizardAnswers[step.id];
     });
     const targetIdx = firstUnansweredIdx === -1 ? Math.max(wizardSteps.length - 1, 0) : firstUnansweredIdx;
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
     setWizardIndex(targetIdx);
     setPendingPrefill(false);
-  }, [pendingPrefill, wizardSteps, wizardAnswers, notes, effectiveAttachmentCount]);
+  }, [clearWizardPromptTimer, pendingPrefill, wizardSteps, wizardAnswers, notes, effectiveAttachmentCount]);
 
   const handleBookConsultancy = () => {
     const requestStatus = String(activeRequestLive?.status || "").toLowerCase();
@@ -1058,19 +1706,22 @@ export default function OrdinaryConversationFlow() {
     const alreadyBooked =
       Boolean(activeRequestId) &&
       (paymentStatus === "paid" ||
-        ["pending_inspection", "assigned", "assigned_for_job", "in_progress", "completed", "cancelled"].includes(
+        [
+          "pending_inspection",
+          "assigned",
+          "assigned_for_job",
+          "in_progress",
+          "work_completed_pending_resident",
+          "disputed",
+          "rework_required",
+          "completed",
+          "cancelled",
+        ].includes(
           requestStatus,
         ));
     if (alreadyBooked) {
       return;
     }
-
-    const selectedCategory = categories.find((cat: any) => {
-      const id = String(cat?.id ?? "");
-      const key = String(cat?.key ?? "");
-      const name = String(cat?.name ?? "");
-      return selectedCategoryValue === id || selectedCategoryValue === key || selectedCategoryValue === name;
-    });
 
     const descriptionParts = [
       wizardAnswers.issue_type ? `Issue: ${wizardAnswers.issue_type}` : null,
@@ -1086,19 +1737,20 @@ export default function OrdinaryConversationFlow() {
         ? `Photos attached: ${effectiveAttachmentCount}`
         : "Photos attached: 0",
     ].filter(Boolean);
-    const categoryKeyCandidate = String(
-      selectedCategory?.key ?? selectedCategory?.name ?? selectedCategoryLabel ?? selectedCategoryValue ?? "",
-    )
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "");
+    const categoryKeyCandidate =
+      selectedCategoryKey || normalizeCategoryKey(String(selectedCategoryLabel || selectedCategoryValue || ""));
+    if (!categoryKeyCandidate) {
+      restoreStageAfterCategorySelectionRef.current = stage;
+      restoreWizardIndexAfterCategorySelectionRef.current = wizardIndex;
+      setIsCategoryRequiredDialogOpen(true);
+      return;
+    }
 
     const primaryFollowUpId = categoryProfile.followUps[0]?.id;
     const primaryFollowUpAnswer = primaryFollowUpId ? wizardAnswers[primaryFollowUpId] : "";
 
     const draft = {
-      categoryKey: categoryKeyCandidate || "maintenance_repair",
+      categoryKey: categoryKeyCandidate,
       categoryLabel: selectedCategoryLabel || String(selectedCategory?.name ?? ""),
       urgency,
       issueType: wizardAnswers.issue_type || "",
@@ -1127,20 +1779,99 @@ export default function OrdinaryConversationFlow() {
   };
 
   const draftSessionId = "draft-ordinary-flow";
-  const draftSessions = useMemo(
-    () => [
-      {
+  const liveDraftHasContent = Boolean(
+    selectedCategoryValue ||
+      Object.keys(wizardAnswers).length ||
+      notes.trim() ||
+      urgency.trim() ||
+      address.trim() ||
+      unit.trim() ||
+      estateName.trim() ||
+      residentState.trim() ||
+      residentLga.trim(),
+  );
+  const liveDraftSnippet = useMemo(() => {
+    const lastAnswered = historyBlocks.length
+      ? String(historyBlocks[historyBlocks.length - 1]?.answer || "").trim()
+      : "";
+    if (lastAnswered) return lastAnswered;
+
+    const locationDraft =
+      estateResidenceMode === "outside"
+        ? [address, residentLga, residentState].filter(Boolean).join(", ")
+        : [estateName, address].filter(Boolean).join(", ");
+    return locationDraft || "Not provided";
+  }, [address, estateName, estateResidenceMode, historyBlocks, residentLga, residentState]);
+  const storedDraftTitle = useMemo(() => {
+    const draftCategory = String(storedDraftSnapshot?.selectedCategoryValue || "");
+    if (!draftCategory) return "New request";
+    const match = categories.find((cat: any) => {
+      const id = String(cat?.id ?? "");
+      const key = String(cat?.key ?? "");
+      const name = String(cat?.name ?? "");
+      return draftCategory === id || draftCategory === key || draftCategory === name;
+    });
+    return String(match?.name ?? match?.key ?? draftCategory ?? "New request");
+  }, [categories, storedDraftSnapshot]);
+  const storedDraftSnippet = useMemo(() => {
+    if (!storedDraftSnapshot) return "Not provided";
+
+    const answers = Object.values(storedDraftSnapshot.wizardAnswers || {})
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    const lastAnswered = answers.length ? answers[answers.length - 1] : "";
+    if (lastAnswered) return lastAnswered;
+
+    const locationDraft =
+      storedDraftSnapshot.estateResidenceMode === "outside"
+        ? [storedDraftSnapshot.address, storedDraftSnapshot.residentLga, storedDraftSnapshot.residentState]
+            .filter(Boolean)
+            .join(", ")
+        : [storedDraftSnapshot.estateName, storedDraftSnapshot.address].filter(Boolean).join(", ");
+    return locationDraft || "Not provided";
+  }, [storedDraftSnapshot]);
+  const draftSessionPreview = useMemo(() => {
+    if (!activeRequestId && liveDraftHasContent) {
+      return {
         id: draftSessionId,
         title: selectedCategoryLabel || "New request",
-        updatedAt: new Date().toISOString(),
-        snippet: intakeLocationLabel(),
+        updatedAt: draftSavedAt || new Date().toISOString(),
+        snippet: liveDraftSnippet,
         status: "draft",
-      },
-    ],
-    [selectedCategoryLabel, intakeLocationLabel],
+      };
+    }
+    if (!storedDraftSnapshot) return null;
+    return {
+      id: draftSessionId,
+      title: storedDraftTitle || "New request",
+      updatedAt: storedDraftSnapshot.updatedAt || draftSavedAt || new Date().toISOString(),
+      snippet: storedDraftSnippet,
+      status: "draft",
+    };
+  }, [
+    activeRequestId,
+    draftSavedAt,
+    liveDraftHasContent,
+    liveDraftSnippet,
+    selectedCategoryLabel,
+    storedDraftSnapshot,
+    storedDraftSnippet,
+    storedDraftTitle,
+  ]);
+  const draftSessions = useMemo(
+    () => (draftSessionPreview ? [draftSessionPreview] : []),
+    [draftSessionPreview],
   );
 
-  const activeSessionId = activeRequestId || draftSessionId;
+  const activeSessionId = activeRequestId || (draftSessions.length ? draftSessionId : null);
+
+  const handleOpenCategorySelectionFromModal = () => {
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    setIsCategoryRequiredDialogOpen(false);
+    skipCategoryResetRef.current = true;
+    setStage("intake");
+  };
 
   const { data: serviceRequestMessages = [] } = useQuery<RequestMessage[]>({
     queryKey: ["resident-request-messages", activeRequestId],
@@ -1183,11 +1914,80 @@ export default function OrdinaryConversationFlow() {
     },
   });
 
-  useEffect(() => {
-    if (!user?.id) return;
+  const confirmDeliveryMutation = useMutation({
+    mutationFn: async (payload: { requestId: string }) =>
+      residentFetch(`/api/service-requests/${payload.requestId}/confirm-delivery`, {
+        method: "POST",
+      }),
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["resident-active-request", variables.requestId] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+    },
+  });
 
+  const disputeDeliveryMutation = useMutation({
+    mutationFn: async (payload: { requestId: string; reason: string }) =>
+      residentFetch(`/api/service-requests/${payload.requestId}/dispute-delivery`, {
+        method: "POST",
+        json: { reason: payload.reason },
+      }),
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["resident-active-request", variables.requestId] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+    },
+  });
+
+  const requestCancellationReviewMutation = useMutation({
+    mutationFn: async (payload: {
+      requestId: string;
+      reasonCode: string;
+      reasonDetail: string;
+      preferredResolution: "full_refund" | "partial_refund" | "cancel_without_refund";
+    }) =>
+      residentFetch(`/api/service-requests/${payload.requestId}/cancellation-cases`, {
+        method: "POST",
+        json: {
+          reasonCode: payload.reasonCode,
+          reasonDetail: payload.reasonDetail,
+          preferredResolution: payload.preferredResolution,
+        },
+      }),
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["resident-active-request", variables.requestId] }),
+        queryClient.invalidateQueries({ queryKey: ["my-recent-requests"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+      setIsCancelRequestDialogOpen(false);
+      setCancelReasonCode("");
+      setCancelReasonDetail("");
+      setCancelPreferredResolution("full_refund");
+      toast({
+        title: "Cancellation request submitted",
+        description: "Admin will review your reason and update you.",
+      });
+    },
+    onError: (error: any) => {
+      const message = error?.message || "Unable to submit cancellation request";
+      toast({
+        title: "Could not submit request",
+        description: message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  useEffect(() => {
     const socket = io();
-    socket.emit("join", user.id);
+    socketRef.current = socket;
+    const joinIdentity = String(user?.id || activeRequestLive?.residentId || "").trim();
+    if (joinIdentity) {
+      socket.emit("join", joinIdentity);
+    }
 
     socket.on("request-message:new", (payload: RequestMessageSocketPayload) => {
       if (!payload?.requestId || !payload?.message) return;
@@ -1219,10 +2019,30 @@ export default function OrdinaryConversationFlow() {
       );
     });
 
+    socket.on("request-typing", (payload: RequestTypingSocketPayload) => {
+      if (!payload?.requestId) return;
+      if (payload.userId === user?.id) return;
+      if (payload.senderRole !== "provider" && payload.senderRole !== "admin") return;
+
+      if (!payload.isTyping) {
+        clearPeerTypingClearTimer();
+        setIsPeerTyping(false);
+        return;
+      }
+
+      setIsPeerTyping(true);
+      clearPeerTypingClearTimer();
+      peerTypingClearTimerRef.current = window.setTimeout(() => {
+        setIsPeerTyping(false);
+      }, 4500);
+    });
+
     return () => {
+      socketRef.current = null;
+      clearPeerTypingClearTimer();
       socket.disconnect();
     };
-  }, [queryClient, user?.id]);
+  }, [activeRequestId, activeRequestLive?.residentId, clearPeerTypingClearTimer, queryClient, user?.id]);
 
   const orderedServiceMessages = useMemo(
     () =>
@@ -1235,11 +2055,65 @@ export default function OrdinaryConversationFlow() {
   );
 
   const providerDisplayName = assignedProvider?.name || "CityConnect Assistant";
-  const canMessageAssignedProvider = Boolean(activeRequestLive?.providerId);
+  const activeRequestStatusValue = normalizeStatusKey(activeRequestLive?.status || "");
+  const activeCancellationCase = activeRequestLive?.cancellationCase || null;
+  const activeCancellationCaseStatus = normalizeStatusKey(activeCancellationCase?.status || "");
+  const hasOpenCancellationReview = ["requested", "under_review"].includes(activeCancellationCaseStatus);
+  const canRequestCancellationReview =
+    Boolean(activeRequestId) &&
+    CANCELLATION_REVIEW_REQUIRED_STATUSES.has(activeRequestStatusValue) &&
+    !hasOpenCancellationReview;
+  const isAwaitingResidentConfirmation = [
+    "work_completed_pending_resident",
+    "awaiting_resident_confirmation",
+    "awaiting_confirmation",
+  ].includes(activeRequestStatusValue);
+  const canMessageAssignedProvider =
+    Boolean(activeRequestLive?.providerId) &&
+    !["cancelled", "completed"].includes(activeRequestStatusValue);
+
+  useEffect(() => {
+    if (canMessageAssignedProvider && activeRequestId) return;
+    stopSelfTyping(activeRequestId);
+    clearPeerTypingClearTimer();
+    setIsPeerTyping(false);
+  }, [activeRequestId, canMessageAssignedProvider, clearPeerTypingClearTimer, stopSelfTyping]);
+
+  useEffect(() => {
+    if (!activeRequestId || !canMessageAssignedProvider) return;
+
+    let cancelled = false;
+    const syncTypingState = async () => {
+      try {
+        const typingState = await residentFetch<{
+          provider?: boolean;
+          admin?: boolean;
+        }>(`/api/service-requests/${activeRequestId}/typing`);
+        if (cancelled) return;
+        setIsPeerTyping(Boolean(typingState?.provider || typingState?.admin));
+      } catch {
+        if (!cancelled) {
+          setIsPeerTyping(false);
+        }
+      }
+    };
+
+    void syncTypingState();
+    const interval = window.setInterval(() => {
+      void syncTypingState();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeRequestId, canMessageAssignedProvider]);
+
+  const activeRequestCategoryDisplay =
+    activeRequestLive?.categoryLabel || activeRequestLive?.category || selectedCategoryLabel;
   const activeRequestStatusLabel = activeRequestLive?.status
     ? formatServiceRequestStatusLabel(activeRequestLive.status, activeRequestLive?.category || selectedCategoryLabel)
     : "";
-  const activeRequestStatusValue = String(activeRequestLive?.status || "").toLowerCase();
   const activeRequestPaymentStatusValue = String(activeRequestLive?.paymentStatus || "").toLowerCase();
   const activeConsultancyReport = useMemo(
     () => readConsultancyReport(activeRequestLive?.consultancyReport || null),
@@ -1276,7 +2150,19 @@ export default function OrdinaryConversationFlow() {
     parsedActiveRequestDetails.photosCount ?? persistedAttachmentCount ?? attachments.length;
   const consultancyAlreadyBooked = Boolean(activeRequestId) && (
     activeRequestPaymentStatusValue === "paid" ||
-    ["pending_inspection", "assigned", "assigned_for_job", "in_progress", "completed", "cancelled"].includes(
+    [
+      "pending_inspection",
+      "assigned",
+      "assigned_for_job",
+      "in_progress",
+      "work_completed_pending_resident",
+      "awaiting_resident_confirmation",
+      "awaiting_confirmation",
+      "disputed",
+      "rework_required",
+      "completed",
+      "cancelled",
+    ].includes(
       activeRequestStatusValue,
     )
   );
@@ -1284,8 +2170,10 @@ export default function OrdinaryConversationFlow() {
   const summaryItems = [
     {
       label: "Category",
-      value: formatCategoryLabel(activeRequestLive?.category || selectedCategoryLabel) || "Not selected",
+      value: formatCategoryLabel(activeRequestCategoryDisplay) || "Not selected",
       onEdit: () => {
+        clearWizardPromptTimer();
+        setIsWizardBotThinking(false);
         setStage("intake");
         setWizardIndex(0);
       },
@@ -1323,6 +2211,12 @@ export default function OrdinaryConversationFlow() {
   ];
   const showWizardInteractiveStep = !activeRequestId || activeRequestStatusValue === "pending";
 
+  useEffect(() => {
+    if (stage === "wizard" && showWizardInteractiveStep) return;
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+  }, [clearWizardPromptTimer, showWizardInteractiveStep, stage]);
+
   const providerAvailabilityLabel = canMessageAssignedProvider
     ? "Assigned to this request"
     : "Awaiting assignment";
@@ -1354,7 +2248,7 @@ export default function OrdinaryConversationFlow() {
         json: {
           amount,
           serviceRequestId: activeRequestId,
-          description: `Job payment for ${formatCategoryLabel(activeRequestLive?.category || selectedCategoryLabel || "service request")}`,
+          description: `Job payment for ${formatCategoryLabel(activeRequestCategoryDisplay || "service request")}`,
         },
       });
 
@@ -1413,6 +2307,86 @@ export default function OrdinaryConversationFlow() {
     }
   };
 
+  const handleSubmitCancellationReview = async () => {
+    if (!activeRequestId || requestCancellationReviewMutation.isPending) return;
+
+    const reasonCode = cancelReasonCode.trim();
+    const reasonDetail = cancelReasonDetail.trim();
+    if (!reasonCode) {
+      toast({
+        title: "Reason category required",
+        description: "Select a reason category before submitting.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (reasonDetail.length < 10) {
+      toast({
+        title: "Add more detail",
+        description: "Please provide a clear reason (at least 10 characters).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    await requestCancellationReviewMutation.mutateAsync({
+      requestId: activeRequestId,
+      reasonCode,
+      reasonDetail,
+      preferredResolution: cancelPreferredResolution,
+    });
+  };
+
+  const handleConfirmDelivery = async () => {
+    if (!activeRequestId || confirmDeliveryMutation.isPending) return;
+    try {
+      await confirmDeliveryMutation.mutateAsync({ requestId: activeRequestId });
+      setIsConfirmDeliveryDialogOpen(false);
+      toast({
+        title: "Delivery confirmed",
+        description: "This request has been marked as completed.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Could not confirm delivery",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDisputeDelivery = async () => {
+    if (!activeRequestId || disputeDeliveryMutation.isPending) return;
+    const trimmedReason = raiseIssueReason.trim();
+    if (!trimmedReason) return;
+
+    try {
+      await disputeDeliveryMutation.mutateAsync({ requestId: activeRequestId, reason: trimmedReason });
+      setRaiseIssueReason("");
+      setIsRaiseIssueDialogOpen(false);
+      toast({
+        title: "Issue submitted",
+        description: "Your dispute was sent to admin for review.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Could not submit issue",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const openConfirmDeliveryDialog = () => {
+    if (!activeRequestId || confirmDeliveryMutation.isPending) return;
+    setIsConfirmDeliveryDialogOpen(true);
+  };
+
+  const openRaiseIssueDialog = () => {
+    if (!activeRequestId || disputeDeliveryMutation.isPending) return;
+    setIsRaiseIssueDialogOpen(true);
+  };
+
   const conversationItems = useMemo<ThreadItem[]>(() => {
     const items: ThreadItem[] = [];
 
@@ -1438,20 +2412,103 @@ export default function OrdinaryConversationFlow() {
       });
     }
 
-    historyBlocks.forEach((block, idx) => {
+    if (activeRequestStatusValue === "assigned_for_job") {
+      const jobTimerScheduleAt =
+        toDate(activeRequestLive?.preferredTime) ||
+        assignedProvider?.scheduledAt ||
+        toDate(activeRequestLive?.assignedAt);
+      const jobTimerCountdownRaw = assignedProvider?.countdown || formatCountdown(jobTimerScheduleAt);
+      const jobTimerCountdownLabel =
+        jobTimerCountdownRaw === "Not scheduled"
+          ? "Awaiting agreed date"
+          : jobTimerCountdownRaw === "Starting soon"
+            ? "Starting soon"
+            : `${jobTimerCountdownRaw} remaining`;
+
       items.push({
-        id: `prompt-${idx}`,
-        kind: "message",
-        role: "provider",
-        text: block.prompt,
+        id: "assigned-for-job-timer-event",
+        kind: "event",
+        title: "Assigned for job timer is active",
+        body: jobTimerScheduleAt
+          ? "Countdown is running to the agreed job date."
+          : "Waiting for the agreed job date to start the countdown.",
+        scheduleLabel: jobTimerScheduleAt
+          ? jobTimerScheduleAt.toLocaleString(undefined, {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })
+          : "Agreed date pending",
+        countdownLabel: jobTimerCountdownLabel,
       });
+    }
+
+    const deliveryConfirmationItem: ThreadItem | null = isAwaitingResidentConfirmation
+      ? {
+          id: "delivery-confirmation-card",
+          kind: "delivery_confirmation",
+          statusLabel: activeRequestStatusLabel || "Awaiting confirmation",
+          note: "Provider marked this job as done. Confirm delivery if satisfied or raise an issue for admin review.",
+          requestedAt:
+            typeof activeRequestLive?.updatedAt === "string"
+              ? activeRequestLive.updatedAt
+              : activeRequestLive?.updatedAt
+                ? new Date(activeRequestLive.updatedAt).toISOString()
+                : undefined,
+          canConfirm: true,
+          onConfirm: openConfirmDeliveryDialog,
+          onDispute: openRaiseIssueDialog,
+          isConfirming: confirmDeliveryMutation.isPending,
+          isDisputing: disputeDeliveryMutation.isPending,
+        }
+      : null;
+
+    if (activeRequestStatusValue === "disputed") {
       items.push({
-        id: `answer-${idx}`,
-        kind: "message",
-        role: "resident",
-        text: block.answer,
+        id: "delivery-disputed-event",
+        kind: "event",
+        title: "Delivery issue under review",
+        body: "Your dispute is currently being reviewed by admin.",
       });
-    });
+    }
+
+    if (activeRequestStatusValue === "rework_required") {
+      items.push({
+        id: "delivery-rework-event",
+        kind: "event",
+        title: "Rework approved",
+        body: "Admin requested provider rework. Progress updates will continue in this chat.",
+      });
+    }
+
+    if (!showWizardInteractiveStep) {
+      historyBlocks.forEach((block, idx) => {
+        items.push({
+          id: `prompt-${idx}`,
+          kind: "message",
+          role: "provider",
+          text: block.prompt,
+        });
+        items.push({
+          id: `answer-${idx}`,
+          kind: "message",
+          role: "resident",
+          text: block.answer,
+        });
+      });
+    }
+
+
+    const shouldShowProviderDivider = Boolean(assignedProvider && orderedServiceMessages.length > 0);
+    if (shouldShowProviderDivider) {
+      items.push({
+        id: "provider-chat-divider",
+        kind: "divider",
+        text: "Conversation with your provider",
+      });
+    }
 
     orderedServiceMessages.forEach((message) => {
       const consultancyReport = parseConsultancyReportMessage(message.message);
@@ -1530,21 +2587,37 @@ export default function OrdinaryConversationFlow() {
       });
     }
 
+    // Keep delivery confirmation CTA near the latest thread content.
+    if (deliveryConfirmationItem) {
+      items.push(deliveryConfirmationItem);
+    }
+
     return items;
   }, [
     activeRequestLive?.billedAmount,
+    activeRequestLive?.assignedAt,
+    activeRequestLive?.updatedAt,
     activeConsultancyReport,
+    activeRequestLive?.preferredTime,
     activeRequestLive?.paymentRequestedAt,
+    activeRequestStatusLabel,
+    activeRequestStatusValue,
     assignedProvider,
     canPayJobRequest,
+    confirmDeliveryMutation.isPending,
     declineJobPaymentMutation.isPending,
+    disputeDeliveryMutation.isPending,
     handleDeclineRequestedPayment,
+    openConfirmDeliveryDialog,
+    openRaiseIssueDialog,
     handlePayRequestedJob,
     hasJobPaymentRequest,
     historyBlocks,
+    isAwaitingResidentConfirmation,
     isStartingJobPayment,
     orderedServiceMessages,
     paymentCardStatusLabel,
+    showWizardInteractiveStep,
   ]);
   const shouldPrioritizeInteractiveStep = showWizardInteractiveStep && conversationItems.length === 0;
 
@@ -1593,6 +2666,7 @@ export default function OrdinaryConversationFlow() {
     const trimmed = residentMessageDraft.trim();
     if (!trimmed && composerAttachments.length === 0) return;
     if (sendResidentMessageMutation.isPending) return;
+    stopSelfTyping(activeRequestId);
 
     try {
       if (composerAttachments.length === 0) {
@@ -1667,76 +2741,108 @@ export default function OrdinaryConversationFlow() {
             draftSessions={draftSessions}
           />
         </div>
-        <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-l-[40px] border border-[#E4E7EC]/60 bg-[#F8FAFC] shadow-[inset_0_1px_0_rgba(255,255,255,0.4)]">
-          <div className="border-b border-[#EAECF0] bg-white px-4 sm:px-6 lg:px-10 py-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-[24px] font-semibold tracking-[-0.02em] text-[#101828]">
-                  Request Assistant
-                </p>
-                {!isTopSectionCollapsed ? (
-                  <p className="text-[12px] text-[#98A2B3]">
-                    Location and urgency are captured first to reduce pricing errors. Then we guide you with quick chips.
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center rounded-full border border-[#D1FADF] bg-[#ECFDF3] px-3 py-1 text-xs font-semibold text-[#027A48]">
-                  {selectedCategoryLabel ? formatCategoryLabel(selectedCategoryLabel) : "No category selected"}
-                </span>
-                {stage === "wizard" ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2 text-xs"
-                    onClick={() => setIsTopSectionCollapsed((prev) => !prev)}
-                    aria-label={isTopSectionCollapsed ? "Expand top section" : "Collapse top section"}
-                  >
-                    {isTopSectionCollapsed ? "Expand" : "Collapse"}
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          </div>
+        <div
+          className={cn(
+            "flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-l-[40px]",
+            stage === "intake"
+              ? "bg-[#F2F4F7]"
+              : "border border-[#E4E7EC]/60 bg-[#F8FAFC] shadow-[inset_0_1px_0_rgba(255,255,255,0.4)]",
+          )}
+        >
+          {stage !== "intake" ? (
+            <>
+              <div className="border-b border-[#EAECF0] bg-white px-4 py-3 sm:px-6 lg:px-10">
+                <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0 flex items-center gap-3">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#D0D5DD] bg-[#F9FAFB] text-[12px] font-semibold text-[#344054]">
+                      R
+                    </span>
+                    <p className="truncate text-[16px] font-semibold text-[#101828]">
+                      {selectedCategoryLabel
+                        ? `You selected ${formatCategoryLabel(selectedCategoryLabel)}.`
+                        : "Select a category to continue."}
+                    </p>
+                  </div>
 
-          {stage === "wizard" ? (
-            <div
-              className={cn(
-                "overflow-hidden transition-[max-height,opacity] duration-200 ease-out",
-                isTopSectionCollapsed ? "max-h-0 opacity-0" : "max-h-[220px] opacity-100",
-              )}
-            >
-              <ProviderHeader
-                providerName={providerDisplayName}
-                providerRole={assignedProvider?.role || "Service coordinator"}
-                availabilityLabel={providerAvailabilityLabel}
-                etaLabel={providerEtaLabel}
-                coverageLabel={intakeLocationLabel()}
-                onReviewSummary={() => setStage("summary")}
-              />
-              <RequestProgressTracker status={activeRequestLive?.status || (activeRequestId ? "pending" : "draft")} />
-            </div>
+                  {stage === "wizard" ? (
+                    showWizardInteractiveStep ? (
+                      <div className="flex items-center gap-4 text-[14px] font-semibold">
+                        <button
+                          type="button"
+                          onClick={handleCancelRequest}
+                          className="text-[#667085] transition hover:text-[#344054]"
+                        >
+                          Cancel Request
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleChangeCategory}
+                          className="text-[#027A48] transition hover:text-[#039855]"
+                        >
+                          Change category
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        {activeRequestId && !["cancelled"].includes(activeRequestStatusValue) ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 rounded-full border-[#D0D5DD] bg-white px-3 text-[13px] font-semibold text-[#344054] hover:bg-[#F9FAFB]"
+                            onClick={handleCancelRequest}
+                            disabled={requestCancellationReviewMutation.isPending}
+                          >
+                            {hasOpenCancellationReview ? "Cancellation under review" : "Cancel Request"}
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-full border-[#D0D5DD] bg-white px-3 text-[13px] font-semibold text-[#344054] hover:bg-[#F9FAFB]"
+                          onClick={() => setIsProviderDetailsCollapsed((prev) => !prev)}
+                          aria-label={isProviderDetailsCollapsed ? "Show provider details" : "Hide provider details"}
+                        >
+                          {isProviderDetailsCollapsed ? "Show Provider Details" : "Hide Provider Details"}
+                        </Button>
+                      </div>
+                    )
+                  ) : null}
+                </div>
+              </div>
+
+              {stage === "wizard" && !showWizardInteractiveStep ? (
+                <div>
+                  {!isProviderDetailsCollapsed ? (
+                    <ProviderHeader
+                      providerName={providerDisplayName}
+                      providerRole={assignedProvider?.role || "Service coordinator"}
+                      availabilityLabel={providerAvailabilityLabel}
+                      etaLabel={providerEtaLabel}
+                      coverageLabel={intakeLocationLabel()}
+                      onReviewSummary={() => setStage("summary")}
+                    />
+                  ) : null}
+                  <RequestProgressTracker
+                    status={activeRequestLive?.status || (activeRequestId ? "pending" : "draft")}
+                  />
+                </div>
+              ) : null}
+            </>
           ) : null}
 
           <div className="min-h-0 flex-1 overflow-hidden">
 
           {stage === "intake" ? (
             <div className="h-full overflow-y-auto">
-              <div className="mx-auto max-w-5xl space-y-4 p-6">
-                <MainWrapSelectCategory
-                  searchQuery={categorySelectSearch}
-                  setSearchQuery={setCategorySelectSearch}
-                  onCategorySelect={handleSelectCategoryFromGrid}
-                  categoriesData={categories}
-                  catsLoading={categoriesLoading}
-                  myEstates={estates}
-                  selectedEstateName={estateName || null}
-                  setSelectedEstateName={(value) => setEstateName(value || "")}
-                  isOutsideCityConnectEstate={false}
-                  setIsOutsideCityConnectEstate={(outside) => setEstateResidenceMode(outside ? "outside" : "estate")}
-                />
-              </div>
+              <MainWrapSelectCategory
+                searchQuery={categorySelectSearch}
+                setSearchQuery={setCategorySelectSearch}
+                onCategorySelect={handleSelectCategoryFromGrid}
+                categoriesData={categories}
+                catsLoading={categoriesLoading}
+              />
             </div>
           ) : null}
 
@@ -1754,6 +2860,9 @@ export default function OrdinaryConversationFlow() {
                       ) : (
                         <SystemMessage text="Conversation starts once the first response is captured." />
                       )}
+                      {isPeerTyping && canMessageAssignedProvider ? (
+                        <TypingPresenceIndicator label={`${providerDisplayName} is typing...`} className="mt-2" />
+                      ) : null}
                       <div ref={chatBottomRef} />
                     </div>
 
@@ -1773,8 +2882,22 @@ export default function OrdinaryConversationFlow() {
                               : "city-scrollbar max-h-[32vh] overflow-y-auto",
                           )}
                         >
-                        <ChatPrompt text={currentStep.prompt} />
-                        <p className="text-[12px] text-[#667085]">This helps us match nearby providers faster.</p>
+                        {showWizardInteractiveStep ? (
+                          <div className="space-y-3">
+                            {historyBlocks.map((block, idx) => (
+                              <div key={`wizard-history-${idx}`} className="space-y-2.5">
+                                <ChatPrompt text={block.prompt} status="answered" />
+                                <WizardAnswerBubble text={block.answer} />
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {isWizardBotThinking ? (
+                          <WizardTypingIndicator />
+                        ) : (
+                          <>
+                            <ChatPrompt text={currentStep.prompt} />
                         {currentStep.kind === "location" ? (
                           <div className="space-y-3">
                             <div className="rounded-2xl border border-[#EAECF0] bg-[#f9fafb] p-4 space-y-3">
@@ -1953,11 +3076,12 @@ export default function OrdinaryConversationFlow() {
                               <Button
                                 variant="outline"
                                 className="rounded-full"
-                                disabled={!isLocationComplete}
+                                disabled={!isLocationComplete || isWizardBotThinking}
                                 onClick={() => {
-                                  if (!isLocationComplete) return;
+                                  if (isWizardBotThinking || !isLocationComplete) return;
                                   setWizardAnswers((prev) => ({ ...prev, [currentStep.id]: intakeLocationLabel() }));
-                                  setWizardIndex((prev) => Math.min(prev + 1, wizardSteps.length - 1));
+                                  const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
+                                  queueWizardStepAdvance(nextIndex);
                                 }}
                               >
                                 Add location
@@ -1966,16 +3090,44 @@ export default function OrdinaryConversationFlow() {
                           </div>
                         ) : null}
                         {currentStep.kind === "chips" ? (
-                          <div className="flex flex-wrap gap-3">
-                            {currentStep.options.map((opt) => (
-                              <ChipButton
-                                key={opt}
-                                label={opt}
-                                selected={wizardAnswers[currentStep.id] === opt}
-                                onClick={() => handleSelectChip(currentStep.id, opt)}
-                              />
-                            ))}
-                          </div>
+                          currentStep.id === "urgency" ? (
+                            <div className="rounded-2xl border border-[#E4E7EC] bg-[#F2F4F7] p-4">
+                              <div className="flex flex-wrap gap-3">
+                                {URGENCY_OPTIONS.map((opt) => {
+                                  const selected = wizardAnswers[currentStep.id] === opt.label;
+                                  return (
+                                    <button
+                                      key={opt.value}
+                                      type="button"
+                                      onClick={() => handleSelectChip(currentStep.id, opt.label)}
+                                      className={cn(
+                                        "flex min-w-[124px] items-center gap-3 rounded-2xl border px-4 py-3 text-left transition",
+                                        selected
+                                          ? "border-[#039855] bg-white shadow-sm"
+                                          : "border-[#D0D5DD] bg-white hover:border-[#98A2B3]",
+                                      )}
+                                    >
+                                      <UrgencyIcon value={opt.value} />
+                                      <span className="text-[16px] font-semibold leading-[22px] text-[#101828]">
+                                        {opt.label}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap gap-3">
+                              {currentStep.options.map((opt) => (
+                                <ChipButton
+                                  key={opt}
+                                  label={opt}
+                                  selected={wizardAnswers[currentStep.id] === opt}
+                                  onClick={() => handleSelectChip(currentStep.id, opt)}
+                                />
+                              ))}
+                            </div>
+                          )
                         ) : null}
 
                         {currentStep.kind === "photos" ? (
@@ -2045,15 +3197,23 @@ export default function OrdinaryConversationFlow() {
                               {!currentStep.required ? (
                                 <Button
                                   variant="outline"
-                                  onClick={() => setWizardIndex((prev) => Math.min(prev + 1, wizardSteps.length - 1))}
+                                  disabled={isWizardBotThinking}
+                                  onClick={() => {
+                                    if (isWizardBotThinking) return;
+                                    const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
+                                    queueWizardStepAdvance(nextIndex);
+                                  }}
                                 >
                                   Skip for now
                                 </Button>
                               ) : null}
                               <Button
+                                disabled={isWizardBotThinking}
                                 onClick={() => {
+                                  if (isWizardBotThinking) return;
                                   if (currentStep.required && attachments.length === 0) return;
-                                  setWizardIndex((prev) => Math.min(prev + 1, wizardSteps.length - 1));
+                                  const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
+                                  queueWizardStepAdvance(nextIndex);
                                 }}
                                 className="rounded-full"
                               >
@@ -2078,6 +3238,8 @@ export default function OrdinaryConversationFlow() {
                             </div>
                           </div>
                         ) : null}
+                          </>
+                        )}
                         </div>
                       </div>
                     ) : null}
@@ -2093,7 +3255,7 @@ export default function OrdinaryConversationFlow() {
                 variant="citybuddy"
                 label={`Message ${providerDisplayName}`}
                 value={residentMessageDraft}
-                onChange={setResidentMessageDraft}
+                onChange={handleResidentComposerChange}
                 onSend={handleSendComposerMessage}
                 isSending={sendResidentMessageMutation.isPending}
                 attachments={composerAttachments}
@@ -2113,6 +3275,181 @@ export default function OrdinaryConversationFlow() {
           ) : null}
         </div>
       </div>
+
+      <Dialog open={isCategoryRequiredDialogOpen} onOpenChange={setIsCategoryRequiredDialogOpen}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>Select category first</DialogTitle>
+            <DialogDescription>
+              You need to select a service category before booking for consultancy.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCategoryRequiredDialogOpen(false)}>
+              Continue editing
+            </Button>
+            <Button onClick={handleOpenCategorySelectionFromModal}>Select category</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isCancelRequestDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !requestCancellationReviewMutation.isPending) {
+            setCancelReasonCode("");
+            setCancelReasonDetail("");
+            setCancelPreferredResolution("full_refund");
+          }
+          setIsCancelRequestDialogOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>Request cancellation review</DialogTitle>
+            <DialogDescription>
+              This request is already assigned/active. Tell us why you want to cancel so admin can review and decide.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-[#101828]">Reason category</p>
+              <Select value={cancelReasonCode} onValueChange={setCancelReasonCode}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select reason" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="wrong_provider">Wrong provider assigned</SelectItem>
+                  <SelectItem value="quality_concern">Quality concern</SelectItem>
+                  <SelectItem value="delay_no_show">Delay or no-show</SelectItem>
+                  <SelectItem value="pricing_dispute">Pricing dispute</SelectItem>
+                  <SelectItem value="safety_issue">Safety issue</SelectItem>
+                  <SelectItem value="duplicate_request">Duplicate request</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-[#101828]">Details</p>
+              <textarea
+                value={cancelReasonDetail}
+                onChange={(event) => setCancelReasonDetail(event.target.value)}
+                placeholder="Explain what happened and why cancellation is needed."
+                className="min-h-[120px] w-full rounded-xl border border-[#D0D5DD] px-3 py-2 text-sm text-[#344054]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-[#101828]">Preferred resolution</p>
+              <Select
+                value={cancelPreferredResolution}
+                onValueChange={(value: "full_refund" | "partial_refund" | "cancel_without_refund") =>
+                  setCancelPreferredResolution(value)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="full_refund">Full refund</SelectItem>
+                  <SelectItem value="partial_refund">Partial refund</SelectItem>
+                  <SelectItem value="cancel_without_refund">Cancel without refund</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsCancelRequestDialogOpen(false)}
+              disabled={requestCancellationReviewMutation.isPending}
+            >
+              Close
+            </Button>
+            <Button
+              onClick={handleSubmitCancellationReview}
+              disabled={requestCancellationReviewMutation.isPending}
+            >
+              {requestCancellationReviewMutation.isPending ? "Submitting..." : "Submit for admin review"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isConfirmDeliveryDialogOpen} onOpenChange={setIsConfirmDeliveryDialogOpen}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Confirm job delivery</DialogTitle>
+            <DialogDescription>
+              Confirm that this job was delivered satisfactorily. This will mark the request as completed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsConfirmDeliveryDialogOpen(false)}
+              disabled={confirmDeliveryMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmDelivery} disabled={confirmDeliveryMutation.isPending}>
+              {confirmDeliveryMutation.isPending ? "Confirming..." : "Confirm delivery"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isRaiseIssueDialogOpen}
+        onOpenChange={(open) => {
+          setIsRaiseIssueDialogOpen(open);
+          if (!open && !disputeDeliveryMutation.isPending) {
+            setRaiseIssueReason("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Raise delivery issue</DialogTitle>
+            <DialogDescription>
+              Tell admin what should be reviewed before this request can be completed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-[#344054]">Issue details</p>
+            <textarea
+              value={raiseIssueReason}
+              onChange={(event) => setRaiseIssueReason(event.target.value)}
+              placeholder="Describe what is incomplete or incorrect."
+              className="min-h-[120px] w-full rounded-xl border border-[#D0D5DD] px-3 py-2 text-sm"
+              disabled={disputeDeliveryMutation.isPending}
+            />
+            <p className="text-xs text-[#667085]">Required to submit dispute.</p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (disputeDeliveryMutation.isPending) return;
+                setIsRaiseIssueDialogOpen(false);
+                setRaiseIssueReason("");
+              }}
+              disabled={disputeDeliveryMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleDisputeDelivery}
+              disabled={disputeDeliveryMutation.isPending || raiseIssueReason.trim().length === 0}
+            >
+              {disputeDeliveryMutation.isPending ? "Submitting..." : "Submit issue"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {stage === "summary" ? (
         <div className="fixed inset-0 z-50">
@@ -2191,7 +3528,7 @@ export default function OrdinaryConversationFlow() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-[14px] font-semibold text-[#101828]">
-                        {formatCategoryLabel(activeRequestLive?.category || selectedCategoryLabel || "General Provider")}
+                        {formatCategoryLabel(activeRequestCategoryDisplay || "General Provider")}
                       </p>
                       <p className="text-[12px] text-[#667085]">
                         Issue: {summaryProblemTypeValue}

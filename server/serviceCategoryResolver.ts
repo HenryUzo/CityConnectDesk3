@@ -24,6 +24,9 @@ const SERVICE_REQUEST_CATEGORY_KEYS = new Set([
   "catering_services",
   "it_support",
   "maintenance_repair",
+  "general_repairs",
+  "locksmith",
+  "glass_windows",
   "packaging_solutions",
   "marketing_advertising",
   "home_tutors",
@@ -55,16 +58,18 @@ const CATEGORY_ALIASES: Record<string, string> = {
   laundry: "laundry_service",
   pest: "pest_control",
   appliance: "appliance_repair",
+  store_owner: "item_vendor",
+  store_staff: "item_vendor",
   maintenance: "maintenance_repair",
   maintenance_and_repair: "maintenance_repair",
-  repair: "maintenance_repair",
-  repairs: "maintenance_repair",
-  general_repair: "maintenance_repair",
-  general_repairs: "maintenance_repair",
-  general_maintenance: "maintenance_repair",
-  locksmith: "maintenance_repair",
-  glass_windows: "maintenance_repair",
-  glass_window: "maintenance_repair",
+  repair: "general_repairs",
+  repairs: "general_repairs",
+  general_repair: "general_repairs",
+  general_repairs: "general_repairs",
+  general_maintenance: "general_repairs",
+  locksmith: "locksmith",
+  glass_windows: "glass_windows",
+  glass_window: "glass_windows",
 };
 
 const CATEGORY_HINTS: Array<{ token: string; category: string }> = [
@@ -83,9 +88,10 @@ const CATEGORY_HINTS: Array<{ token: string; category: string }> = [
   { token: "laundry", category: "laundry_service" },
   { token: "pest", category: "pest_control" },
   { token: "appliance", category: "appliance_repair" },
-  { token: "lock", category: "maintenance_repair" },
-  { token: "glass", category: "maintenance_repair" },
-  { token: "repair", category: "maintenance_repair" },
+  { token: "store", category: "item_vendor" },
+  { token: "lock", category: "locksmith" },
+  { token: "glass", category: "glass_windows" },
+  { token: "repair", category: "general_repairs" },
   { token: "maint", category: "maintenance_repair" },
 ];
 
@@ -119,10 +125,17 @@ function resolveFromCandidate(candidate: string): string | null {
   return null;
 }
 
-export function resolveServiceRequestCategory(categoryKey?: string, categoryLabel?: string): string {
+export function tryResolveServiceRequestCategory(
+  categoryKey?: string,
+  categoryLabel?: string,
+): string | null {
   return (
     resolveFromCandidate(String(categoryKey || "")) ||
     resolveFromCandidate(String(categoryLabel || "")) ||
-    "maintenance_repair"
+    null
   );
+}
+
+export function resolveServiceRequestCategory(categoryKey?: string, categoryLabel?: string): string {
+  return tryResolveServiceRequestCategory(categoryKey, categoryLabel) || "maintenance_repair";
 }

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { io } from "socket.io-client";
-import { ProviderLayout } from "@/components/admin/ProviderLayout";
+import { ProviderShell } from "@/components/provider/ProviderShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MessageComposer, type ComposerAttachment } from "@/components/resident/ordinary-flow/MessageComposer";
 import { ChatThread, type ThreadItem } from "@/components/resident/ordinary-flow/ChatThread";
+import { TypingPresenceIndicator } from "@/components/resident/ordinary-flow/TypingPresenceIndicator";
+import { EmptyState, InlineErrorState, PageSkeleton } from "@/components/shared/page-states";
 import { useToast } from "@/hooks/use-toast";
 import { useNotifications } from "@/contexts/NotificationsContext";
 import { useAuth } from "@/hooks/use-auth";
@@ -28,9 +30,12 @@ import { cn } from "@/lib/utils";
 
 interface ServiceRequest {
   id: string;
+  providerId?: string | null;
   title?: string;
   description?: string;
   category?: string;
+  categoryLabel?: string;
+  issueType?: string;
   location?: string;
   urgency?: string;
   status: string;
@@ -70,6 +75,14 @@ type ServiceRequestUpdateSocketPayload = {
   at?: string;
 };
 
+type RequestTypingSocketPayload = {
+  requestId: string;
+  userId: string;
+  senderRole: "resident" | "provider" | "admin";
+  isTyping: boolean;
+  at?: string;
+};
+
 function formatLabel(value: string) {
   if (!value) return "New request";
   return value
@@ -79,6 +92,26 @@ function formatLabel(value: string) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function normalizeCategoryKey(value?: string | null) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function resolveRequestCategoryLabel(request?: ServiceRequest | null) {
+  return request?.categoryLabel || request?.issueType || request?.category || request?.title || "Service request";
+}
+
+function resolveRequestCategoryKey(request?: ServiceRequest | null) {
+  if (!request) return "";
+  const categoryKey = normalizeCategoryKey(request.category);
+  const inferredKey = normalizeCategoryKey(request.categoryLabel || request.issueType || request.title || "");
+  if (categoryKey && categoryKey !== "maintenance_repair") return categoryKey;
+  return inferredKey || categoryKey;
+}
+
 function statusTone(status: string) {
   const key = String(status || "").toLowerCase().replace(/[\s-]+/g, "_");
   const map: Record<string, string> = {
@@ -86,6 +119,9 @@ function statusTone(status: string) {
     assigned: "border-violet-300 bg-violet-100 text-violet-700",
     assigned_for_job: "border-indigo-300 bg-indigo-100 text-indigo-700",
     in_progress: "border-sky-300 bg-sky-100 text-sky-700",
+    work_completed_pending_resident: "border-cyan-300 bg-cyan-100 text-cyan-700",
+    rework_required: "border-amber-300 bg-amber-100 text-amber-700",
+    disputed: "border-rose-300 bg-rose-100 text-rose-700",
     pending_inspection: "border-amber-300 bg-amber-100 text-amber-700",
     completed: "border-emerald-300 bg-emerald-100 text-emerald-700",
     cancelled: "border-rose-300 bg-rose-100 text-rose-700",
@@ -181,6 +217,7 @@ export default function ProviderChatPage() {
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [messageDraft, setMessageDraft] = useState("");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
+  const [isResidentTyping, setIsResidentTyping] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [reportInspectionDate, setReportInspectionDate] = useState("");
   const [reportActualIssue, setReportActualIssue] = useState("");
@@ -188,20 +225,40 @@ export default function ProviderChatPage() {
   const [reportMaterialCost, setReportMaterialCost] = useState("");
   const [reportServiceCost, setReportServiceCost] = useState("");
   const [reportPreventiveRecommendation, setReportPreventiveRecommendation] = useState("");
+  const socketRef = useRef<ReturnType<typeof io> | null>(null);
+  const selfTypingRef = useRef(false);
+  const selfTypingStopTimerRef = useRef<number | null>(null);
+  const residentTypingClearTimerRef = useRef<number | null>(null);
 
   const requestIdFromQuery = useMemo(() => {
     const queryString = location.includes("?") ? location.split("?")[1] : "";
     return new URLSearchParams(queryString).get("requestId") || "";
   }, [location]);
 
-  const { data: requests = [], isLoading: requestsLoading } = useQuery<ServiceRequest[]>({
+  const {
+    data: requests = [],
+    isLoading: requestsLoading,
+    error: requestsError,
+  } = useQuery<ServiceRequest[]>({
     queryKey: ["provider-chat-requests"],
+    staleTime: 10_000,
+    refetchInterval: 20_000,
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/service-requests");
       const data = (await res.json()) as ServiceRequest[];
       return Array.isArray(data)
         ? data.filter((request) =>
-            ["assigned", "assigned_for_job", "in_progress", "pending", "pending_inspection", "completed"].includes(
+            [
+              "assigned",
+              "assigned_for_job",
+              "in_progress",
+              "work_completed_pending_resident",
+              "rework_required",
+              "disputed",
+              "pending",
+              "pending_inspection",
+              "completed",
+            ].includes(
               request.status,
             ),
           )
@@ -280,16 +337,82 @@ export default function ProviderChatPage() {
     if (canGenerateConsultancyReport) return "";
 
     const normalizedStatus = String(activeRequest.status || "").toLowerCase().replace(/[\s-]+/g, "_");
-    if (["assigned_for_job", "in_progress", "completed", "cancelled"].includes(normalizedStatus)) {
+    if (
+      [
+        "assigned_for_job",
+        "in_progress",
+        "work_completed_pending_resident",
+        "rework_required",
+        "disputed",
+        "completed",
+        "cancelled",
+      ].includes(normalizedStatus)
+    ) {
       return "Consultancy report can only be generated during inspection (Pending inspection / Assigned for inspection).";
     }
 
     return "This request is not in an inspection stage yet.";
   }, [activeRequest, canGenerateConsultancyReport]);
 
-  const { data: requestMessages = [], isLoading: messagesLoading } = useQuery<RequestMessage[]>({
+  const activeRequestStatus = useMemo(
+    () => String(activeRequest?.status || "").toLowerCase().replace(/[\s-]+/g, "_"),
+    [activeRequest?.status],
+  );
+
+  const clearSelfTypingStopTimer = useCallback(() => {
+    if (selfTypingStopTimerRef.current !== null) {
+      window.clearTimeout(selfTypingStopTimerRef.current);
+      selfTypingStopTimerRef.current = null;
+    }
+  }, []);
+
+  const clearResidentTypingTimer = useCallback(() => {
+    if (residentTypingClearTimerRef.current !== null) {
+      window.clearTimeout(residentTypingClearTimerRef.current);
+      residentTypingClearTimerRef.current = null;
+    }
+  }, []);
+
+  const emitTypingState = useCallback(
+    (requestId: string, isTyping: boolean) => {
+      if (!requestId) return;
+      const socket = socketRef.current;
+      if (socket) {
+        socket.emit("request-typing", {
+          requestId,
+          userId: String(user?.id || ""),
+          senderRole: "provider",
+          isTyping,
+        });
+      }
+      void apiRequest("POST", `/api/service-requests/${requestId}/typing`, {
+        isTyping,
+      }).catch(() => undefined);
+    },
+    [user?.id],
+  );
+
+  const stopSelfTyping = useCallback(
+    (requestId?: string | null) => {
+      clearSelfTypingStopTimer();
+      const targetRequestId = String(requestId || activeRequestId || "").trim();
+      if (!targetRequestId) return;
+      if (!selfTypingRef.current) return;
+      selfTypingRef.current = false;
+      emitTypingState(targetRequestId, false);
+    },
+    [activeRequestId, clearSelfTypingStopTimer, emitTypingState],
+  );
+
+  const {
+    data: requestMessages = [],
+    isLoading: messagesLoading,
+    error: messagesError,
+  } = useQuery<RequestMessage[]>({
     queryKey: ["provider-chat-messages", activeRequestId],
     enabled: Boolean(activeRequestId),
+    staleTime: 2_000,
+    refetchInterval: 10_000,
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/service-requests/${activeRequestId}/messages`);
       return res.json() as Promise<RequestMessage[]>;
@@ -412,6 +535,52 @@ export default function ProviderChatPage() {
     },
   });
 
+  const updateJobStatusMutation = useMutation<Response, Error, { requestId: string; status: string }>({
+    mutationFn: async ({ requestId, status }) =>
+      apiRequest("PATCH", `/api/service-requests/${requestId}`, { status }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["provider-chat-requests"] }),
+        queryClient.invalidateQueries({ queryKey: ["provider-jobs", user?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/service-requests"] }),
+      ]);
+      toast({
+        title: "Status updated",
+        description: "The job stage has been updated.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Status update failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const markWorkCompletedMutation = useMutation<Response, Error, { requestId: string }>({
+    mutationFn: async ({ requestId }) =>
+      apiRequest("POST", `/api/service-requests/${requestId}/work-completed`),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["provider-chat-requests"] }),
+        queryClient.invalidateQueries({ queryKey: ["provider-jobs", user?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/service-requests"] }),
+      ]);
+      toast({
+        title: "Work marked completed",
+        description: "Resident confirmation is now pending.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not mark work completed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const submitConsultancyReportMutation = useMutation({
     mutationFn: async (payload: {
       requestId: string;
@@ -436,10 +605,17 @@ export default function ProviderChatPage() {
       );
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["provider-chat-requests"] });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["provider-chat-requests"] }),
+        queryClient.invalidateQueries({ queryKey: ["provider-jobs", user?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/service-requests"] }),
+      ]);
       if (activeRequestId) {
-        queryClient.invalidateQueries({ queryKey: ["provider-chat-messages", activeRequestId] });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["provider-chat-messages", activeRequestId] }),
+          queryClient.invalidateQueries({ queryKey: ["provider-dashboard-request-messages", activeRequestId] }),
+        ]);
       }
       toast({ title: "Consultancy report sent" });
       setIsReportModalOpen(false);
@@ -565,12 +741,36 @@ export default function ProviderChatPage() {
     );
   };
 
+  const handleProviderComposerChange = useCallback(
+    (nextValue: string) => {
+      setMessageDraft(nextValue);
+      if (!activeRequestId) return;
+
+      if (!nextValue.trim()) {
+        stopSelfTyping(activeRequestId);
+        return;
+      }
+
+      if (!selfTypingRef.current) {
+        selfTypingRef.current = true;
+        emitTypingState(activeRequestId, true);
+      }
+
+      clearSelfTypingStopTimer();
+      selfTypingStopTimerRef.current = window.setTimeout(() => {
+        stopSelfTyping(activeRequestId);
+      }, 1800);
+    },
+    [activeRequestId, clearSelfTypingStopTimer, emitTypingState, stopSelfTyping],
+  );
+
   const handleSendComposerMessage = async () => {
     if (!activeRequestId) return;
     if (sendMessageMutation.isPending) return;
 
     const trimmed = messageDraft.trim();
     if (!trimmed && composerAttachments.length === 0) return;
+    stopSelfTyping(activeRequestId);
 
     try {
       if (composerAttachments.length === 0) {
@@ -606,9 +806,55 @@ export default function ProviderChatPage() {
   }, [activeRequestId, orderedMessages.length]);
 
   useEffect(() => {
-    if (!user?.id) return;
+    if (activeRequestId) return;
+    stopSelfTyping(null);
+    clearResidentTypingTimer();
+    setIsResidentTyping(false);
+  }, [activeRequestId, clearResidentTypingTimer, stopSelfTyping]);
+
+  useEffect(() => {
+    if (!activeRequestId) return;
+
+    let cancelled = false;
+    const syncTypingState = async () => {
+      try {
+        const response = await apiRequest("GET", `/api/service-requests/${activeRequestId}/typing`);
+        const typingState = (await response.json()) as { resident?: boolean };
+        if (cancelled) return;
+        setIsResidentTyping(Boolean(typingState?.resident));
+      } catch {
+        if (!cancelled) {
+          setIsResidentTyping(false);
+        }
+      }
+    };
+
+    void syncTypingState();
+    const interval = window.setInterval(() => {
+      void syncTypingState();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeRequestId]);
+
+  useEffect(() => {
+    return () => {
+      stopSelfTyping(activeRequestId);
+      clearResidentTypingTimer();
+      setIsResidentTyping(false);
+    };
+  }, [activeRequestId, clearResidentTypingTimer, stopSelfTyping]);
+
+  useEffect(() => {
     const socket = io();
-    socket.emit("join", user.id);
+    socketRef.current = socket;
+    const joinIdentity = String(user?.id || activeRequest?.providerId || "").trim();
+    if (joinIdentity) {
+      socket.emit("join", joinIdentity);
+    }
 
     socket.on("request-message:new", (payload: RequestMessageSocketPayload) => {
       if (!payload?.requestId || !payload?.message) return;
@@ -637,28 +883,56 @@ export default function ProviderChatPage() {
       );
     });
 
+    socket.on("request-typing", (payload: RequestTypingSocketPayload) => {
+      if (!payload?.requestId) return;
+      if (payload.userId === user?.id) return;
+      if (payload.senderRole !== "resident") return;
+
+      if (!payload.isTyping) {
+        clearResidentTypingTimer();
+        setIsResidentTyping(false);
+        return;
+      }
+
+      setIsResidentTyping(true);
+      clearResidentTypingTimer();
+      residentTypingClearTimerRef.current = window.setTimeout(() => {
+        setIsResidentTyping(false);
+      }, 4500);
+    });
+
     return () => {
+      socketRef.current = null;
+      clearResidentTypingTimer();
       socket.disconnect();
     };
-  }, [queryClient, user?.id]);
+  }, [activeRequest?.providerId, activeRequestId, clearResidentTypingTimer, queryClient, user?.id]);
 
   return (
-    <ProviderLayout title="Provider Chat">
-      <div className="flex h-[calc(100vh-180px)] min-h-[620px] overflow-hidden rounded-[32px] border border-[#D0D5DD] bg-[#F8FAFC]">
-        <div className="hidden h-full w-[332px] shrink-0 flex-col border-r border-[#0C7A57] bg-[#065F46] px-5 py-6 text-white lg:flex">
+    <ProviderShell title="Provider Chat">
+      <div className="grid h-[calc(100vh-180px)] min-h-[620px] overflow-hidden rounded-[28px] border border-[#D0D5DD] bg-white lg:grid-cols-[320px,minmax(0,1fr)]">
+        <div className="hidden h-full shrink-0 flex-col border-r border-[#EAECF0] bg-[#F9FAFB] px-4 py-5 text-[#101828] lg:flex">
           <div>
-            <p className="text-[28px] font-semibold tracking-[-0.02em]">My Requests</p>
-            <p className="mt-1 text-xs text-emerald-100/90">
+            <p className="text-[24px] font-semibold tracking-[-0.02em]">My Requests</p>
+            <p className="mt-1 text-xs text-[#667085]">
               Open any request to chat with the resident.
             </p>
           </div>
 
           <div className="city-scrollbar mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1.5">
-            <p className="text-sm font-semibold uppercase tracking-[0.06em] text-emerald-100/85">Recents</p>
-            {requestsLoading ? (
-              <p className="text-sm text-emerald-100/80">Loading requests...</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.06em] text-[#667085]">Recents</p>
+            {requestsError ? (
+              <InlineErrorState
+                title="Unable to load requests"
+                description={requestsError instanceof Error ? requestsError.message : "Could not load assigned requests."}
+              />
+            ) : requestsLoading ? (
+              <PageSkeleton withHeader={false} rows={2} />
             ) : requests.length === 0 ? (
-              <p className="text-sm text-emerald-100/80">No assigned requests yet.</p>
+              <EmptyState
+                title="No assigned requests yet"
+                description="Assigned resident conversations will appear here."
+              />
             ) : (
               requests.map((request) => {
                 const isActive = request.id === activeRequestId;
@@ -669,15 +943,15 @@ export default function ProviderChatPage() {
                     type="button"
                     onClick={() => void handleSelectRequest(request.id)}
                     className={cn(
-                      "w-full rounded-2xl border px-4 py-3.5 text-left transition-all",
+                      "w-full rounded-xl border px-3.5 py-3 text-left transition-colors",
                       isActive
-                        ? "border-[#73E2BA]/70 bg-[#0C7355] shadow-[0_14px_24px_-20px_rgba(94,233,178,0.95)]"
-                        : "border-transparent bg-[#0A6A4E]/60 hover:border-[#29A874]/45 hover:bg-[#0D7557]",
+                        ? "border-[#D0D5DD] bg-white shadow-sm"
+                        : "border-transparent bg-transparent hover:border-[#D0D5DD] hover:bg-white",
                     )}
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <p className="truncate text-[18px] font-semibold tracking-[-0.01em] text-white">
-                        {formatLabel(request.category || request.title || "Service Request")}
+                      <p className="truncate text-[16px] font-semibold tracking-[-0.01em] text-[#101828]">
+                        {formatLabel(resolveRequestCategoryLabel(request))}
                       </p>
                       {unreadCount > 0 ? (
                         <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[#F04438] px-1 text-[10px] font-semibold text-white">
@@ -686,7 +960,7 @@ export default function ProviderChatPage() {
                       ) : null}
                     </div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <p className="text-[13px] text-emerald-100/90">
+                      <p className="text-[12px] text-[#667085]">
                         {new Date(request.updatedAt || request.createdAt || Date.now()).toLocaleDateString(
                           undefined,
                           {
@@ -701,10 +975,10 @@ export default function ProviderChatPage() {
                           statusTone(request.status),
                         )}
                       >
-                        {formatServiceRequestStatusLabel(request.status, request.category || request.title)}
+                        {formatServiceRequestStatusLabel(request.status, resolveRequestCategoryKey(request))}
                       </span>
                     </div>
-                    <p className="mt-1 truncate text-[13px] text-emerald-100/85">
+                    <p className="mt-1 truncate text-[12px] text-[#667085]">
                       {request.location || "Location not set"}
                     </p>
                   </button>
@@ -714,16 +988,16 @@ export default function ProviderChatPage() {
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-r-[32px] bg-white">
-          <div className="border-b border-[#EAECF0] bg-white px-5 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
+          <div className="border-b border-[#EAECF0] bg-white px-4 py-3 sm:px-5">
+            <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-[24px] font-semibold tracking-[-0.02em] text-[#101828]">Resident Conversation</p>
-                <p className="text-[12px] text-[#98A2B3]">
+                <p className="text-[22px] font-semibold tracking-[-0.02em] text-[#101828]">Resident Conversation</p>
+                <p className="text-[12px] text-[#667085]">
                   Coordinate updates, timelines, and attachments in real time.
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 {activeRequest ? (
                   canGenerateConsultancyReport ? (
                     <Button variant="outline" size="sm" onClick={handleOpenReportModal}>
@@ -732,7 +1006,7 @@ export default function ProviderChatPage() {
                   ) : (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span className="inline-flex">
+                        <span className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2" tabIndex={0} aria-label={generateReportDisabledReason}>
                           <Button variant="outline" size="sm" disabled>
                             {hasConsultancyReport ? "Update report" : "Generate report"}
                           </Button>
@@ -742,9 +1016,46 @@ export default function ProviderChatPage() {
                     </Tooltip>
                   )
                 ) : null}
+                {activeRequest && activeRequestStatus === "assigned_for_job" ? (
+                  <Button
+                    size="sm"
+                    onClick={() => updateJobStatusMutation.mutate({ requestId: activeRequest.id, status: "in_progress" })}
+                    disabled={updateJobStatusMutation.isPending || markWorkCompletedMutation.isPending}
+                  >
+                    Start job
+                  </Button>
+                ) : null}
+                {activeRequest && activeRequestStatus === "rework_required" ? (
+                  <Button
+                    size="sm"
+                    onClick={() => updateJobStatusMutation.mutate({ requestId: activeRequest.id, status: "in_progress" })}
+                    disabled={updateJobStatusMutation.isPending || markWorkCompletedMutation.isPending}
+                  >
+                    Resume rework
+                  </Button>
+                ) : null}
+                {activeRequest && activeRequestStatus === "in_progress" ? (
+                  <Button
+                    size="sm"
+                    onClick={() => markWorkCompletedMutation.mutate({ requestId: activeRequest.id })}
+                    disabled={updateJobStatusMutation.isPending || markWorkCompletedMutation.isPending}
+                  >
+                    {markWorkCompletedMutation.isPending ? "Submitting..." : "Mark work done"}
+                  </Button>
+                ) : null}
+                {activeRequest && activeRequestStatus === "work_completed_pending_resident" ? (
+                  <Button size="sm" variant="outline" disabled>
+                    Awaiting resident confirmation
+                  </Button>
+                ) : null}
+                {activeRequest && activeRequestStatus === "disputed" ? (
+                  <Button size="sm" variant="outline" disabled>
+                    Awaiting admin review
+                  </Button>
+                ) : null}
                 <span className="inline-flex items-center rounded-full border border-[#D1FADF] bg-[#ECFDF3] px-3 py-1 text-sm font-semibold text-[#027A48]">
                   {activeRequest
-                    ? formatLabel(activeRequest.category || activeRequest.title || "Service request")
+                    ? formatLabel(resolveRequestCategoryLabel(activeRequest))
                     : "No request selected"}
                 </span>
                 {activeRequest ? (
@@ -756,14 +1067,14 @@ export default function ProviderChatPage() {
                   >
                     {formatServiceRequestStatusLabel(
                       activeRequest.status,
-                      activeRequest.category || activeRequest.title,
+                      resolveRequestCategoryKey(activeRequest),
                     )}
                   </Badge>
                 ) : null}
               </div>
             </div>
 
-            <div className="mt-2 flex lg:hidden gap-2 overflow-x-auto pb-1">
+            <div className="mx-auto mt-2 flex w-full max-w-5xl gap-2 overflow-x-auto pb-1 lg:hidden">
               {requests.map((request) => {
                 const isActive = request.id === activeRequestId;
                 const unreadCount = unreadByRequestId[request.id] || 0;
@@ -779,7 +1090,7 @@ export default function ProviderChatPage() {
                         : "border-[#D0D5DD] bg-white text-[#344054]",
                     )}
                   >
-                    <span>{formatLabel(request.category || request.title || "Request")}</span>
+                    <span>{formatLabel(resolveRequestCategoryLabel(request))}</span>
                     {unreadCount > 0 ? (
                       <Badge className="bg-rose-500 text-white hover:bg-rose-500">
                         {unreadCount > 9 ? "9+" : unreadCount}
@@ -791,71 +1102,64 @@ export default function ProviderChatPage() {
             </div>
           </div>
 
-          <div className="city-scrollbar flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] px-5 py-4">
+          <div className="city-scrollbar flex-1 min-h-0 overflow-y-auto bg-[#FCFCFD] px-4 py-4 sm:px-5">
             <div className="mx-auto w-full max-w-5xl space-y-4">
-              {activeRequest && canGenerateConsultancyReport ? (
-                <div className="flex items-center justify-between rounded-2xl border border-[#D0D5DD] bg-white px-4 py-3">
+              {activeRequest && canGenerateConsultancyReport && !hasConsultancyReport ? (
+                <div className="flex items-center justify-between rounded-xl border border-[#D0D5DD] bg-white px-3.5 py-2.5">
                   <div>
                     <p className="text-sm font-semibold text-[#101828]">Consultancy report</p>
                     <p className="text-xs text-[#667085]">
-                      {hasConsultancyReport
-                        ? "Report submitted. Update it if your inspection findings changed."
-                        : "Generate and send report to unlock payment request for admin/company."}
+                      Generate and send your report before admin/company can request payment.
                     </p>
                   </div>
-                  {canGenerateConsultancyReport ? (
-                    <Button variant="outline" size="sm" onClick={handleOpenReportModal}>
-                      {hasConsultancyReport ? "Update report" : "Generate report"}
-                    </Button>
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex">
-                          <Button variant="outline" size="sm" disabled>
-                            {hasConsultancyReport ? "Update report" : "Generate report"}
-                          </Button>
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>{generateReportDisabledReason}</TooltipContent>
-                    </Tooltip>
-                  )}
+                  <Button variant="outline" size="sm" onClick={handleOpenReportModal}>
+                    Generate report
+                  </Button>
                 </div>
               ) : null}
 
               {!activeRequest ? (
-                <div className="rounded-2xl border border-[#EAECF0] bg-white px-4 py-6 text-center text-sm text-[#667085]">
-                  Select a request to open the conversation.
-                </div>
+                <EmptyState
+                  title="Select a request"
+                  description="Choose a request from recents to open the conversation."
+                />
+              ) : messagesError ? (
+                <InlineErrorState
+                  description={messagesError instanceof Error ? messagesError.message : "Unable to load messages."}
+                />
               ) : messagesLoading ? (
-                <div className="rounded-2xl border border-[#EAECF0] bg-white px-4 py-6 text-center text-sm text-[#667085]">
-                  Loading messages...
-                </div>
+                <PageSkeleton withHeader={false} rows={2} />
               ) : conversationItems.length === 0 ? (
-                <div className="rounded-2xl border border-[#EAECF0] bg-white px-4 py-6 text-center text-sm text-[#667085]">
-                  No messages yet. Send the first update to the resident.
-                </div>
+                <EmptyState
+                  title="No messages yet"
+                  description="Send the first update to the resident."
+                />
               ) : (
                 <ChatThread items={conversationItems} />
               )}
+              {activeRequest && isResidentTyping ? (
+                <TypingPresenceIndicator label="Resident is typing..." className="mt-2" />
+              ) : null}
               <div ref={chatBottomRef} />
             </div>
           </div>
 
           {activeRequest ? (
             <MessageComposer
-              label={`Reply to resident${activeRequest.location ? ` · ${activeRequest.location}` : ""}`}
+              label={`Reply to resident${activeRequest.location ? ` - ${activeRequest.location}` : ""}`}
               value={messageDraft}
-              onChange={setMessageDraft}
+              onChange={handleProviderComposerChange}
               onSend={handleSendComposerMessage}
               isSending={sendMessageMutation.isPending}
               attachments={composerAttachments}
               onAttachFiles={handleComposerAttachFiles}
               onRemoveAttachment={handleRemoveComposerAttachment}
               onShareLocation={handleShareLocationToComposer}
+              variant="citybuddy"
             />
           ) : (
             <div className="border-t border-[#EAECF0] bg-white px-5 py-3">
-              <div className="mx-auto max-w-5xl rounded-xl border border-[#EAECF0] bg-[#F9FAFB] p-3">
+              <div className="mx-auto w-full max-w-5xl rounded-xl border border-[#EAECF0] bg-[#F9FAFB] p-3">
                 <p className="text-xs text-[#475467]">
                   Select a request from recents to start messaging the resident.
                 </p>
@@ -947,6 +1251,6 @@ export default function ProviderChatPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </ProviderLayout>
+    </ProviderShell>
   );
 }

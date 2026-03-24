@@ -178,8 +178,10 @@ export function MessageComposer({
           )}
           <button
             type="button"
-            className="absolute right-1 top-1 hidden rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white group-hover:block"
+            className="absolute right-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
             onClick={() => onRemoveAttachment?.(attachment.id)}
+            aria-label={`Remove ${attachment.name}`}
+            title="Remove attachment"
           >
             Remove
           </button>
@@ -190,15 +192,15 @@ export function MessageComposer({
 
   if (variant === "citybuddy") {
     return (
-      <div className="border-t border-[#EAECF0] bg-[#F8FAFC] px-4 sm:px-6 lg:px-10 pb-3 pt-2">
-        <div className="mx-auto w-full max-w-[1100px] space-y-2">
-          <p className="text-[11px] font-medium text-[#667085]">{label}</p>
+      <div className="border-t border-[#EAECF0] bg-white px-4 py-2.5 sm:px-5">
+        <div className="mx-auto w-full max-w-5xl space-y-2">
+          <p className="truncate text-xs font-medium text-[#667085]">{label}</p>
 
           {attachmentsPreview}
 
           <div
             className={cn(
-              "relative rounded-xl border border-[#D0D5DD] bg-white p-2.5 transition-colors",
+              "relative rounded-xl border border-[#D0D5DD] bg-white p-2 transition-colors",
               dragActive && "border-dashed border-[#039855] bg-[#ECFDF3]/35",
               disabled && "opacity-70",
             )}
@@ -211,8 +213,9 @@ export function MessageComposer({
               value={value}
               onChange={(event) => onChange(event.target.value)}
               placeholder={placeholder}
-              className="min-h-[90px] max-h-[160px] w-full resize-y bg-transparent pr-12 text-[13px] leading-5 text-[#344054] placeholder:text-[#98A2B3] focus:outline-none"
+              className="min-h-[76px] max-h-[140px] w-full resize-y bg-transparent pr-11 text-[13px] leading-5 text-[#344054] placeholder:text-[#98A2B3] focus:outline-none"
               disabled={disabled}
+              aria-label={label}
             />
 
             <button
@@ -220,20 +223,22 @@ export function MessageComposer({
               onClick={onSend}
               disabled={!canSend}
               className={cn(
-                "absolute bottom-3 right-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-[#039855] text-white shadow-[0px_1px_2px_0px_rgba(16,24,40,0.05)] transition",
+                "absolute bottom-2.5 right-2.5 inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#039855] text-white shadow-[0px_1px_2px_0px_rgba(16,24,40,0.05)] transition",
                 "hover:bg-[#027A48] disabled:cursor-not-allowed disabled:bg-[#A6F4C5]",
               )}
+              aria-label="Send message"
+              title="Send message"
             >
-              <Send className="h-4 w-4" />
+              <Send className="h-3.5 w-3.5" />
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="h-7 gap-1 border-[#D0D5DD] bg-white px-2 text-[11px] text-[#344054]"
+              className="h-7 gap-1 border-[#D0D5DD] bg-white px-2.5 text-[11px] text-[#344054]"
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled}
             >
@@ -255,7 +260,7 @@ export function MessageComposer({
               type="button"
               variant={isRecording ? "default" : "outline"}
               size="sm"
-              className="h-7 gap-1 border-[#D0D5DD] bg-white px-2 text-[11px] data-[recording=true]:bg-rose-600 data-[recording=true]:text-white"
+              className="h-7 gap-1 border-[#D0D5DD] bg-white px-2.5 text-[11px] data-[recording=true]:bg-rose-600 data-[recording=true]:text-white"
               data-recording={isRecording}
               onClick={() => {
                 if (isRecording) {
@@ -318,6 +323,7 @@ export function MessageComposer({
             placeholder={placeholder}
             className="min-h-[74px] max-h-[150px] w-full resize-y bg-transparent text-[14px] text-[#344054] placeholder:text-[#98A2B3] focus:outline-none"
             disabled={disabled}
+            aria-label={label}
           />
           <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-[#EAECF0] pt-2.5">
             <div className="flex flex-wrap items-center gap-2">
