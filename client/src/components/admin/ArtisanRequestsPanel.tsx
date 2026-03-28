@@ -83,12 +83,14 @@ interface ServiceRequest {
   paymentStatus?: string;
   consultancyReport?: {
     inspectionDate?: string;
+    completionDeadline?: string;
     actualIssue?: string;
     causeOfIssue?: string;
     materialCost?: number;
     serviceCost?: number;
     totalRecommendation?: number;
     preventiveRecommendation?: string;
+    evidence?: string[];
     submittedAt?: string;
   } | null;
   consultancyReportSubmittedAt?: string;
@@ -164,12 +166,16 @@ function readConsultancyReport(report: ServiceRequest["consultancyReport"]) {
     Number((report as any).totalRecommendation || 0) || materialCost + serviceCost;
   return {
     inspectionDate: String((report as any).inspectionDate || ""),
+    completionDeadline: String((report as any).completionDeadline || ""),
     actualIssue: String((report as any).actualIssue || ""),
     causeOfIssue: String((report as any).causeOfIssue || ""),
     materialCost: Number.isFinite(materialCost) ? materialCost : 0,
     serviceCost: Number.isFinite(serviceCost) ? serviceCost : 0,
     totalRecommendation: Number.isFinite(totalRecommendation) ? totalRecommendation : 0,
     preventiveRecommendation: String((report as any).preventiveRecommendation || ""),
+    evidence: Array.isArray((report as any).evidence)
+      ? (report as any).evidence.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+      : [],
     submittedAt: String((report as any).submittedAt || ""),
   };
 }
@@ -177,6 +183,22 @@ function readConsultancyReport(report: ServiceRequest["consultancyReport"]) {
 function formatNgnAmount(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "Not set";
   return `NGN ${value.toLocaleString()}`;
+}
+
+function toDate(value?: string | Date | null) {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatElapsedDuration(startedAt: Date | null, nowMs = Date.now()) {
+  if (!startedAt) return "00:00:00";
+  const diffMs = Math.max(nowMs - startedAt.getTime(), 0);
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function normalizeCategoryKey(value?: string | null) {
@@ -301,6 +323,7 @@ export default function ArtisanRequestsPanel({
   >("none");
   const [cancellationReviewRefundAmount, setCancellationReviewRefundAmount] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
+  const [elapsedTick, setElapsedTick] = useState(() => Date.now());
   const actionHandledRef = useRef<{ id: string; action: string } | null>(null);
 
   const estateOptions = [
@@ -312,6 +335,11 @@ export default function ArtisanRequestsPanel({
       })
       .filter(Boolean) as { value: string; label: string }[]),
   ];
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setElapsedTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Fetch service requests
   const { data, isLoading, isFetching, error, refetch } = useQuery<ServiceRequest[], Error>({
@@ -995,6 +1023,10 @@ export default function ArtisanRequestsPanel({
                 Boolean(r.consultancyReportSubmittedAt) || Boolean(consultancyReport);
               const openCancellationCase = resolveOpenCancellationCase(r);
               const cancellationReviewStatus = normalizeStatusKey(openCancellationCase?.status || "");
+              const inProgressElapsedLabel =
+                r.status === "in_progress"
+                  ? formatElapsedDuration(toDate(r.updatedAt) || toDate(r.assignedAt) || toDate(r.createdAt), elapsedTick)
+                  : "";
 
               return (
                 <div
@@ -1021,6 +1053,14 @@ export default function ArtisanRequestsPanel({
                         {r.urgency}
                       </Badge>
                     )}
+                    {r.status === "in_progress" ? (
+                      <Badge
+                        variant="outline"
+                        className="border-[#7DD3FC] bg-[#F0F9FF] px-2 py-0.5 text-xs text-[#0369A1]"
+                      >
+                        In progress: {inProgressElapsedLabel}
+                      </Badge>
+                    ) : null}
                     {openCancellationCase ? (
                       <Badge
                         variant="outline"
@@ -1090,6 +1130,16 @@ export default function ArtisanRequestsPanel({
                       {consultancyReport.inspectionDate ? (
                         <span className="rounded-full bg-white px-2 py-0.5 border border-[#EAECF0]">
                           Inspected {new Date(consultancyReport.inspectionDate).toLocaleDateString()}
+                        </span>
+                      ) : null}
+                      {consultancyReport.completionDeadline ? (
+                        <span className="rounded-full bg-white px-2 py-0.5 border border-[#EAECF0]">
+                          Due {new Date(consultancyReport.completionDeadline).toLocaleDateString()}
+                        </span>
+                      ) : null}
+                      {consultancyReport.evidence.length > 0 ? (
+                        <span className="rounded-full bg-white px-2 py-0.5 border border-[#EAECF0]">
+                          Evidence {consultancyReport.evidence.length}
                         </span>
                       ) : null}
                     </div>
@@ -1493,6 +1543,7 @@ export default function ArtisanRequestsPanel({
                   <p className="text-sm font-semibold text-[#101828]">Provider consultancy report</p>
                   <div className="mt-2 space-y-2 text-sm text-[#344054]">
                     <p><span className="font-medium">Inspection date:</span> {report.inspectionDate ? new Date(report.inspectionDate).toLocaleString() : "Not set"}</p>
+                    <p><span className="font-medium">Completion deadline:</span> {report.completionDeadline ? new Date(report.completionDeadline).toLocaleString() : "Not set"}</p>
                     <p><span className="font-medium">Issue:</span> {report.actualIssue || "Not provided"}</p>
                     <p><span className="font-medium">Cause:</span> {report.causeOfIssue || "Not provided"}</p>
                     <p>
@@ -1500,6 +1551,27 @@ export default function ArtisanRequestsPanel({
                       {report.totalRecommendation > 0 ? ` (Total NGN ${report.totalRecommendation.toLocaleString()})` : ""}
                     </p>
                     <p><span className="font-medium">Prevention:</span> {report.preventiveRecommendation || "Not provided"}</p>
+                    <p><span className="font-medium">Evidence attachments:</span> {report.evidence.length}</p>
+                    {report.evidence.length > 0 ? (
+                      <div className="grid grid-cols-2 gap-2 pt-1 md:grid-cols-3">
+                        {report.evidence.slice(0, 6).map((evidenceUrl: string, evidenceIndex: number) => (
+                          <a
+                            key={`${evidenceUrl.slice(0, 80)}-${evidenceIndex}`}
+                            href={evidenceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="overflow-hidden rounded-md border border-[#D0D5DD] bg-white"
+                          >
+                            <img
+                              src={evidenceUrl}
+                              alt={`Evidence ${evidenceIndex + 1}`}
+                              className="h-20 w-full object-cover"
+                              loading="lazy"
+                            />
+                          </a>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               );

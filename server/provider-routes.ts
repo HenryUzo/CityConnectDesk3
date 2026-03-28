@@ -32,11 +32,13 @@ router.use(requireProvider);
 
 const ConsultancyReportSchema = z.object({
   inspectionDate: z.string().min(1),
+  completionDeadline: z.string().min(1),
   actualIssue: z.string().trim().min(3).max(2000),
   causeOfIssue: z.string().trim().min(3).max(2000),
   materialCost: z.preprocess((val) => Number(val), z.number().min(0)),
   serviceCost: z.preprocess((val) => Number(val), z.number().min(0)),
   preventiveRecommendation: z.string().trim().min(3).max(2000),
+  evidence: z.array(z.string().trim().min(1).max(10_000_000)).max(8).optional().default([]),
 });
 
 const ProviderTaskStatusSchema = z.object({
@@ -81,16 +83,25 @@ router.post("/service-requests/:id/consultancy-report", async (req: any, res) =>
     if (Number.isNaN(inspectionDate.getTime())) {
       return res.status(400).json({ error: "Invalid inspection date" });
     }
+    const completionDeadline = new Date(payload.completionDeadline);
+    if (Number.isNaN(completionDeadline.getTime())) {
+      return res.status(400).json({ error: "Invalid completion deadline" });
+    }
+    if (completionDeadline.getTime() < inspectionDate.getTime()) {
+      return res.status(400).json({ error: "Completion deadline must be after inspection date" });
+    }
 
     const totalRecommendation = payload.materialCost + payload.serviceCost;
     const report = {
       inspectionDate: inspectionDate.toISOString(),
+      completionDeadline: completionDeadline.toISOString(),
       actualIssue: payload.actualIssue,
       causeOfIssue: payload.causeOfIssue,
       materialCost: payload.materialCost,
       serviceCost: payload.serviceCost,
       totalRecommendation,
       preventiveRecommendation: payload.preventiveRecommendation,
+      evidence: payload.evidence,
       submittedAt: new Date().toISOString(),
       submittedBy: providerId,
     };

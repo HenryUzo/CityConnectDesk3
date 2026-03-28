@@ -41,7 +41,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import EmojiCombobox from "@/components/admin/EmojiCombobox";
+import EmojiCombobox, { EMOJI_OPTIONS as MARKETPLACE_EMOJI_OPTIONS } from "@/components/admin/EmojiCombobox";
 import { Label } from "@/components/ui/label";
 import DetailsView from "@/components/admin/DetailsView";
 import { Textarea } from "@/components/ui/textarea";
@@ -156,179 +156,11 @@ import {
   XCircle,
 } from "lucide-react";
 
-// Shopping-focused emoji palette (generated into dropdown)
-const EMOJI_GROUPS = [
-  { value: "ðŸŽ", names: ["Apple", "Apple Bag", "Apple Basket", "Apple Box", "Apple Jam", "Apple Juice", "Apple Pie", "Apple Snack", "Apple Crate", "Apple Pack"] },
-  { value: "ðŸ", names: ["Green Apple", "Green Apple Box", "Green Apple Juice", "Green Apple Pie", "Green Apple Snack", "Green Apple Basket", "Green Apple Crate", "Green Apple Jam", "Green Apple Pack", "Green Apple Bundle"] },
-  { value: "ðŸŒ", names: ["Banana", "Banana Bunch", "Banana Chips", "Banana Smoothie", "Banana Yogurt", "Banana Bread", "Banana Pack", "Banana Basket", "Banana Split", "Banana Snack"] },
-  { value: "ðŸ‡", names: ["Grapes", "Grape Box", "Grape Juice", "Grape Jam", "Grape Pack", "Grape Snack", "Grape Basket", "Grape Bundle", "Grape Carton", "Grape Tray"] },
-  { value: "ðŸ“", names: ["Strawberry", "Strawberry Box", "Strawberry Jam", "Strawberry Yogurt", "Strawberry Milk", "Strawberry Cake", "Strawberry Pack", "Strawberry Basket", "Strawberry Snack", "Strawberry Tart"] },
-  { value: "ðŸ’", names: ["Cherry", "Cherry Box", "Cherry Jam", "Cherry Juice", "Cherry Pack", "Cherry Basket", "Cherry Tart", "Cherry Snack", "Cherry Mix", "Cherry Crate"] },
-  { value: "ðŸ‘", names: ["Peach", "Peach Jam", "Peach Juice", "Peach Tart", "Peach Basket", "Peach Crate", "Peach Yogurt", "Peach Pack", "Peach Snack", "Peach Slices"] },
-  { value: "ðŸ", names: ["Pineapple", "Pineapple Slices", "Pineapple Juice", "Pineapple Rings", "Pineapple Jam", "Pineapple Pack", "Pineapple Snack", "Pineapple Basket", "Pineapple Chunks", "Pineapple Crate"] },
-  { value: "ðŸ¥­", names: ["Mango", "Mango Juice", "Mango Slices", "Mango Jam", "Mango Lassi", "Mango Pack", "Mango Basket", "Mango Snack", "Mango Chutney", "Mango Crate"] },
-  { value: "ðŸ‰", names: ["Watermelon", "Watermelon Slice", "Watermelon Juice", "Watermelon Pack", "Watermelon Snack", "Watermelon Basket", "Watermelon Wedges", "Watermelon Crate", "Watermelon Bowl", "Watermelon Platter"] },
-  { value: "ðŸ¥", names: ["Kiwi", "Kiwi Pack", "Kiwi Slices", "Kiwi Yogurt", "Kiwi Juice", "Kiwi Basket", "Kiwi Snack", "Kiwi Crate", "Kiwi Mix", "Kiwi Platter"] },
-  { value: "ðŸŠ", names: ["Orange", "Orange Juice", "Orange Pack", "Orange Basket", "Orange Crate", "Orange Marmalade", "Orange Snack", "Orange Segments", "Orange Carton", "Orange Mix"] },
-  { value: "ðŸ‹", names: ["Lemon", "Lemonade", "Lemon Pack", "Lemon Basket", "Lemon Crate", "Lemon Wedges", "Lemon Pie", "Lemon Tart", "Lemon Snack", "Lemon Mix"] },
-  { value: "ðŸˆ", names: ["Melon", "Melon Wedges", "Melon Pack", "Melon Basket", "Melon Crate", "Melon Juice", "Melon Snack", "Melon Platter", "Melon Mix", "Melon Slices"] },
-  { value: "ðŸ", names: ["Pear", "Pear Pack", "Pear Basket", "Pear Crate", "Pear Juice", "Pear Snack", "Pear Slices", "Pear Tart", "Pear Mix", "Pear Bowl"] },
-  { value: "ðŸ†", names: ["Eggplant", "Eggplant Pack", "Eggplant Basket", "Eggplant Crate", "Eggplant Cutlets", "Eggplant Parm", "Eggplant Mix", "Eggplant Grill", "Eggplant Tray", "Eggplant Dip"] },
-  { value: "ðŸ¥‘", names: ["Avocado", "Avocado Pack", "Avocado Basket", "Avocado Toast", "Avocado Dip", "Avocado Mix", "Avocado Crate", "Avocado Salad", "Avocado Sushi", "Avocado Bowl"] },
-  { value: "ðŸŒ½", names: ["Corn", "Corn on Cob", "Corn Pack", "Corn Basket", "Corn Crate", "Corn Chips", "Corn Meal", "Corn Mix", "Corn Snack", "Corn Tray"] },
-  { value: "ðŸ¥•", names: ["Carrot", "Carrot Pack", "Carrot Basket", "Carrot Crate", "Carrot Juice", "Carrot Snack", "Carrot Sticks", "Carrot Cake", "Carrot Mix", "Carrot Tray"] },
-  { value: "ðŸ¥”", names: ["Potato", "Potato Bag", "Potato Pack", "Potato Basket", "Potato Crate", "Potato Wedges", "Potato Chips", "Potato Mash", "Potato Mix", "Potato Tray"] },
-  { value: "ðŸ¥¦", names: ["Broccoli", "Broccoli Pack", "Broccoli Basket", "Broccoli Crate", "Broccoli Florets", "Broccoli Mix", "Broccoli Snack", "Broccoli Tray", "Broccoli Salad", "Broccoli Stir Fry"] },
-  { value: "ðŸ¥¬", names: ["Lettuce", "Lettuce Pack", "Lettuce Basket", "Lettuce Crate", "Lettuce Mix", "Lettuce Heads", "Lettuce Wraps", "Lettuce Salad", "Lettuce Tray", "Lettuce Stack"] },
-  { value: "ðŸ…", names: ["Tomato", "Tomato Pack", "Tomato Basket", "Tomato Crate", "Tomato Sauce", "Tomato Puree", "Tomato Soup", "Tomato Mix", "Tomato Snack", "Tomato Tray"] },
-  { value: "ðŸ§„", names: ["Garlic", "Garlic Pack", "Garlic Basket", "Garlic Crate", "Garlic Paste", "Garlic Powder", "Garlic Mix", "Garlic Snack", "Garlic Tray", "Garlic Bulbs"] },
-  { value: "ðŸ§…", names: ["Onion", "Onion Pack", "Onion Basket", "Onion Crate", "Onion Rings", "Onion Powder", "Onion Mix", "Onion Snack", "Onion Tray", "Onion Bulbs"] },
-  { value: "ðŸŒ¶ï¸", names: ["Chili Pepper", "Chili Pack", "Chili Basket", "Chili Crate", "Chili Flakes", "Chili Powder", "Chili Mix", "Chili Snack", "Chili Tray", "Chili Sauce"] },
-  { value: "ðŸ„", names: ["Mushroom", "Mushroom Pack", "Mushroom Basket", "Mushroom Crate", "Mushroom Mix", "Mushroom Snack", "Mushroom Soup", "Mushroom Tray", "Mushroom Slices", "Mushroom Skewers"] },
-  { value: "ðŸ¥", names: ["Croissant", "Croissant Pack", "Croissant Basket", "Croissant Crate", "Chocolate Croissant", "Almond Croissant", "Butter Croissant", "Mini Croissant", "Croissant Tray", "Croissant Snack"] },
-  { value: "ðŸž", names: ["Bread Loaf", "Bread Pack", "Bread Basket", "Bread Crate", "Wholegrain Bread", "Sourdough Bread", "White Bread", "Rye Bread", "Bread Rolls", "Bread Tray"] },
-  { value: "ðŸ¥¯", names: ["Bagel", "Bagel Pack", "Bagel Basket", "Bagel Crate", "Sesame Bagel", "Everything Bagel", "Plain Bagel", "Cinnamon Bagel", "Bagel Tray", "Bagel Snack"] },
-  { value: "ðŸ¥ž", names: ["Pancake", "Pancake Pack", "Pancake Mix", "Pancake Stack", "Pancake Syrup", "Pancake Basket", "Pancake Crate", "Pancake Tray", "Pancake Snack", "Mini Pancake"] },
-  { value: "ðŸ§‡", names: ["Waffle", "Waffle Pack", "Waffle Mix", "Waffle Stack", "Waffle Syrup", "Waffle Basket", "Waffle Crate", "Waffle Tray", "Waffle Snack", "Mini Waffle"] },
-  { value: "ðŸ¥–", names: ["Baguette", "Baguette Pack", "Baguette Basket", "Baguette Crate", "Garlic Baguette", "Seeded Baguette", "Classic Baguette", "Mini Baguette", "Baguette Tray", "Baguette Snack"] },
-  { value: "ðŸ—", names: ["Chicken Drumstick", "Chicken Bucket", "Chicken Pack", "Chicken Basket", "Chicken Crate", "BBQ Chicken", "Spicy Chicken", "Fried Chicken", "Roast Chicken", "Chicken Tray"] },
-  { value: "ðŸ¥©", names: ["Steak", "Steak Pack", "Steak Basket", "Steak Crate", "Ribeye Steak", "Sirloin Steak", "Flank Steak", "Steak Marinade", "Steak Tray", "Steak Cuts"] },
-  { value: "ðŸ¥“", names: ["Bacon", "Bacon Pack", "Bacon Basket", "Bacon Crate", "Smoked Bacon", "Crispy Bacon", "Turkey Bacon", "Bacon Bits", "Bacon Tray", "Bacon Strips"] },
-  { value: "ðŸ–", names: ["Meat Ribs", "Rib Rack", "BBQ Ribs", "Smoked Ribs", "Ribs Pack", "Ribs Basket", "Ribs Crate", "Ribs Tray", "Honey Ribs", "Spicy Ribs"] },
-  { value: "ðŸ¤", names: ["Fried Shrimp", "Shrimp Pack", "Shrimp Basket", "Shrimp Crate", "Shrimp Cocktail", "Shrimp Tray", "Shrimp Skewers", "Shrimp Snack", "Garlic Shrimp", "Spicy Shrimp"] },
-  { value: "ðŸŸ", names: ["Fish Fillet", "Fish Pack", "Fish Basket", "Fish Crate", "Salmon Fillet", "Cod Fillet", "Tilapia Fillet", "Fish Tray", "Smoked Fish", "Fish Steak"] },
-  { value: "ðŸ£", names: ["Sushi Roll", "Sushi Box", "Sushi Pack", "Sushi Tray", "Salmon Sushi", "Tuna Sushi", "Veggie Sushi", "Sushi Platter", "Sushi Combo", "Nigiri Sushi"] },
-  { value: "ðŸ•", names: ["Pizza Slice", "Pizza Box", "Cheese Pizza", "Pepperoni Pizza", "Veggie Pizza", "BBQ Pizza", "Pizza Combo", "Pizza Party", "Pizza Pack", "Pizza Tray"] },
-  { value: "ðŸ”", names: ["Burger", "Cheeseburger", "Double Burger", "Veggie Burger", "Chicken Burger", "Burger Combo", "Burger Pack", "Burger Box", "Burger Meal", "Burger Tray"] },
-  { value: "ðŸŒ­", names: ["Hotdog", "Chili Dog", "Cheese Dog", "BBQ Hotdog", "Hotdog Combo", "Hotdog Pack", "Hotdog Box", "Hotdog Meal", "Hotdog Tray", "Hotdog Snack"] },
-  { value: "ðŸ¥ª", names: ["Sandwich", "Club Sandwich", "Chicken Sandwich", "Turkey Sandwich", "Veggie Sandwich", "Sandwich Box", "Sandwich Pack", "Sandwich Meal", "Sandwich Tray", "BLT Sandwich"] },
-  { value: "ðŸŒ®", names: ["Taco", "Beef Taco", "Chicken Taco", "Fish Taco", "Veggie Taco", "Taco Pack", "Taco Box", "Taco Meal", "Taco Tray", "Taco Combo"] },
-  { value: "ðŸŒ¯", names: ["Burrito", "Beef Burrito", "Chicken Burrito", "Veggie Burrito", "Bean Burrito", "Burrito Pack", "Burrito Box", "Burrito Meal", "Burrito Tray", "Burrito Combo"] },
-  { value: "ðŸ¥™", names: ["Pita Pocket", "Falafel Pita", "Chicken Pita", "Lamb Pita", "Veggie Pita", "Pita Pack", "Pita Box", "Pita Meal", "Pita Tray", "Pita Combo"] },
-  { value: "ðŸœ", names: ["Ramen Bowl", "Ramen Pack", "Ramen Box", "Spicy Ramen", "Chicken Ramen", "Veggie Ramen", "Miso Ramen", "Ramen Meal", "Ramen Tray", "Ramen Combo"] },
-  { value: "ðŸ", names: ["Pasta", "Spaghetti", "Pasta Pack", "Pasta Box", "Pasta Meal", "Pasta Tray", "Pasta Combo", "Creamy Pasta", "Tomato Pasta", "Pesto Pasta"] },
-  { value: "ðŸ²", names: ["Stew", "Stew Pack", "Stew Bowl", "Beef Stew", "Chicken Stew", "Veggie Stew", "Spicy Stew", "Stew Meal", "Stew Tray", "Stew Combo"] },
-  { value: "ðŸ›", names: ["Curry", "Chicken Curry", "Beef Curry", "Veggie Curry", "Curry Pack", "Curry Box", "Curry Meal", "Curry Tray", "Curry Combo", "Spicy Curry"] },
-  { value: "ðŸš", names: ["Rice Bowl", "Rice Pack", "Rice Bag", "Brown Rice", "Jasmine Rice", "Basmati Rice", "Sticky Rice", "Rice Box", "Rice Meal", "Rice Tray"] },
-  { value: "ðŸ¥", names: ["Fish Cake", "Fish Cake Pack", "Fish Cake Box", "Fish Cake Tray", "Spicy Fish Cake", "Sesame Fish Cake", "Veggie Fish Cake", "Fish Cake Meal", "Fish Cake Snack", "Fish Cake Combo"] },
-  { value: "ðŸ©", names: ["Doughnut", "Glazed Doughnut", "Chocolate Doughnut", "Sprinkle Doughnut", "Doughnut Box", "Doughnut Pack", "Doughnut Tray", "Doughnut Snack", "Filled Doughnut", "Mini Doughnut"] },
-  { value: "ðŸª", names: ["Cookie", "Chocolate Chip Cookie", "Oatmeal Cookie", "Sugar Cookie", "Cookie Box", "Cookie Pack", "Cookie Tray", "Cookie Snack", "Cookie Gift", "Cookie Tin"] },
-  { value: "ðŸ«", names: ["Chocolate Bar", "Dark Chocolate", "Milk Chocolate", "White Chocolate", "Chocolate Pack", "Chocolate Box", "Chocolate Gift", "Chocolate Snack", "Chocolate Mix", "Chocolate Tray"] },
-  { value: "ðŸ¿", names: ["Popcorn", "Butter Popcorn", "Caramel Popcorn", "Cheese Popcorn", "Popcorn Tub", "Popcorn Pack", "Popcorn Box", "Popcorn Snack", "Popcorn Bowl", "Popcorn Mix"] },
-  { value: "ðŸ§ƒ", names: ["Juice Box", "Apple Juice Box", "Orange Juice Box", "Grape Juice Box", "Mixed Fruit Juice", "Juice Pack", "Juice Carton", "Juice Bottle", "Juice Cooler", "Juice Case"] },
-  { value: "ðŸ¥¤", names: ["Soft Drink", "Soda Can", "Soda Bottle", "Cola Can", "Lemon Soda", "Orange Soda", "Ginger Soda", "Soda Pack", "Soda Crate", "Soda Mix"] },
-  { value: "ðŸ§‹", names: ["Bubble Tea", "Milk Tea", "Taro Bubble Tea", "Matcha Bubble Tea", "Brown Sugar Bubble Tea", "Fruit Bubble Tea", "Bubble Tea Pack", "Bubble Tea Tray", "Bubble Tea Kit", "Bubble Tea Mix"] },
-  { value: "â˜•", names: ["Coffee", "Latte", "Cappuccino", "Espresso", "Mocha", "Iced Coffee", "Coffee Pack", "Coffee Beans", "Coffee Pods", "Coffee Gift"] },
-  { value: "ðŸ·", names: ["Red Wine", "White Wine", "RosÃ© Wine", "Sparkling Wine", "Wine Bottle", "Wine Pack", "Wine Crate", "Wine Gift", "Wine Box", "Wine Pairing"] },
-  { value: "ðŸº", names: ["Beer", "Beer Can", "Beer Bottle", "Craft Beer", "Lager Beer", "Ale Beer", "Beer Pack", "Beer Crate", "Beer Combo", "Beer Gift"] },
-  { value: "ðŸ¥›", names: ["Milk Carton", "Milk Bottle", "Whole Milk", "Skim Milk", "Almond Milk", "Oat Milk", "Soy Milk", "Milk Pack", "Milk Crate", "Milk Cooler"] },
-  { value: "ðŸ§€", names: ["Cheese Block", "Cheddar Cheese", "Mozzarella Cheese", "Parmesan Cheese", "Cheese Pack", "Cheese Tray", "Cheese Platter", "Cheese Snack", "Cheese Crate", "Cheese Basket"] },
-  { value: "ðŸ¶", names: ["Sake Bottle", "Sake Pack", "Sake Gift", "Sake Crate", "Rice Wine", "Premium Sake", "Sparkling Sake", "Sake Set", "Sake Box", "Sake Pairing"] },
-  { value: "ðŸ§´", names: ["Lotion", "Body Lotion", "Hand Lotion", "Face Cream", "Sunscreen", "Lotion Pack", "Lotion Gift", "Lotion Set", "Lotion Bottle", "Lotion Tube"] },
-  { value: "ðŸ§»", names: ["Paper Towel", "Paper Roll", "Toilet Roll", "Kitchen Towel", "Paper Pack", "Paper Bulk", "Paper Value Pack", "Paper Carton", "Paper Bundle", "Paper Case"] },
-  { value: "ðŸ§½", names: ["Sponge", "Cleaning Sponge", "Scrub Sponge", "Kitchen Sponge", "Bath Sponge", "Sponge Pack", "Sponge Bulk", "Sponge Set", "Sponge Value Pack", "Sponge Duo"] },
-  { value: "ðŸ§¹", names: ["Broom", "Cleaning Broom", "Floor Broom", "Broom Set", "Broom With Dustpan", "Broom Pack", "Broom Value Pack", "Broom Combo", "Outdoor Broom", "Indoor Broom"] },
-  { value: "ðŸ§º", names: ["Laundry Basket", "Storage Basket", "Market Basket", "Picnic Basket", "Gift Basket", "Fruit Basket", "Grocery Basket", "Home Basket", "Basket Set", "Basket Duo"] },
-  { value: "ðŸ§¼", names: ["Soap Bar", "Hand Soap", "Body Soap", "Face Soap", "Soap Pack", "Soap Gift", "Soap Set", "Soap Refill", "Liquid Soap", "Foam Soap"] },
-  { value: "ðŸ§¦", names: ["Socks", "Ankle Socks", "Crew Socks", "Sport Socks", "Wool Socks", "Dress Socks", "Socks Pack", "Socks Gift", "Socks Bundle", "Socks Trio"] },
-  { value: "ðŸ‘•", names: ["T-Shirt", "Graphic Tee", "Basic Tee", "Sport Tee", "V-Neck Tee", "Long Sleeve Tee", "T-Shirt Pack", "T-Shirt Duo", "T-Shirt Bundle", "T-Shirt Gift"] },
-  { value: "ðŸ‘–", names: ["Jeans", "Slim Jeans", "Straight Jeans", "Relaxed Jeans", "Dark Jeans", "Light Jeans", "Jeans Pack", "Jeans Duo", "Jeans Bundle", "Jeans Gift"] },
-  { value: "ðŸ‘—", names: ["Dress", "Summer Dress", "Evening Dress", "Casual Dress", "Floral Dress", "Party Dress", "Dress Pack", "Dress Duo", "Dress Bundle", "Dress Gift"] },
-  { value: "ðŸ‘”", names: ["Shirt", "Formal Shirt", "Oxford Shirt", "Linen Shirt", "Checked Shirt", "Striped Shirt", "Shirt Pack", "Shirt Duo", "Shirt Bundle", "Shirt Gift"] },
-  { value: "ðŸ§¥", names: ["Jacket", "Denim Jacket", "Leather Jacket", "Puffer Jacket", "Blazer Jacket", "Rain Jacket", "Jacket Pack", "Jacket Duo", "Jacket Bundle", "Jacket Gift"] },
-  { value: "ðŸ§¢", names: ["Cap", "Baseball Cap", "Trucker Cap", "Snapback Cap", "Dad Cap", "Sport Cap", "Cap Pack", "Cap Duo", "Cap Bundle", "Cap Gift"] },
-  { value: "ðŸ‘Ÿ", names: ["Sneakers", "Running Sneakers", "Casual Sneakers", "High-Top Sneakers", "Court Sneakers", "Trail Sneakers", "Sneaker Pack", "Sneaker Duo", "Sneaker Bundle", "Sneaker Gift"] },
-  { value: "ðŸ‘ ", names: ["Heels", "Stiletto Heels", "Block Heels", "Kitten Heels", "Party Heels", "Dress Heels", "Heels Pack", "Heels Duo", "Heels Bundle", "Heels Gift"] },
-  { value: "ðŸ‘ž", names: ["Dress Shoes", "Oxford Shoes", "Derby Shoes", "Loafer Shoes", "Wingtip Shoes", "Leather Shoes", "Shoe Pack", "Shoe Duo", "Shoe Bundle", "Shoe Gift"] },
-  { value: "ðŸŽ’", names: ["Backpack", "Travel Backpack", "School Backpack", "Laptop Backpack", "Hiking Backpack", "Mini Backpack", "Backpack Pack", "Backpack Duo", "Backpack Bundle", "Backpack Gift"] },
-  { value: "ðŸ‘œ", names: ["Handbag", "Tote Bag", "Shoulder Bag", "Crossbody Bag", "Clutch Bag", "Satchel Bag", "Bag Pack", "Bag Duo", "Bag Bundle", "Bag Gift"] },
-  { value: "ðŸ’", names: ["Ring", "Gold Ring", "Silver Ring", "Diamond Ring", "Engagement Ring", "Wedding Ring", "Ring Box", "Ring Gift", "Ring Pair", "Ring Set"] },
-  { value: "âŒš", names: ["Watch", "Smart Watch", "Sport Watch", "Dress Watch", "Classic Watch", "Metal Watch", "Watch Box", "Watch Gift", "Watch Pair", "Watch Set"] },
-  { value: "ðŸ“±", names: ["Smartphone", "Phone Case", "Phone Charger", "Phone Screen Guard", "Phone Bundle", "Phone Earbuds", "Phone Power Bank", "Phone Mount", "Phone Cable", "Phone Stand"] },
-  { value: "ðŸ’»", names: ["Laptop", "Laptop Sleeve", "Laptop Stand", "Laptop Charger", "Laptop Dock", "Laptop Bundle", "Laptop Cooling Pad", "Laptop Bag", "Laptop Combo", "Laptop Kit"] },
-  { value: "ðŸŽ§", names: ["Headphones", "Wireless Headphones", "Noise Canceling Headphones", "Gaming Headset", "On-Ear Headphones", "Over-Ear Headphones", "Headphone Case", "Headphone Stand", "Headphone Bundle", "Headphone Gift"] },
-  { value: "ðŸ–¥ï¸", names: ["Monitor", "Gaming Monitor", "Office Monitor", "Curved Monitor", "4K Monitor", "Monitor Stand", "Monitor Arm", "Monitor Bundle", "Monitor Pair", "Monitor Gift"] },
-  { value: "ðŸ“º", names: ["Television", "Smart TV", "LED TV", "OLED TV", "4K TV", "TV Wall Mount", "TV Soundbar", "TV Bundle", "TV Gift", "TV Pair"] },
-  { value: "ðŸ§¸", names: ["Teddy Bear", "Stuffed Animal", "Plush Toy", "Toy Bundle", "Toy Gift", "Toy Set", "Toy Box", "Toy Basket", "Toy Pack", "Toy Plush"] },
-  { value: "ðŸ“š", names: ["Books", "Novel Pack", "Cookbook", "Children Book", "Notebook Set", "Journal Pack", "Planner", "Story Book", "Workbook", "Reference Book"] },
-  { value: "âœï¸", names: ["Pencil", "Pencil Pack", "Colored Pencil Set", "Mechanical Pencil", "Pencil Case", "Pencil Box", "Pencil Kit", "Pencil Duo", "Pencil Bundle", "Pencil Gift"] },
-  { value: "ðŸ–Šï¸", names: ["Pen", "Gel Pen", "Ballpoint Pen", "Fountain Pen", "Pen Pack", "Pen Case", "Pen Box", "Pen Set", "Pen Duo", "Pen Gift"] },
-  { value: "ðŸ“’", names: ["Notebook", "Spiral Notebook", "Hardcover Notebook", "Softcover Notebook", "Notebook Pack", "Notebook Bundle", "Notebook Set", "Notebook Gift", "Notebook Duo", "Notebook Trio"] },
-  { value: "ðŸ§´", names: ["Shampoo", "Conditioner", "Body Wash", "Face Wash", "Hair Serum", "Body Lotion", "Hand Cream", "Hair Oil", "Shower Gel", "Self Care Kit"] },
-  { value: "ðŸ§¹", names: ["Cleaning Mop", "Cleaning Kit", "Cleaning Spray", "Cleaning Cloths", "Cleaning Bucket", "Cleaning Gloves", "Cleaning Set", "Cleaning Bundle", "Cleaning Wipes", "Cleaning Pads"] },
-  { value: "ðŸ§º", names: ["Laundry Hamper", "Laundry Bag", "Laundry Basket", "Laundry Detergent", "Laundry Softener", "Laundry Pods", "Laundry Sheets", "Laundry Bundle", "Laundry Kit", "Laundry Pair"] },
-  { value: "ðŸ§Š", names: ["Ice Tray", "Ice Pack", "Ice Cube", "Ice Bag", "Ice Bucket", "Ice Maker", "Ice Scoop", "Ice Stones", "Ice Set", "Ice Bundle"] },
-  { value: "ðŸ›ï¸", names: ["Bed", "Bed Sheet", "Bed Set", "Duvet", "Comforter", "Pillow", "Pillow Cases", "Mattress Topper", "Bed Blanket", "Bed Throw"] },
-  { value: "ðŸ›‹ï¸", names: ["Sofa", "Sofa Cover", "Throw Pillow", "Cushion", "Sofa Set", "Sectional Sofa", "Loveseat", "Recliner Sofa", "Sofa Blanket", "Sofa Protector"] },
-  { value: "ðŸª‘", names: ["Chair", "Dining Chair", "Office Chair", "Desk Chair", "Bar Stool", "Folding Chair", "Patio Chair", "Gaming Chair", "Accent Chair", "Chair Cushion"] },
-  { value: "ðŸ½ï¸", names: ["Dinner Set", "Plate Set", "Bowl Set", "Cutlery Set", "Glass Set", "Mug Set", "Serving Tray", "Serving Bowl", "Kitchen Utensils", "Table Napkins"] },
-  { value: "ðŸ”ª", names: ["Kitchen Knife", "Chef Knife", "Knife Set", "Cutting Board", "Knife Sharpener", "Knife Block", "Paring Knife", "Bread Knife", "Utility Knife", "Knife Bundle"] },
-  { value: "ðŸ³", names: ["Frying Pan", "Nonstick Pan", "Skillet", "SautÃ© Pan", "Omelette Pan", "Griddle Pan", "Pan Set", "Pan Duo", "Pan Bundle", "Pan Gift"] },
-  { value: "ðŸ¥£", names: ["Mixing Bowl", "Salad Bowl", "Soup Bowl", "Cereal Bowl", "Bowl Set", "Bowl Duo", "Bowl Bundle", "Bowl Gift", "Bowl Pack", "Serving Bowl"] },
-  { value: "ðŸ§‚", names: ["Salt Shaker", "Pepper Grinder", "Spice Rack", "Spice Jars", "Seasoning Pack", "Herb Mix", "Spice Blend", "Salt Pack", "Pepper Pack", "Spice Kit"] },
-  { value: "ðŸª¥", names: ["Toothbrush", "Toothpaste", "Oral Care Kit", "Mouthwash", "Floss", "Toothbrush Pack", "Toothbrush Duo", "Toothbrush Bundle", "Toothbrush Gift", "Toothbrush Holder"] },
-  { value: "ðŸ¼", names: ["Baby Bottle", "Baby Formula", "Baby Food", "Baby Snack", "Baby Spoon", "Baby Bowl", "Baby Bib", "Baby Cup", "Baby Utensils", "Baby Sippy Cup"] },
-  { value: "ðŸ§¸", names: ["Baby Plush", "Baby Toy", "Baby Rattle", "Baby Teether", "Baby Book", "Baby Blocks", "Baby Gift", "Baby Set", "Baby Bundle", "Baby Stacker"] },
-  { value: "ðŸ¾", names: ["Pet Treats", "Pet Food", "Pet Toy", "Pet Leash", "Pet Collar", "Pet Bed", "Pet Bowl", "Pet Grooming", "Pet Shampoo", "Pet Bundle"] },
-  { value: "âš½", names: ["Soccer Ball", "Football", "Futsal Ball", "Training Ball", "Match Ball", "Ball Pump", "Ball Net", "Ball Pack", "Ball Duo", "Ball Bundle"] },
-  { value: "ðŸ€", names: ["Basketball", "Outdoor Basketball", "Indoor Basketball", "Training Basketball", "Match Basketball", "Basketball Pump", "Basketball Net", "Basketball Pack", "Basketball Duo", "Basketball Bundle"] },
-  { value: "ðŸ", names: ["Volleyball", "Beach Volleyball", "Indoor Volleyball", "Training Volleyball", "Match Volleyball", "Volleyball Pump", "Volleyball Net", "Volleyball Pack", "Volleyball Duo", "Volleyball Bundle"] },
-  { value: "ðŸ“", names: ["Ping Pong Paddle", "Ping Pong Balls", "Table Tennis Set", "Ping Pong Net", "Ping Pong Racket", "Ping Pong Case", "Ping Pong Pack", "Ping Pong Duo", "Ping Pong Bundle", "Ping Pong Gift"] },
-  { value: "ðŸŽ¯", names: ["Dartboard", "Dart Set", "Soft Tip Darts", "Steel Tip Darts", "Dart Flights", "Dart Shafts", "Dart Case", "Dart Pack", "Dart Bundle", "Dart Gift"] },
-  { value: "ðŸŽ²", names: ["Board Game", "Dice Set", "Card Game", "Puzzle", "Game Bundle", "Game Pack", "Strategy Game", "Family Game", "Party Game", "Game Gift"] },
-  { value: "ðŸ“¦", names: ["Storage Box", "Gift Box", "Shipping Box", "Moving Box", "Organizer Box", "Folding Box", "Clear Box", "Decor Box", "Box Bundle", "Box Set"] },
-  { value: "ðŸ›’", names: ["Shopping Cart Token", "Shopping Basket Tag", "Reusable Tote", "Market Bag", "Grocery Tote", "Foldable Tote", "Insulated Bag", "Eco Bag", "Canvas Bag", "Cart Clip"] },
-  { value: "ðŸ¦Š", names: ["Fox"] },
-  { value: "ðŸ¦", names: ["Lion"] },
-  { value: "ðŸ¯", names: ["Tiger"] },
-  { value: "ðŸ»", names: ["Bear"] },
-  { value: "ðŸ¼", names: ["Panda"] },
-  { value: "ðŸ¨", names: ["Koala"] },
-  { value: "ðŸµ", names: ["Monkey Face"] },
-  { value: "ðŸ’", names: ["Monkey"] },
-  { value: "ðŸ¦‰", names: ["Owl"] },
-  { value: "ðŸ§", names: ["Penguin"] },
-  { value: "ðŸ¦", names: ["Bird"] },
-  { value: "ðŸ¤", names: ["Baby Chick"] },
-  { value: "ðŸ£", names: ["Hatching Chick"] },
-  { value: "ðŸ¥", names: ["Front-Facing Baby Chick"] },
-  { value: "ðŸº", names: ["Wolf"] },
-  { value: "ðŸ—", names: ["Boar"] },
-  { value: "ðŸ´", names: ["Horse"] },
-  { value: "ðŸ¦„", names: ["Unicorn"] },
-  { value: "ðŸ", names: ["Honeybee"] },
-  { value: "ðŸ›", names: ["Bug"] },
-  { value: "ðŸ¦‹", names: ["Butterfly"] },
-  { value: "ðŸŒ", names: ["Snail"] },
-  { value: "ðŸ¢", names: ["Turtle"] },
-  { value: "ðŸ", names: ["Snake"] },
-  { value: "ðŸ¦–", names: ["T-Rex"] },
-  { value: "ðŸ¦•", names: ["Sauropod"] },
-  { value: "ðŸ™", names: ["Octopus"] },
-  { value: "ðŸ¦‘", names: ["Squid"] },
-  { value: "ðŸ ", names: ["Tropical Fish"] },
-  { value: "ðŸ³", names: ["Spouting Whale"] },
-  { value: "ðŸ¬", names: ["Dolphin"] },
-  { value: "ðŸ‹", names: ["Whale"] },
-  { value: "ðŸŠ", names: ["Crocodile"] },
-  { value: "ðŸ¦ˆ", names: ["Shark"] },
-  { value: "ðŸ…", names: ["Tiger (Alt)"] },
-  { value: "ðŸ¦“", names: ["Zebra"] },
-  { value: "ðŸ˜", names: ["Elephant"] },
-  { value: "ðŸ¦", names: ["Rhinoceros"] },
-  { value: "ðŸ¦›", names: ["Hippopotamus"] },
-  { value: "ðŸ«", names: ["Two-Hump Camel"] },
-  { value: "ðŸª", names: ["Single-Hump Camel"] },
-  { value: "ðŸ¦’", names: ["Giraffe"] },
-  { value: "ðŸƒ", names: ["Water Buffalo"] },
-  { value: "ðŸ‚", names: ["Ox"] },
-  { value: "ðŸ„", names: ["Cow"] },
-  { value: "ðŸ", names: ["Goat"] },
-  { value: "ðŸ‘", names: ["Sheep"] },
-  { value: "ðŸŽ", names: ["Racehorse"] },
-  { value: "ðŸ–", names: ["Pig"] },
-  { value: "ðŸ“", names: ["Rooster"] },
-];
+// Shopping-focused emoji palette shared with the combobox options.
+const EMOJI_GROUPS = MARKETPLACE_EMOJI_OPTIONS.map((option) => ({
+  value: option.value,
+  names: [option.label],
+}));
 
 const CATEGORY_TAG_OPTIONS = [
   "Security & Access Control",
@@ -612,7 +444,7 @@ const AdminLogin = () => {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                placeholder="........"
                 required
                 data-testid="input-admin-password"
               />
@@ -841,7 +673,7 @@ const AiConversationsPanel = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+          <p className="text-sm text-muted-foreground">Loading...</p>
         ) : error ? (
           <p className="text-sm text-destructive">Failed to load AI conversations.</p>
         ) : (
@@ -865,10 +697,10 @@ const AiConversationsPanel = () => {
                     <TableCell>{r.category}</TableCell>
                     <TableCell>{r.urgency}</TableCell>
                     <TableCell>{r.recommendedApproach}</TableCell>
-                    <TableCell>{Number.isFinite(Number(r.confidenceScore)) ? Number(r.confidenceScore) : "â€”"}</TableCell>
+                    <TableCell>{Number.isFinite(Number(r.confidenceScore)) ? Number(r.confidenceScore) : "-"}</TableCell>
                     <TableCell>{r.status}</TableCell>
                     <TableCell>
-                      {r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "â€”"}
+                      {r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "-"}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -915,7 +747,7 @@ const AiPreparedRequestsPanel = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+          <p className="text-sm text-muted-foreground">Loading...</p>
         ) : error ? (
           <p className="text-sm text-destructive">Failed to load prepared requests.</p>
         ) : (
@@ -939,7 +771,7 @@ const AiPreparedRequestsPanel = () => {
                   const estimateText =
                     est && Number.isFinite(Number(est.min)) && Number.isFinite(Number(est.max))
                       ? `${Number(est.min)} - ${Number(est.max)}`
-                      : "â€”";
+                      : "-";
 
                   return (
                     <TableRow key={r.id}>
@@ -950,7 +782,7 @@ const AiPreparedRequestsPanel = () => {
                       <TableCell className="max-w-[220px] truncate">{r.scope || "—"}</TableCell>
                       <TableCell>{Number.isFinite(Number(r.imageCount)) ? Number(r.imageCount) : 0}</TableCell>
                       <TableCell>{estimateText}</TableCell>
-                      <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "â€”"}</TableCell>
+                      <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "-"}</TableCell>
                     </TableRow>
                   );
                 })}
@@ -1577,7 +1409,7 @@ const PricingRulesPanel = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+          <p className="text-sm text-muted-foreground">Loading...</p>
         ) : error ? (
           <p className="text-sm text-destructive">Failed to load pricing rules.</p>
         ) : (rows || []).length === 0 ? (
@@ -1618,7 +1450,7 @@ const PricingRulesPanel = () => {
                     <TableCell>{r.minPrice}</TableCell>
                     <TableCell>{r.maxPrice}</TableCell>
                     <TableCell>{r.isActive ? "Yes" : "No"}</TableCell>
-                    <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "â€”"}</TableCell>
+                    <TableCell>{r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "-"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -1787,7 +1619,7 @@ const ProviderMatchingPanel = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+          <p className="text-sm text-muted-foreground">Loading...</p>
         ) : error ? (
           <p className="text-sm text-destructive">Failed to load provider matching settings.</p>
         ) : (
@@ -1810,7 +1642,7 @@ const ProviderMatchingPanel = () => {
                     <TableCell>{p.isApproved ? "Yes" : "No"}</TableCell>
                     <TableCell>{p.matching?.isEnabled === false ? "No" : "Yes"}</TableCell>
                     <TableCell>
-                      {p.matching?.updatedAt ? new Date(p.matching.updatedAt).toLocaleString() : "â€”"}
+                      {p.matching?.updatedAt ? new Date(p.matching.updatedAt).toLocaleString() : "-"}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -2037,7 +1869,7 @@ const UsersManagement = () => {
     }
   }, []);
 
-  // Users (unified) â€” array normalized for the table
+  // Users (unified) - array normalized for the table
   const { data: users = [], isLoading } = useQuery<any[]>({
     queryKey: [
       `${import.meta.env.VITE_API_URL}/api/admin/users/all`,
@@ -2091,7 +1923,7 @@ const UsersManagement = () => {
     }
   };
 
-  // Memberships query â€“ use the correct endpoint
+  // Memberships query - use the correct endpoint
   const { data: userMemberships } = useQuery({
     queryKey: ["admin-user-memberships", membershipUser?._id || membershipUser?.id],
     queryFn: () => {
@@ -2103,7 +1935,7 @@ const UsersManagement = () => {
     enabled: !!membershipUser,
   });
 
-  // Toggle active/inactive â€“ use /api/admin/users/{id}
+  // Toggle active/inactive - use /api/admin/users/{id}
   const toggleUserStatusMutation = useMutation({
     mutationFn: ({ userId, isActive }: { userId: string; isActive: boolean }) =>
       adminApiRequest("PATCH", `/api/admin/users/${userId}`, { isActive }),
@@ -2141,7 +1973,7 @@ const UsersManagement = () => {
     },
   });
 
-  // Reset password (admin) â€“ calls server endpoint that may return a generated temp password
+  // Reset password (admin) - calls server endpoint that may return a generated temp password
   const [showTempPasswordModal, setShowTempPasswordModal] = useState(false);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [tempPasswordUser, setTempPasswordUser] = useState<any>(null);
@@ -2185,7 +2017,7 @@ const UsersManagement = () => {
     deleteUserMutation.mutate(userId);
   };
 
-  // Create user â€“ POST to /api/admin/users
+  // Create user - POST to /api/admin/users
   const createUserMutation = useMutation({
     mutationFn: (userData: any) =>
       adminApiRequest("POST", "/api/admin/users", userData),
@@ -2204,7 +2036,7 @@ const UsersManagement = () => {
     },
   });
 
-  // Update user â€“ PATCH to /api/admin/users/{id}
+  // Update user - PATCH to /api/admin/users/{id}
   const updateUserMutation = useMutation({
     mutationFn: ({ userId, userData }: { userId: string; userData: any }) =>
       adminApiRequest("PATCH", `/api/admin/users/${userId}`, userData),
@@ -4077,11 +3909,11 @@ const ProvidersManagement = () => {
               <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Email</p>
-                  <p className="font-medium">{previewData.email || "â€”"}</p>
+                  <p className="font-medium">{previewData.email || "-"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Phone</p>
-                  <p className="font-medium">{previewData.phone || "â€”"}</p>
+                  <p className="font-medium">{previewData.phone || "-"}</p>
                 </div>
                 <div className="md:col-span-2">
                   <p className="text-xs text-muted-foreground mb-2">Categories</p>
@@ -4822,7 +4654,7 @@ const CategoriesManagement = () => {
 
       {/* Create Category Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="w-[60vw] max-w-[95vw]">
+        <DialogContent className="w-[96vw] sm:max-w-2xl lg:max-w-4xl">
           <DialogHeader>
             <DialogTitle>Create New Category</DialogTitle>
             <DialogDescription>
@@ -4877,7 +4709,7 @@ const CategoriesManagement = () => {
                       setFormData({ ...formData, icon: e.target.value })
                     }
                     onFocus={() => setIconPickerOpen(true)}
-                    placeholder="ðŸ”§ (optional emoji icon)"
+                    placeholder="Optional emoji icon"
                     data-testid="input-category-icon"
                   />
                 </PopoverTrigger>
@@ -4998,7 +4830,7 @@ const CategoriesManagement = () => {
           }
         }}
       >
-        <DialogContent className="w-[60vw] max-w-[95vw]">
+        <DialogContent className="w-[96vw] sm:max-w-2xl lg:max-w-4xl">
           <DialogHeader>
             <DialogTitle>Edit Category</DialogTitle>
             <DialogDescription>Update the category details</DialogDescription>
@@ -5037,7 +4869,7 @@ const CategoriesManagement = () => {
                       setFormData({ ...formData, icon: e.target.value })
                     }
                     onFocus={() => setIconPickerOpen(true)}
-                    placeholder="ðŸ”§ (optional emoji icon)"
+                    placeholder="Optional emoji icon"
                     data-testid="input-edit-category-icon"
                   />
                 </PopoverTrigger>
@@ -5489,7 +5321,7 @@ const MarketplaceManagement = () => {
 
       {/* Create Item Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="w-[60vw] max-w-[95vw]">
+        <DialogContent className="w-[96vw] sm:max-w-2xl lg:max-w-4xl">
           <DialogHeader>
             <DialogTitle>Create New Marketplace Item</DialogTitle>
             <DialogDescription>
@@ -5667,7 +5499,7 @@ const MarketplaceManagement = () => {
           }
         }}
       >
-        <DialogContent className="w-[60vw] max-w-[95vw]">
+        <DialogContent className="w-[96vw] sm:max-w-2xl lg:max-w-4xl">
           <DialogHeader>
             <DialogTitle>Edit Marketplace Item</DialogTitle>
             <DialogDescription>Update the item details</DialogDescription>
@@ -6093,7 +5925,7 @@ const CityMartBannersManagement = () => {
 
       {/* Create/Edit Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="w-[70vw] max-w-[95vw] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[96vw] sm:max-w-3xl lg:max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {editingBanner ? "Edit Banner" : "Create New Banner"}
@@ -6667,8 +6499,8 @@ const RecentActivity = () => {
                     className="text-xs text-muted-foreground"
                     data-testid={`activity-details-${index}`}
                   >
-                    {activity.user?.name || "System"} â€¢{" "}
-                    {activity.details || "No details"} â€¢{" "}
+                    {activity.user?.name || "System"} ?{" "}
+                    {activity.details || "No details"} ?{" "}
                     {activity.createdAt
                       ? new Date(activity.createdAt).toLocaleString()
                       : "Unknown time"}
@@ -6823,7 +6655,7 @@ const PostgreSQLBridgeStats = () => {
           <Badge variant="outline">Live Data</Badge>
           {bridgeStats?.source && (
             <Badge variant="outline" className="text-xs">
-              {bridgeStats.source.toUpperCase()} â€¢ {new Date(bridgeStats.timestamp).toLocaleTimeString()}
+              {bridgeStats.source.toUpperCase()} ? {new Date(bridgeStats.timestamp).toLocaleTimeString()}
             </Badge>
           )}
           <Button
@@ -6909,7 +6741,7 @@ const EstatePerformanceCard = () => {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+          <p className="text-sm text-muted-foreground">Loading...</p>
         ) : !rows || rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">No estate data available.</p>
         ) : (
@@ -7285,7 +7117,7 @@ export default function AdminSuperDashboard() {
 
   return (
     
-    <div className="h-screen overflow-hidden bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen overflow-x-hidden bg-gray-50 dark:bg-gray-900">
       <div className="flex h-full">
         {/* Sidebar */}
         <AdminSidebar
@@ -7296,7 +7128,7 @@ export default function AdminSuperDashboard() {
         />
 
         {/* Main Content */}
-        <div className="flex-1 lg:ml-0 h-full overflow-y-auto">
+        <div className="flex-1 lg:ml-0 min-w-0 overflow-y-auto overflow-x-hidden">
           {/* Mobile Header */}
           <div className="lg:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
             <div className="flex items-center justify-between">
@@ -7338,7 +7170,8 @@ export default function AdminSuperDashboard() {
           </div>
 
           {isSuperAdmin && (
-            <div className="hidden lg:flex justify-end bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-3">
+            <div className="hidden border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 lg:flex">
+              <div className="mx-auto flex w-full max-w-[1680px] items-center justify-end px-6 py-3">
                 <div className="flex items-center space-x-2">
                   <Link href="/company-registration">
                     <Button variant="secondary" size="sm" className="px-2 sm:px-3 h-8 flex items-center">
@@ -7381,6 +7214,7 @@ export default function AdminSuperDashboard() {
                   )}
                 </div>
               </div>
+            </div>
           )}
 
           {isSuperAdmin && (
@@ -7420,7 +7254,7 @@ export default function AdminSuperDashboard() {
                             Received{" "}
                             {request.createdAt
                               ? new Date(request.createdAt).toLocaleString()
-                              : "â€”"}
+                              : "-"}
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
@@ -7469,7 +7303,7 @@ export default function AdminSuperDashboard() {
                 setDeclineReason("");
               }
             }}>
-              <DialogContent className="w-[60vw] max-w-[95vw]">
+              <DialogContent className="w-[96vw] sm:max-w-2xl lg:max-w-4xl">
                 <DialogHeader>
                   <DialogTitle>Decline provider request</DialogTitle>
                   <DialogDescription>
@@ -7478,7 +7312,7 @@ export default function AdminSuperDashboard() {
                 </DialogHeader>
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    {selectedRequestForDecline?.name || "Provider"} â€“ {selectedRequestForDecline?.email}
+                    {selectedRequestForDecline?.name || "Provider"} - {selectedRequestForDecline?.email}
                   </p>
                   <Textarea
                     value={declineReason}
@@ -7508,7 +7342,7 @@ export default function AdminSuperDashboard() {
                 setDeclineReason("");
               }
             }}>
-              <DialogContent className="w-[60vw] max-w-[95vw]">
+              <DialogContent className="w-[96vw] sm:max-w-2xl lg:max-w-4xl">
                 <DialogHeader>
                   <DialogTitle>Decline provider request</DialogTitle>
                   <DialogDescription>
@@ -7517,7 +7351,7 @@ export default function AdminSuperDashboard() {
                 </DialogHeader>
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    {selectedRequestForDecline?.name || "Provider"} â€“ {selectedRequestForDecline?.email}
+                    {selectedRequestForDecline?.name || "Provider"} - {selectedRequestForDecline?.email}
                   </p>
                   <Textarea
                     value={declineReason}
@@ -7544,7 +7378,7 @@ export default function AdminSuperDashboard() {
           )}
 
           {/* Page Content */}
-          <div className="py-6 px-0">
+          <div className="mx-auto w-full max-w-[1680px] px-4 py-6 sm:px-6 lg:px-8">
             {activeTab === "dashboard" && (
               <div>
                 <div className="mb-6">
@@ -8042,7 +7876,7 @@ const EstatesManagement = () => {
           resetForm();
         }}
       >
-        <DialogContent className="w-[60vw] max-w-[95vw]">
+        <DialogContent className="w-[96vw] sm:max-w-2xl lg:max-w-4xl">
           <DialogHeader>
             <DialogTitle>
               {editingEstate ? "Edit Estate" : "Create New Estate"}
@@ -10055,7 +9889,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
             <Card>
               <CardHeader>
                 <CardTitle>Service Requests</CardTitle>
-                <CardDescription>Requests assigned to this companyâ€™s providers.</CardDescription>
+                <CardDescription>Requests assigned to this company's providers.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="flex flex-wrap gap-2 text-xs">
@@ -10534,7 +10368,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
         if (!open) resetAddForm();
         else setShowAddCompany(true);
       }}>
-        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
+        <DialogContent className="w-[96vw] sm:max-w-3xl lg:max-w-5xl max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Add Company</DialogTitle>
             <DialogDescription>Create a new provider company.</DialogDescription>
@@ -10760,7 +10594,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
 
       {/* View Company Dialog */}
       <Dialog open={showViewCompany} onOpenChange={setShowViewCompany}>
-        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
+        <DialogContent className="w-[96vw] sm:max-w-3xl lg:max-w-5xl max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Company Details</DialogTitle>
           </DialogHeader>
@@ -10773,11 +10607,11 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Contact Email</Label>
-                  <p className="text-sm">{selectedCompany.contactEmail || "â€”"}</p>
+                  <p className="text-sm">{selectedCompany.contactEmail || "-"}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Phone</Label>
-                  <p className="text-sm">{selectedCompany.phone || "â€”"}</p>
+                  <p className="text-sm">{selectedCompany.phone || "-"}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Submitted At</Label>
@@ -10786,17 +10620,17 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Description</Label>
-                <p className="text-sm">{selectedCompany.description || "â€”"}</p>
+                <p className="text-sm">{selectedCompany.description || "-"}</p>
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Provider</Label>
-                <p className="text-sm">{selectedCompany.providerName || selectedCompany.provider_id || "â€”"}</p>
+                <p className="text-sm">{selectedCompany.providerName || selectedCompany.provider_id || "-"}</p>
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Active</Label>
                 <div>
                   <Badge variant={selectedCompany.isActive ? "default" : "outline"} className="text-sm">
-                    {typeof selectedCompany.isActive !== "undefined" ? (selectedCompany.isActive ? "Active" : "Inactive") : "â€”"}
+                    {typeof selectedCompany.isActive !== "undefined" ? (selectedCompany.isActive ? "Active" : "Inactive") : "-"}
                   </Badge>
                 </div>
               </div>
@@ -10835,7 +10669,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
         if (!open) resetEditForm();
         else setShowEditCompany(true);
       }}>
-        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
+        <DialogContent className="w-[96vw] sm:max-w-3xl lg:max-w-5xl max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Edit Company</DialogTitle>
             <DialogDescription>Update company information.</DialogDescription>
@@ -11065,7 +10899,7 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-        <DialogContent className="w-[60vw] max-w-none max-h-[90vh] overflow-auto">
+        <DialogContent className="w-[96vw] sm:max-w-3xl lg:max-w-5xl max-h-[90vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Delete Company</DialogTitle>
             <DialogDescription>
@@ -11177,8 +11011,8 @@ const CompaniesManagement = ({ categoriesList = [] }: { categoriesList?: any[] }
                     {companies.map((company: any) => (
                       <tr key={company.id} className="border-t border-border hover:bg-gray-50 dark:hover:bg-gray-900/50">
                         <td className="px-4 py-3 font-medium">{company.name}</td>
-                        <td className="px-4 py-3">{company.contactEmail || "â€”"}</td>
-                        <td className="px-4 py-3">{company.phone || "â€”"}</td>
+                        <td className="px-4 py-3">{company.contactEmail || "-"}</td>
+                        <td className="px-4 py-3">{company.phone || "-"}</td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex gap-2 justify-end">
                             <Button
@@ -12202,7 +12036,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                       <div className="text-right">
                         <p className="text-sm font-medium">{event.amount}</p>
                         <p className="text-xs text-muted-foreground">
-                          {event.createdAt ? new Date(event.createdAt).toLocaleString() : "â€”"}
+                          {event.createdAt ? new Date(event.createdAt).toLocaleString() : "-"}
                         </p>
                       </div>
                     </div>
@@ -12483,7 +12317,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                                     </div>
                                   </div>
                                 </td>
-                                <td className="px-4 py-3">{item.category || "â€”"}</td>
+                                <td className="px-4 py-3">{item.category || "-"}</td>
                                 <td className="px-4 py-3">
                                   <div className="font-medium">{formatPrice(item)}</div>
                                   <div className="text-xs text-muted-foreground">Stock: {item.stock - 0}</div>
@@ -12965,7 +12799,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                   if (images.length === 0) {
                     toast({
                       title: "Add at least one image",
-                      description: "Upload 1â€“6 images before adding the item.",
+                      description: "Upload 1-6 images before adding the item.",
                       variant: "destructive",
                     });
                     return;
@@ -13009,7 +12843,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                     <FormControl>
                       <div className="space-y-2">
                         <p className="text-xs text-muted-foreground">
-                          Upload 1â€“6 images. {Math.max(0, 6 - inventoryImagePreview.length)} remaining.
+                          Upload 1-6 images. {Math.max(0, 6 - inventoryImagePreview.length)} remaining.
                         </p>
                         {inventoryImagePreview.length > 0 && (
                           <div className="grid grid-cols-2 gap-2">
@@ -13318,7 +13152,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                     </div>
                     <div className="rounded border p-3">
                       <p className="text-xs text-muted-foreground">Category</p>
-                      <p className="text-sm font-medium">{viewInventoryItem.category || "â€”"}</p>
+                      <p className="text-sm font-medium">{viewInventoryItem.category || "-"}</p>
                     </div>
                     <div className="rounded border p-3">
                       <p className="text-xs text-muted-foreground">Status</p>
@@ -13330,7 +13164,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                   <div className="rounded border p-3">
                     <p className="text-xs text-muted-foreground mb-1">ID</p>
                     <p className="text-sm font-mono break-all">
-                      {viewInventoryItem._id || viewInventoryItem.id || "â€”"}
+                      {viewInventoryItem._id || viewInventoryItem.id || "-"}
                     </p>
                   </div>
                 </div>
@@ -13468,8 +13302,8 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
                         {store.location}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                        <div>{store.phone || "â€”"}</div>
-                        <div>{store.email || "â€”"}</div>
+                        <div>{store.phone || "-"}</div>
+                        <div>{store.email || "-"}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex flex-col gap-2">
@@ -13585,7 +13419,7 @@ const StoresManagement: FC<{ companyIdOverride?: string; categoriesList?: any[] 
 
       {/* Create Store Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="w-[60vw] max-w-[60vw]">
+        <DialogContent className="w-[96vw] sm:max-w-2xl lg:max-w-4xl">
           <DialogHeader>
             <DialogTitle>{selectedStore ? "Edit Store" : "Create New Store"}</DialogTitle>
             <DialogDescription className="sr-only">
@@ -13949,7 +13783,7 @@ const ItemCategoriesPage = () => {
       </Card>
 
       <Dialog open={showModal} onOpenChange={setShowModal}>
-        <DialogContent className="w-[60vw] max-w-[95vw]">
+        <DialogContent className="w-[96vw] sm:max-w-2xl lg:max-w-4xl">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit Category" : "Create Category"}</DialogTitle>
             <DialogDescription>

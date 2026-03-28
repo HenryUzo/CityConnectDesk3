@@ -255,11 +255,13 @@ function writeRequestTypingState(
 
 const ConsultancyReportPayloadSchema = z.object({
   inspectionDate: z.string().min(1),
+  completionDeadline: z.string().min(1),
   actualIssue: z.string().trim().min(3).max(2000),
   causeOfIssue: z.string().trim().min(3).max(2000),
   materialCost: z.preprocess((val) => Number(val), z.number().min(0)),
   serviceCost: z.preprocess((val) => Number(val), z.number().min(0)),
   preventiveRecommendation: z.string().trim().min(3).max(2000),
+  evidence: z.array(z.string().trim().min(1).max(10_000_000)).max(8).optional().default([]),
 });
 
 function formatNgn(value: unknown) {
@@ -276,6 +278,11 @@ function buildConsultancyReportMessage(
   const inspectionDate = inspectionDateRaw
     ? new Date(inspectionDateRaw).toLocaleDateString()
     : "Not provided";
+  const completionDeadlineRaw = String(report.completionDeadline || "").trim();
+  const completionDeadline = completionDeadlineRaw
+    ? new Date(completionDeadlineRaw).toLocaleString()
+    : "Not provided";
+  const evidenceCount = Array.isArray(report.evidence) ? report.evidence.length : 0;
   const prefix =
     mode === "approved" ? "Consultancy report approved." : "Consultancy report submitted.";
 
@@ -286,6 +293,8 @@ function buildConsultancyReportMessage(
     `Cause: ${String(report.causeOfIssue || "Not provided")}\n` +
     `Recommended material cost: NGN ${formatNgn(report.materialCost)}\n` +
     `Recommended service cost: NGN ${formatNgn(report.serviceCost)}\n` +
+    `Completion deadline: ${completionDeadline}\n` +
+    `Evidence attachments: ${evidenceCount}\n` +
     `Preventive recommendation: ${String(report.preventiveRecommendation || "Not provided")}`
   );
 }
@@ -531,9 +540,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return "medium";
   };
 
-  const resolveAssignedForJobTaskDueDate = (serviceRequest: any): Date | null =>
-    parseTaskDateCandidate(serviceRequest?.preferredTime) ||
-    parseTaskDateCandidate(serviceRequest?.assignedAt);
+  const resolveAssignedForJobTaskDueDate = (serviceRequest: any): Date | null => {
+    const report =
+      serviceRequest?.consultancyReport &&
+      typeof serviceRequest.consultancyReport === "object" &&
+      !Array.isArray(serviceRequest.consultancyReport)
+        ? (serviceRequest.consultancyReport as Record<string, unknown>)
+        : null;
+
+    return (
+      parseTaskDateCandidate(report?.completionDeadline) ||
+      parseTaskDateCandidate(serviceRequest?.preferredTime) ||
+      parseTaskDateCandidate(serviceRequest?.assignedAt)
+    );
+  };
 
   const upsertAssignedForJobTask = async (
     serviceRequest: any,
@@ -942,16 +962,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const currentStatus = normalizeServiceRequestStatusKey(currentRequest.status);
     const canAutoAssignForJob =
+      currentStatus === "assigned" &&
       Boolean(currentRequest.providerId) &&
-      ![
-        "assigned_for_job",
-        "in_progress",
-        "work_completed_pending_resident",
-        "disputed",
-        "rework_required",
-        "completed",
-        "cancelled",
-      ].includes(currentStatus);
+      Boolean(currentRequest.paymentRequestedAt) &&
+      Boolean(currentRequest.consultancyReportSubmittedAt || currentRequest.consultancyReport);
 
     const updates: Record<string, unknown> = {};
     if (String(currentRequest.paymentStatus || "").toLowerCase() !== "paid") {
@@ -964,6 +978,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (Number.isFinite(billedAmountNumber) && billedAmountNumber > 0) {
         updates.billedAmount = billedAmountNumber.toString();
       }
+    }
+
+    const shouldMoveToPendingInspection = ["pending", "request_created"].includes(currentStatus);
+    if (shouldMoveToPendingInspection) {
+      updates.status = "pending_inspection";
     }
 
     if (canAutoAssignForJob) {
@@ -1651,6 +1670,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (normalizedPaymentStatus === "pending" && !updates.paymentRequestedAt) {
           updates.paymentRequestedAt = new Date();
         }
+        if (
+          normalizedPaymentStatus === "paid" &&
+          ["pending", "request_created"].includes(currentStatus)
+        ) {
+          updates.status = "pending_inspection";
+          changedKeys.add("status");
+        }
       }
 
       if (nextStatus === "assigned") {
@@ -1693,6 +1719,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         updates.approvedForJobAt = new Date();
         updates.approvedForJobBy = actorId;
         updates.assignedAt = updates.assignedAt || currentRequest.assignedAt || new Date();
+      }
+
+      if (nextStatus === "pending_inspection") {
+        const effectivePaymentStatus = String(
+          updates.paymentStatus ?? currentRequest.paymentStatus ?? "",
+        ).toLowerCase();
+        if (effectivePaymentStatus !== "paid") {
+          return res.status(400).json({
+            message: "Payment must be completed before moving to pending inspection",
+          });
+        }
       }
 
       if (nextStatus === "in_progress") {
@@ -2718,16 +2755,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (Number.isNaN(inspectionDate.getTime())) {
         return res.status(400).json({ message: "Invalid inspection date" });
       }
+      const completionDeadline = new Date(payload.completionDeadline);
+      if (Number.isNaN(completionDeadline.getTime())) {
+        return res.status(400).json({ message: "Invalid completion deadline" });
+      }
+      if (completionDeadline.getTime() < inspectionDate.getTime()) {
+        return res.status(400).json({ message: "Completion deadline must be after inspection date" });
+      }
 
       const totalRecommendation = payload.materialCost + payload.serviceCost;
       const report = {
         inspectionDate: inspectionDate.toISOString(),
+        completionDeadline: completionDeadline.toISOString(),
         actualIssue: payload.actualIssue,
         causeOfIssue: payload.causeOfIssue,
         materialCost: payload.materialCost,
         serviceCost: payload.serviceCost,
         totalRecommendation,
         preventiveRecommendation: payload.preventiveRecommendation,
+        evidence: payload.evidence,
         submittedAt: new Date().toISOString(),
         submittedBy: actorId,
       };
@@ -5160,7 +5206,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           specialInstructions: String(payload.consultancyRequest.notes || "").trim() || null,
           photosCount: Number(payload.consultancyRequest.attachmentsCount || 0) || 0,
           paymentPurpose: "Consultancy / inspection",
-          status: "pending_inspection" as any,
+          status: "pending" as any,
           paymentStatus: "pending",
         } as any);
         createdServiceRequestId = created.id;
@@ -5525,8 +5571,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               specialInstructions: String(meta.consultancyRequest.notes || "").trim() || null,
               photosCount: Number(meta.consultancyRequest.attachmentsCount || 0) || 0,
               paymentPurpose: "Consultancy / inspection",
-              status: "pending_inspection" as any,
-              paymentStatus: "paid",
+              status: "pending" as any,
+              paymentStatus: "pending",
             } as any);
 
             await storage.updateTransactionByReference(reference, {
@@ -5553,6 +5599,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         reference,
         ...result,
         serviceRequestId: responseTx?.serviceRequestId ?? null,
+        conversationId: responseTx?.serviceRequestId ?? null,
         transactionStatus: responseTx?.status ?? null,
       });
     } catch (error) {

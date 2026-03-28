@@ -77,7 +77,7 @@ async function ensureConsultancyServiceRequest(params: {
     specialInstructions: String((consultancy as any).notes || "").trim() || null,
     photosCount: Number((consultancy as any).attachmentsCount || 0) || 0,
     paymentPurpose: "Consultancy / inspection",
-    status: "pending_inspection" as any,
+    status: "pending" as any,
     paymentStatus: "pending",
   } as any);
 

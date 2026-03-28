@@ -17,6 +17,10 @@ export default function PaymentConfirmation() {
     const params = new URLSearchParams(window.location.search);
     const ref = params.get("reference");
     const orderType = params.get("orderType");
+    const source = params.get("source");
+    const conversationIdFromQuery = params.get("conversationId");
+    const requestIdFromQuery = params.get("requestId");
+    const serviceRequestIdFromQuery = params.get("serviceRequestId");
     
     if (!ref) {
       setStatus("failed");
@@ -27,45 +31,90 @@ export default function PaymentConfirmation() {
 
     (async () => {
       try {
-        const res = await residentFetch<{
-          status: "success" | "failed";
-          message?: string;
-          serviceRequestId?: string | null;
-        }>("/api/payments/paystack/verify", {
-          method: "POST",
-          json: { reference: ref },
-        });
+        const verifyOnce = async () =>
+          residentFetch<{
+            status: "success" | "failed";
+            message?: string;
+            serviceRequestId?: string | null;
+            conversationId?: string | null;
+          }>("/api/payments/paystack/verify", {
+            method: "POST",
+            json: { reference: ref },
+          });
 
-        if (res?.status === "success") {
+        const maxAttempts = source === "ordinary" && orderType !== "marketplace" ? 5 : 1;
+        let verified:
+          | {
+              status: "success" | "failed";
+              message?: string;
+              serviceRequestId?: string | null;
+              conversationId?: string | null;
+            }
+          | null = null;
+        let resolvedConversationId = "";
+        let resolvedRequestId = "";
+
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+          const res = await verifyOnce();
+          verified = res;
+          if (res?.status !== "success") break;
+
+          resolvedConversationId = String(
+            res.conversationId ||
+              res.serviceRequestId ||
+              conversationIdFromQuery ||
+              requestIdFromQuery ||
+              serviceRequestIdFromQuery ||
+              "",
+          ).trim();
+          resolvedRequestId = String(
+            res.serviceRequestId || requestIdFromQuery || serviceRequestIdFromQuery || resolvedConversationId || "",
+          ).trim();
+
+          if (orderType === "marketplace" || resolvedConversationId || resolvedRequestId) {
+            break;
+          }
+
+          if (attempt < maxAttempts - 1) {
+            await new Promise((resolve) => window.setTimeout(resolve, 700));
+          }
+        }
+
+        if (verified?.status === "success") {
           toast({
             title: "Payment received",
-            description: orderType === "marketplace" ? "Payment confirmed. Completing your order..." : "Your booking has been confirmed.",
+            description:
+              orderType === "marketplace"
+                ? "Payment confirmed. Completing your order..."
+                : "Your booking has been confirmed.",
           });
-          
-          // Handle marketplace orders
+
           if (orderType === "marketplace") {
-            // Redirect back to cart with payment reference
-            // The cart page will use this to finalize the checkout
-            setLocation(`/resident/citymart/cart?paymentReference=${encodeURIComponent(ref)}&orderType=marketplace`);
+            setLocation(
+              `/resident/citymart/cart?paymentReference=${encodeURIComponent(ref)}&orderType=marketplace`,
+            );
             return;
           }
-          
-          // Handle service requests
-          if (res.serviceRequestId) {
-            setLocation(`/track-orders?highlight=${encodeURIComponent(res.serviceRequestId)}`);
-          } else {
-            setLocation(`/resident?paid=1&reference=${encodeURIComponent(ref)}`);
+
+          if (resolvedConversationId || resolvedRequestId) {
+            setLocation(
+              `/resident/requests/ordinary?conversationId=${encodeURIComponent(
+                resolvedConversationId || resolvedRequestId,
+              )}&requestId=${encodeURIComponent(resolvedRequestId || resolvedConversationId)}&serviceRequestId=${encodeURIComponent(resolvedRequestId || resolvedConversationId)}&paid=1&reference=${encodeURIComponent(ref)}`,
+            );
+            return;
           }
+
+          // Last-resort fallback: do not open draft if the linked conversation ID is not ready yet.
+          setLocation(`/track-orders?paid=1&reference=${encodeURIComponent(ref)}`);
           return;
         }
 
         setStatus("failed");
-        setFailureMessage(
-          res?.message || "We could not confirm this payment. Please try again."
-        );
+        setFailureMessage(verified?.message || "We could not confirm this payment. Please try again.");
         toast({
           title: "Verification failed",
-          description: res?.message || "The payment could not be confirmed",
+          description: verified?.message || "The payment could not be confirmed",
           variant: "destructive",
         });
       } catch (err: any) {

@@ -135,12 +135,14 @@ type ActiveServiceRequest = {
   paymentRequestedAt?: string | Date | null;
   consultancyReport?: {
     inspectionDate?: string;
+    completionDeadline?: string;
     actualIssue?: string;
     causeOfIssue?: string;
     materialCost?: number;
     serviceCost?: number;
     totalRecommendation?: number;
     preventiveRecommendation?: string;
+    evidence?: string[];
     submittedAt?: string;
   } | null;
   consultancyReportSubmittedAt?: string | Date | null;
@@ -257,10 +259,30 @@ function parseOrdinaryConversationDraftSnapshot(
 }
 
 const URGENCY_OPTIONS = [
-  { value: "emergency", label: "Emergency", tone: "border-rose-200 text-rose-700 bg-rose-50" },
-  { value: "high", label: "High", tone: "border-amber-200 text-amber-700 bg-amber-50" },
-  { value: "medium", label: "Medium", tone: "border-slate-200 text-slate-700 bg-slate-50" },
-  { value: "low", label: "Low", tone: "border-emerald-200 text-emerald-700 bg-emerald-50" },
+  {
+    value: "emergency",
+    label: "Emergency",
+    timeframe: "Within 24 hrs",
+    tone: "border-rose-200 text-rose-700 bg-rose-50",
+  },
+  {
+    value: "high",
+    label: "High",
+    timeframe: "24 - 48 hrs",
+    tone: "border-amber-200 text-amber-700 bg-amber-50",
+  },
+  {
+    value: "medium",
+    label: "Medium",
+    timeframe: "3 - 4 days",
+    tone: "border-slate-200 text-slate-700 bg-slate-50",
+  },
+  {
+    value: "low",
+    label: "Low",
+    timeframe: "In a week",
+    tone: "border-emerald-200 text-emerald-700 bg-emerald-50",
+  },
 ];
 type UrgencyValue = (typeof URGENCY_OPTIONS)[number]["value"];
 
@@ -658,12 +680,16 @@ function readConsultancyReport(report: ActiveServiceRequest["consultancyReport"]
     Number((report as any).totalRecommendation || 0) || materialCost + serviceCost;
   return {
     inspectionDate: String((report as any).inspectionDate || ""),
+    completionDeadline: String((report as any).completionDeadline || ""),
     actualIssue: String((report as any).actualIssue || ""),
     causeOfIssue: String((report as any).causeOfIssue || ""),
     materialCost: Number.isFinite(materialCost) ? materialCost : 0,
     serviceCost: Number.isFinite(serviceCost) ? serviceCost : 0,
     totalRecommendation: Number.isFinite(totalRecommendation) ? totalRecommendation : 0,
     preventiveRecommendation: String((report as any).preventiveRecommendation || ""),
+    evidence: Array.isArray((report as any).evidence)
+      ? (report as any).evidence.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+      : [],
   };
 }
 
@@ -680,6 +706,20 @@ function formatCountdown(target: Date | null) {
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+function formatElapsedDuration(startedAt: Date | null) {
+  if (!startedAt) return "00:00:00";
+  const diffMs = Math.max(Date.now() - startedAt.getTime(), 0);
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const hh = String(hours).padStart(2, "0");
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(seconds).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
 }
 
 function toDate(value: string | Date | null | undefined) {
@@ -748,11 +788,13 @@ function parseConsultancyReportMessage(text: string) {
 
   return {
     inspectionDate: pick("Inspection date") || undefined,
+    completionDeadline: pick("Completion deadline") || undefined,
     actualIssue: pick("Issue") || "Not provided",
     causeOfIssue: pick("Cause") || "Not provided",
     materialCostLabel: pick("Recommended material cost") || "Not provided",
     serviceCostLabel: pick("Recommended service cost") || "Not provided",
     preventiveRecommendation: pick("Preventive recommendation") || "Not provided",
+    evidenceCount: Number(pick("Evidence attachments").match(/(\d+)/)?.[1] || 0) || undefined,
   };
 }
 
@@ -761,7 +803,7 @@ export default function OrdinaryConversationFlow() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { data: estates = [] } = useMyEstates();
+  const { data: estates = [], loading: estatesLoading, error: estatesError } = useMyEstates();
   const { settings: approvedCategorySettings, isLoading: approvedCategoriesLoading } =
     useAiConversationFlowSettings();
   const { categories: fallbackCategories, isLoading: fallbackCategoriesLoading } = useCategories({
@@ -794,12 +836,15 @@ export default function OrdinaryConversationFlow() {
   const categoriesLoading = approvedCategoriesLoading || fallbackCategoriesLoading;
 
   const queryParams = useMemo(() => {
-    const queryString = location.includes("?") ? location.split("?")[1] : "";
+    const search = typeof window !== "undefined" ? window.location.search : "";
+    const queryString = search ? search.slice(1) : location.includes("?") ? location.split("?")[1] : "";
     return new URLSearchParams(queryString);
   }, [location]);
 
   const categoryFromSearch = queryParams.get("category") || "";
-  const requestIdFromSearch = queryParams.get("requestId") || "";
+  const conversationIdFromSearch = queryParams.get("conversationId") || "";
+  const requestIdFromSearch =
+    queryParams.get("requestId") || queryParams.get("serviceRequestId") || conversationIdFromSearch;
 
   const [stage, setStage] = useState<FlowStage>("intake");
 
@@ -825,6 +870,10 @@ export default function OrdinaryConversationFlow() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const openedRequestFromQueryRef = useRef<string | null>(null);
   const skipCategoryResetRef = useRef(false);
+  const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const lastAutoScrollSessionRef = useRef<string>("");
+  const wizardInteractiveScrollRef = useRef<HTMLDivElement | null>(null);
+  const latestWizardPromptRef = useRef<HTMLDivElement | null>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const estateSearchInputRef = useRef<HTMLInputElement | null>(null);
   const stateSelectTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -834,6 +883,7 @@ export default function OrdinaryConversationFlow() {
   const [loadingRequestId, setLoadingRequestId] = useState<string | null>(null);
   const [pendingPrefill, setPendingPrefill] = useState(false);
   const [isProviderDetailsCollapsed, setIsProviderDetailsCollapsed] = useState(true);
+  const [isProgressTrackerCollapsed, setIsProgressTrackerCollapsed] = useState(false);
   const [residentMessageDraft, setResidentMessageDraft] = useState("");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
   const [isPeerTyping, setIsPeerTyping] = useState(false);
@@ -848,6 +898,7 @@ export default function OrdinaryConversationFlow() {
   const [isConfirmDeliveryDialogOpen, setIsConfirmDeliveryDialogOpen] = useState(false);
   const [isRaiseIssueDialogOpen, setIsRaiseIssueDialogOpen] = useState(false);
   const [raiseIssueReason, setRaiseIssueReason] = useState("");
+  const [previewAttachment, setPreviewAttachment] = useState<{ name: string; url: string } | null>(null);
   const [draftSavedAt, setDraftSavedAt] = useState<string>(() => new Date().toISOString());
   const [storedDraftSnapshot, setStoredDraftSnapshot] = useState<OrdinaryConversationDraftSnapshot | null>(null);
   const restoreStageAfterCategorySelectionRef = useRef<FlowStage | null>(null);
@@ -1295,7 +1346,7 @@ export default function OrdinaryConversationFlow() {
       if (step.kind === "text") {
         answer = notes.trim();
       }
-      return { prompt: step.prompt, answer };
+      return { id: step.id, kind: step.kind, prompt: step.prompt, answer };
     });
 
   const persistCurrentDraftSnapshot = useCallback(() => {
@@ -1405,6 +1456,30 @@ export default function OrdinaryConversationFlow() {
     persistCurrentDraftSnapshot,
   ]);
 
+  useEffect(() => {
+    const persistDraftOnVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") return;
+      if (!draftHydratedRef.current) return;
+      if (activeRequestId) return;
+      persistCurrentDraftSnapshot();
+    };
+
+    const persistDraftOnPageExit = () => {
+      if (!draftHydratedRef.current) return;
+      if (activeRequestId) return;
+      persistCurrentDraftSnapshot();
+    };
+
+    document.addEventListener("visibilitychange", persistDraftOnVisibilityChange);
+    window.addEventListener("beforeunload", persistDraftOnPageExit);
+    window.addEventListener("pagehide", persistDraftOnPageExit);
+    return () => {
+      document.removeEventListener("visibilitychange", persistDraftOnVisibilityChange);
+      window.removeEventListener("beforeunload", persistDraftOnPageExit);
+      window.removeEventListener("pagehide", persistDraftOnPageExit);
+    };
+  }, [activeRequestId, persistCurrentDraftSnapshot]);
+
   const handleSelectChip = (stepId: string, value: string) => {
     if (isWizardBotThinking) return;
     if (stepId === "urgency") {
@@ -1433,7 +1508,13 @@ export default function OrdinaryConversationFlow() {
 
   const handleRemoveAttachment = (id: string) => {
     setPersistedAttachmentCount(null);
-    setAttachments((prev) => prev.filter((att) => att.id !== id));
+    setAttachments((prev) => {
+      const removed = prev.find((att) => att.id === id);
+      if (removed && previewAttachment?.url === removed.dataUrl) {
+        setPreviewAttachment(null);
+      }
+      return prev.filter((att) => att.id !== id);
+    });
   };
 
   const handleFinishNotes = () => {
@@ -1598,7 +1679,7 @@ export default function OrdinaryConversationFlow() {
       } else {
         resetFlowForNewRequest();
       }
-      return;
+      return true;
     }
     if (!activeRequestId) {
       persistCurrentDraftSnapshot();
@@ -1607,8 +1688,10 @@ export default function OrdinaryConversationFlow() {
       setLoadingRequestId(requestId);
       const data = await residentFetch(`/api/app/service-requests/${requestId}`);
       hydrateFromRequest(data);
+      return true;
     } catch (error) {
       console.error("Failed to load request", error);
+      return false;
     } finally {
       setLoadingRequestId(null);
     }
@@ -1617,8 +1700,28 @@ export default function OrdinaryConversationFlow() {
   useEffect(() => {
     if (!requestIdFromSearch) return;
     if (openedRequestFromQueryRef.current === requestIdFromSearch) return;
-    openedRequestFromQueryRef.current = requestIdFromSearch;
-    void handleOpenRecentRequest(requestIdFromSearch);
+    let cancelled = false;
+    let retries = 0;
+
+    const openFromQuery = async () => {
+      if (cancelled) return;
+      const success = await handleOpenRecentRequest(requestIdFromSearch);
+      if (success) {
+        openedRequestFromQueryRef.current = requestIdFromSearch;
+        return;
+      }
+      if (!cancelled && retries < 4) {
+        retries += 1;
+        window.setTimeout(() => {
+          void openFromQuery();
+        }, 600);
+      }
+    };
+
+    void openFromQuery();
+    return () => {
+      cancelled = true;
+    };
   }, [requestIdFromSearch]);
 
   const photoGuard =
@@ -1635,7 +1738,7 @@ export default function OrdinaryConversationFlow() {
   const [countdownTick, setCountdownTick] = useState(() => Date.now());
   useEffect(() => {
     if (!activeRequestId) return;
-    const timer = window.setInterval(() => setCountdownTick(Date.now()), 60000);
+    const timer = window.setInterval(() => setCountdownTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [activeRequestId]);
 
@@ -1783,6 +1886,7 @@ export default function OrdinaryConversationFlow() {
     selectedCategoryValue ||
       Object.keys(wizardAnswers).length ||
       notes.trim() ||
+      attachments.length ||
       urgency.trim() ||
       address.trim() ||
       unit.trim() ||
@@ -1863,7 +1967,10 @@ export default function OrdinaryConversationFlow() {
     [draftSessionPreview],
   );
 
-  const activeSessionId = activeRequestId || (draftSessions.length ? draftSessionId : null);
+  const activeSessionId =
+    activeRequestId ||
+    loadingRequestId ||
+    (requestIdFromSearch ? null : draftSessions.length ? draftSessionId : null);
 
   const handleOpenCategorySelectionFromModal = () => {
     clearWizardPromptTimer();
@@ -2071,6 +2178,11 @@ export default function OrdinaryConversationFlow() {
   const canMessageAssignedProvider =
     Boolean(activeRequestLive?.providerId) &&
     !["cancelled", "completed"].includes(activeRequestStatusValue);
+  const inProgressStartedAt =
+    activeRequestStatusValue === "in_progress"
+      ? toDate(activeRequestLive?.updatedAt) || toDate(activeRequestLive?.assignedAt)
+      : null;
+  const inProgressElapsedLabel = formatElapsedDuration(inProgressStartedAt);
 
   useEffect(() => {
     if (canMessageAssignedProvider && activeRequestId) return;
@@ -2210,6 +2322,9 @@ export default function OrdinaryConversationFlow() {
     },
   ];
   const showWizardInteractiveStep = !activeRequestId || activeRequestStatusValue === "pending";
+  const isConversationStage = stage === "wizard" || stage === "summary";
+  const showInProgressCounter =
+    isConversationStage && !showWizardInteractiveStep && activeRequestStatusValue === "in_progress";
 
   useEffect(() => {
     if (stage === "wizard" && showWizardInteractiveStep) return;
@@ -2266,7 +2381,7 @@ export default function OrdinaryConversationFlow() {
               paymentKind: "job_request_payment",
             },
             reference: session.reference,
-            callbackUrl: `${window.location.origin}/payment-confirmation`,
+            callbackUrl: `${window.location.origin}/payment-confirmation?source=ordinary&conversationId=${encodeURIComponent(activeRequestId)}&requestId=${encodeURIComponent(activeRequestId)}&serviceRequestId=${encodeURIComponent(activeRequestId)}`,
           },
         },
       );
@@ -2517,11 +2632,14 @@ export default function OrdinaryConversationFlow() {
           id: `consultancy-report-${message.id}`,
           kind: "consultancy_report",
           inspectionDate: consultancyReport.inspectionDate,
+          completionDeadline: consultancyReport.completionDeadline || activeConsultancyReport?.completionDeadline || undefined,
           actualIssue: consultancyReport.actualIssue,
           causeOfIssue: consultancyReport.causeOfIssue,
           materialCostLabel: consultancyReport.materialCostLabel,
           serviceCostLabel: consultancyReport.serviceCostLabel,
           preventiveRecommendation: consultancyReport.preventiveRecommendation,
+          evidenceUrls: activeConsultancyReport?.evidence || [],
+          evidenceCount: consultancyReport.evidenceCount,
           timestamp: message.createdAt,
         });
         return;
@@ -2543,6 +2661,9 @@ export default function OrdinaryConversationFlow() {
             activeConsultancyReport.inspectionDate
               ? `Inspection date: ${new Date(activeConsultancyReport.inspectionDate).toLocaleString()}`
               : "",
+            activeConsultancyReport.completionDeadline
+              ? `Completion deadline: ${new Date(activeConsultancyReport.completionDeadline).toLocaleString()}`
+              : "",
             activeConsultancyReport.actualIssue
               ? `Issue: ${activeConsultancyReport.actualIssue}`
               : "",
@@ -2560,6 +2681,9 @@ export default function OrdinaryConversationFlow() {
               : "",
             activeConsultancyReport.preventiveRecommendation
               ? `Prevention: ${activeConsultancyReport.preventiveRecommendation}`
+              : "",
+            activeConsultancyReport.evidence?.length
+              ? `Evidence attachments: ${activeConsultancyReport.evidence.length}`
               : "",
           ].filter(Boolean)
         : [];
@@ -2697,14 +2821,53 @@ export default function OrdinaryConversationFlow() {
   };
 
   useEffect(() => {
-    if (stage !== "wizard") return;
-    chatBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (!isConversationStage) return;
+    const container = chatScrollContainerRef.current;
+    if (!container) return;
+    const sessionKey = activeRequestId || "draft";
+    const isFirstForSession = lastAutoScrollSessionRef.current !== sessionKey;
+    lastAutoScrollSessionRef.current = sessionKey;
+    const frame = window.requestAnimationFrame(() => {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: isFirstForSession ? "auto" : "smooth",
+      });
+      chatBottomRef.current?.scrollIntoView({
+        behavior: isFirstForSession ? "auto" : "smooth",
+        block: "end",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [
+    activeRequestId,
+    isConversationStage,
     canMessageAssignedProvider,
     conversationItems.length,
     historyBlocks.length,
     showWizardInteractiveStep,
-    stage,
+  ]);
+
+  useEffect(() => {
+    if (!isConversationStage || !showWizardInteractiveStep) return;
+    const container = wizardInteractiveScrollRef.current;
+    if (!container) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      latestWizardPromptRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: "smooth",
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    currentStep?.id,
+    historyBlocks.length,
+    isConversationStage,
+    isWizardBotThinking,
+    showWizardInteractiveStep,
+    wizardIndex,
   ]);
 
   return (
@@ -2764,7 +2927,7 @@ export default function OrdinaryConversationFlow() {
                     </p>
                   </div>
 
-                  {stage === "wizard" ? (
+                  {isConversationStage ? (
                     showWizardInteractiveStep ? (
                       <div className="flex items-center gap-4 text-[14px] font-semibold">
                         <button
@@ -2784,6 +2947,18 @@ export default function OrdinaryConversationFlow() {
                       </div>
                     ) : (
                       <div className="flex items-center gap-2">
+                        {showInProgressCounter ? (
+                          <div
+                            className="inline-flex h-8 items-center rounded-full border border-[#12B76A]/30 bg-[#ECFDF3] px-3 text-[12px] font-semibold text-[#027A48]"
+                            title={
+                              inProgressStartedAt
+                                ? `Tracking since ${inProgressStartedAt.toLocaleString()}`
+                                : "Tracking in-progress duration"
+                            }
+                          >
+                            In progress: {inProgressElapsedLabel}
+                          </div>
+                        ) : null}
                         {activeRequestId && !["cancelled"].includes(activeRequestStatusValue) ? (
                           <Button
                             type="button"
@@ -2812,7 +2987,7 @@ export default function OrdinaryConversationFlow() {
                 </div>
               </div>
 
-              {stage === "wizard" && !showWizardInteractiveStep ? (
+              {isConversationStage && !showWizardInteractiveStep ? (
                 <div>
                   {!isProviderDetailsCollapsed ? (
                     <ProviderHeader
@@ -2826,6 +3001,8 @@ export default function OrdinaryConversationFlow() {
                   ) : null}
                   <RequestProgressTracker
                     status={activeRequestLive?.status || (activeRequestId ? "pending" : "draft")}
+                    collapsed={isProgressTrackerCollapsed}
+                    onToggleCollapsed={() => setIsProgressTrackerCollapsed((prev) => !prev)}
                   />
                 </div>
               ) : null}
@@ -2846,10 +3023,11 @@ export default function OrdinaryConversationFlow() {
             </div>
           ) : null}
 
-          {stage === "wizard" ? (
+          {isConversationStage ? (
             <div className="mx-auto flex h-full max-w-[1100px] min-h-0 w-full flex-col gap-1.5 px-4 sm:px-6 lg:px-10 pb-2 pt-1.5">
               <div className="flex min-h-0 flex-1 flex-col">
                     <div
+                      ref={chatScrollContainerRef}
                       className={cn(
                         "city-scrollbar overflow-y-auto overscroll-contain px-1 pb-2 pr-2 scroll-smooth",
                         shouldPrioritizeInteractiveStep ? "hidden" : "min-h-0 flex-1",
@@ -2875,6 +3053,7 @@ export default function OrdinaryConversationFlow() {
                         )}
                       >
                         <div
+                          ref={wizardInteractiveScrollRef}
                           className={cn(
                             "space-y-4 pr-1",
                             shouldPrioritizeInteractiveStep
@@ -2888,6 +3067,42 @@ export default function OrdinaryConversationFlow() {
                               <div key={`wizard-history-${idx}`} className="space-y-2.5">
                                 <ChatPrompt text={block.prompt} status="answered" />
                                 <WizardAnswerBubble text={block.answer} />
+                                {block.kind === "photos" && attachments.length > 0 ? (
+                                  <div className="flex justify-end">
+                                    <div className="grid max-w-[260px] grid-cols-3 gap-2">
+                                      {attachments.map((file) => (
+                                        <div
+                                          key={`history-photo-${file.id}`}
+                                          className="relative overflow-hidden rounded-lg border border-[#D0D5DD] bg-white"
+                                        >
+                                          <button
+                                            type="button"
+                                            className="block w-full"
+                                            onClick={() => setPreviewAttachment({ name: file.name, url: file.dataUrl })}
+                                          >
+                                            <img
+                                              src={file.dataUrl}
+                                              alt={file.name}
+                                              className="h-16 w-full object-cover"
+                                            />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            aria-label={`Remove ${file.name}`}
+                                            className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-[11px] font-semibold text-white transition hover:bg-black"
+                                            onClick={(event) => {
+                                              event.preventDefault();
+                                              event.stopPropagation();
+                                              handleRemoveAttachment(file.id);
+                                            }}
+                                          >
+                                            x
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
                               </div>
                             ))}
                           </div>
@@ -2897,7 +3112,9 @@ export default function OrdinaryConversationFlow() {
                           <WizardTypingIndicator />
                         ) : (
                           <>
-                            <ChatPrompt text={currentStep.prompt} />
+                            <div ref={latestWizardPromptRef}>
+                              <ChatPrompt text={currentStep.prompt} />
+                            </div>
                         {currentStep.kind === "location" ? (
                           <div className="space-y-3">
                             <div className="rounded-2xl border border-[#EAECF0] bg-[#f9fafb] p-4 space-y-3">
@@ -2993,27 +3210,39 @@ export default function OrdinaryConversationFlow() {
                                         className="w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
                                       />
                                       <div className="flex flex-wrap gap-2">
-                                        {filteredEstates.slice(0, 8).map((estate) => (
-                                          <button
-                                            key={estate.id}
-                                            type="button"
-                                            onClick={() => {
-                                              setEstateResidenceMode("estate");
-                                              setEstateName(estate.name);
-                                              setResidentState("");
-                                              setResidentLga("");
-                                              focusAddressField();
-                                            }}
-                                            className={cn(
-                                              "rounded-xl border px-4 py-2 text-sm font-semibold transition",
-                                              estateResidenceMode === "estate" && estateName === estate.name
-                                                ? "border-[#039855] bg-[#ECFDF3] text-[#027A48]"
-                                                : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#f9fafb]",
-                                            )}
-                                          >
-                                            {estate.name}
-                                          </button>
-                                        ))}
+                                        {estatesLoading ? (
+                                          <p className="text-sm text-[#667085]">Loading estates...</p>
+                                        ) : filteredEstates.length > 0 ? (
+                                          filteredEstates.slice(0, 8).map((estate) => (
+                                            <button
+                                              key={estate.id}
+                                              type="button"
+                                              onClick={() => {
+                                                setEstateResidenceMode("estate");
+                                                setEstateName(estate.name);
+                                                setResidentState("");
+                                                setResidentLga("");
+                                                focusAddressField();
+                                              }}
+                                              className={cn(
+                                                "rounded-xl border px-4 py-2 text-sm font-semibold transition",
+                                                estateResidenceMode === "estate" && estateName === estate.name
+                                                  ? "border-[#039855] bg-[#ECFDF3] text-[#027A48]"
+                                                  : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#f9fafb]",
+                                              )}
+                                            >
+                                              {estate.name}
+                                            </button>
+                                          ))
+                                        ) : (
+                                          <p className="text-sm text-[#667085]">
+                                            {estatesError
+                                              ? "Could not load estates. Try refreshing."
+                                              : estateSearch.trim()
+                                                ? "No estates match your search."
+                                                : "No estates available."}
+                                          </p>
+                                        )}
                                       </div>
                                     </>
                                   )}
@@ -3108,8 +3337,13 @@ export default function OrdinaryConversationFlow() {
                                       )}
                                     >
                                       <UrgencyIcon value={opt.value} />
-                                      <span className="text-[16px] font-semibold leading-[22px] text-[#101828]">
-                                        {opt.label}
+                                      <span className="space-y-0.5">
+                                        <span className="block text-[16px] font-semibold leading-[20px] text-[#101828]">
+                                          {opt.label}
+                                        </span>
+                                        <span className="block text-[11px] leading-[14px] text-[#667085]">
+                                          {opt.timeframe}
+                                        </span>
                                       </span>
                                     </button>
                                   );
@@ -3167,23 +3401,33 @@ export default function OrdinaryConversationFlow() {
                               }}
                             />
                             {attachments.length ? (
-                              <div className="space-y-2">
+                              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                                 {attachments.map((file) => (
-                                  <div
-                                    key={file.id}
-                                    className="flex items-center justify-between rounded-xl border border-[#EAECF0] px-3 py-2"
-                                  >
-                                    <div className="flex items-center gap-2 text-sm text-[#344054]">
-                                      <UploadItem />
-                                      <span>{file.name}</span>
+                                  <div key={file.id} className="space-y-1.5">
+                                    <div className="relative overflow-hidden rounded-xl border border-[#D0D5DD] bg-white">
+                                      <button
+                                        type="button"
+                                        className="block w-full"
+                                        onClick={() => setPreviewAttachment({ name: file.name, url: file.dataUrl })}
+                                      >
+                                        <img src={file.dataUrl} alt={file.name} className="h-24 w-full object-cover" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        aria-label={`Remove ${file.name}`}
+                                        className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-sm font-semibold text-white transition hover:bg-black"
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          handleRemoveAttachment(file.id);
+                                        }}
+                                      >
+                                        x
+                                      </button>
                                     </div>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => handleRemoveAttachment(file.id)}
-                                    >
-                                      Remove
-                                    </Button>
+                                    <p className="truncate text-[11px] text-[#475467]" title={file.name}>
+                                      {file.name}
+                                    </p>
                                   </div>
                                 ))}
                               </div>
@@ -3249,7 +3493,7 @@ export default function OrdinaryConversationFlow() {
           ) : null}
 
           </div>
-          {stage === "wizard" ? (
+          {isConversationStage ? (
             canMessageAssignedProvider ? (
               <MessageComposer
                 variant="citybuddy"
@@ -3503,6 +3747,14 @@ export default function OrdinaryConversationFlow() {
                 </p>
               </div>
 
+              <div className="rounded-2xl border border-[#D1FADF] bg-[#ECFDF3] p-4 space-y-1.5">
+                <p className="text-[14px] font-semibold text-[#027A48]">Why consultancy comes first</p>
+                <p className="text-[13px] leading-[20px] text-[#065F46]">
+                  CityConnect policy requires a consultancy inspection before job execution so scope, safety checks,
+                  timeline, and cost are verified before provider dispatch.
+                </p>
+              </div>
+
               <div className="rounded-2xl border border-[#EAECF0] overflow-hidden">
                 <div className="px-4 py-3 border-b border-[#EAECF0]">
                   <p className="text-[14px] font-semibold text-[#101828]">Provider preview</p>
@@ -3567,15 +3819,6 @@ export default function OrdinaryConversationFlow() {
                       ))}
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {canBookConsultancy ? (
-                      <Button className="rounded-full" onClick={handleBookConsultancy}>
-                        Book for consultancy ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· NGN 6,500
-                      </Button>
-                    ) : (
-                      <Button className="rounded-full" variant="secondary" disabled>
-                        Consultancy already booked
-                      </Button>
-                    )}
                     <Button variant="outline" onClick={() => setStage("wizard")}>
                       Change details
                     </Button>
@@ -3651,8 +3894,32 @@ export default function OrdinaryConversationFlow() {
           </div>
         </div>
       ) : null}
+
+      <Dialog
+        open={Boolean(previewAttachment)}
+        onOpenChange={(open) => {
+          if (!open) setPreviewAttachment(null);
+        }}
+      >
+        <DialogContent className="max-w-[720px]">
+          <DialogHeader>
+            <DialogTitle>{previewAttachment?.name || "Attachment preview"}</DialogTitle>
+            <DialogDescription>Preview uploaded image.</DialogDescription>
+          </DialogHeader>
+          {previewAttachment?.url ? (
+            <div className="overflow-hidden rounded-xl border border-[#EAECF0]">
+              <img
+                src={previewAttachment.url}
+                alt={previewAttachment.name || "Uploaded attachment"}
+                className="max-h-[70vh] w-full object-contain bg-[#F9FAFB]"
+              />
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
+
 
 

@@ -42,6 +42,7 @@ type ServiceRequest = {
   budget?: string | number;
   location?: string;
   urgency?: string;
+  assignedAt?: string;
   createdAt?: string;
   updatedAt?: string;
   buyer?: { name?: string };
@@ -146,6 +147,22 @@ function formatDateLabel(value?: string) {
   return parsed.toLocaleDateString();
 }
 
+function toDate(value?: string | Date | null) {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatElapsedDuration(startedAt: Date | null, nowMs = Date.now()) {
+  if (!startedAt) return "00:00:00";
+  const diffMs = Math.max(nowMs - startedAt.getTime(), 0);
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function sortByMostRecent<T extends { updatedAt?: string; createdAt?: string }>(items: T[]) {
   return [...items].sort((left, right) => {
     const leftTime = new Date(left.updatedAt || left.createdAt || 0).getTime();
@@ -181,6 +198,7 @@ export default function ProviderDashboard() {
   const [isCreateStoreDialogOpen, setIsCreateStoreDialogOpen] = useState(false);
   const [activeChatRequestId, setActiveChatRequestId] = useState<string | null>(null);
   const [messageDraft, setMessageDraft] = useState("");
+  const [elapsedTick, setElapsedTick] = useState(() => Date.now());
   const [storeFormData, setStoreFormData] = useState<StoreFormData>({
     name: "",
     description: "",
@@ -191,6 +209,11 @@ export default function ProviderDashboard() {
   });
 
   const isProvider = user?.role === "provider";
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setElapsedTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!isProvider || !user?.id) return;
@@ -733,6 +756,13 @@ export default function ProviderDashboard() {
                 ) : (
                   activeQueue.slice(0, 6).map((job) => {
                     const normalizedStatus = normalizeServiceRequestStatus(job.status);
+                    const inProgressElapsedLabel =
+                      normalizedStatus === "in_progress"
+                        ? formatElapsedDuration(
+                            toDate(job.updatedAt) || toDate(job.assignedAt) || toDate(job.createdAt),
+                            elapsedTick,
+                          )
+                        : "";
                     return (
                       <div key={job.id} className="rounded-xl border border-border bg-card p-4" data-testid={`active-job-${job.id}`}>
                         <div className="flex flex-wrap items-start justify-between gap-2">
@@ -740,7 +770,14 @@ export default function ProviderDashboard() {
                             <p className="text-sm font-semibold text-foreground">
                               {job.description || resolveRequestCategoryLabel(job)}
                             </p>
-                            <p className="mt-1 text-xs text-muted-foreground">Updated {formatDateLabel(job.updatedAt || job.createdAt)}</p>
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                              <span>Updated {formatDateLabel(job.updatedAt || job.createdAt)}</span>
+                              {normalizedStatus === "in_progress" ? (
+                                <span className="inline-flex items-center rounded-full border border-[#7DD3FC] bg-[#F0F9FF] px-2 py-0.5 font-semibold text-[#0369A1]">
+                                  In progress: {inProgressElapsedLabel}
+                                </span>
+                              ) : null}
+                            </div>
                           </div>
                           <ProviderStatusBadge status={job.status} category={resolveRequestCategoryKey(job)} />
                         </div>

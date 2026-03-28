@@ -41,15 +41,18 @@ interface ServiceRequest {
   status: string;
   consultancyReport?: {
     inspectionDate?: string;
+    completionDeadline?: string;
     actualIssue?: string;
     causeOfIssue?: string;
     materialCost?: number;
     serviceCost?: number;
     totalRecommendation?: number;
     preventiveRecommendation?: string;
+    evidence?: string[];
     submittedAt?: string;
   } | null;
   consultancyReportSubmittedAt?: string | null;
+  assignedAt?: string | null;
   updatedAt?: string;
   createdAt?: string;
 }
@@ -112,6 +115,22 @@ function resolveRequestCategoryKey(request?: ServiceRequest | null) {
   return inferredKey || categoryKey;
 }
 
+function toDate(value?: string | Date | null) {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatElapsedDuration(startedAt: Date | null) {
+  if (!startedAt) return "00:00:00";
+  const diffMs = Math.max(Date.now() - startedAt.getTime(), 0);
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function statusTone(status: string) {
   const key = String(status || "").toLowerCase().replace(/[\s-]+/g, "_");
   const map: Record<string, string> = {
@@ -158,8 +177,15 @@ function normalizeConsultancyReport(report: ServiceRequest["consultancyReport"])
   const materialCost = Number((report as any).materialCost || 0);
   const serviceCost = Number((report as any).serviceCost || 0);
   const inspectionDateRaw = String((report as any).inspectionDate || "");
+  const completionDeadlineRaw = String((report as any).completionDeadline || "");
+  const evidence = Array.isArray((report as any).evidence)
+    ? (report as any).evidence.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+    : [];
   return {
     inspectionDate: inspectionDateRaw ? new Date(inspectionDateRaw).toLocaleString() : undefined,
+    completionDeadline: completionDeadlineRaw
+      ? new Date(completionDeadlineRaw).toLocaleString()
+      : undefined,
     actualIssue: String((report as any).actualIssue || "Not provided"),
     causeOfIssue: String((report as any).causeOfIssue || "Not provided"),
     materialCostLabel: Number.isFinite(materialCost)
@@ -169,6 +195,7 @@ function normalizeConsultancyReport(report: ServiceRequest["consultancyReport"])
       ? `NGN ${serviceCost.toLocaleString()}`
       : "Not provided",
     preventiveRecommendation: String((report as any).preventiveRecommendation || "Not provided"),
+    evidenceUrls: evidence,
   };
 }
 
@@ -195,15 +222,41 @@ function parseConsultancyReportMessage(text: string) {
   const materialCost = pick("Recommended material cost") || "Not provided";
   const serviceCost = pick("Recommended service cost") || "Not provided";
   const prevention = pick("Preventive recommendation") || "Not provided";
+  const completionDeadline = pick("Completion deadline");
+  const evidenceCountText = pick("Evidence attachments");
+  const evidenceCountMatch = evidenceCountText.match(/(\d+)/);
 
   return {
     inspectionDate: inspectionDate || undefined,
+    completionDeadline: completionDeadline || undefined,
     actualIssue: issue,
     causeOfIssue: cause,
     materialCostLabel: materialCost,
     serviceCostLabel: serviceCost,
     preventiveRecommendation: prevention,
+    evidenceCount: evidenceCountMatch ? Number(evidenceCountMatch[1]) : undefined,
   };
+}
+
+type ReportEvidenceAttachment = {
+  id: string;
+  name: string;
+  previewUrl: string;
+  kind: "image";
+  mimeType: string;
+};
+
+function buildReportEvidenceFromUrls(urls: string[]) {
+  return urls
+    .map((url, index) => String(url || "").trim())
+    .filter(Boolean)
+    .map<ReportEvidenceAttachment>((url, index) => ({
+      id: `report-evidence-${index}-${url.slice(0, 24)}`,
+      name: `Evidence ${index + 1}`,
+      previewUrl: url,
+      kind: "image",
+      mimeType: "image/*",
+    }));
 }
 
 export default function ProviderChatPage() {
@@ -220,11 +273,14 @@ export default function ProviderChatPage() {
   const [isResidentTyping, setIsResidentTyping] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [reportInspectionDate, setReportInspectionDate] = useState("");
+  const [reportCompletionDeadline, setReportCompletionDeadline] = useState("");
   const [reportActualIssue, setReportActualIssue] = useState("");
   const [reportCauseOfIssue, setReportCauseOfIssue] = useState("");
   const [reportMaterialCost, setReportMaterialCost] = useState("");
   const [reportServiceCost, setReportServiceCost] = useState("");
   const [reportPreventiveRecommendation, setReportPreventiveRecommendation] = useState("");
+  const [reportEvidence, setReportEvidence] = useState<ReportEvidenceAttachment[]>([]);
+  const [elapsedTick, setElapsedTick] = useState(() => Date.now());
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
   const selfTypingRef = useRef(false);
   const selfTypingStopTimerRef = useRef<number | null>(null);
@@ -359,6 +415,17 @@ export default function ProviderChatPage() {
     [activeRequest?.status],
   );
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setElapsedTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const activeInProgressElapsedLabel = useMemo(() => {
+    if (activeRequestStatus !== "in_progress") return "";
+    const startedAt = toDate(activeRequest?.updatedAt) || toDate(activeRequest?.assignedAt) || toDate(activeRequest?.createdAt);
+    return formatElapsedDuration(startedAt);
+  }, [activeRequest?.updatedAt, activeRequest?.assignedAt, activeRequest?.createdAt, activeRequestStatus, elapsedTick]);
+
   const clearSelfTypingStopTimer = useCallback(() => {
     if (selfTypingStopTimerRef.current !== null) {
       window.clearTimeout(selfTypingStopTimerRef.current);
@@ -441,11 +508,17 @@ export default function ProviderChatPage() {
           const reportSummaryNote = requestReport
             ? [
                 requestReport.inspectionDate ? `Inspection date: ${requestReport.inspectionDate}` : "",
+                requestReport.completionDeadline
+                  ? `Completion deadline: ${requestReport.completionDeadline}`
+                  : "",
                 `Actual issue: ${requestReport.actualIssue}`,
                 `Cause of issue: ${requestReport.causeOfIssue}`,
                 `Material cost: ${requestReport.materialCostLabel}`,
                 `Service cost: ${requestReport.serviceCostLabel}`,
                 `Preventive recommendation: ${requestReport.preventiveRecommendation}`,
+                requestReport.evidenceUrls?.length
+                  ? `Evidence attachments: ${requestReport.evidenceUrls.length}`
+                  : "",
               ]
                 .filter(Boolean)
                 .join("\n")
@@ -468,12 +541,16 @@ export default function ProviderChatPage() {
           items.push({
             id: `${message.id}-consultancy-report`,
             kind: "consultancy_report",
-            inspectionDate: consultancyReport.inspectionDate,
+            inspectionDate: consultancyReport.inspectionDate || requestReport?.inspectionDate,
+            completionDeadline:
+              consultancyReport.completionDeadline || requestReport?.completionDeadline,
             actualIssue: consultancyReport.actualIssue,
             causeOfIssue: consultancyReport.causeOfIssue,
             materialCostLabel: consultancyReport.materialCostLabel,
             serviceCostLabel: consultancyReport.serviceCostLabel,
             preventiveRecommendation: consultancyReport.preventiveRecommendation,
+            evidenceUrls: requestReport?.evidenceUrls,
+            evidenceCount: consultancyReport.evidenceCount,
             timestamp: message.createdAt,
           });
           return;
@@ -495,11 +572,13 @@ export default function ProviderChatPage() {
           id: "consultancy-report-from-request",
           kind: "consultancy_report",
           inspectionDate: requestReport.inspectionDate,
+          completionDeadline: requestReport.completionDeadline,
           actualIssue: requestReport.actualIssue,
           causeOfIssue: requestReport.causeOfIssue,
           materialCostLabel: requestReport.materialCostLabel,
           serviceCostLabel: requestReport.serviceCostLabel,
           preventiveRecommendation: requestReport.preventiveRecommendation,
+          evidenceUrls: requestReport.evidenceUrls,
           timestamp: activeRequest?.consultancyReportSubmittedAt || activeRequest?.updatedAt,
         });
       }
@@ -585,22 +664,26 @@ export default function ProviderChatPage() {
     mutationFn: async (payload: {
       requestId: string;
       inspectionDate: string;
+      completionDeadline: string;
       actualIssue: string;
       causeOfIssue: string;
       materialCost: number;
       serviceCost: number;
       preventiveRecommendation: string;
+      evidence: string[];
     }) => {
       const res = await apiRequest(
         "POST",
         `/api/provider/service-requests/${payload.requestId}/consultancy-report`,
         {
           inspectionDate: payload.inspectionDate,
+          completionDeadline: payload.completionDeadline,
           actualIssue: payload.actualIssue,
           causeOfIssue: payload.causeOfIssue,
           materialCost: payload.materialCost,
           serviceCost: payload.serviceCost,
           preventiveRecommendation: payload.preventiveRecommendation,
+          evidence: payload.evidence,
         },
       );
       return res.json();
@@ -635,11 +718,15 @@ export default function ProviderChatPage() {
     setReportInspectionDate(
       report?.inspectionDate ? new Date(report.inspectionDate).toISOString().slice(0, 16) : "",
     );
+    setReportCompletionDeadline(
+      report?.completionDeadline ? new Date(report.completionDeadline).toISOString().slice(0, 16) : "",
+    );
     setReportActualIssue(report?.actualIssue || "");
     setReportCauseOfIssue(report?.causeOfIssue || "");
     setReportMaterialCost(report?.materialCost ? String(report.materialCost) : "");
     setReportServiceCost(report?.serviceCost ? String(report.serviceCost) : "");
     setReportPreventiveRecommendation(report?.preventiveRecommendation || "");
+    setReportEvidence(buildReportEvidenceFromUrls(Array.isArray(report?.evidence) ? report.evidence : []));
     setIsReportModalOpen(true);
   };
 
@@ -649,6 +736,7 @@ export default function ProviderChatPage() {
     const serviceCost = Number(reportServiceCost);
     if (
       !reportInspectionDate ||
+      !reportCompletionDeadline ||
       !reportActualIssue.trim() ||
       !reportCauseOfIssue.trim() ||
       !reportPreventiveRecommendation.trim() ||
@@ -668,13 +756,73 @@ export default function ProviderChatPage() {
     await submitConsultancyReportMutation.mutateAsync({
       requestId: activeRequestId,
       inspectionDate: new Date(reportInspectionDate).toISOString(),
+      completionDeadline: new Date(reportCompletionDeadline).toISOString(),
       actualIssue: reportActualIssue.trim(),
       causeOfIssue: reportCauseOfIssue.trim(),
       materialCost,
       serviceCost,
       preventiveRecommendation: reportPreventiveRecommendation.trim(),
+      evidence: reportEvidence.map((entry) => entry.previewUrl),
     });
   };
+
+  const handleAttachReportEvidence = (files: File[]) => {
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    if (imageFiles.length === 0) {
+      toast({
+        title: "Unsupported evidence file",
+        description: "Upload image files for report evidence.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const roomLeft = Math.max(0, 8 - reportEvidence.length);
+    if (!roomLeft) return;
+
+    imageFiles.slice(0, roomLeft).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        if (!result) return;
+        setReportEvidence((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}-${Math.random()}`,
+            name: file.name,
+            previewUrl: result,
+            kind: "image",
+            mimeType: file.type || "image/*",
+          },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveReportEvidence = (attachmentId: string) => {
+    setReportEvidence((prev) => prev.filter((entry) => entry.id !== attachmentId));
+  };
+
+  const reportMaterialCostValue = Number(reportMaterialCost);
+  const reportServiceCostValue = Number(reportServiceCost);
+  const reportCostsAreValid =
+    Number.isFinite(reportMaterialCostValue) &&
+    reportMaterialCostValue >= 0 &&
+    Number.isFinite(reportServiceCostValue) &&
+    reportServiceCostValue >= 0;
+  const reportTotalCost = reportCostsAreValid ? reportMaterialCostValue + reportServiceCostValue : 0;
+  const reportTimelineInvalid =
+    Boolean(reportInspectionDate) &&
+    Boolean(reportCompletionDeadline) &&
+    new Date(reportCompletionDeadline).getTime() < new Date(reportInspectionDate).getTime();
+  const reportFormMissingFields =
+    !reportInspectionDate ||
+    !reportCompletionDeadline ||
+    !reportActualIssue.trim() ||
+    !reportCauseOfIssue.trim() ||
+    !reportPreventiveRecommendation.trim();
+  const isReportFormReady = !reportFormMissingFields && reportCostsAreValid && !reportTimelineInvalid;
 
   const handleComposerAttachFiles = (files: File[]) => {
     const supportedFiles = files.filter(
@@ -977,6 +1125,11 @@ export default function ProviderChatPage() {
                       >
                         {formatServiceRequestStatusLabel(request.status, resolveRequestCategoryKey(request))}
                       </span>
+                      {String(request.status || "").toLowerCase().replace(/[\s-]+/g, "_") === "in_progress" ? (
+                        <span className="inline-flex items-center rounded-full border border-[#7DD3FC] bg-[#F0F9FF] px-2.5 py-0.5 text-[10px] font-semibold text-[#0369A1]">
+                          Elapsed: {formatElapsedDuration(toDate(request.updatedAt) || toDate(request.assignedAt) || toDate(request.createdAt))}
+                        </span>
+                      ) : null}
                     </div>
                     <p className="mt-1 truncate text-[12px] text-[#667085]">
                       {request.location || "Location not set"}
@@ -1070,6 +1223,11 @@ export default function ProviderChatPage() {
                       resolveRequestCategoryKey(activeRequest),
                     )}
                   </Badge>
+                ) : null}
+                {activeRequestStatus === "in_progress" ? (
+                  <span className="inline-flex items-center rounded-full border border-[#7DD3FC] bg-[#F0F9FF] px-3 py-1 text-[11px] font-semibold text-[#0369A1]">
+                    In progress: {activeInProgressElapsedLabel}
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -1170,82 +1328,196 @@ export default function ProviderChatPage() {
       </div>
 
       <Dialog open={isReportModalOpen} onOpenChange={setIsReportModalOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Consultancy report</DialogTitle>
-            <DialogDescription>
+        <DialogContent className="max-w-2xl overflow-hidden border border-[#D0D5DD] p-0 sm:max-w-3xl">
+          <DialogHeader className="border-b border-[#EAECF0] bg-[#F8FAFC] px-4 py-4 sm:px-5">
+            <DialogTitle className="text-[22px] font-semibold tracking-[-0.02em] text-[#101828]">
+              Consultancy report
+            </DialogTitle>
+            <DialogDescription className="text-sm text-[#475467]">
               Submit your inspection analysis. Admin/company can request payment only after this report is sent.
             </DialogDescription>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="rounded-full border border-[#D0D5DD] bg-white px-2.5 py-1 font-medium text-[#344054]">
+                {formatLabel(resolveRequestCategoryLabel(activeRequest || undefined))}
+              </span>
+              <span className="rounded-full border border-[#D1FADF] bg-[#ECFDF3] px-2.5 py-1 font-medium text-[#027A48]">
+                Evidence: {reportEvidence.length}/8
+              </span>
+            </div>
           </DialogHeader>
 
-          <div className="grid gap-4">
-            <div>
-              <Label htmlFor="inspectionDate">Inspection date and time</Label>
-              <Input
-                id="inspectionDate"
-                type="datetime-local"
-                value={reportInspectionDate}
-                onChange={(event) => setReportInspectionDate(event.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="actualIssue">Actual issue</Label>
-              <Textarea
-                id="actualIssue"
-                value={reportActualIssue}
-                onChange={(event) => setReportActualIssue(event.target.value)}
-                placeholder="Describe the issue observed during inspection"
-              />
-            </div>
-            <div>
-              <Label htmlFor="causeOfIssue">Cause of issue</Label>
-              <Textarea
-                id="causeOfIssue"
-                value={reportCauseOfIssue}
-                onChange={(event) => setReportCauseOfIssue(event.target.value)}
-                placeholder="Explain what is causing the issue"
-              />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <Label htmlFor="materialCost">Material cost (NGN)</Label>
-                <Input
-                  id="materialCost"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={reportMaterialCost}
-                  onChange={(event) => setReportMaterialCost(event.target.value)}
-                />
+          <div className="city-scrollbar max-h-[58vh] space-y-3 overflow-y-auto px-4 py-4 sm:max-h-[62vh] sm:px-5">
+            <div className="rounded-xl border border-[#EAECF0] bg-[#FCFCFD] p-3 sm:p-4">
+              <p className="text-sm font-semibold text-[#101828]">Timeline</p>
+              <div className="mt-2.5 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="inspectionDate">Inspection date and time</Label>
+                  <Input
+                    id="inspectionDate"
+                    type="datetime-local"
+                    value={reportInspectionDate}
+                    onChange={(event) => setReportInspectionDate(event.target.value)}
+                    className="mt-1 bg-white"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="completionDeadline">Expected completion deadline</Label>
+                  <Input
+                    id="completionDeadline"
+                    type="datetime-local"
+                    value={reportCompletionDeadline}
+                    onChange={(event) => setReportCompletionDeadline(event.target.value)}
+                    className="mt-1 bg-white"
+                  />
+                </div>
               </div>
-              <div>
-                <Label htmlFor="serviceCost">Average service cost (NGN)</Label>
-                <Input
-                  id="serviceCost"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={reportServiceCost}
-                  onChange={(event) => setReportServiceCost(event.target.value)}
-                />
+              {reportTimelineInvalid ? (
+                <p className="mt-2 text-xs font-medium text-[#B42318]">
+                  Completion deadline must be later than inspection date.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl border border-[#EAECF0] bg-white p-3 sm:p-4">
+              <p className="text-sm font-semibold text-[#101828]">Inspection findings</p>
+              <div className="mt-2.5 grid gap-3 lg:grid-cols-2">
+                <div>
+                  <Label htmlFor="actualIssue">Actual issue</Label>
+                  <Textarea
+                    id="actualIssue"
+                    value={reportActualIssue}
+                    onChange={(event) => setReportActualIssue(event.target.value)}
+                    placeholder="Describe the issue observed during inspection"
+                    className="mt-1 min-h-[82px] bg-[#FCFCFD] sm:min-h-[92px]"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="causeOfIssue">Cause of issue</Label>
+                  <Textarea
+                    id="causeOfIssue"
+                    value={reportCauseOfIssue}
+                    onChange={(event) => setReportCauseOfIssue(event.target.value)}
+                    placeholder="Explain what is causing the issue"
+                    className="mt-1 min-h-[82px] bg-[#FCFCFD] sm:min-h-[92px]"
+                  />
+                </div>
               </div>
             </div>
-            <div>
-              <Label htmlFor="preventiveRecommendation">Preventive recommendation</Label>
+
+            <div className="rounded-xl border border-[#EAECF0] bg-white p-3 sm:p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-[#101828]">Cost recommendation</p>
+                <span className="rounded-full border border-[#B2DDFF] bg-[#EFF8FF] px-2.5 py-1 text-xs font-semibold text-[#175CD3]">
+                  Total: NGN {Number.isFinite(reportTotalCost) ? reportTotalCost.toLocaleString() : "0"}
+                </span>
+              </div>
+              <div className="mt-2.5 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="materialCost">Material cost (NGN)</Label>
+                  <Input
+                    id="materialCost"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={reportMaterialCost}
+                    onChange={(event) => setReportMaterialCost(event.target.value)}
+                    className="mt-1 bg-[#FCFCFD]"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="serviceCost">Average service cost (NGN)</Label>
+                  <Input
+                    id="serviceCost"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={reportServiceCost}
+                    onChange={(event) => setReportServiceCost(event.target.value)}
+                    className="mt-1 bg-[#FCFCFD]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-[#EAECF0] bg-white p-3 sm:p-4">
+              <Label htmlFor="preventiveRecommendation" className="text-sm font-semibold text-[#101828]">
+                Preventive recommendation
+              </Label>
               <Textarea
                 id="preventiveRecommendation"
                 value={reportPreventiveRecommendation}
                 onChange={(event) => setReportPreventiveRecommendation(event.target.value)}
                 placeholder="Tell the resident how to prevent recurrence"
+                className="mt-2 min-h-[82px] bg-[#FCFCFD] sm:min-h-[92px]"
               />
+            </div>
+
+            <div className="rounded-xl border border-[#EAECF0] bg-white p-3 sm:p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label htmlFor="reportEvidenceUpload" className="text-sm font-semibold text-[#101828]">
+                  Evidence upload
+                </Label>
+                <span className="text-xs text-[#667085]">Up to 8 images</span>
+              </div>
+              <Input
+                id="reportEvidenceUpload"
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  const files = Array.from(event.target.files || []);
+                  if (files.length) handleAttachReportEvidence(files);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <label
+                htmlFor="reportEvidenceUpload"
+                className="mt-2 flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-[#98A2B3] bg-[#F9FAFB] px-4 py-4 text-sm font-medium text-[#475467] transition-colors hover:border-[#12B76A] hover:bg-[#ECFDF3]"
+              >
+                Click to upload evidence images
+              </label>
+              {reportEvidence.length > 0 ? (
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                  {reportEvidence.map((evidence) => (
+                    <div
+                      key={evidence.id}
+                      className="overflow-hidden rounded-md border border-[#D0D5DD] bg-[#F9FAFB]"
+                    >
+                      <img
+                        src={evidence.previewUrl}
+                        alt={evidence.name}
+                        className="h-16 w-full object-cover sm:h-20"
+                      />
+                      <button
+                        type="button"
+                        className="w-full border-t border-[#D0D5DD] px-2 py-1 text-xs font-medium text-[#344054] hover:bg-[#EAECF0]"
+                        onClick={() => handleRemoveReportEvidence(evidence.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-[#667085]">
+                  Add clear photos of the issue, affected area, or completed inspection findings.
+                </p>
+              )}
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="flex-wrap gap-2 border-t border-[#EAECF0] bg-white px-4 py-3 sm:px-5">
+            <div className="mr-auto text-xs text-[#667085]">
+              {isReportFormReady ? "Report is ready to send." : "Complete required fields to send this report."}
+            </div>
             <Button variant="outline" onClick={() => setIsReportModalOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleSendConsultancyReport} disabled={submitConsultancyReportMutation.isPending}>
+            <Button
+              onClick={handleSendConsultancyReport}
+              disabled={submitConsultancyReportMutation.isPending || !isReportFormReady}
+            >
               {submitConsultancyReportMutation.isPending ? "Sending..." : "Send report"}
             </Button>
           </DialogFooter>

@@ -1284,6 +1284,16 @@ export class DatabaseStorage implements IStorage {
         ? ({ ...(input.metadata as Record<string, unknown>) } as Record<string, unknown>)
         : {};
 
+    const metadataRequestId = String(metadata.requestId || metadata.serviceRequestId || "").trim();
+    const metadataConversationId = String(metadata.conversationId || "").trim();
+    const resolvedConversationId = metadataConversationId || metadataRequestId;
+    if (resolvedConversationId) {
+      metadata.conversationId = resolvedConversationId;
+      if (!metadata.requestId) {
+        metadata.requestId = resolvedConversationId;
+      }
+    }
+
     const [recipient] = await db
       .select({ role: users.role, globalRole: users.globalRole })
       .from(users)

@@ -15,6 +15,12 @@ function ensureAppPath(value: string) {
   return value.startsWith("/") ? value : `/${value}`;
 }
 
+function appendQueryParam(path: string, key: string, value: string) {
+  if (!path || !key || !value) return path;
+  if (path.includes(`${key}=`)) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+}
+
 export function resolveNotificationTarget(
   notification: NotificationLike,
   role: NotificationRole,
@@ -24,22 +30,35 @@ export function resolveNotificationTarget(
       ? (notification.metadata as Record<string, unknown>)
       : null;
 
+  const serviceRequestId = readString(metadata?.serviceRequestId);
+  const conversationId =
+    readString(metadata?.conversationId) || readString(metadata?.requestId) || serviceRequestId;
+  const requestId = readString(metadata?.requestId) || serviceRequestId || conversationId;
+
   const directPath =
     ensureAppPath(readString(metadata?.targetPath)) ||
     ensureAppPath(readString(metadata?.path)) ||
     ensureAppPath(readString(metadata?.href));
-  if (directPath) return directPath;
+  if (directPath) {
+    if (role === "resident" && /\/resident\/requests\/ordinary/i.test(directPath) && (conversationId || requestId)) {
+      let enriched = appendQueryParam(directPath, "conversationId", conversationId || requestId);
+      enriched = appendQueryParam(enriched, "requestId", requestId || conversationId);
+      return enriched;
+    }
+    return directPath;
+  }
 
-  const requestId = readString(metadata?.requestId);
-  if (requestId) {
+  if (conversationId || requestId) {
     if (role === "provider") {
-      return `/provider/chat?requestId=${encodeURIComponent(requestId)}`;
+      return `/provider/chat?requestId=${encodeURIComponent(requestId || conversationId)}`;
     }
     if (role === "resident") {
-      return `/resident/requests/ordinary?requestId=${encodeURIComponent(requestId)}`;
+      return `/resident/requests/ordinary?conversationId=${encodeURIComponent(
+        conversationId || requestId,
+      )}&requestId=${encodeURIComponent(requestId || conversationId)}`;
     }
     if (role === "admin" || role === "super_admin" || role === "estate_admin") {
-      return `/admin-dashboard/requests/${encodeURIComponent(requestId)}`;
+      return `/admin-dashboard/requests/${encodeURIComponent(requestId || conversationId)}`;
     }
   }
 
@@ -53,4 +72,3 @@ export function resolveNotificationTarget(
 
   return null;
 }
-

@@ -92,9 +92,15 @@ export function readConsultancyReportSummary(report: unknown) {
 
   return {
     inspectionDate: firstText(raw.inspectionDate),
+    completionDeadline: firstText(raw.completionDeadline),
     actualIssue: firstText(raw.actualIssue),
     causeOfIssue: firstText(raw.causeOfIssue),
     preventiveRecommendation: firstText(raw.preventiveRecommendation),
+    evidence: Array.isArray(raw.evidence)
+      ? raw.evidence
+          .map((item) => String(item || "").trim())
+          .filter(Boolean)
+      : [],
     materialCost,
     serviceCost,
     totalRecommendation,

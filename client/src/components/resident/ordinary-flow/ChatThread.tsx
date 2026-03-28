@@ -61,11 +61,14 @@ type ThreadConsultancyReportItem = {
   id: string;
   kind: "consultancy_report";
   inspectionDate?: string;
+  completionDeadline?: string;
   actualIssue: string;
   causeOfIssue: string;
   materialCostLabel: string;
   serviceCostLabel: string;
   preventiveRecommendation: string;
+  evidenceUrls?: string[];
+  evidenceCount?: number;
   timestamp?: string;
 };
 
@@ -157,11 +160,14 @@ export function ChatThread({ items }: ChatThreadProps) {
             <ThreadCardFrame key={item.id}>
               <ConsultancyReportCard
                 inspectionDate={item.inspectionDate}
+                completionDeadline={item.completionDeadline}
                 actualIssue={item.actualIssue}
                 causeOfIssue={item.causeOfIssue}
                 materialCostLabel={item.materialCostLabel}
                 serviceCostLabel={item.serviceCostLabel}
                 preventiveRecommendation={item.preventiveRecommendation}
+                evidenceUrls={item.evidenceUrls}
+                evidenceCount={item.evidenceCount}
                 timestamp={item.timestamp}
               />
             </ThreadCardFrame>

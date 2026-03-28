@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Calendar,
@@ -18,6 +18,7 @@ import { formatServiceRequestStatusLabel } from "@/lib/serviceRequestStatus";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -49,6 +50,7 @@ type RequestDetail = {
   categoryLabel?: string;
   title?: string;
   status: string;
+  updatedAt?: string | null;
   urgency?: string | null;
   createdAt?: string | null;
   assignedAt?: string | null;
@@ -87,12 +89,26 @@ type RequestDetail = {
   } | null;
   providerReport?: {
     inspectionDate?: string;
+    completionDeadline?: string;
     actualIssue?: string;
     causeOfIssue?: string;
     preventiveRecommendation?: string;
     materialCost?: number;
     serviceCost?: number;
     totalRecommendation?: number;
+    evidence?: string[];
+    submittedAt?: string;
+  } | null;
+  consultancyReport?: {
+    inspectionDate?: string;
+    completionDeadline?: string;
+    actualIssue?: string;
+    causeOfIssue?: string;
+    preventiveRecommendation?: string;
+    materialCost?: number;
+    serviceCost?: number;
+    totalRecommendation?: number;
+    evidence?: string[];
     submittedAt?: string;
   } | null;
   paymentSummary?: {
@@ -176,6 +192,22 @@ function formatNgnAmount(value?: number | string | null) {
   return `NGN ${amount.toLocaleString()}`;
 }
 
+function toDate(value?: string | Date | null) {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatElapsedDuration(startedAt: Date | null, nowMs = Date.now()) {
+  if (!startedAt) return "00:00:00";
+  const diffMs = Math.max(nowMs - startedAt.getTime(), 0);
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function normalizeCategoryKey(value?: string | null) {
   return String(value || "")
     .trim()
@@ -219,6 +251,8 @@ export default function ServiceRequestDetailPage({
   const [reviewNote, setReviewNote] = useState("");
   const [refundDecision, setRefundDecision] = useState<"none" | "full" | "partial">("none");
   const [refundAmount, setRefundAmount] = useState("");
+  const [elapsedTick, setElapsedTick] = useState(() => Date.now());
+  const [selectedEvidenceImage, setSelectedEvidenceImage] = useState<string | null>(null);
 
   const reviewCancellationMutation = useMutation({
     mutationFn: async (payload: {
@@ -260,11 +294,92 @@ export default function ServiceRequestDetailPage({
     return name ? `${data.currentOwner.label}: ${name}` : data.currentOwner.label;
   }, [data?.currentOwner]);
 
+  const providerReportView = useMemo(() => {
+    if (!data) return null;
+    const summary = data.providerReport || {};
+    const raw = data.consultancyReport || {};
+    const rawEvidence = Array.isArray(raw.evidence)
+      ? raw.evidence.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : [];
+    const summaryEvidence = Array.isArray(summary.evidence)
+      ? summary.evidence.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : [];
+    const evidence = summaryEvidence.length ? summaryEvidence : rawEvidence;
+
+    const inspectionDate =
+      String(summary.inspectionDate || "").trim() || String(raw.inspectionDate || "").trim();
+    const completionDeadline =
+      String(summary.completionDeadline || "").trim() || String(raw.completionDeadline || "").trim();
+    const submittedAt = String(summary.submittedAt || "").trim() || String(raw.submittedAt || "").trim();
+    const actualIssue = String(summary.actualIssue || "").trim() || String(raw.actualIssue || "").trim();
+    const causeOfIssue = String(summary.causeOfIssue || "").trim() || String(raw.causeOfIssue || "").trim();
+    const preventiveRecommendation =
+      String(summary.preventiveRecommendation || "").trim() ||
+      String(raw.preventiveRecommendation || "").trim();
+
+    const materialCost = Number.isFinite(Number(summary.materialCost))
+      ? Number(summary.materialCost)
+      : Number.isFinite(Number(raw.materialCost))
+        ? Number(raw.materialCost)
+        : null;
+    const serviceCost = Number.isFinite(Number(summary.serviceCost))
+      ? Number(summary.serviceCost)
+      : Number.isFinite(Number(raw.serviceCost))
+        ? Number(raw.serviceCost)
+        : null;
+    const totalRecommendation = Number.isFinite(Number(summary.totalRecommendation))
+      ? Number(summary.totalRecommendation)
+      : Number.isFinite(Number(raw.totalRecommendation))
+        ? Number(raw.totalRecommendation)
+        : materialCost != null && serviceCost != null
+          ? materialCost + serviceCost
+          : null;
+
+    const hasAnyField = Boolean(
+      inspectionDate ||
+        completionDeadline ||
+        submittedAt ||
+        actualIssue ||
+        causeOfIssue ||
+        preventiveRecommendation ||
+        evidence.length ||
+        materialCost != null ||
+        serviceCost != null ||
+        totalRecommendation != null,
+    );
+
+    if (!hasAnyField) return null;
+    return {
+      inspectionDate: inspectionDate || undefined,
+      completionDeadline: completionDeadline || undefined,
+      submittedAt: submittedAt || undefined,
+      actualIssue: actualIssue || undefined,
+      causeOfIssue: causeOfIssue || undefined,
+      preventiveRecommendation: preventiveRecommendation || undefined,
+      materialCost,
+      serviceCost,
+      totalRecommendation,
+      evidence,
+    };
+  }, [data]);
+
   const openCancellationCase =
     data?.cancellationCase &&
     ["requested", "under_review"].includes(String(data.cancellationCase.status || "").toLowerCase())
       ? data.cancellationCase
       : null;
+  const inProgressElapsedLabel =
+    data?.status === "in_progress"
+      ? formatElapsedDuration(
+          toDate(data.updatedAt) || toDate(data.timeline?.assignedAt) || toDate(data.assignedAt),
+          elapsedTick,
+        )
+      : "";
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setElapsedTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const handleMarkCancellationUnderReview = () => {
     const note = reviewNote.trim();
@@ -348,6 +463,11 @@ export default function ServiceRequestDetailPage({
               {data.urgency ? (
                 <Badge variant="outline" className={cn("capitalize", urgencyTone)}>
                   {data.urgency}
+                </Badge>
+              ) : null}
+              {data.status === "in_progress" ? (
+                <Badge variant="outline" className="border-[#7DD3FC] bg-[#F0F9FF] text-[#0369A1]">
+                  In progress: {inProgressElapsedLabel}
                 </Badge>
               ) : null}
               <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700 capitalize">
@@ -436,7 +556,7 @@ export default function ServiceRequestDetailPage({
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-base font-semibold text-slate-900">Provider report</h2>
-                {data.providerReport ? (
+                {providerReportView ? (
                   <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">Submitted</Badge>
                 ) : (
                   <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-600">Awaiting report</Badge>
@@ -444,13 +564,37 @@ export default function ServiceRequestDetailPage({
               </div>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-2">
-              <InfoRow label="Inspection date" value={data.providerReport?.inspectionDate ? formatDate(data.providerReport.inspectionDate) : "Not set"} />
-              <InfoRow label="Submitted" value={data.providerReport?.submittedAt ? formatDate(data.providerReport.submittedAt) : "Not set"} />
-              <div className="sm:col-span-2"><InfoRow label="Actual issue" value={data.providerReport?.actualIssue || "Not provided"} /></div>
-              <div className="sm:col-span-2"><InfoRow label="Cause of issue" value={data.providerReport?.causeOfIssue || "Not provided"} /></div>
-              <InfoRow label="Material cost" value={formatNgnAmount(data.providerReport?.materialCost)} />
-              <InfoRow label="Service cost" value={formatNgnAmount(data.providerReport?.serviceCost)} />
-              <div className="sm:col-span-2"><InfoRow label="Preventive recommendation" value={data.providerReport?.preventiveRecommendation || "Not provided"} /></div>
+              <InfoRow label="Inspection date" value={providerReportView?.inspectionDate ? formatDate(providerReportView.inspectionDate) : "Not set"} />
+              <InfoRow label="Completion deadline" value={providerReportView?.completionDeadline ? formatDate(providerReportView.completionDeadline) : "Not set"} />
+              <InfoRow label="Submitted" value={providerReportView?.submittedAt ? formatDate(providerReportView.submittedAt) : "Not set"} />
+              <div className="sm:col-span-2"><InfoRow label="Actual issue" value={providerReportView?.actualIssue || "Not provided"} /></div>
+              <div className="sm:col-span-2"><InfoRow label="Cause of issue" value={providerReportView?.causeOfIssue || "Not provided"} /></div>
+              <InfoRow label="Material cost" value={formatNgnAmount(providerReportView?.materialCost)} />
+              <InfoRow label="Service cost" value={formatNgnAmount(providerReportView?.serviceCost)} />
+              <div className="sm:col-span-2"><InfoRow label="Preventive recommendation" value={providerReportView?.preventiveRecommendation || "Not provided"} /></div>
+              <InfoRow label="Evidence count" value={String(providerReportView?.evidence?.length || 0)} />
+              {Array.isArray(providerReportView?.evidence) && providerReportView.evidence.length > 0 ? (
+                <div className="sm:col-span-2">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Evidence</p>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {providerReportView.evidence.slice(0, 8).map((evidenceUrl, evidenceIndex) => (
+                      <button
+                        type="button"
+                        key={`${String(evidenceUrl).slice(0, 80)}-${evidenceIndex}`}
+                        onClick={() => setSelectedEvidenceImage(String(evidenceUrl))}
+                        className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                      >
+                        <img
+                          src={String(evidenceUrl)}
+                          alt={`Evidence ${evidenceIndex + 1}`}
+                          className="h-24 w-full object-cover"
+                          loading="lazy"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -625,6 +769,30 @@ export default function ServiceRequestDetailPage({
           </Card>
         </div>
       </div>
+
+      <Dialog
+        open={Boolean(selectedEvidenceImage)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedEvidenceImage(null);
+        }}
+      >
+        <DialogContent className="max-w-3xl border border-slate-200 p-0">
+          <DialogHeader className="border-b border-slate-200 px-4 py-3">
+            <DialogTitle className="text-base font-semibold text-slate-900">
+              Evidence preview
+            </DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[75vh] overflow-auto bg-slate-950 p-2 sm:p-3">
+            {selectedEvidenceImage ? (
+              <img
+                src={selectedEvidenceImage}
+                alt="Evidence preview"
+                className="mx-auto max-h-[70vh] w-auto max-w-full rounded-md object-contain"
+              />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

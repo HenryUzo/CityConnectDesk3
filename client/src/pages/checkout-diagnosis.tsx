@@ -31,6 +31,8 @@ export default function CheckoutDiagnosis() {
   const tax = 2000;
   const total = consultancyFee + tax;
   const CONSULTANCY_DRAFT_KEY = "citybuddy_consultancy_draft";
+  const formatCurrency = (amount: number, options?: { negative?: boolean }) =>
+    `${options?.negative ? "- " : ""}NGN ${amount.toLocaleString()}`;
 
   const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
 
@@ -76,7 +78,7 @@ export default function CheckoutDiagnosis() {
             amountInNaira: total,
             metadata: { residentId: user?.id, sessionReference: session.reference },
             reference: session.reference, // ensure Paystack uses our DB reference
-            callbackUrl: window.location.origin + "/payment-confirmation",
+            callbackUrl: window.location.origin + "/payment-confirmation?source=ordinary",
           },
         }
       );
@@ -147,23 +149,24 @@ export default function CheckoutDiagnosis() {
                 One of our core values is absolute safety.
               </p>
               <p className="text-emerald-700 text-sm">
-                Both your digital and physical activity with us is secured and transparent. We utilize one of the most secure monitoring system
+                Both your digital and physical activity with us is secured and transparent. We utilize one of the
+                most secure monitoring systems.
               </p>
             </div>
           </div>
 
           {/* Payment Summary Card */}
-          <Card className="border-0 shadow-lg p-8">
+          <Card className="border-0 p-8 shadow-lg">
             <div className="mb-8">
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">Payment summary</h1>
+              <h1 className="mb-2 text-3xl font-bold text-gray-900">Payment summary</h1>
               <p className="text-gray-600">This is a summary of your payments</p>
             </div>
 
             {/* Payment Items */}
-            <div className="space-y-6 mb-8">
+            <div className="mb-8 space-y-6">
               {/* Consultancy */}
-              <div className="flex items-start justify-between pb-6 border-b border-gray-100">
-                <div className="flex items-start space-x-4">
+              <div className="flex flex-col gap-3 border-b border-gray-100 pb-6 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 items-start space-x-4">
                   <div className="relative">
                     <div className="w-6 h-6 rounded-full border-2 border-gray-900 flex items-center justify-center">
                       <div className="w-2 h-2 rounded-full bg-gray-900"></div>
@@ -171,34 +174,35 @@ export default function CheckoutDiagnosis() {
                     <div className="absolute left-1/2 top-6 w-px h-12 bg-gray-300 -ml-px"></div>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-gray-900 mb-1">Consultancy</h3>
+                    <h3 className="mb-1 font-semibold text-gray-900">Consultancy</h3>
                     <p className="text-sm text-gray-600">This fee covers inspection and transportation</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-xl font-semibold text-gray-900">₦ {consultancyFee.toLocaleString()}</p>
+                <div className="text-left sm:text-right">
+                  <p className="whitespace-nowrap text-xl font-semibold text-gray-900">{formatCurrency(consultancyFee)}</p>
                 </div>
               </div>
 
               {/* Tax */}
-              <div className="flex items-start justify-between">
-                <div className="flex items-start space-x-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 items-start space-x-4">
                   <div className="relative">
                     <div className="w-6 h-6 rounded-full border-2 border-gray-900 flex items-center justify-center">
                       <div className="w-2 h-2 rounded-full bg-gray-900"></div>
                     </div>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-gray-900 mb-1">Tax</h3>
+                    <h3 className="mb-1 font-semibold text-gray-900">Tax</h3>
                     <p className="text-sm text-gray-600">This is a value added tax on the total</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-xl font-semibold text-gray-900">- ₦ {tax.toLocaleString()}</p>
+                <div className="text-left sm:text-right">
+                  <p className="whitespace-nowrap text-xl font-semibold text-gray-900">
+                    {formatCurrency(tax, { negative: true })}
+                  </p>
                 </div>
               </div>
             </div>
-
             {/* Decorative Wave Divider */}
             <div className="my-8">
               <svg width="100%" height="20" viewBox="0 0 800 20" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
@@ -210,31 +214,31 @@ export default function CheckoutDiagnosis() {
             </div>
 
             {/* Total Section */}
-            <div className="flex items-end justify-between pt-6">
-              <div>
-                <p className="text-sm text-gray-600 mb-2">TOTAL</p>
-                <div className="flex items-baseline space-x-3">
-                  <h2 className="text-5xl font-bold text-gray-900">₦ {total.toLocaleString()}</h2>
-                  <div className="flex items-center space-x-2 text-sm text-gray-600 mb-2">
+            <div className="flex flex-col gap-6 pt-6 lg:flex-row lg:items-end lg:justify-between">
+              <div className="min-w-0">
+                <p className="mb-2 text-sm text-gray-600">TOTAL</p>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-4">
+                  <h2 className="whitespace-nowrap text-5xl font-bold text-gray-900">{formatCurrency(total)}</h2>
+                  <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600">
                     <Info className="w-4 h-4" />
                     <span>Some rates might apply</span>
                     <Link href="/payment-policy">
-                      <button className="text-emerald-600 hover:underline">Read Payment Policy</button>
+                      <button className="font-medium text-emerald-600 hover:underline">Read Payment Policy</button>
                     </Link>
                   </div>
                 </div>
               </div>
 
-              <div className="flex flex-col items-end gap-3">
+              <div className="flex flex-col items-start gap-3 lg:items-end">
                 <Button
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-6 text-lg font-semibold"
+                  className="h-auto min-h-[52px] w-full whitespace-nowrap bg-emerald-600 px-8 py-3 text-lg font-semibold text-white hover:bg-emerald-700 sm:w-auto"
                   disabled={isPaying}
                   onClick={() => setShowPasswordDialog(true)}
                 >
-                  {isPaying ? "Processing..." : `Pay ₦ ${total.toLocaleString()}`}
+                  {isPaying ? "Processing..." : `Pay ${formatCurrency(total)}`}
                   <ArrowRight className="w-5 h-5 ml-2" />
                 </Button>
-                <p className="text-xs text-gray-500 text-right">
+                <p className="max-w-[540px] text-left text-xs text-gray-500 lg:text-right">
                   Charges are secured through Paystack. You will be redirected to complete payment.
                 </p>
               </div>
@@ -262,7 +266,7 @@ export default function CheckoutDiagnosis() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
+            placeholder="Enter your password"
             className="mt-2"
           />
         </div>
@@ -291,3 +295,6 @@ export default function CheckoutDiagnosis() {
     </>
   );
 }
+
+
+

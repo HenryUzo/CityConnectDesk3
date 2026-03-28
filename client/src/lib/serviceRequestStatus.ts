@@ -8,6 +8,7 @@ export function normalizeServiceRequestStatus(status?: string | null) {
 export function formatServiceRequestStatusLabel(status?: string | null, _category?: string | null) {
   const key = normalizeServiceRequestStatus(status);
 
+  if (key === "pending" || key === "request_created") return "Request created";
   if (key === "pending_inspection") return "Pending inspection";
   if (key === "assigned") return "Assigned for inspection";
   if (key === "assigned_for_job" || key === "assigned_for_maintenance") return "Assigned for job";
