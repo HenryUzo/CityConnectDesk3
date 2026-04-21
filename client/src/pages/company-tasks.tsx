@@ -1,17 +1,27 @@
-import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+﻿import { useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Form,
   FormControl,
@@ -32,58 +42,84 @@ import { Textarea } from "@/components/ui/textarea";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { ArrowLeft, Plus, Trash2, CheckCircle, Clock, AlertCircle, Calendar, User } from "lucide-react";
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
+  ArrowLeft,
+  Calendar,
+  Plus,
+  Trash2,
+  User,
+  MessageSquare,
+} from "lucide-react";
+import { EmptyState, InlineErrorState, PageSkeleton } from "@/components/shared/page-states";
 
 type CompanyStaff = {
   id: string;
-  name?: string;
-  email?: string;
-};
-
-type Task = {
-  id: string;
-  title: string;
-  description?: string;
-  assigneeId: string;
-  priority: "low" | "medium" | "high";
-  status: "open" | "in_progress" | "completed";
-  dueDate?: string;
-  createdAt: string;
-  updates?: TaskUpdate[];
+  name?: string | null;
+  email?: string | null;
 };
 
 type TaskUpdate = {
   id: string;
   taskId: string;
-  userId: string;
+  authorId: string;
   message: string;
   attachments?: string[];
-  createdAt: string;
+  createdAt?: string;
+  author?: {
+    id: string;
+    name?: string | null;
+    email?: string | null;
+  } | null;
+};
+
+type Task = {
+  id: string;
+  title: string;
+  description?: string | null;
+  assigneeId?: string | null;
+  createdBy: string;
+  priority: "low" | "medium" | "high";
+  status: "open" | "in_progress" | "completed" | "cancelled";
+  dueDate?: string | null;
+  serviceRequestId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  assignee?: {
+    id: string;
+    name?: string | null;
+    email?: string | null;
+  } | null;
+  creator?: {
+    id: string;
+    name?: string | null;
+    email?: string | null;
+  } | null;
+  updates?: TaskUpdate[];
 };
 
 const taskFormSchema = z.object({
   title: z.string().min(1, "Task title is required"),
   description: z.string().optional(),
-  assigneeId: z.string().min(1, "Assignee is required"),
+  assigneeId: z.string().optional(),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
   dueDate: z.string().optional(),
 });
 
 type TaskFormData = z.infer<typeof taskFormSchema>;
 
+const statusColumns: Array<{ key: Task["status"]; label: string; color: string; badgeColor: string }> = [
+  { key: "open", label: "TO DO", color: "from-slate-100 to-slate-50", badgeColor: "bg-slate-100 text-slate-700" },
+  { key: "in_progress", label: "IN PROGRESS", color: "from-blue-100 to-blue-50", badgeColor: "bg-blue-100 text-blue-700" },
+  { key: "completed", label: "COMPLETE", color: "from-green-100 to-green-50", badgeColor: "bg-green-100 text-green-700" },
+  { key: "cancelled", label: "CANCELLED", color: "from-rose-100 to-rose-50", badgeColor: "bg-rose-100 text-rose-700" },
+];
+
 export default function CompanyTasks() {
   const { toast } = useToast();
-  const [showDialog, setShowDialog] = useState(false);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
+  const [note, setNote] = useState("");
 
   const taskForm = useForm<TaskFormData>({
     resolver: zodResolver(taskFormSchema),
@@ -96,236 +132,166 @@ export default function CompanyTasks() {
     },
   });
 
-  const { data: staff = [] } = useQuery<CompanyStaff[]>({
+  const {
+    data: staff = [],
+    isLoading: isLoadingStaff,
+  } = useQuery<CompanyStaff[]>({
     queryKey: ["/api/company/staff"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/company/staff");
-      if (!res.ok) {
-        console.error("Failed to fetch company staff:", res.status);
-        return [];
-      }
-      const data = await res.json();
-      console.log("Company staff loaded:", data);
-      return data;
+  });
+
+  const {
+    data: tasks = [],
+    isLoading: isLoadingTasks,
+    error: tasksError,
+  } = useQuery<Task[]>({
+    queryKey: ["/api/company/tasks"],
+  });
+
+  const createTaskMutation = useMutation({
+    mutationFn: async (payload: TaskFormData) => {
+      const res = await apiRequest("POST", "/api/company/tasks", {
+        title: payload.title,
+        description: payload.description || null,
+        assigneeId: payload.assigneeId || null,
+        priority: payload.priority,
+        dueDate: payload.dueDate || null,
+      });
+      return (await res.json()) as Task;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company/tasks"] });
+      taskForm.reset();
+      setShowCreateDialog(false);
+      toast({ title: "Task assigned", description: "The task has been saved to the server." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to assign task", description: error.message, variant: "destructive" });
     },
   });
 
-  // Load tasks from localStorage
-  useEffect(() => {
-    const savedTasks = localStorage.getItem("company-tasks");
-    if (savedTasks) {
-      try {
-        setTasks(JSON.parse(savedTasks));
-      } catch (e) {
-        console.error("Failed to load tasks:", e);
-      }
-    }
-  }, []);
+  const updateTaskMutation = useMutation({
+    mutationFn: async ({ taskId, status }: { taskId: string; status: Task["status"] }) => {
+      const res = await apiRequest("PATCH", `/api/company/tasks/${taskId}`, { status });
+      return (await res.json()) as Task;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company/tasks"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to update task", description: error.message, variant: "destructive" });
+    },
+  });
 
-  // Save tasks to localStorage
-  useEffect(() => {
-    localStorage.setItem("company-tasks", JSON.stringify(tasks));
+  const deleteTaskMutation = useMutation({
+    mutationFn: async (taskId: string) => {
+      await apiRequest("DELETE", `/api/company/tasks/${taskId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company/tasks"] });
+      toast({ title: "Task deleted" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to delete task", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const addUpdateMutation = useMutation({
+    mutationFn: async ({ taskId, message }: { taskId: string; message: string }) => {
+      const res = await apiRequest("POST", `/api/company/tasks/${taskId}/updates`, { message });
+      return await res.json();
+    },
+    onSuccess: () => {
+      setNote("");
+      queryClient.invalidateQueries({ queryKey: ["/api/company/tasks"] });
+      toast({ title: "Update posted" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to post update", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const groupedTasks = useMemo(() => {
+    return statusColumns.reduce<Record<Task["status"], Task[]>>((acc, column) => {
+      acc[column.key] = tasks.filter((task) => task.status === column.key);
+      return acc;
+    }, { open: [], in_progress: [], completed: [], cancelled: [] });
   }, [tasks]);
 
-  const getAssigneeName = (id: string) => {
-    const person = staff.find((s) => s.id === id);
-    return person?.name || person?.email || "Unknown";
-  };
-
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case "high":
-        return "bg-red-50 text-red-700 border-red-200";
-      case "medium":
-        return "bg-yellow-50 text-yellow-700 border-yellow-200";
-      case "low":
-        return "bg-green-50 text-green-700 border-green-200";
-      default:
-        return "bg-gray-50 text-gray-700 border-gray-200";
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "completed":
-        return <CheckCircle className="h-5 w-5 text-green-500" />;
-      case "in_progress":
-        return <Clock className="h-5 w-5 text-blue-500" />;
-      case "open":
-        return <AlertCircle className="h-5 w-5 text-yellow-500" />;
-      default:
-        return null;
-    }
-  };
-
-  const getStatusBadgeVariant = (status: string) => {
-    switch (status) {
-      case "completed":
-        return "default";
-      case "in_progress":
-        return "secondary";
-      case "open":
-        return "outline";
-      default:
-        return "outline";
-    }
-  };
-
   const onSubmit = (data: TaskFormData) => {
-    const newTask: Task = {
-      id: crypto.randomUUID(),
-      title: data.title,
-      description: data.description,
-      assigneeId: data.assigneeId,
-      priority: data.priority,
-      status: "open",
-      dueDate: data.dueDate,
-      createdAt: new Date().toISOString(),
-      updates: [],
-    };
-    setTasks((prev) => [newTask, ...prev]);
-    taskForm.reset();
-    setShowDialog(false);
-    toast({
-      title: "Success",
-      description: "Task assigned successfully",
-    });
+    createTaskMutation.mutate(data);
   };
 
-  const handleDeleteTask = (taskId: string) => {
-    if (confirm("Delete this task?")) {
-      setTasks((prev) => prev.filter((t) => t.id !== taskId));
-      toast({
-        title: "Success",
-        description: "Task deleted",
-      });
-    }
+  const handleDrop = (taskId: string, status: Task["status"]) => {
+    updateTaskMutation.mutate({ taskId, status });
   };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = "move";
-  };
-
-  const handleDrop = (e: React.DragEvent, newStatus: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const taskId = e.dataTransfer.getData("taskId");
-    
-    if (!taskId) {
-      console.warn("No taskId in drop event");
-      return;
-    }
-
-    // Map column title to status
-    const statusMap: { [key: string]: string } = {
-      "to_do": "open",
-      "in_progress": "in_progress",
-      "complete": "completed",
-    };
-
-    const status = statusMap[newStatus] || newStatus;
-    console.log("Dropping task", taskId, "to status", status, "from column", newStatus);
-
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId ? { ...t, status: status as any } : t
-      )
-    );
-  };
-
-  const openTasks = tasks.filter((t) => t.status === "open");
-  const inProgressTasks = tasks.filter((t) => t.status === "in_progress");
-  const completedTasks = tasks.filter((t) => t.status === "completed");
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800">
-      {/* Navigation */}
-      <nav className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-10">
-        <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <Link href="/company-dashboard">
-              <Button variant="ghost" size="icon" className="mr-2">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            </Link>
-            <div className="flex flex-col">
-              <span className="text-lg font-semibold">Tasks & Assignments</span>
-            </div>
-            <div className="w-10" />
-          </div>
+      <nav className="sticky top-0 z-10 border-b border-slate-200 bg-white shadow-sm">
+        <div className="mx-auto flex h-16 max-w-full items-center justify-between px-4 sm:px-6 lg:px-8">
+          <Link href="/company-dashboard">
+            <Button variant="ghost" size="icon" className="mr-2">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          </Link>
+          <span className="text-lg font-semibold">Tasks & Assignments</span>
+          <div className="w-10" />
         </div>
       </nav>
 
-      <main className="h-[calc(100vh-64px)] overflow-hidden flex flex-col">
-        {/* Header */}
-        <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+      <main className="flex h-[calc(100vh-64px)] flex-col overflow-hidden">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Task Board</h1>
-            <p className="text-sm text-slate-500 mt-1">
-              Drag tasks between columns or click to manage
-            </p>
+            <p className="mt-1 text-sm text-slate-500">Server-backed workflow for company-assigned provider tasks.</p>
           </div>
-          <Button onClick={() => setShowDialog(true)} size="lg" className="bg-blue-600 hover:bg-blue-700">
-            <Plus className="w-5 h-5 mr-2" />
+          <Button onClick={() => setShowCreateDialog(true)} size="lg" className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="mr-2 h-5 w-5" />
             Add Task
           </Button>
         </div>
 
-        {/* Kanban Board */}
-        <div className="flex-1 overflow-x-auto p-6">
-          <div className="flex gap-6 min-w-max">
-            {/* TO DO Column */}
-            <KanbanColumn
-              title="TO DO"
-              count={openTasks.length}
-              color="from-slate-100 to-slate-50"
-              badgeColor="bg-slate-100 text-slate-700"
-              tasks={openTasks}
-              getAssigneeName={getAssigneeName}
-              getPriorityColor={getPriorityColor}
-              onDelete={handleDeleteTask}
-              onSelect={setSelectedTask}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-            />
-
-            {/* IN PROGRESS Column */}
-            <KanbanColumn
-              title="IN PROGRESS"
-              count={inProgressTasks.length}
-              color="from-blue-100 to-blue-50"
-              badgeColor="bg-blue-100 text-blue-700"
-              tasks={inProgressTasks}
-              getAssigneeName={getAssigneeName}
-              getPriorityColor={getPriorityColor}
-              onDelete={handleDeleteTask}
-              onSelect={setSelectedTask}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-            />
-
-            {/* COMPLETE Column */}
-            <KanbanColumn
-              title="COMPLETE"
-              count={completedTasks.length}
-              color="from-green-100 to-green-50"
-              badgeColor="bg-green-100 text-green-700"
-              tasks={completedTasks}
-              getAssigneeName={getAssigneeName}
-              getPriorityColor={getPriorityColor}
-              onDelete={handleDeleteTask}
-              onSelect={setSelectedTask}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
+        {tasksError ? (
+          <div className="p-6">
+            <InlineErrorState
+              title="Unable to load tasks"
+              description={tasksError instanceof Error ? tasksError.message : "Something went wrong loading tasks."}
             />
           </div>
-        </div>
+        ) : isLoadingTasks ? (
+          <div className="p-6">
+            <PageSkeleton withHeader={false} rows={3} />
+          </div>
+        ) : tasks.length === 0 ? (
+          <div className="p-6">
+            <EmptyState
+              title="No tasks yet"
+              description="Create your first task to assign work to a provider in your company."
+              action={<Button onClick={() => setShowCreateDialog(true)}>Create task</Button>}
+            />
+          </div>
+        ) : (
+          <div className="flex-1 overflow-x-auto p-6">
+            <div className="flex min-w-max gap-6">
+              {statusColumns.map((column) => (
+                <KanbanColumn
+                  key={column.key}
+                  title={column.label}
+                  count={groupedTasks[column.key].length}
+                  color={column.color}
+                  badgeColor={column.badgeColor}
+                  tasks={groupedTasks[column.key]}
+                  onDelete={(task) => setTaskToDelete(task)}
+                  onSelect={setSelectedTask}
+                  onDropStatus={handleDrop}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </main>
 
-      {/* Create Task Dialog */}
-      <Dialog open={showDialog} onOpenChange={setShowDialog}>
+      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Assign New Task</DialogTitle>
@@ -337,7 +303,7 @@ export default function CompanyTasks() {
                 name="title"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Task Title</FormLabel>
+                    <FormLabel>Task title</FormLabel>
                     <FormControl>
                       <Input placeholder="Task title" {...field} />
                     </FormControl>
@@ -358,18 +324,24 @@ export default function CompanyTasks() {
                   </FormItem>
                 )}
               />
-              <FormField
-                control={taskForm.control}
-                name="assigneeId"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Assign To</FormLabel>
-                    <FormControl>
-                      <Select value={field.value} onValueChange={field.onChange}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select provider" />
-                        </SelectTrigger>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <FormField
+                  control={taskForm.control}
+                  name="assigneeId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Assign to provider</FormLabel>
+                      <Select
+                        value={field.value || "unassigned"}
+                        onValueChange={(value) => field.onChange(value === "unassigned" ? "" : value)}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder={isLoadingStaff ? "Loading..." : "Select provider"} />
+                          </SelectTrigger>
+                        </FormControl>
                         <SelectContent>
+                          <SelectItem value="unassigned">Unassigned</SelectItem>
                           {staff.map((person) => (
                             <SelectItem key={person.id} value={person.id}>
                               {person.name || person.email || person.id}
@@ -377,30 +349,28 @@ export default function CompanyTasks() {
                           ))}
                         </SelectContent>
                       </Select>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <div className="grid grid-cols-2 gap-4">
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
                 <FormField
                   control={taskForm.control}
                   name="priority"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Priority</FormLabel>
-                      <FormControl>
-                        <Select value={field.value} onValueChange={field.onChange}>
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <FormControl>
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="low">Low</SelectItem>
-                            <SelectItem value="medium">Medium</SelectItem>
-                            <SelectItem value="high">High</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </FormControl>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="low">Low</SelectItem>
+                          <SelectItem value="medium">Medium</SelectItem>
+                          <SelectItem value="high">High</SelectItem>
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -409,8 +379,8 @@ export default function CompanyTasks() {
                   control={taskForm.control}
                   name="dueDate"
                   render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Due Date</FormLabel>
+                    <FormItem className="md:col-span-2">
+                      <FormLabel>Due date</FormLabel>
                       <FormControl>
                         <Input type="date" {...field} />
                       </FormControl>
@@ -420,18 +390,97 @@ export default function CompanyTasks() {
                 />
               </div>
               <div className="flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowDialog(false)}
-                >
+                <Button type="button" variant="outline" onClick={() => setShowCreateDialog(false)}>
                   Cancel
                 </Button>
-                <Button type="submit">Assign Task</Button>
+                <Button type="submit" disabled={createTaskMutation.isPending}>
+                  {createTaskMutation.isPending ? "Saving..." : "Assign task"}
+                </Button>
               </div>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={Boolean(selectedTask)} onOpenChange={(open) => !open && setSelectedTask(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{selectedTask?.title}</DialogTitle>
+          </DialogHeader>
+          {selectedTask ? (
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600">{selectedTask.description || "No description provided."}</p>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="outline">{selectedTask.priority}</Badge>
+                <Badge variant="secondary">{selectedTask.status.replace("_", " ")}</Badge>
+                {selectedTask.assignee ? (
+                  <Badge variant="outline">Assigned: {selectedTask.assignee.name || selectedTask.assignee.email}</Badge>
+                ) : (
+                  <Badge variant="outline">Unassigned</Badge>
+                )}
+              </div>
+              <div className="space-y-3 rounded-lg border border-slate-200 p-3">
+                <p className="text-sm font-medium">Updates</p>
+                {selectedTask.updates && selectedTask.updates.length > 0 ? (
+                  <div className="max-h-48 space-y-2 overflow-y-auto pr-2">
+                    {selectedTask.updates.map((update) => (
+                      <div key={update.id} className="rounded border border-slate-200 bg-slate-50 p-2 text-sm">
+                        <p>{update.message}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {(update.author?.name || update.author?.email || "Team member")} - {update.createdAt ? new Date(update.createdAt).toLocaleString() : ""}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">No updates yet.</p>
+                )}
+                <div className="space-y-2">
+                  <Textarea
+                    placeholder="Post an internal update"
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                  />
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      disabled={!note.trim() || addUpdateMutation.isPending}
+                      onClick={() => addUpdateMutation.mutate({ taskId: selectedTask.id, message: note.trim() })}
+                    >
+                      {addUpdateMutation.isPending ? "Posting..." : "Post update"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={Boolean(taskToDelete)} onOpenChange={(open) => !open && setTaskToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete task?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the task and all updates for it. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-rose-600 hover:bg-rose-700"
+              onClick={() => {
+                if (taskToDelete) {
+                  deleteTaskMutation.mutate(taskToDelete.id);
+                }
+                setTaskToDelete(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -442,89 +491,60 @@ function KanbanColumn({
   color,
   badgeColor,
   tasks,
-  getAssigneeName,
-  getPriorityColor,
   onDelete,
   onSelect,
-  onDragOver,
-  onDrop,
+  onDropStatus,
 }: {
   title: string;
   count: number;
   color: string;
   badgeColor: string;
   tasks: Task[];
-  getAssigneeName: (id: string) => string;
-  getPriorityColor: (priority: string) => string;
-  onDelete: (id: string) => void;
+  onDelete: (task: Task) => void;
   onSelect: (task: Task) => void;
-  onDragOver: (e: React.DragEvent) => void;
-  onDrop: (e: React.DragEvent, status: string) => void;
+  onDropStatus: (taskId: string, status: Task["status"]) => void;
 }) {
   const [isDragOver, setIsDragOver] = useState(false);
 
-  const handleDragEnter = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = "move";
-    onDragOver(e);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-    onDrop(e, title.toLowerCase().replace(/ /g, "_"));
-  };
+  const targetStatus = title === "TO DO"
+    ? "open"
+    : title === "IN PROGRESS"
+      ? "in_progress"
+      : title === "COMPLETE"
+        ? "completed"
+        : "cancelled";
 
   return (
-    <div className="flex-shrink-0 w-96">
-      {/* Column Header */}
-      <div className={`bg-gradient-to-br ${color} rounded-lg p-4 mb-4 border border-slate-200`}>
+    <div className="w-96 flex-shrink-0">
+      <div className={`mb-4 rounded-lg border border-slate-200 bg-gradient-to-br ${color} p-4`}>
         <div className="flex items-center justify-between">
-          <h2 className="font-bold text-slate-900 text-lg">{title}</h2>
-          <span className={`${badgeColor} px-3 py-1 rounded-full text-sm font-semibold`}>
-            {count}
-          </span>
+          <h2 className="text-lg font-bold text-slate-900">{title}</h2>
+          <span className={`${badgeColor} rounded-full px-3 py-1 text-sm font-semibold`}>{count}</span>
         </div>
       </div>
 
-      {/* Tasks Container */}
-      <div 
-        className={`space-y-3 min-h-96 pb-4 rounded-lg transition-colors ${
-          isDragOver ? "bg-blue-50 border-2 border-blue-300" : ""
-        }`}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
+      <div
+        className={`min-h-96 space-y-3 rounded-lg pb-4 transition-colors ${isDragOver ? "border-2 border-blue-300 bg-blue-50" : ""}`}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          setIsDragOver(true);
+        }}
+        onDragLeave={() => setIsDragOver(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          setIsDragOver(false);
+          const taskId = event.dataTransfer.getData("taskId");
+          if (taskId) onDropStatus(taskId, targetStatus);
+        }}
       >
         {tasks.length === 0 ? (
-          <div className="bg-white rounded-lg border-2 border-dashed border-slate-300 p-8 text-center min-h-96 flex items-center justify-center">
-            <p className="text-slate-400 text-sm">No tasks - Drag here to move tasks</p>
+          <div className="flex min-h-96 items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-white p-8 text-center">
+            <p className="text-sm text-slate-400">No tasks yet</p>
           </div>
         ) : (
           tasks.map((task) => (
-            <KanbanCard
-              key={task.id}
-              task={task}
-              assigneeName={getAssigneeName(task.assigneeId)}
-              onDelete={onDelete}
-              onSelect={onSelect}
-              getPriorityColor={getPriorityColor}
-            />
+            <KanbanCard key={task.id} task={task} onDelete={onDelete} onSelect={onSelect} />
           ))
         )}
       </div>
@@ -534,190 +554,83 @@ function KanbanColumn({
 
 function KanbanCard({
   task,
-  assigneeName,
   onDelete,
   onSelect,
-  getPriorityColor,
 }: {
   task: Task;
-  assigneeName: string;
-  onDelete: (id: string) => void;
+  onDelete: (task: Task) => void;
   onSelect: (task: Task) => void;
-  getPriorityColor: (priority: string) => string;
 }) {
-  const getPriorityBg = (priority: string) => {
-    switch (priority) {
-      case "high":
-        return "bg-red-100 text-red-700";
-      case "medium":
-        return "bg-yellow-100 text-yellow-700";
-      case "low":
-        return "bg-green-100 text-green-700";
-      default:
-        return "bg-gray-100 text-gray-700";
-    }
-  };
+  const priorityClasses =
+    task.priority === "high"
+      ? "bg-red-100 text-red-700"
+      : task.priority === "medium"
+        ? "bg-yellow-100 text-yellow-700"
+        : "bg-green-100 text-green-700";
 
-  const getInitials = (name: string) => {
-    return name
-      .split(" ")
-      .map((n) => n[0])
-      .join("")
-      .toUpperCase()
-      .slice(0, 2);
-  };
-
-  const handleDragStart = (e: React.DragEvent) => {
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("taskId", task.id);
-    e.dataTransfer.setData("taskData", JSON.stringify(task));
-  };
+  const assigneeLabel = task.assignee?.name || task.assignee?.email || "Unassigned";
 
   return (
-    <div 
+    <Card
       draggable
-      onDragStart={handleDragStart}
-      className="bg-white rounded-lg border border-slate-200 p-4 hover:shadow-lg transition-shadow cursor-move group active:opacity-50 select-none"
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("taskId", task.id);
+      }}
+      className="group cursor-move border border-slate-200 bg-white transition-shadow hover:shadow-lg"
     >
-      {/* Card Header with Delete */}
-      <div className="flex items-start justify-between mb-2">
-        <h3 className="font-semibold text-slate-900 text-sm flex-1 pr-2 line-clamp-2 pointer-events-none">
-          {task.title}
-        </h3>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => onDelete(task.id)}
-          className="text-slate-400 hover:text-red-500 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-        >
-          <Trash2 className="h-3 w-3" />
-        </Button>
-      </div>
-
-      {/* Description */}
-      {task.description && (
-        <p className="text-xs text-slate-600 mb-3 line-clamp-2 pointer-events-none">{task.description}</p>
-      )}
-
-      {/* Priority Badge */}
-      <div className="mb-3">
-        <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${getPriorityBg(task.priority)}`}>
-          {task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
-        </span>
-      </div>
-
-      {/* Footer with Assignee and Due Date */}
-      <div className="flex items-center justify-between pt-3 border-t border-slate-100">
-        {/* Assignee Avatar */}
-        <div className="flex items-center gap-2 flex-1">
-          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 text-white text-xs font-bold flex items-center justify-center">
-            {getInitials(assigneeName)}
-          </div>
-          <span className="text-xs text-slate-600 truncate max-w-[120px]">{assigneeName}</span>
-        </div>
-
-        {/* Due Date and Open Button */}
-        <div className="flex items-center gap-2">
-          {task.dueDate && (
-            <div className="flex items-center gap-1 text-xs text-slate-500">
-              <Calendar className="h-3 w-3" />
-              {new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-            </div>
-          )}
-          
-          {/* Open Button */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelect(task);
-            }}
-            className="ml-2 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded transition-colors"
-          >
-            Open →
-          </button>
-        </div>
-      </div>
-
-      {/* Update Count */}
-      {task.updates && task.updates.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-slate-100">
-          <p className="text-xs text-blue-600 font-medium">
-            {task.updates.length} {task.updates.length === 1 ? "update" : "updates"}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TaskCard({
-  task,
-  assigneeName,
-  onDelete,
-  getPriorityColor,
-  getStatusBadgeVariant,
-}: {
-  task: Task;
-  assigneeName: string;
-  onDelete: (id: string) => void;
-  getPriorityColor: (priority: string) => string;
-  getStatusBadgeVariant: (status: string) => string;
-}) {
-  return (
-    <Card>
-      <CardContent className="p-6">
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <h3 className="font-semibold text-slate-900">{task.title}</h3>
-            {task.description && (
-              <p className="text-sm text-slate-600 mt-1">{task.description}</p>
-            )}
-            <div className="flex items-center gap-3 mt-3 flex-wrap">
-              <Badge variant="outline">{assigneeName}</Badge>
-              <Badge className={getPriorityColor(task.priority)}>
-                {task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
-              </Badge>
-              <Badge variant={getStatusBadgeVariant(task.status)}>
-                {task.status.replace("_", " ").charAt(0).toUpperCase() +
-                  task.status.slice(1).replace("_", " ")}
-              </Badge>
-              {task.dueDate && (
-                <Badge variant="outline">
-                  Due: {new Date(task.dueDate).toLocaleDateString()}
-                </Badge>
-              )}
-            </div>
-            {task.updates && task.updates.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-slate-200">
-                <p className="text-sm font-medium text-slate-700 mb-2">
-                  Updates ({task.updates.length})
-                </p>
-                <div className="space-y-2">
-                  {task.updates.slice(0, 2).map((update) => (
-                    <div key={update.id} className="text-xs text-slate-600 bg-slate-50 p-2 rounded">
-                      <p>{update.message}</p>
-                      <p className="text-xs text-slate-500 mt-1">
-                        {new Date(update.createdAt).toLocaleString()}
-                      </p>
-                    </div>
-                  ))}
-                  {task.updates.length > 2 && (
-                    <p className="text-xs text-slate-500 italic">
-                      +{task.updates.length - 2} more updates
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
+      <CardContent className="p-4">
+        <div className="mb-2 flex items-start justify-between gap-2">
+          <h3 className="line-clamp-2 flex-1 text-sm font-semibold text-slate-900">{task.title}</h3>
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => onDelete(task.id)}
-            className="text-rose-500 hover:text-rose-700"
+            className="h-6 w-6 p-0 text-slate-400 opacity-0 transition-opacity hover:text-rose-500 group-hover:opacity-100"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete(task);
+            }}
           >
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-3 w-3" />
           </Button>
+        </div>
+
+        {task.description ? (
+          <p className="mb-3 line-clamp-2 text-xs text-slate-600">{task.description}</p>
+        ) : null}
+
+        <div className="mb-3 flex items-center gap-2">
+          <span className={`inline-block rounded px-2 py-1 text-xs font-medium ${priorityClasses}`}>{task.priority}</span>
+          {task.updates && task.updates.length > 0 ? (
+            <span className="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700">
+              <MessageSquare className="h-3 w-3" />
+              {task.updates.length}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-slate-100 pt-3">
+          <div className="flex min-w-0 items-center gap-2 text-xs text-slate-600">
+            <User className="h-3 w-3" />
+            <span className="truncate max-w-[120px]">{assigneeLabel}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {task.dueDate ? (
+              <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+                <Calendar className="h-3 w-3" />
+                {new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              </span>
+            ) : null}
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelect(task);
+              }}
+              className="rounded px-2 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50"
+            >
+              Open
+            </button>
+          </div>
         </div>
       </CardContent>
     </Card>

@@ -1,9 +1,11 @@
-import { useAuth } from "@/hooks/use-auth";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { ProviderShell } from "@/components/provider/ProviderShell";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -12,211 +14,287 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ProviderLayout } from "@/components/admin/ProviderLayout";
-import { useState, useMemo } from "react";
-import { ShoppingCart, Search, DollarSign, Star, Package } from "lucide-react";
+import { Search, Package, Store, Layers3, ArrowRight, DollarSign } from "lucide-react";
+import { EmptyState, InlineErrorState, PageSkeleton } from "@/components/shared/page-states";
+import { ProviderFilterActionBar } from "@/components/provider/provider-primitives";
 
-interface MarketplaceItem {
+type ProviderMarketplaceStore = {
   id: string;
   name: string;
-  description?: string;
-  price: number;
-  storeId?: string;
-  storeName?: string;
-  category?: string;
-  rating?: number;
-  reviews?: number;
-  image?: string;
-  isAvailable?: boolean;
-  stock?: number;
-}
+  location?: string | null;
+  logo?: string | null;
+};
+
+type ProviderMarketplaceCategory = {
+  id: string;
+  name: string;
+  slug?: string | null;
+};
+
+type ProviderMarketplaceItem = {
+  id: string;
+  name: string;
+  description?: string | null;
+  price: string | number;
+  currency?: string | null;
+  unitOfMeasure?: string | null;
+  category?: string | null;
+  subcategory?: string | null;
+  stock?: number | null;
+  images?: string[] | null;
+  storeId?: string | null;
+  storeName?: string | null;
+  storeLocation?: string | null;
+};
+
+type ProviderMarketplaceItemsResponse = {
+  items: ProviderMarketplaceItem[];
+  total: number;
+  page: number;
+  totalPages: number;
+};
+
+const parsePrice = (value: string | number | undefined | null) => {
+  if (typeof value === "number") return value;
+  const parsed = Number.parseFloat(String(value ?? "0"));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 export default function ProviderMarketplace() {
-  const { user } = useAuth();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("name");
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedStoreId, setSelectedStoreId] = useState("all");
 
-  // Fetch all marketplace items
-  const { data: items = [], isLoading } = useQuery<MarketplaceItem[]>({
-    queryKey: ["provider-marketplace"],
+  const { data: stores = [] } = useQuery<ProviderMarketplaceStore[]>({
+    queryKey: ["provider-marketplace-stores"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/admin/marketplace");
-      return res.json() as Promise<MarketplaceItem[]>;
+      const res = await apiRequest("GET", "/api/provider/marketplace/stores");
+      return res.json() as Promise<ProviderMarketplaceStore[]>;
     },
+    staleTime: 60_000,
+    refetchInterval: 120_000,
   });
 
-  const filteredAndSortedItems = useMemo(() => {
-    let filtered = items.filter(
-      (item) =>
-        item.name.toLowerCase().includes(search.toLowerCase()) ||
-        item.description?.toLowerCase().includes(search.toLowerCase()) ||
-        item.category?.toLowerCase().includes(search.toLowerCase())
-    );
+  const { data: categories = [] } = useQuery<ProviderMarketplaceCategory[]>({
+    queryKey: ["provider-marketplace-categories"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/provider/marketplace/categories");
+      return res.json() as Promise<ProviderMarketplaceCategory[]>;
+    },
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
 
-    // Sort
-    filtered.sort((a, b) => {
+  const {
+    data: itemsResponse,
+    isLoading,
+    error: itemsError,
+  } = useQuery<ProviderMarketplaceItemsResponse>({
+    queryKey: ["provider-marketplace-items", { search, selectedCategory, selectedStoreId }],
+    placeholderData: (prev) => prev,
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (search.trim()) qs.set("search", search.trim());
+      if (selectedCategory !== "all") qs.set("category", selectedCategory);
+      if (selectedStoreId !== "all") qs.set("storeId", selectedStoreId);
+
+      const query = qs.toString();
+      const url = query
+        ? `/api/provider/marketplace/items?${query}`
+        : "/api/provider/marketplace/items";
+
+      const res = await apiRequest("GET", url);
+      return res.json() as Promise<ProviderMarketplaceItemsResponse>;
+    },
+    staleTime: 30_000,
+    refetchInterval: search.trim() || selectedCategory !== "all" || selectedStoreId !== "all" ? false : 90_000,
+  });
+
+  const sortedItems = useMemo(() => {
+    const base = [...(itemsResponse?.items ?? [])];
+    base.sort((a, b) => {
       switch (sortBy) {
         case "price-low":
-          return a.price - b.price;
+          return parsePrice(a.price) - parsePrice(b.price);
         case "price-high":
-          return b.price - a.price;
-        case "rating":
-          return (b.rating || 0) - (a.rating || 0);
+          return parsePrice(b.price) - parsePrice(a.price);
+        case "stock":
+          return Number(b.stock ?? 0) - Number(a.stock ?? 0);
         case "name":
         default:
           return a.name.localeCompare(b.name);
       }
     });
-
-    return filtered;
-  }, [items, search, sortBy]);
+    return base;
+  }, [itemsResponse?.items, sortBy]);
 
   return (
-    <ProviderLayout title="Marketplace">
+    <ProviderShell
+      title="Marketplace"
+      subtitle="Read-only catalog browsing. Inventory and pricing changes happen in your Stores workspace."
+      actions={<Badge variant="secondary">{itemsResponse?.total ?? 0} items</Badge>}
+    >
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex justify-between items-center">
-          <div>
-            <h2 className="text-2xl font-bold">Marketplace</h2>
-            <p className="text-gray-500">Browse and discover products</p>
-          </div>
-          <Badge variant="secondary">{filteredAndSortedItems.length} Items</Badge>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Layers3 className="h-4 w-4 text-muted-foreground" />
+                Catalog browsing
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0 text-sm text-muted-foreground">
+              Use this page to monitor live marketplace listings from approved stores.
+              This view is read-only for providers.
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Store className="h-4 w-4 text-muted-foreground" />
+                Store operations
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between gap-4 pt-0 text-sm text-muted-foreground">
+              <span>Manage your inventory, pricing, and orders in the Stores workspace.</span>
+              <Button asChild variant="outline" className="whitespace-nowrap">
+                <Link href="/provider/stores">
+                  Go to stores
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
-        {/* Search and Filters */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="relative col-span-1 md:col-span-2">
-            <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
-            <Input
-              placeholder="Search products, categories..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-10"
-            />
-          </div>
-          <Select value={sortBy} onValueChange={setSortBy}>
-            <SelectTrigger>
-              <SelectValue placeholder="Sort by" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="name">Name (A-Z)</SelectItem>
-              <SelectItem value="price-low">Price (Low to High)</SelectItem>
-              <SelectItem value="price-high">Price (High to Low)</SelectItem>
-              <SelectItem value="rating">Rating</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        <ProviderFilterActionBar
+          leading={
+            <div className="relative w-full sm:w-[260px]">
+              <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search catalog"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-10"
+                aria-label="Search marketplace catalog"
+              />
+            </div>
+          }
+          trailing={
+            <>
+              <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                <SelectTrigger aria-label="Filter marketplace by category" className="w-full sm:w-[190px]">
+                  <SelectValue placeholder="Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All categories</SelectItem>
+                  {categories.map((category) => (
+                    <SelectItem key={category.id} value={category.name}>
+                      {category.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-        {/* Items Grid */}
+              <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
+                <SelectTrigger aria-label="Filter marketplace by store" className="w-full sm:w-[190px]">
+                  <SelectValue placeholder="Store" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All stores</SelectItem>
+                  {stores.map((store) => (
+                    <SelectItem key={store.id} value={store.id}>
+                      {store.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={sortBy} onValueChange={setSortBy}>
+                <SelectTrigger aria-label="Sort marketplace results" className="w-full sm:w-[190px]">
+                  <SelectValue placeholder="Sort by" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="name">Name (A-Z)</SelectItem>
+                  <SelectItem value="price-low">Price (Low to High)</SelectItem>
+                  <SelectItem value="price-high">Price (High to Low)</SelectItem>
+                  <SelectItem value="stock">Stock (High to Low)</SelectItem>
+                </SelectContent>
+              </Select>
+            </>
+          }
+        />
+
         <Card>
           <CardContent className="pt-6">
-            {isLoading ? (
-              <div className="flex justify-center py-12">
-                <p className="text-gray-500">Loading marketplace items...</p>
-              </div>
-            ) : filteredAndSortedItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12">
-                <Package className="w-12 h-12 text-gray-300 mb-4" />
-                <p className="text-gray-500 mb-2">No items found</p>
-                <p className="text-sm text-gray-400">
-                  {search ? "Try adjusting your search" : "Browse available products"}
-                </p>
-              </div>
+            {itemsError ? (
+              <InlineErrorState
+                description={itemsError instanceof Error ? itemsError.message : "Unable to load marketplace catalog."}
+              />
+            ) : isLoading ? (
+              <PageSkeleton withHeader={false} rows={4} />
+            ) : sortedItems.length === 0 ? (
+              <EmptyState
+                icon={Package}
+                title="No catalog items found"
+                description="Adjust your search or filters to view available marketplace listings."
+              />
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {filteredAndSortedItems.map((item) => (
-                  <Card
-                    key={item.id}
-                    className="hover:shadow-lg transition-shadow flex flex-col"
-                  >
-                    {/* Image Placeholder */}
-                    <div className="w-full h-40 bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
-                      {item.image ? (
-                        <img
-                          src={item.image}
-                          alt={item.name}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <Package className="w-12 h-12 text-gray-400" />
-                      )}
-                    </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {sortedItems.map((item) => {
+                  const image = item.images?.[0] ?? null;
+                  const price = parsePrice(item.price);
+                  const stock = Number(item.stock ?? 0);
 
-                    <CardContent className="pt-4 flex-1 flex flex-col">
-                      {/* Category Badge */}
-                      {item.category && (
-                        <Badge variant="outline" className="w-fit mb-2 text-xs">
-                          {item.category}
-                        </Badge>
-                      )}
-
-                      {/* Product Name */}
-                      <h3 className="font-semibold text-sm mb-1 line-clamp-2">
-                        {item.name}
-                      </h3>
-
-                      {/* Description */}
-                      {item.description && (
-                        <p className="text-xs text-gray-600 mb-3 line-clamp-2">
-                          {item.description}
-                        </p>
-                      )}
-
-                      {/* Rating */}
-                      {item.rating && (
-                        <div className="flex items-center gap-1 mb-3">
-                          <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                          <span className="text-xs font-medium">{item.rating}</span>
-                          {item.reviews && (
-                            <span className="text-xs text-gray-500">
-                              ({item.reviews} reviews)
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Store Name */}
-                      {item.storeName && (
-                        <p className="text-xs text-gray-500 mb-3">
-                          From: <span className="font-medium">{item.storeName}</span>
-                        </p>
-                      )}
-
-                      {/* Price and Stock */}
-                      <div className="mt-auto space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1 text-lg font-bold">
-                            <DollarSign className="w-4 h-4" />
-                            {item.price.toLocaleString()}
-                          </div>
-                          {item.stock !== undefined && (
-                            <Badge
-                              variant={item.stock > 0 ? "default" : "destructive"}
-                              className="text-xs"
-                            >
-                              {item.stock > 0 ? `${item.stock} in stock` : "Out of stock"}
-                            </Badge>
-                          )}
-                        </div>
-
-                        {/* Add to Cart Button */}
-                        <Button
-                          className="w-full"
-                          variant="default"
-                          disabled={!item.isAvailable || (item.stock === 0)}
-                        >
-                          <ShoppingCart className="w-4 h-4 mr-2" />
-                          {item.isAvailable ? "View Details" : "Unavailable"}
-                        </Button>
+                  return (
+                    <Card key={item.id} className="flex h-full flex-col border-border">
+                      <div className="flex h-40 w-full items-center justify-center bg-gradient-to-br from-muted to-muted/60">
+                        {image ? (
+                          <img src={image} alt={item.name} className="h-full w-full object-cover" />
+                        ) : (
+                          <Package className="h-12 w-12 text-muted-foreground" />
+                        )}
                       </div>
-                    </CardContent>
-                  </Card>
-                ))}
+
+                      <CardContent className="flex flex-1 flex-col pt-4">
+                        <div className="mb-2 flex flex-wrap gap-2">
+                          {item.category ? (
+                            <Badge variant="outline" className="text-[11px]">
+                              {item.category}
+                            </Badge>
+                          ) : null}
+                          <Badge variant={stock > 0 ? "default" : "destructive"} className="text-[11px]">
+                            {stock > 0 ? `${stock} in stock` : "Out of stock"}
+                          </Badge>
+                        </div>
+
+                        <h3 className="mb-1 line-clamp-2 text-sm font-semibold text-foreground">{item.name}</h3>
+                        {item.description ? (
+                          <p className="mb-3 line-clamp-2 text-xs text-muted-foreground">{item.description}</p>
+                        ) : null}
+
+                        <p className="mb-3 text-xs text-muted-foreground">
+                          Store: <span className="font-medium text-foreground">{item.storeName ?? "Unknown"}</span>
+                        </p>
+
+                        <div className="mt-auto flex items-center justify-between pt-2">
+                          <div className="flex items-center gap-1 text-base font-semibold text-foreground">
+                            <DollarSign className="h-4 w-4" />
+                            {price.toLocaleString("en-NG")}
+                          </div>
+                          <span className="text-xs text-muted-foreground">{item.unitOfMeasure ?? "unit"}</span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </div>
             )}
           </CardContent>
         </Card>
       </div>
-    </ProviderLayout>
+    </ProviderShell>
   );
 }
+

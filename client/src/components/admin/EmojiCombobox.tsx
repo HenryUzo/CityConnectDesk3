@@ -3,73 +3,66 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 export const EMOJI_OPTIONS = [
-  { value: "🛒", label: "Shopping" },
-  { value: "🍎", label: "Groceries" },
-  { value: "🍽️", label: "Food" },
-  { value: "👔", label: "Men’s Clothing (Corporate)" },
-  { value: "👕", label: "Men’s Clothing (Casual)" },
-  { value: "👖", label: "Men’s Jeans / Trousers" },
-  { value: "👗", label: "Women’s Clothing (Casual)" },
-  { value: "👚", label: "Women’s Clothing (Traditional)" },
-  { value: "🧒", label: "Kids Clothing" },
-  { value: "👟", label: "Sneakers" },
-  { value: "👞", label: "Formal Shoes" },
-  { value: "🩴", label: "Sandals / Flip-flops" },
-  { value: "🥿", label: "Ladies Flats" },
-  { value: "👜", label: "Handbags" },
-  { value: "🎒", label: "Backpacks" },
-  { value: "🧳", label: "Travel Bags" },
-  { value: "⌚", label: "Watches" },
-  { value: "🧣", label: "Belts & Scarves" },
-  { value: "🕶️", label: "Sunglasses" },
-  { value: "🎩", label: "Hats" },
-  { value: "💎", label: "Fine Jewelry" },
-  { value: "📿", label: "Fashion Jewelry" },
-  { value: "🧵", label: "Tailoring / Alterations" },
-  { value: "🌸", label: "Perfumes / Fragrances" },
-  { value: "💄", label: "Makeup" },
-  { value: "🧴", label: "Skincare" },
-  { value: "💇", label: "Hair Salon / Barbers" },
-  { value: "💅", label: "Nails / Spa" },
-  { value: "🧼", label: "Personal Care (Soaps/Deodorants)" },
-  { value: "🩺", label: "Pharmacy / Chemist" },
-  { value: "💊", label: "Vitamins & Supplements" },
-  { value: "🩹", label: "Basic Medical Devices" },
-  { value: "👓", label: "Opticals / Glasses" },
-  { value: "📱", label: "Phones" },
-  { value: "📱", label: "Tablets" },
-  { value: "💻", label: "Laptops" },
-  { value: "🎧", label: "Earbuds / Headsets" },
-  { value: "🔊", label: "Speakers" },
-  { value: "⌚", label: "Smartwatches" },
-  { value: "🔋", label: "Power Banks / Chargers" },
-  { value: "🔌", label: "Cables & Chargers" },
-  { value: "📺", label: "TVs" },
-  { value: "🎮", label: "Game Consoles" },
-  { value: "📷", label: "Cameras" },
-  { value: "🔧", label: "Repair / Accessory Kiosks" },
-  { value: "🍿", label: "Snacks & Drinks" },
-  { value: "🥐", label: "Bakery / Fresh Food" },
-  { value: "🍎", label: "Fresh Fruits" },
-  { value: "🥩", label: "Fresh Meat / Butchery" },
-  { value: "🧻", label: "Household Basics" },
-  { value: "🧽", label: "Cleaning Supplies" },
-  { value: "🛋️", label: "Furniture Showroom" },
-  { value: "🛏️", label: "Bedding & Linen" },
-  { value: "🍳", label: "Kitchenware" },
-  { value: "🖼️", label: "Home Décor" },
-  { value: "📦", label: "Storage / Organizers" },
-  { value: "👶", label: "Baby & Kids" },
-  { value: "🧸", label: "Toys & Games" },
-  { value: "🍼", label: "Baby Food / Diapers" },
-  { value: "🚼", label: "Strollers / Baby Gear" },
-  { value: "⚽", label: "Sportswear" },
-  { value: "🏀", label: "Sports Equipment" },
-  { value: "🧢", label: "Outdoor / Fitness Accessories" },
-  { value: "📚", label: "Books & Stationery" },
-  { value: "🖨️", label: "Printing / Photocopying" },
-  { value: "🔖", label: "Labels / Tags / Sales" },
-  { value: "🧾", label: "Receipts / Customer Service" },
+  { value: "\u{1F6D2}", label: "Shopping" },
+  { value: "\u{1F34E}", label: "Groceries" },
+  { value: "\u{1F37D}", label: "Food" },
+  { value: "\u{1F454}", label: "Men's Clothing (Corporate)" },
+  { value: "\u{1F455}", label: "Men's Clothing (Casual)" },
+  { value: "\u{1F456}", label: "Men's Jeans / Trousers" },
+  { value: "\u{1F457}", label: "Women's Clothing (Casual)" },
+  { value: "\u{1F45A}", label: "Women's Clothing (Traditional)" },
+  { value: "\u{1F9D2}", label: "Kids Clothing" },
+  { value: "\u{1F45F}", label: "Sneakers" },
+  { value: "\u{1F45E}", label: "Formal Shoes" },
+  { value: "\u{1FA74}", label: "Sandals / Flip-flops" },
+  { value: "\u{1F97F}", label: "Ladies Flats" },
+  { value: "\u{1F45C}", label: "Handbags" },
+  { value: "\u{1F392}", label: "Backpacks" },
+  { value: "\u{1F9F3}", label: "Travel Bags" },
+  { value: "\u{231A}", label: "Watches" },
+  { value: "\u{1F576}", label: "Sunglasses" },
+  { value: "\u{1F3A9}", label: "Hats" },
+  { value: "\u{1F48E}", label: "Fine Jewelry" },
+  { value: "\u{1F4FF}", label: "Fashion Jewelry" },
+  { value: "\u{1F9F5}", label: "Tailoring / Alterations" },
+  { value: "\u{1F338}", label: "Perfumes / Fragrances" },
+  { value: "\u{1F484}", label: "Makeup" },
+  { value: "\u{1F9F4}", label: "Skincare" },
+  { value: "\u{1F487}", label: "Hair Salon / Barbers" },
+  { value: "\u{1F485}", label: "Nails / Spa" },
+  { value: "\u{1F9FC}", label: "Personal Care (Soaps/Deodorants)" },
+  { value: "\u{1F9EA}", label: "Pharmacy / Chemist" },
+  { value: "\u{1F48A}", label: "Vitamins & Supplements" },
+  { value: "\u{1F4F1}", label: "Phones" },
+  { value: "\u{1F4BB}", label: "Laptops" },
+  { value: "\u{1F3A7}", label: "Earbuds / Headsets" },
+  { value: "\u{1F50A}", label: "Speakers" },
+  { value: "\u{1F50B}", label: "Power Banks / Chargers" },
+  { value: "\u{1F4FA}", label: "TVs" },
+  { value: "\u{1F3AE}", label: "Game Consoles" },
+  { value: "\u{1F4F7}", label: "Cameras" },
+  { value: "\u{1F527}", label: "Repair / Accessory Kiosks" },
+  { value: "\u{1F37F}", label: "Snacks & Drinks" },
+  { value: "\u{1F950}", label: "Bakery / Fresh Food" },
+  { value: "\u{1F969}", label: "Fresh Meat / Butchery" },
+  { value: "\u{1F9FB}", label: "Household Basics" },
+  { value: "\u{1F9FD}", label: "Cleaning Supplies" },
+  { value: "\u{1F6CB}", label: "Furniture Showroom" },
+  { value: "\u{1F6CF}", label: "Bedding & Linen" },
+  { value: "\u{1F373}", label: "Kitchenware" },
+  { value: "\u{1F5BC}", label: "Home Decor" },
+  { value: "\u{1F4E6}", label: "Storage / Organizers" },
+  { value: "\u{1F476}", label: "Baby & Kids" },
+  { value: "\u{1F9F8}", label: "Toys & Games" },
+  { value: "\u{1F37C}", label: "Baby Food / Diapers" },
+  { value: "\u{1F6BC}", label: "Strollers / Baby Gear" },
+  { value: "\u{26BD}", label: "Sportswear" },
+  { value: "\u{1F3C0}", label: "Sports Equipment" },
+  { value: "\u{1F3CB}", label: "Outdoor / Fitness Accessories" },
+  { value: "\u{1F4DA}", label: "Books & Stationery" },
+  { value: "\u{1F5A8}", label: "Printing / Photocopying" },
+  { value: "\u{1F516}", label: "Labels / Tags / Sales" },
+  { value: "\u{1F9FE}", label: "Receipts / Customer Service" },
 ];
 
 export default function EmojiCombobox({
@@ -106,7 +99,7 @@ export default function EmojiCombobox({
     const q = String(query || "").toLowerCase().trim();
     if (!q) return EMOJI_OPTIONS;
     return EMOJI_OPTIONS.filter(
-      (o) => o.label.toLowerCase().includes(q) || o.value.includes(q)
+      (o) => o.label.toLowerCase().includes(q) || o.value.includes(q),
     );
   }, [query]);
 
@@ -117,9 +110,8 @@ export default function EmojiCombobox({
     } else {
       setHighlighted(-1);
     }
-  }, [open, options.length]);
+  }, [open, options.length, highlighted]);
 
-  // Ensure highlighted item is visible
   useEffect(() => {
     if (!listRef.current || highlighted < 0) return;
     const el = listRef.current.children[highlighted] as HTMLElement | undefined;
@@ -182,8 +174,8 @@ export default function EmojiCombobox({
                 role="option"
                 aria-selected={highlighted === idx}
                 className={cn(
-                  "flex items-center gap-2 cursor-pointer rounded px-2 py-1",
-                  highlighted === idx ? "bg-accent text-accent-foreground" : "hover:bg-accent/30"
+                  "flex cursor-pointer items-center gap-2 rounded px-2 py-1",
+                  highlighted === idx ? "bg-accent text-accent-foreground" : "hover:bg-accent/30",
                 )}
                 onMouseEnter={() => setHighlighted(idx)}
                 onClick={() => selectIndex(idx)}

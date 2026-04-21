@@ -10,7 +10,6 @@ import {
   LogOut,
   Settings,
   ShoppingBag,
-  Wrench,
 } from "lucide-react";
 
 import { ProfilePics } from "@/components/resident/CityBuddyMessage";
@@ -101,12 +100,6 @@ export default function Nav({
       label: "Dashboard",
       Icon: Home,
       action: onNavigateToHomepage,
-    },
-    {
-      key: "chat",
-      label: "Book a Service",
-      Icon: Wrench,
-      action: onBookServiceClick,
     },
     {
       key: "ordinary_flow",
@@ -221,10 +214,6 @@ export default function Nav({
         </div>
       </div>
 
-      <div className={`px-2 ${collapsed ? "flex justify-center" : ""}`}>
-        <NotificationBell collapsed={collapsed} />
-      </div>
-
       {/* PRIMARY NAV SECTION */}
       <div className="flex flex-col gap-2 px-2">
         {navItems.map(renderNavItem)}
@@ -234,7 +223,10 @@ export default function Nav({
       <div className="flex-1" />
 
       {/* BOTTOM SECTION: Support, Settings */}
-      <div className="flex flex-col gap-2 px-2">
+      <div className="flex flex-col gap-2 px-2 pb-2">
+        <div className={`${collapsed ? "flex justify-center" : ""}`}>
+          <NotificationBell collapsed={collapsed} />
+        </div>
         {secondaryItems.map(renderNavItem)}
       </div>
 

@@ -15,7 +15,7 @@ import {
 // Placeholder header image (asset may be missing in this environment)
 const headerImage = "";
 
-import { ProfilePics } from "../../imports/AIChatResponses";
+import { ProfilePics } from "../../components/ui/ProfilePics";
 import { useProfile } from "../../contexts/ProfileContext";
 import { svgPaths } from "../../components/ui/icon";
 

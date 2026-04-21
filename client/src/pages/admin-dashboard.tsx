@@ -47,7 +47,14 @@ interface User {
 interface ServiceRequest {
   id: string;
   category: string;
-  status: "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
+  status:
+    | "pending"
+    | "pending_inspection"
+    | "assigned"
+    | "assigned_for_job"
+    | "in_progress"
+    | "completed"
+    | "cancelled";
   createdAt: string;
   providerId?: string;
   residentId?: string;
@@ -198,7 +205,12 @@ export default function AdminDashboard() {
                 </div>
               </div>
               <p className="text-xs text-muted-foreground mt-2">
-                {allRequests.filter((r: any) => ['pending', 'assigned', 'in_progress'].includes(r.status)).length} active
+                {
+                  allRequests.filter((r: any) =>
+                    ["pending", "pending_inspection", "assigned", "assigned_for_job", "in_progress"].includes(r.status),
+                  ).length
+                }{" "}
+                active
               </p>
             </CardContent>
           </Card>

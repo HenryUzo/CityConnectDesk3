@@ -41,7 +41,7 @@ test.describe('AI Conversation Flow with Ollama', () => {
       const loginButton = page.getByRole('button', { name: /sign in|login/i });
       if (await loginButton.isVisible().catch(() => false)) {
         await loginButton.click();
-        await page.waitForURL('**/login');
+        await page.waitForURL('**/auth');
         // This test requires an authenticated user - skip if not logged in
         test.skip(true, 'Requires authenticated user');
       }

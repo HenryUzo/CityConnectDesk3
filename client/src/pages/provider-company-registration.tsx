@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MapPin, Shield, Eye } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { ProviderShell } from "@/components/provider/ProviderShell";
 
 export default function ProviderCompanyRegistration() {
   const { toast } = useToast();
@@ -72,8 +73,12 @@ export default function ProviderCompanyRegistration() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 py-12">
-      <div className="max-w-7xl mx-auto px-4 lg:px-6 space-y-10">
+    <ProviderShell
+      title="Register business"
+      subtitle="Submit your company profile, banking, and location details for review."
+      contentClassName="overflow-auto"
+    >
+      <div className="space-y-10 rounded-[36px] bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 px-4 py-8 lg:px-6">
         <div className="text-center text-white space-y-3">
           <p className="text-[0.7rem] tracking-[0.5em] text-primary-foreground uppercase">
             CityConnect Business Suite
@@ -105,7 +110,7 @@ export default function ProviderCompanyRegistration() {
                 </div>
                 <Button
                   variant="outline"
-                  onClick={() => setLocation("/provider")}
+                  onClick={() => setLocation("/provider/dashboard")}
                 >
                   Back to dashboard
                 </Button>
@@ -334,6 +339,7 @@ export default function ProviderCompanyRegistration() {
           </div>
         </div>
       </div>
-    </div>
+    </ProviderShell>
   );
 }
+

@@ -1,4 +1,4 @@
-import { createContext, ReactNode, useContext } from "react";
+import { createContext, ReactNode, useContext, useEffect } from "react";
 import {
   useQuery,
   useMutation,
@@ -24,12 +24,34 @@ type LoginData = {
   accessCode?: string;
 };
 
+const LEGACY_AUTH_STORAGE_KEYS = [
+  "jwt",
+  "refreshToken",
+  "token",
+  "admin_access_token",
+  "admin_refresh_token",
+  "admin_jwt",
+];
+
+function clearLegacyAuthStorage() {
+  if (typeof window === "undefined") return;
+
+  for (const key of LEGACY_AUTH_STORAGE_KEYS) {
+    window.localStorage.removeItem(key);
+    window.sessionStorage.removeItem(key);
+  }
+}
+
 export const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { toast } = useToast();
 
-  // ⛔️ Do NOT query /api/user on admin routes (prevents 401 noise there)
+  useEffect(() => {
+    clearLegacyAuthStorage();
+  }, []);
+
+  // Avoid querying /api/user on admin routes (prevents noisy 401s there)
   const isAdminRoute =
     typeof window !== "undefined" &&
     (window.location.pathname.startsWith("/admin") ||
@@ -39,8 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // On admin routes, we disable this query entirely.
   const isPublicRegistrationRoute =
     typeof window !== "undefined" &&
-    (window.location.pathname === "/company-registration" ||
-      window.location.pathname.startsWith("/auth") ||
+    (window.location.pathname.startsWith("/auth") ||
       window.location.pathname.startsWith("/register"));
 
   const {
@@ -62,17 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const res = await apiRequest("POST", "/api/login", loginData);
       const data = await res.json();
-      
-      // Store JWT tokens from response
-      if (data.accessToken) {
-        localStorage.setItem("jwt", data.accessToken);
-        sessionStorage.setItem("jwt", data.accessToken);
-      }
-      if (data.refreshToken) {
-        localStorage.setItem("refreshToken", data.refreshToken);
-        sessionStorage.setItem("refreshToken", data.refreshToken);
-      }
-      
+      clearLegacyAuthStorage();
       return data.user || data;
     },
     onSuccess: (user: SelectUser) => {
@@ -93,17 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       insertUserSchema.passthrough().parse(credentials);
       const res = await apiRequest("POST", "/api/register", credentials);
       const data = await res.json();
-      
-      // Store JWT tokens from response
-      if (data.accessToken) {
-        localStorage.setItem("jwt", data.accessToken);
-        sessionStorage.setItem("jwt", data.accessToken);
-      }
-      if (data.refreshToken) {
-        localStorage.setItem("refreshToken", data.refreshToken);
-        sessionStorage.setItem("refreshToken", data.refreshToken);
-      }
-      
+      clearLegacyAuthStorage();
       return data.user || data;
     },
     onSuccess: (user: SelectUser) => {
@@ -123,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await apiRequest("POST", "/api/logout");
     },
     onSuccess: () => {
+      clearLegacyAuthStorage();
       queryClient.setQueryData(["/api/user"], null);
     },
     onError: (error: Error) => {

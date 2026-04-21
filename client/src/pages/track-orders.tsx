@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { formatServiceRequestStatusLabel, normalizeServiceRequestStatus } from "@/lib/serviceRequestStatus";
 import { 
   ClipboardList, 
   Wrench,
@@ -16,7 +17,15 @@ import {
 } from "lucide-react";
 import ResidentShell from "@/components/layout/ResidentShell";
 
-type StatusFilter = "all" | "pending" | "assigned" | "in_progress" | "completed" | "cancelled";
+type StatusFilter =
+  | "all"
+  | "pending"
+  | "pending_inspection"
+  | "assigned"
+  | "assigned_for_job"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
 type ServiceRequest = {
   id: string;
   status: string;
@@ -66,13 +75,16 @@ export default function TrackOrders() {
 
   const filteredRequests = serviceRequests.filter((request: any) => {
     if (statusFilter === "all") return true;
-    return request.status === statusFilter;
+    return normalizeServiceRequestStatus(request.status) === statusFilter;
   });
 
   const getStatusColor = (status: string) => {
-    switch (status) {
+    const normalizedStatus = normalizeServiceRequestStatus(status);
+    switch (normalizedStatus) {
       case 'pending': return 'bg-gray-100 text-gray-800';
-      case 'assigned': return 'bg-blue-100 text-blue-800';
+      case 'pending_inspection': return 'bg-orange-100 text-orange-800';
+      case 'assigned': return 'bg-purple-100 text-purple-800';
+      case 'assigned_for_job': return 'bg-indigo-100 text-indigo-800';
       case 'in_progress': return 'bg-yellow-100 text-yellow-800';
       case 'completed': return 'bg-green-100 text-green-800';
       case 'cancelled': return 'bg-red-100 text-red-800';
@@ -90,12 +102,31 @@ export default function TrackOrders() {
     }
   };
 
-  const getProgressSteps = (status: string) => {
+  const getProgressSteps = (status: string, category?: string) => {
+    const normalizedStatus = normalizeServiceRequestStatus(status);
     const steps = [
       { key: 'submitted', label: 'Submitted', active: true },
-      { key: 'assigned', label: 'Assigned', active: ['assigned', 'in_progress', 'completed'].includes(status) },
-      { key: 'in_progress', label: 'In Progress', active: ['in_progress', 'completed'].includes(status) },
-      { key: 'completed', label: 'Completed', active: status === 'completed' },
+      {
+        key: 'pending_inspection',
+        label: formatServiceRequestStatusLabel("pending_inspection", category),
+        active: ['pending_inspection', 'assigned', 'assigned_for_job', 'in_progress', 'completed'].includes(normalizedStatus),
+      },
+      {
+        key: 'assigned',
+        label: formatServiceRequestStatusLabel("assigned", category),
+        active: ['assigned', 'assigned_for_job', 'in_progress', 'completed'].includes(normalizedStatus),
+      },
+      {
+        key: 'assigned_for_job',
+        label: formatServiceRequestStatusLabel("assigned_for_job", category),
+        active: ['assigned_for_job', 'in_progress', 'completed'].includes(normalizedStatus),
+      },
+      {
+        key: 'in_progress',
+        label: 'In Progress',
+        active: ['in_progress', 'completed'].includes(normalizedStatus),
+      },
+      { key: 'completed', label: 'Completed', active: normalizedStatus === 'completed' },
     ];
     return steps;
   };
@@ -157,7 +188,9 @@ export default function TrackOrders() {
             {[
               { key: "all", label: "All" },
               { key: "pending", label: "Pending" },
-              { key: "assigned", label: "Assigned" },
+              { key: "pending_inspection", label: "Pending inspection" },
+              { key: "assigned", label: "Assigned for inspection" },
+              { key: "assigned_for_job", label: "Assigned for job" },
               { key: "in_progress", label: "In Progress" },
               { key: "completed", label: "Completed" },
               { key: "cancelled", label: "Cancelled" },
@@ -184,6 +217,7 @@ export default function TrackOrders() {
           ) : filteredRequests.length > 0 ? (
             filteredRequests.map((request: any) => {
               const isHighlighted = highlightId === request.id;
+              const progressSteps = getProgressSteps(request.status, request.category);
               const cardClasses = [
                 "transition-shadow hover:shadow-lg",
                 isHighlighted ? "ring-2 ring-emerald-500 shadow-2xl bg-emerald-50/60" : "",
@@ -217,7 +251,9 @@ export default function TrackOrders() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge className={`${getStatusColor(request.status)}`}>{request.status.replace('_', ' ')}</Badge>
+                      <Badge className={`${getStatusColor(request.status)}`}>
+                        {formatServiceRequestStatusLabel(request.status, request.category)}
+                      </Badge>
                       <Badge className={`${getUrgencyColor(request.urgency)}`}>{request.urgency}</Badge>
                     </div>
                   </div>
@@ -225,14 +261,20 @@ export default function TrackOrders() {
                   {/* Progress Tracker */}
                   <div className="my-6">
                     <div className="flex justify-between">
-                      {getProgressSteps(request.status).map((step, index) => (
+                      {progressSteps.map((step, index) => (
                         <div key={step.key} className="flex-1 flex flex-col items-center relative">
                           <div className={`w-8 h-8 rounded-full flex items-center justify-center ${step.active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
                             {step.active ? <CheckCircle className="w-5 h-5" /> : <Clock className="w-5 h-5" />}
                           </div>
                           <p className={`mt-2 text-xs text-center ${step.active ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>{step.label}</p>
-                          {index < getProgressSteps(request.status).length - 1 && (
-                            <div className={`absolute top-4 left-1/2 w-full h-0.5 ${getProgressSteps(request.status)[index + 1].active ? 'bg-primary' : 'bg-muted'}`} />
+                          {index < progressSteps.length - 1 && (
+                            <div
+                              className={`absolute top-4 left-1/2 w-full h-0.5 ${
+                                progressSteps[index + 1].active
+                                  ? 'bg-primary'
+                                  : 'bg-muted'
+                              }`}
+                            />
                           )}
                         </div>
                       ))}

@@ -44,7 +44,7 @@ import {
   AlertDialogDescription,
   AlertDialogAction,
   AlertDialogCancel,
-} from "@/components/NewSelectUi/src/components/ui/alert-dialog";
+} from "@/components/ui/alert-dialog";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 
 import { useMyEstates } from "@/hooks/useMyEstates";
@@ -2385,10 +2385,10 @@ export function SidebarNavigation({
 function TextAndSupportingText() {
   return (
     <div
-      className="basis-0 content-stretch flex flex-col gap-[4px] grow items-start min-h-px min-w-px not-italic relative shrink-0 text-center"
+      className="content-stretch flex flex-col gap-[4px] items-start not-italic relative shrink-0 text-left w-full"
       data-name="Text and supporting text"
     >
-      <p className="font-['General_Sans:Medium',sans-serif] leading-[38px] relative shrink-0 text-[#054f31] text-[30px] w-full">
+      <p className="font-['General_Sans:Medium',sans-serif] leading-[38px] relative shrink-0 text-[#054f31] text-[40px] tracking-[-0.8px] w-full">
         Select Categories
       </p>
       <p className="font-['General_Sans:Regular',sans-serif] leading-[24px] relative shrink-0 text-[#667085] text-[16px] w-full">
@@ -2401,7 +2401,7 @@ function TextAndSupportingText() {
 function Content7() {
   return (
     <div
-      className="content-stretch flex gap-[16px] items-start justify-center relative shrink-0 w-full"
+      className="content-stretch flex gap-[16px] items-start justify-start relative shrink-0 w-full"
       data-name="Content"
     >
       <TextAndSupportingText />
@@ -2534,11 +2534,11 @@ function Container1({
       className="relative shrink-0 w-full"
       data-name="Container"
     >
-      <div className="flex flex-col items-center size-full">
-        <div className="content-stretch flex flex-col gap-[24px] items-center px-[32px] py-0 relative w-full">
+      <div className="flex flex-col items-start size-full">
+        <div className="content-stretch flex flex-col gap-[24px] items-start px-[32px] py-0 relative w-full">
           <Content7 />
-          <div className="w-full flex justify-center">
-            <div className="w-full lg:max-w-[720px] lg:min-w-[500px]">
+          <div className="w-full flex justify-start">
+            <div className="w-full max-w-[440px]">
               <InputDropdown
                 searchQuery={searchQuery}
                 setSearchQuery={setSearchQuery}
@@ -2824,7 +2824,7 @@ function AvatarLabelGroup({ count }: { count: string }) {
         <Avatar3 />
         <Avatar4 />
       </div>
-      <p className="font-['General_Sans:Regular',sans-serif] leading-[20px] not-italic relative shrink-0 text-[#027a48] text-[14px] text-nowrap">
+      <p className="font-['General_Sans:Regular',sans-serif] leading-[20px] not-italic relative shrink-0 text-[#12b76a] text-[12px] text-nowrap">
         {count}
       </p>
     </div>
@@ -2846,14 +2846,14 @@ function MetricItem({
 }: CategoryCardProps) {
   return (
     <button
-      className="bg-white border border-border hover:shadow-md active:shadow-sm transition-shadow cursor-pointer relative rounded-[12px] w-full h-full text-left"
+      className="bg-white border border-[#D0D5DD] hover:shadow-md active:shadow-sm transition-shadow cursor-pointer relative rounded-[8px] w-full h-full text-left"
       onClick={onClick}
     >
       <div className="flex flex-col justify-between size-full">
         <div className="content-stretch flex flex-col gap-[20px] items-start px-[24px] py-[20px] relative w-full">
-          <div className="text-[40px]">{icon}</div>
+          <div className="text-[32px]">{icon}</div>
           <div className="content-stretch flex flex-col gap-[8px] items-start relative shrink-0 w-full">
-            <p className="font-['General_Sans:Medium',sans-serif] leading-[24px] not-italic relative shrink-0 text-[#054f31] text-[16px] text-nowrap">
+            <p className="font-['General_Sans:Medium',sans-serif] leading-[24px] not-italic relative shrink-0 text-[#1d2939] text-[16px] text-nowrap">
               {title}
             </p>
             <AvatarLabelGroup count={count} />
@@ -2862,7 +2862,7 @@ function MetricItem({
       </div>
       <div
         aria-hidden="true"
-        className="absolute inset-0 pointer-events-none rounded-[12px]"
+        className="absolute inset-0 pointer-events-none rounded-[8px]"
       />
     </button>
   );
@@ -2944,7 +2944,7 @@ function Form({
 }) {
   return (
     <div
-      className="bg-white content-stretch flex flex-col items-start overflow-clip relative rounded-[8px] self-stretch shadow-sm w-full"
+      className="bg-[#F2F4F7] content-stretch flex flex-col items-start overflow-clip relative rounded-[8px] self-stretch w-full"
       data-name="Form"
     >
       <Content11
@@ -3080,6 +3080,9 @@ function MainWrapSelectCategory({
     </div>
   );
 }
+
+// Exported for reuse (e.g., OrdinaryConversationFlow category gate)
+export { MainWrapSelectCategory };
 
 // ============ CHAT VIEW COMPONENTS ============
 function Frame30NewMain({ 
@@ -5052,7 +5055,7 @@ export default function ChatInterface({
   const [issueText, setIssueText] = useState<string>("");
   const { data: myEstates } = useMyEstates();
   const { toast } = useToast();
-  const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global" });
+  const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global", kind: "service" });
   
   // Load AI conversation flow settings from database
   const { settings: aiFlowSettings, isLoading: aiFlowLoading } = useAiConversationFlowSettings();

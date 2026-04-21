@@ -29,7 +29,11 @@ export const serviceStatusEnum = pgEnum("service_status", [
   "pending",
   "pending_inspection",
   "assigned",
+  "assigned_for_job",
   "in_progress",
+  "work_completed_pending_resident",
+  "disputed",
+  "rework_required",
   "completed",
   "cancelled",
 ]);
@@ -66,6 +70,9 @@ export const serviceCategoryEnum = pgEnum("service_category", [
   "catering_services",
   "it_support",
   "maintenance_repair",
+  "general_repairs",
+  "locksmith",
+  "glass_windows",
   "packaging_solutions",
   "marketing_advertising",
   "home_tutors",
@@ -145,7 +152,7 @@ export const storeApprovalStatusEnum = pgEnum("store_approval_status", [
   "rejected",
 ]);
 
-// ── Marketplace V2 enums ──
+// â”€â”€ Marketplace V2 enums â”€â”€
 export const cartStatusEnum = pgEnum("cart_status", [
   "active",
   "checked_out",
@@ -387,11 +394,11 @@ export const categories = pgTable("categories", {
   estateId: varchar("estate_id").references(() => estates.id),
   name: text("name").notNull(),
   key: text("key").notNull(),
-  // Optional emoji for category display (e.g., 🔌)
+  // Optional emoji for category display (e.g., ðŸ”Œ)
   emoji: text("emoji"),
   description: text("description"),
   icon: text("icon"),
-  tag: text("tag").notNull().default("Facility Management 🏗️"),
+  tag: text("tag").notNull().default("Facility Management ðŸ—ï¸"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -600,7 +607,7 @@ export const orders = pgTable("orders", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// ── Marketplace V2: Inventory ──
+// â”€â”€ Marketplace V2: Inventory â”€â”€
 export const inventory = pgTable("inventory", {
   id: varchar("id")
     .primaryKey()
@@ -619,7 +626,7 @@ export const inventory = pgTable("inventory", {
   uniqueStoreProduct: sql`UNIQUE (${table.storeId}, ${table.productId})`,
 }));
 
-// ── Marketplace V2: Carts ──
+// â”€â”€ Marketplace V2: Carts â”€â”€
 export const carts = pgTable("carts", {
   id: varchar("id")
     .primaryKey()
@@ -653,7 +660,7 @@ export const cartItems = pgTable("cart_items", {
   uniqueCartProduct: sql`UNIQUE (${table.cartId}, ${table.productId})`,
 }));
 
-// ── Marketplace V2: Parent Orders (umbrella) ──
+// â”€â”€ Marketplace V2: Parent Orders (umbrella) â”€â”€
 export const parentOrders = pgTable("parent_orders", {
   id: varchar("id")
     .primaryKey()
@@ -669,7 +676,7 @@ export const parentOrders = pgTable("parent_orders", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// ── Marketplace V2: Store Orders (one per store per parent order) ──
+// â”€â”€ Marketplace V2: Store Orders (one per store per parent order) â”€â”€
 export const storeOrders = pgTable("store_orders", {
   id: varchar("id")
     .primaryKey()
@@ -707,7 +714,7 @@ export const storeOrderItems = pgTable("store_order_items", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// ── Marketplace V2: Payments ──
+// â”€â”€ Marketplace V2: Payments â”€â”€
 export const marketplacePayments = pgTable("marketplace_payments", {
   id: varchar("id")
     .primaryKey()
@@ -724,7 +731,7 @@ export const marketplacePayments = pgTable("marketplace_payments", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// ── Marketplace V2: Refunds (store-level) ──
+// â”€â”€ Marketplace V2: Refunds (store-level) â”€â”€
 export const refunds = pgTable("refunds", {
   id: varchar("id")
     .primaryKey()
@@ -856,12 +863,100 @@ export const serviceRequests = pgTable("service_requests", {
   // Other admin fields
   adminNotes: text("admin_notes"),
   assignedAt: timestamp("assigned_at"),
+  paymentRequestedAt: timestamp("payment_requested_at"),
+  approvedForJobAt: timestamp("approved_for_job_at"),
+  approvedForJobBy: varchar("approved_for_job_by").references(() => users.id),
+  consultancyReport: jsonb("consultancy_report"),
+  consultancyReportSubmittedAt: timestamp("consultancy_report_submitted_at"),
+  consultancyReportSubmittedBy: varchar("consultancy_report_submitted_by").references(() => users.id),
+  categoryLabel: text("category_label"),
+  issueType: text("issue_type"),
+  areaAffected: text("area_affected"),
+  quantityLabel: text("quantity_label"),
+  timeWindowLabel: text("time_window_label"),
+  photosCount: integer("photos_count"),
+  addressLine: text("address_line"),
+  estateName: text("estate_name"),
+  stateName: text("state_name"),
+  lgaName: text("lga_name"),
+  paymentPurpose: text("payment_purpose"),
+  consultancyFee: decimal("consultancy_fee", { precision: 10, scale: 2 }),
+  materialCost: decimal("material_cost", { precision: 10, scale: 2 }),
+  serviceCost: decimal("service_cost", { precision: 10, scale: 2 }),
+  requestedTotal: decimal("requested_total", { precision: 10, scale: 2 }),
+  assignedInspectorId: varchar("assigned_inspector_id").references(() => users.id),
+  assignedJobProviderId: varchar("assigned_job_provider_id").references(() => users.id),
   closedAt: timestamp("closed_at"),
   closeReason: text("close_reason"),
   billedAmount: decimal("billed_amount", { precision: 10, scale: 2 }).default(
     "0",
   ),
   paymentStatus: text("payment_status").default("pending"),
+});
+
+export const serviceRequestCancellationCases = pgTable("service_request_cancellation_cases", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  requestId: varchar("request_id")
+    .notNull()
+    .references(() => serviceRequests.id, { onDelete: "cascade" }),
+  residentId: varchar("resident_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("requested"), // requested | under_review | approved | rejected | withdrawn
+  reasonCode: text("reason_code").notNull(),
+  reasonDetail: text("reason_detail").notNull(),
+  preferredResolution: text("preferred_resolution").notNull().default("full_refund"),
+  evidence: jsonb("evidence").notNull().default("[]"),
+  adminDecision: text("admin_decision"),
+  adminNote: text("admin_note"),
+  refundDecision: text("refund_decision").notNull().default("none"), // none | full | partial
+  refundAmount: decimal("refund_amount", { precision: 10, scale: 2 }),
+  assignedAdminId: varchar("assigned_admin_id").references(() => users.id),
+  providerFeedback: text("provider_feedback"),
+  companyFeedback: text("company_feedback"),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const companyTasks = pgTable("company_tasks", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id")
+    .notNull()
+    .references(() => companies.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  assigneeId: varchar("assignee_id").references(() => users.id),
+  createdBy: varchar("created_by")
+    .notNull()
+    .references(() => users.id),
+  priority: text("priority").notNull().default("medium"),
+  status: text("status").notNull().default("open"),
+  dueDate: timestamp("due_date"),
+  serviceRequestId: varchar("service_request_id").references(() => serviceRequests.id),
+  metadata: jsonb("metadata").notNull().default("{}"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const companyTaskUpdates = pgTable("company_task_updates", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  taskId: varchar("task_id")
+    .notNull()
+    .references(() => companyTasks.id),
+  authorId: varchar("author_id")
+    .notNull()
+    .references(() => users.id),
+  message: text("message").notNull(),
+  attachments: jsonb("attachments").notNull().default("[]"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Wallets table
@@ -1345,6 +1440,39 @@ export const transactionsRelations = relations(transactions, ({ one }) => ({
   }),
 }));
 
+export const companyTasksRelations = relations(companyTasks, ({ one, many }) => ({
+  company: one(companies, {
+    fields: [companyTasks.companyId],
+    references: [companies.id],
+  }),
+  assignee: one(users, {
+    fields: [companyTasks.assigneeId],
+    references: [users.id],
+    relationName: "companyTaskAssignee",
+  }),
+  creator: one(users, {
+    fields: [companyTasks.createdBy],
+    references: [users.id],
+    relationName: "companyTaskCreator",
+  }),
+  serviceRequest: one(serviceRequests, {
+    fields: [companyTasks.serviceRequestId],
+    references: [serviceRequests.id],
+  }),
+  updates: many(companyTaskUpdates),
+}));
+
+export const companyTaskUpdatesRelations = relations(companyTaskUpdates, ({ one }) => ({
+  task: one(companyTasks, {
+    fields: [companyTaskUpdates.taskId],
+    references: [companyTasks.id],
+  }),
+  author: one(users, {
+    fields: [companyTaskUpdates.authorId],
+    references: [users.id],
+  }),
+}));
+
 export const broadcastMessagesRelations = relations(broadcastMessages, ({ one }) => ({
   sender: one(users, {
     fields: [broadcastMessages.senderId],
@@ -1369,7 +1497,7 @@ export const impersonationSessionsRelations = relations(impersonationSessions, (
   }),
 }));
 
-// ── Marketplace V2 relations ──
+// â”€â”€ Marketplace V2 relations â”€â”€
 export const inventoryRelations = relations(inventory, ({ one }) => ({
   store: one(stores, { fields: [inventory.storeId], references: [stores.id] }),
   product: one(marketplaceItems, { fields: [inventory.productId], references: [marketplaceItems.id] }),
@@ -1484,6 +1612,15 @@ export const insertServiceRequestSchema = createInsertSchema(
   updatedAt: true,
 });
 
+export const insertServiceRequestCancellationCaseSchema = createInsertSchema(
+  serviceRequestCancellationCases,
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  resolvedAt: true,
+});
+
 export const insertWalletSchema = createInsertSchema(wallets).omit({
   id: true,
   createdAt: true,
@@ -1491,6 +1628,17 @@ export const insertWalletSchema = createInsertSchema(wallets).omit({
 });
 
 export const insertTransactionSchema = createInsertSchema(transactions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertCompanyTaskSchema = createInsertSchema(companyTasks).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertCompanyTaskUpdateSchema = createInsertSchema(companyTaskUpdates).omit({
   id: true,
   createdAt: true,
 });
@@ -1529,10 +1677,18 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type ServiceRequest = typeof serviceRequests.$inferSelect;
 export type InsertServiceRequest = z.infer<typeof insertServiceRequestSchema>;
+export type ServiceRequestCancellationCase = typeof serviceRequestCancellationCases.$inferSelect;
+export type InsertServiceRequestCancellationCase = z.infer<
+  typeof insertServiceRequestCancellationCaseSchema
+>;
 export type Wallet = typeof wallets.$inferSelect;
 export type InsertWallet = z.infer<typeof insertWalletSchema>;
 export type Transaction = typeof transactions.$inferSelect;
 export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
+export type CompanyTask = typeof companyTasks.$inferSelect;
+export type InsertCompanyTask = z.infer<typeof insertCompanyTaskSchema>;
+export type CompanyTaskUpdate = typeof companyTaskUpdates.$inferSelect;
+export type InsertCompanyTaskUpdate = z.infer<typeof insertCompanyTaskUpdateSchema>;
 export type RequestMessage = typeof requestMessages.$inferSelect;
 export type InsertRequestMessage = typeof requestMessages.$inferInsert;
 export type RequestBill = typeof requestBills.$inferSelect;
@@ -1547,7 +1703,7 @@ export type InsertBroadcastMessage = z.infer<typeof insertBroadcastMessageSchema
 export type ImpersonationSession = typeof impersonationSessions.$inferSelect;
 export type InsertImpersonationSession = z.infer<typeof insertImpersonationSessionSchema>;
 
-// ── Marketplace V2 types ──
+// â”€â”€ Marketplace V2 types â”€â”€
 export type Cart = typeof carts.$inferSelect;
 export type CartItem = typeof cartItems.$inferSelect;
 export type Inventory = typeof inventory.$inferSelect;

@@ -6,3 +6,35 @@ vite.config.ts.*
 *.tar.gz
 *.env
 .env
+
+# Build output
+dist/
+client/dist/
+
+# Logs and temp files
+*.log
+*.err
+*.out
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+!.vscode/settings.json
+
+# Test results
+test-results/
+playwright-report/
+screenshots/
+
+# Replit
+.replit
+replit.md
+.local/
+.config/
+.tools/
+
+# Local uploaded assets
+uploads/

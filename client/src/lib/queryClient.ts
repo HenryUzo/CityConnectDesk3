@@ -11,39 +11,24 @@ async function throwIfResNotOk(res: Response, url: string) {
 function getBaseUrl(): string {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   if (import.meta.env.DEV || origin.includes(".replit.dev") || origin.includes("localhost")) {
-    // Dev / Replit preview: hit the same origin to avoid CORS
     return origin || "http://localhost:5173";
   }
-  // Production: prefer configured API, else current origin, else hard fallback
   return import.meta.env.VITE_API_URL || origin || "https://cityconnect.replit.app";
 }
 
 /** Build an absolute URL from a queryKey (expects key[0] to be the path or URL) */
 function resolveUrlFromQueryKey(queryKey: readonly unknown[]): string {
   const raw = String(queryKey[0] ?? "");
-  if (/^https?:\/\//i.test(raw)) return raw; // already absolute
+  if (/^https?:\/\//i.test(raw)) return raw;
   const base = getBaseUrl();
   const path = raw.startsWith("/") ? raw : `/${raw}`;
   return `${base}${path}`;
 }
 
-/** Attach Bearer token from storage (sessionStorage preferred in this repo) */
-function getAuthHeaders() {
+/** Session-cookie auth model: send credentials, attach only non-auth context headers. */
+function getRequestHeaders() {
   const headers: Record<string, string> = {};
 
-  // Read admin token from storage (check resident token keys too)
-  const token =
-    sessionStorage.getItem("jwt") ||
-    localStorage.getItem("jwt") ||
-    sessionStorage.getItem("admin_access_token") ||
-    localStorage.getItem("admin_access_token") ||
-    localStorage.getItem("admin_jwt") ||
-    localStorage.getItem("token") ||
-    "";
-
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  // Send selected estate id with every admin call
   const estateId =
     localStorage.getItem("admin_current_estate_id") ||
     sessionStorage.getItem("admin_current_estate_id") ||
@@ -51,10 +36,21 @@ function getAuthHeaders() {
 
   if (estateId) headers["X-Estate-Id"] = estateId;
 
+  const devEmail =
+    sessionStorage.getItem("dev_user_email") ||
+    localStorage.getItem("dev_user_email") ||
+    sessionStorage.getItem("provider_email_dev") ||
+    localStorage.getItem("provider_email_dev") ||
+    sessionStorage.getItem("resident_email_dev") ||
+    localStorage.getItem("resident_email_dev") ||
+    "";
+
+  if (devEmail && !headers["x-user-email"]) {
+    headers["x-user-email"] = devEmail;
+  }
+
   return headers;
 }
-
-
 
 export async function apiRequest(
   method: string,
@@ -66,7 +62,7 @@ export async function apiRequest(
     ? url
     : resolveUrlFromQueryKey([url]);
 
-  const headers: Record<string, string> = { ...getAuthHeaders() };
+  const headers: Record<string, string> = { ...getRequestHeaders() };
   if (data) headers["Content-Type"] = "application/json";
 
   const res = await fetch(finalUrl, {
@@ -81,13 +77,12 @@ export async function apiRequest(
   return res;
 }
 
-
 type UnauthorizedBehavior = "returnNull" | "throw";
 
 export function getQueryFn<TReturn>(opts: { on401: UnauthorizedBehavior }): QueryFunction<TReturn> {
   const fn: QueryFunction<TReturn> = async ({ queryKey }) => {
     const url = resolveUrlFromQueryKey(queryKey);
-    const headers = getAuthHeaders();
+    const headers = getRequestHeaders();
 
     let res: Response;
     try {
@@ -116,8 +111,10 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      staleTime: 30_000,
+      gcTime: 10 * 60 * 1000,
       retry: false,
     },
     mutations: {

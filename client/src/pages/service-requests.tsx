@@ -4,29 +4,25 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { residentFetch } from "@/lib/residentApi";
+import { formatServiceRequestStatusLabel, normalizeServiceRequestStatus } from "@/lib/serviceRequestStatus";
 import { format } from "date-fns";
 import Nav from "@/components/layout/Nav";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 
 const statusStyles: Record<string, string> = {
   pending: "bg-amber-100 text-amber-800",
+  pending_inspection: "bg-amber-100 text-amber-800",
   assigned: "bg-purple-100 text-purple-800",
+  assigned_for_job: "bg-indigo-100 text-indigo-800",
   in_progress: "bg-sky-100 text-sky-800",
   completed: "bg-emerald-100 text-emerald-800",
   cancelled: "bg-rose-100 text-rose-800",
 };
 
-const statusLabels: Record<string, string> = {
-  pending: "Pending",
-  assigned: "Assigned",
-  in_progress: "In Progress",
-  completed: "Completed",
-  cancelled: "Cancelled",
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const label = statusLabels[status] ?? status;
-  const classes = statusStyles[status] ?? "bg-gray-100 text-gray-800";
+function StatusBadge({ status, category }: { status: string; category?: string }) {
+  const normalizedStatus = normalizeServiceRequestStatus(status);
+  const label = formatServiceRequestStatusLabel(normalizedStatus, category);
+  const classes = statusStyles[normalizedStatus] ?? "bg-gray-100 text-gray-800";
   return (
     <Badge className={`text-xs rounded-full px-3 py-1 ${classes}`}>
       {label}
@@ -145,7 +141,7 @@ export default function ServiceRequestsPage() {
                 ) : selectedRequest ? (
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge status={selectedRequest.status} />
+                      <StatusBadge status={selectedRequest.status} category={selectedRequest.category} />
                       {selectedRequest.paymentStatus ? (
                         <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-full text-[11px]">
                           Payment: {selectedRequest.paymentStatus}
@@ -232,7 +228,7 @@ export default function ServiceRequestsPage() {
                               {request.description ?? "Pending service request"}
                             </h3>
                           </div>
-                          <StatusBadge status={request.status} />
+                          <StatusBadge status={request.status} category={request.category} />
                         </div>
                         <div className="flex flex-wrap gap-2 text-xs text-gray-500">
                           <span>

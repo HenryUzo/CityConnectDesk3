@@ -1,6 +1,9 @@
-// Use a distinct cache key for marketplace item categories to avoid
-// colliding with any legacy service-category cache entries.
-const CACHE_KEY = "cc_item_categories_cache_v1";
+export type CategoryKind = "service" | "item";
+
+const CACHE_KEYS: Record<CategoryKind, string> = {
+  service: "cc_service_categories_cache_v1",
+  item: "cc_item_categories_cache_v1",
+};
 
 export type CategoryItem = {
   id?: string;
@@ -10,9 +13,13 @@ export type CategoryItem = {
   providerCount?: number;
 };
 
-export function readCategoriesCache(): CategoryItem[] | null {
+function getCacheKey(kind: CategoryKind) {
+  return CACHE_KEYS[kind];
+}
+
+export function readCategoriesCache(kind: CategoryKind = "service"): CategoryItem[] | null {
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
+    const raw = localStorage.getItem(getCacheKey(kind));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return null;
@@ -22,31 +29,42 @@ export function readCategoriesCache(): CategoryItem[] | null {
   }
 }
 
-export function writeCategoriesCache(items: CategoryItem[]) {
+export function writeCategoriesCache(items: CategoryItem[], kind: CategoryKind = "service") {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(items));
+    localStorage.setItem(getCacheKey(kind), JSON.stringify(items));
   } catch {
     // ignore
   }
 }
 
-export async function fetchCategories(scope = "global"): Promise<CategoryItem[]> {
+export async function fetchCategories(
+  scope = "global",
+  kind: CategoryKind = "service",
+): Promise<CategoryItem[]> {
   try {
-    // Fetch item categories for marketplace, not service categories
-    const res = await fetch(`/api/item-categories`);
+    const endpoint =
+      kind === "item"
+        ? "/api/item-categories"
+        : `/api/categories?scope=${encodeURIComponent(scope || "global")}`;
+
+    const res = await fetch(endpoint);
     if (!res.ok) return [];
+
     const data = await res.json();
-    const mapped: CategoryItem[] = (Array.isArray(data) ? data : []).map((c: any) => ({
+    const rows = (Array.isArray(data) ? data : []).filter((c: any) => c?.isActive !== false);
+    const mapped: CategoryItem[] = rows.map((c: any) => ({
       id: c.id ?? c._id,
-      key: c.key,
-      name: c.name ?? String(c.key ?? c.id ?? ""),
+      key: c.key ?? c.categoryKey ?? c.slug ?? c.name,
+      name: c.name ?? String(c.key ?? c.categoryKey ?? c.id ?? ""),
       emoji: c.emoji ?? c.icon ?? "",
       providerCount: typeof c.providerCount === "number" ? c.providerCount : 0,
     }));
-    writeCategoriesCache(mapped);
+
+    writeCategoriesCache(mapped, kind);
     return mapped;
   } catch (e) {
     console.warn("fetchCategories failed", e);
     return [];
   }
 }
+

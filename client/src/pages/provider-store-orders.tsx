@@ -3,19 +3,25 @@ import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ProviderShell } from "@/components/provider/ProviderShell";
+import {
+  extractApiErrorMessage,
+  getProviderStoreAccessState,
+  getStoreApprovalBadgeLabel,
+  type ProviderStoreAccessInput,
+} from "@/lib/provider-store-access";
 import { useParams, Link } from "wouter";
+import { useMemo } from "react";
 import { ArrowLeft, Package } from "lucide-react";
+import { EmptyState, InlineErrorState, PageSkeleton } from "@/components/shared/page-states";
 
-type ProviderStore = {
+type ProviderStore = ProviderStoreAccessInput & {
   id: string;
   name: string;
   description?: string;
   location: string;
   phone?: string;
   email?: string;
-  membership?: { role?: string; canManageItems?: boolean; canManageOrders?: boolean };
-  isActive?: boolean;
-  approvalStatus?: string;
 };
 
 type StoreOrder = {
@@ -40,7 +46,11 @@ export default function ProviderStoreOrders() {
       return stores.find((s: ProviderStore) => s.id === storeId) || null;
     },
     enabled: !!storeId,
+    staleTime: 60_000,
   });
+
+  const storeAccess = useMemo(() => getProviderStoreAccessState(store), [store]);
+  const canQueryOrders = Boolean(storeId) && Boolean(store) && !storeAccess.orderUpdateBlockedReason;
 
   const {
     data: orders = [],
@@ -50,121 +60,115 @@ export default function ProviderStoreOrders() {
     queryKey: ["/api/provider/stores", storeId, "orders"],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/provider/stores/${storeId}/orders`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.message || body?.error || "Unable to load orders");
-      }
       return res.json() as Promise<StoreOrder[]>;
     },
-    enabled: !!storeId,
+    enabled: canQueryOrders,
+    staleTime: 10_000,
+    refetchInterval: canQueryOrders ? 20_000 : false,
   });
 
   if (isLoadingStore) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <p className="text-muted-foreground">Loading store...</p>
-      </div>
+      <ProviderShell title="Store orders" subtitle="Loading store details.">
+        <PageSkeleton rows={2} />
+      </ProviderShell>
     );
   }
 
   if (!store) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-muted-foreground mb-4">Store not found</p>
-          <Link href="/provider">
-            <Button variant="outline">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Dashboard
-            </Button>
-          </Link>
-        </div>
-      </div>
+      <ProviderShell
+        title="Store orders"
+        subtitle="We could not find this store."
+        actions={
+          <Button asChild variant="outline">
+            <Link href="/provider/stores">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to stores
+            </Link>
+          </Button>
+        }
+      >
+        <EmptyState
+          title="Store not found"
+          description="We could not locate this store. It may have been removed or you no longer have access."
+          icon={Package}
+        />
+      </ProviderShell>
     );
   }
 
-  const approvalStatus = (store.approvalStatus || "pending").toLowerCase();
-  const isApproved = approvalStatus === "approved";
-  const roleLabel =
-    store.membership?.role === "owner"
-      ? "Owner"
-      : store.membership?.role === "manager"
-        ? "Manager"
-        : "Staff";
+  const approvalLabel = getStoreApprovalBadgeLabel(store.approvalStatus);
 
   return (
-    <div className="min-h-screen bg-background">
-      <nav className="bg-card shadow-sm border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <Link href="/provider">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back to Dashboard
-                </Button>
-              </Link>
-              <span className="ml-4 text-sm text-muted-foreground">
-                Managing: {store.name}
-              </span>
-            </div>
-          </div>
+    <ProviderShell
+      title={`${store.name} Orders`}
+      subtitle={`${store.location} - ${storeAccess.roleLabel}`}
+      actions={
+        <Button asChild variant="outline">
+          <Link href="/provider/stores">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to stores
+          </Link>
+        </Button>
+      }
+    >
+      <div className="space-y-8">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={storeAccess.isApproved ? "default" : "secondary"}>{approvalLabel}</Badge>
+          <Badge variant="outline">{storeAccess.roleLabel}</Badge>
+          <Badge variant={storeAccess.hasEstateAllocation ? "secondary" : "outline"}>
+            {storeAccess.hasEstateAllocation
+              ? `${storeAccess.estateAllocationCount} estate allocation${storeAccess.estateAllocationCount === 1 ? "" : "s"}`
+              : "No estate allocation"}
+          </Badge>
         </div>
-      </nav>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8">
-          <h2 className="text-2xl font-bold text-foreground mb-2">
-            {store.name} - Orders
-          </h2>
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-muted-foreground">{store.location}</p>
-            <Badge variant={isApproved ? "default" : "secondary"}>
-              {isApproved ? "Approved" : approvalStatus === "rejected" ? "Rejected" : "Pending Approval"}
-            </Badge>
-            <Badge variant="outline">{roleLabel}</Badge>
+        {storeAccess.orderUpdateBlockedReason && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700">
+            {storeAccess.orderUpdateBlockedReason}
           </div>
-        </div>
+        )}
 
         <Card>
           <CardHeader>
             <CardTitle>Orders</CardTitle>
           </CardHeader>
           <CardContent>
-            {ordersError && (
-              <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
-                {(ordersError as Error).message}
-              </div>
-            )}
-            {isLoadingOrders ? (
-              <div className="text-center py-8 text-muted-foreground">
-                <p>Loading orders...</p>
-              </div>
+            {ordersError ? (
+              <InlineErrorState
+                className="mb-4"
+                description={extractApiErrorMessage(ordersError, "Unable to load orders")}
+              />
+            ) : null}
+            {!canQueryOrders ? (
+              <EmptyState
+                icon={Package}
+                title="Order access blocked"
+                description="Order access is currently blocked for this store."
+              />
+            ) : isLoadingOrders ? (
+              <PageSkeleton withHeader={false} rows={3} />
             ) : orders.length > 0 ? (
               <div className="overflow-hidden rounded-lg border border-border">
                 <table className="min-w-full divide-y divide-border text-sm">
+                  <caption className="sr-only">Store order list with customer, date, status, and total amount</caption>
                   <thead className="bg-muted/40">
                     <tr>
-                      <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Order ID</th>
-                      <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Customer</th>
-                      <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Date</th>
-                      <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Status</th>
-                      <th className="px-4 py-3 text-right font-semibold text-muted-foreground">Total</th>
+                      <th scope="col" className="px-4 py-3 text-left font-semibold text-muted-foreground">Order ID</th>
+                      <th scope="col" className="px-4 py-3 text-left font-semibold text-muted-foreground">Customer</th>
+                      <th scope="col" className="px-4 py-3 text-left font-semibold text-muted-foreground">Date</th>
+                      <th scope="col" className="px-4 py-3 text-left font-semibold text-muted-foreground">Status</th>
+                      <th scope="col" className="px-4 py-3 text-right font-semibold text-muted-foreground">Total</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border bg-background">
                     {orders.map((order) => (
                       <tr key={order.id}>
-                        <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                          {order.id}
-                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{order.id}</td>
+                        <td className="px-4 py-3">{order.buyerName || order.buyerId}</td>
                         <td className="px-4 py-3">
-                          {order.buyerName || order.buyerId}
-                        </td>
-                        <td className="px-4 py-3">
-                          {order.createdAt
-                            ? new Date(order.createdAt).toLocaleDateString()
-                            : "—"}
+                          {order.createdAt ? new Date(order.createdAt).toLocaleDateString() : "-"}
                         </td>
                         <td className="px-4 py-3">
                           <Badge variant="outline">{order.status || "pending"}</Badge>
@@ -178,15 +182,15 @@ export default function ProviderStoreOrders() {
                 </table>
               </div>
             ) : (
-              <div className="text-center py-12 text-muted-foreground">
-                <Package className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                <h3 className="font-medium text-lg mb-2">No orders yet</h3>
-                <p className="text-sm">Orders for this store will appear here.</p>
-              </div>
+              <EmptyState
+                icon={Package}
+                title="No orders yet"
+                description="Orders for this store will appear here once residents place orders."
+              />
             )}
           </CardContent>
         </Card>
       </div>
-    </div>
+    </ProviderShell>
   );
 }

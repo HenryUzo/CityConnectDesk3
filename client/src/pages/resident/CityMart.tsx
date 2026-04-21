@@ -59,7 +59,7 @@ export default function CityMart() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // ── Data fetching ──
-  const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global" });
+  const { categories: fetchedCategories = [], isLoading: catsLoading } = useCategories({ scope: "global", kind: "item" });
   const { data: storesData, isLoading: storesLoading } = useStores();
   const { data: estatesData, isLoading: estatesLoading } = useEstates();
   const { data: bannersData = [], isLoading: bannersLoading } = usePublicBanners();

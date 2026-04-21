@@ -755,22 +755,96 @@ export default function CompanyDashboard() {
     }
   };
 
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+  const uploadCompanyInventoryImage = async (file: File): Promise<string> => {
+    if (!selectedStoreId) {
+      throw new Error("Select a store before uploading images.");
+    }
+
+    const headers: Record<string, string> = {
+      "Content-Type": file.type,
+      "x-file-name": encodeURIComponent(file.name),
+    };
+
+    const devEmail =
+      sessionStorage.getItem("dev_user_email") ||
+      localStorage.getItem("dev_user_email") ||
+      sessionStorage.getItem("provider_email_dev") ||
+      localStorage.getItem("provider_email_dev") ||
+      "";
+    if (devEmail) {
+      headers["x-user-email"] = devEmail;
+    }
+
+    const res = await fetch(`/api/company/stores/${selectedStoreId}/inventory/images`, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      body: file,
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.message || body.error || "Failed to upload image");
+    }
+
+    const payload = (await res.json()) as { url?: string };
+    const url = String(payload.url || "").trim();
+    if (!url) {
+      throw new Error("Upload succeeded but no image URL was returned.");
+    }
+
+    return url;
+  };
+
   const handleInventoryFiles = async (files: FileList | null) => {
-    if (!files) return;
+    if (!files || !selectedStoreId) return;
+
     const remaining = Math.max(0, 6 - inventoryImages.length);
-    const picked = Array.from(files).slice(0, remaining);
-    const reads = picked.map(
-      (file) =>
-        new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = () => reject(new Error("Failed to read image"));
-          reader.readAsDataURL(file);
-        }),
-    );
+    const accepted: File[] = [];
+
+    for (const file of Array.from(files)) {
+      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        toast({
+          title: "Unsupported image type",
+          description: `${file.name} was skipped. Use JPG, PNG, or WEBP.`,
+          variant: "destructive",
+        });
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast({
+          title: "Image too large",
+          description: `${file.name} exceeds 5MB.`,
+          variant: "destructive",
+        });
+        continue;
+      }
+      accepted.push(file);
+    }
+
+    const queue = accepted.slice(0, remaining);
+    if (!queue.length) {
+      if (inventoryImageInputRef.current) {
+        inventoryImageInputRef.current.value = "";
+      }
+      return;
+    }
+
     try {
-      const results = await Promise.all(reads);
-      setInventoryImages((prev) => [...prev, ...results].slice(0, 6));
+      const uploadedUrls: string[] = [];
+      for (const file of queue) {
+        uploadedUrls.push(await uploadCompanyInventoryImage(file));
+      }
+      setInventoryImages((prev) => [...prev, ...uploadedUrls].slice(0, 6));
+    } catch (error: any) {
+      toast({
+        title: "Image upload failed",
+        description: error?.message || "Unable to upload selected image(s).",
+        variant: "destructive",
+      });
     } finally {
       if (inventoryImageInputRef.current) {
         inventoryImageInputRef.current.value = "";

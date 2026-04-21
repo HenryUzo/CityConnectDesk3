@@ -33,6 +33,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { ArrowLeft, Plus, Edit3, Trash2, Package } from "lucide-react";
+import { EmptyState, InlineErrorState, PageSkeleton } from "@/components/shared/page-states";
+import { DisabledActionHint } from "@/components/provider/DisabledActionHint";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -115,9 +117,27 @@ export default function CompanyInventory() {
     },
   });
 
-  const { data: inventoryItems = [], isLoading: inventoryLoading } = useQuery<
-    InventoryItem[]
-  >({
+  const selectedStore = useMemo(
+    () => stores.find((s) => s.id === selectedStoreId),
+    [stores, selectedStoreId]
+  );
+
+  const selectedStoreApprovalStatus = String(selectedStore?.approvalStatus || "pending").toLowerCase();
+  const isSelectedStoreApproved = selectedStoreApprovalStatus === "approved";
+  const inventoryReadBlockedReason = !selectedStoreId
+    ? null
+    : selectedStoreApprovalStatus === "pending"
+      ? "This store is awaiting admin approval. Inventory opens once approval is complete."
+      : selectedStoreApprovalStatus === "rejected"
+        ? "This store was rejected. Inventory actions are disabled until the store is reviewed."
+        : null;
+  const inventoryWriteBlockedReason = inventoryReadBlockedReason;
+
+  const {
+    data: inventoryItems = [],
+    isLoading: inventoryLoading,
+    error: inventoryError,
+  } = useQuery<InventoryItem[]>({
     queryKey: ["/api/company/stores", selectedStoreId, "inventory"],
     queryFn: async () => {
       if (!selectedStoreId) return [];
@@ -125,18 +145,11 @@ export default function CompanyInventory() {
         "GET",
         `/api/company/stores/${selectedStoreId}/inventory`
       );
-      if (!res.ok) return [];
+      if (!res.ok) throw new Error("Unable to load inventory items");
       return res.json();
     },
-    enabled: !!selectedStoreId,
+    enabled: Boolean(selectedStoreId) && !inventoryReadBlockedReason,
   });
-
-  const selectedStore = useMemo(
-    () => stores.find((s) => s.id === selectedStoreId),
-    [stores, selectedStoreId]
-  );
-
-  const isSelectedStoreApproved = selectedStore?.approvalStatus === "approved";
 
   const itemCategoryOptions = useMemo(() => {
     return [...itemCategories]
@@ -152,17 +165,96 @@ export default function CompanyInventory() {
     }).format(value);
   };
 
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+  const uploadCompanyInventoryImage = async (file: File): Promise<string> => {
+    if (!selectedStoreId) {
+      throw new Error("Select a store before uploading images.");
+    }
+
+    const headers: Record<string, string> = {
+      "Content-Type": file.type,
+      "x-file-name": encodeURIComponent(file.name),
+    };
+
+    const devEmail =
+      sessionStorage.getItem("dev_user_email") ||
+      localStorage.getItem("dev_user_email") ||
+      sessionStorage.getItem("provider_email_dev") ||
+      localStorage.getItem("provider_email_dev") ||
+      "";
+    if (devEmail) {
+      headers["x-user-email"] = devEmail;
+    }
+
+    const res = await fetch(`/api/company/stores/${selectedStoreId}/inventory/images`, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      body: file,
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.message || body.error || "Failed to upload image");
+    }
+
+    const payload = (await res.json()) as { url?: string };
+    const url = String(payload.url || "").trim();
+    if (!url) {
+      throw new Error("Upload succeeded but no image URL was returned.");
+    }
+
+    return url;
+  };
+
   const handleInventoryFiles = async (files: FileList | null) => {
-    if (!files) return;
+    if (!files || !selectedStoreId) return;
+
+    const remaining = Math.max(0, 6 - inventoryImages.length);
+    const accepted: File[] = [];
+
     for (const file of Array.from(files)) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const result = e.target?.result as string;
-        setInventoryImages((prev) =>
-          prev.length < 6 ? [...prev, result] : prev
-        );
-      };
-      reader.readAsDataURL(file);
+      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        toast({
+          title: "Unsupported image type",
+          description: `${file.name} was skipped. Use JPG, PNG, or WEBP.`,
+          variant: "destructive",
+        });
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast({
+          title: "Image too large",
+          description: `${file.name} exceeds 5MB.`,
+          variant: "destructive",
+        });
+        continue;
+      }
+      accepted.push(file);
+    }
+
+    const queue = accepted.slice(0, remaining);
+    if (!queue.length) {
+      if (inventoryImageInputRef.current) inventoryImageInputRef.current.value = "";
+      return;
+    }
+
+    try {
+      const uploadedUrls: string[] = [];
+      for (const file of queue) {
+        uploadedUrls.push(await uploadCompanyInventoryImage(file));
+      }
+      setInventoryImages((prev) => [...prev, ...uploadedUrls].slice(0, 6));
+    } catch (error: any) {
+      toast({
+        title: "Image upload failed",
+        description: error?.message || "Unable to upload selected image(s).",
+        variant: "destructive",
+      });
+    } finally {
+      if (inventoryImageInputRef.current) inventoryImageInputRef.current.value = "";
     }
   };
 
@@ -275,12 +367,30 @@ export default function CompanyInventory() {
   };
 
   const handleDeleteItem = async (item: InventoryItem) => {
+    if (inventoryWriteBlockedReason) {
+      toast({
+        title: "Action blocked",
+        description: inventoryWriteBlockedReason,
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (confirm(`Delete "${item.name}"?`)) {
       deleteItemMutation.mutate(item.id);
     }
   };
 
   const onSubmit = (data: InventoryFormData) => {
+    if (inventoryWriteBlockedReason) {
+      toast({
+        title: "Action blocked",
+        description: inventoryWriteBlockedReason,
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (editingItem) {
       updateItemMutation.mutate(data);
     } else {
@@ -373,17 +483,11 @@ export default function CompanyInventory() {
         </Card>
 
         {!selectedStoreId ? (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center justify-center py-12">
-              <Package className="h-12 w-12 text-slate-300 mb-4" />
-              <h3 className="text-lg font-semibold text-slate-900">
-                No store selected
-              </h3>
-              <p className="text-slate-500 mt-2">
-                Select a store above to manage its inventory
-              </p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={Package}
+            title="No store selected"
+            description="Select a store above to manage its inventory."
+          />
         ) : (
           <div className="grid lg:grid-cols-3 gap-6">
             {/* Items List */}
@@ -391,33 +495,55 @@ export default function CompanyInventory() {
               <Card>
                 <CardHeader className="flex items-center justify-between">
                   <CardTitle>Items in {selectedStore?.name}</CardTitle>
-                  <Button
-                    onClick={() => {
-                      setEditingItem(null);
-                      inventoryForm.reset();
-                      setInventoryImages([]);
-                      setShowDialog(true);
-                    }}
-                    disabled={!isSelectedStoreApproved}
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Item
-                  </Button>
+                  <DisabledActionHint reason={inventoryWriteBlockedReason}>
+                    <Button
+                      onClick={() => {
+                        setEditingItem(null);
+                        inventoryForm.reset();
+                        setInventoryImages([]);
+                        setShowDialog(true);
+                      }}
+                      disabled={Boolean(inventoryWriteBlockedReason)}
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Item
+                    </Button>
+                  </DisabledActionHint>
                 </CardHeader>
                 <CardContent>
-                  {!isSelectedStoreApproved && (
+                  {inventoryReadBlockedReason && (
                     <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700">
-                      This store is not yet approved. Inventory management is disabled.
+                      {inventoryReadBlockedReason}
                     </div>
                   )}
-                  {inventoryLoading ? (
-                    <div className="text-center py-8 text-slate-500">
-                      Loading items...
-                    </div>
+                  {inventoryError ? (
+                    <InlineErrorState
+                      description={inventoryError instanceof Error ? inventoryError.message : "Unable to load inventory items."}
+                    />
+                  ) : inventoryLoading ? (
+                    <PageSkeleton withHeader={false} rows={3} />
                   ) : inventoryItems.length === 0 ? (
-                    <div className="text-center py-8 text-slate-500">
-                      No items yet. Add your first product to get started.
-                    </div>
+                    <EmptyState
+                      icon={Package}
+                      title="No items yet"
+                      description="Add your first product to get started."
+                      action={
+                        <DisabledActionHint reason={inventoryWriteBlockedReason}>
+                          <Button
+                            onClick={() => {
+                              setEditingItem(null);
+                              inventoryForm.reset();
+                              setInventoryImages([]);
+                              setShowDialog(true);
+                            }}
+                            disabled={Boolean(inventoryWriteBlockedReason)}
+                          >
+                            <Plus className="h-4 w-4 mr-2" />
+                            Add Item
+                          </Button>
+                        </DisabledActionHint>
+                      }
+                    />
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
@@ -459,24 +585,26 @@ export default function CompanyInventory() {
                               </td>
                               <td className="px-4 py-3 text-right">
                                 <div className="flex items-center justify-end gap-2">
-                                  {isSelectedStoreApproved && (
-                                    <>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => handleEditItem(item)}
-                                      >
-                                        <Edit3 className="h-4 w-4" />
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => handleDeleteItem(item)}
-                                      >
-                                        <Trash2 className="h-4 w-4 text-rose-500" />
-                                      </Button>
-                                    </>
-                                  )}
+                                  <DisabledActionHint reason={inventoryWriteBlockedReason}>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleEditItem(item)}
+                                      disabled={Boolean(inventoryWriteBlockedReason)}
+                                    >
+                                      <Edit3 className="h-4 w-4" />
+                                    </Button>
+                                  </DisabledActionHint>
+                                  <DisabledActionHint reason={inventoryWriteBlockedReason}>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleDeleteItem(item)}
+                                      disabled={Boolean(inventoryWriteBlockedReason)}
+                                    >
+                                      <Trash2 className="h-4 w-4 text-rose-500" />
+                                    </Button>
+                                  </DisabledActionHint>
                                 </div>
                               </td>
                             </tr>
@@ -600,6 +728,9 @@ export default function CompanyInventory() {
                           </FormItem>
                         )}
                       />
+                      {inventoryWriteBlockedReason ? (
+                        <p className="text-xs text-amber-700">{inventoryWriteBlockedReason}</p>
+                      ) : null}
                       <div className="flex items-center justify-between gap-2 pt-4">
                         {editingItem && (
                           <Button
@@ -613,18 +744,20 @@ export default function CompanyInventory() {
                             Cancel
                           </Button>
                         )}
-                        <Button
-                          type="submit"
-                          disabled={
-                            !selectedStoreId ||
-                            !isSelectedStoreApproved ||
-                            createItemMutation.isPending ||
-                            updateItemMutation.isPending
-                          }
-                          className="ml-auto"
-                        >
-                          {editingItem ? "Save Changes" : "Add Item"}
-                        </Button>
+                        <DisabledActionHint reason={inventoryWriteBlockedReason}>
+                          <Button
+                            type="submit"
+                            disabled={
+                              !selectedStoreId ||
+                              Boolean(inventoryWriteBlockedReason) ||
+                              createItemMutation.isPending ||
+                              updateItemMutation.isPending
+                            }
+                            className="ml-auto"
+                          >
+                            {editingItem ? "Save Changes" : "Add Item"}
+                          </Button>
+                        </DisabledActionHint>
                       </div>
                     </form>
                   </Form>

@@ -1,4 +1,4 @@
-import svgPaths from "./svg-mq83yt3bc5";
+import svgPaths from "./imports/svg-mq83yt3bc5";
 
 function Heart() {
   return (

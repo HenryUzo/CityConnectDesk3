@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { UploadItem } from "@/components/ui/icon";
+import { io } from "socket.io-client";
+import { AIAskBotIcon, AIAnsweredBotIcon, UploadItem } from "@/components/ui/icon";
 import Nav from "@/components/layout/Nav";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 import { useMyEstates } from "@/hooks/useMyEstates";
 import useCategories from "@/hooks/useCategories";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAiConversationFlowSettings } from "@/hooks/useAiConversationFlowSettings";
+import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -15,12 +18,38 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AIMessage, UserResponse } from "@/components/resident/CityBuddyMessage";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { MainWrapSelectCategory } from "@/components/resident/CityBuddyChat";
+import { RequestsSidebar } from "@/components/resident/RequestsSidebar";
+import { ProviderHeader } from "@/components/resident/ordinary-flow/ProviderHeader";
+import { RequestProgressTracker } from "@/components/resident/ordinary-flow/RequestProgressTracker";
+import { ChatThread, type ThreadItem } from "@/components/resident/ordinary-flow/ChatThread";
+import { TypingPresenceIndicator } from "@/components/resident/ordinary-flow/TypingPresenceIndicator";
+import { SystemMessage } from "@/components/resident/ordinary-flow/SystemMessage";
+import {
+  MessageComposer,
+  type ComposerAttachment,
+} from "@/components/resident/ordinary-flow/MessageComposer";
+import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { residentFetch } from "@/lib/residentApi";
+import { formatServiceRequestStatusLabel } from "@/lib/serviceRequestStatus";
 
 type FlowStage = "intake" | "wizard" | "summary";
 
 type WizardStep =
+  | {
+      id: "location";
+      kind: "location";
+      prompt: string;
+    }
   | {
       id: "issue_type" | "quantity" | "time_window";
       kind: "chips";
@@ -59,12 +88,224 @@ type CategoryProfile = {
   photoHelper?: string;
 };
 
+type RequestMessage = {
+  id: string;
+  requestId: string;
+  senderId: string;
+  senderRole: "admin" | "resident" | "provider";
+  message: string;
+  attachmentUrl?: string | null;
+  createdAt?: string;
+};
+
+type RequestProvider = {
+  id: string;
+  name: string | null;
+  company: string | null;
+  serviceCategory: string | null;
+  avatarUrl?: string | null;
+};
+
+type CancellationCaseSummary = {
+  id: string;
+  status?: string | null;
+  reasonCode?: string | null;
+  reasonDetail?: string | null;
+  preferredResolution?: string | null;
+  adminDecision?: string | null;
+  adminNote?: string | null;
+  refundDecision?: string | null;
+  refundAmount?: string | number | null;
+  resolvedAt?: string | Date | null;
+  createdAt?: string | Date | null;
+  updatedAt?: string | Date | null;
+};
+
+type ActiveServiceRequest = {
+  id: string;
+  residentId?: string | null;
+  category?: string;
+  categoryLabel?: string | null;
+  description?: string | null;
+  location?: string | null;
+  urgency?: string | null;
+  status?: string;
+  paymentStatus?: string | null;
+  billedAmount?: string | number | null;
+  paymentRequestedAt?: string | Date | null;
+  consultancyReport?: {
+    inspectionDate?: string;
+    completionDeadline?: string;
+    actualIssue?: string;
+    causeOfIssue?: string;
+    materialCost?: number;
+    serviceCost?: number;
+    totalRecommendation?: number;
+    preventiveRecommendation?: string;
+    evidence?: string[];
+    submittedAt?: string;
+  } | null;
+  consultancyReportSubmittedAt?: string | Date | null;
+  providerId?: string | null;
+  preferredTime?: string | Date | null;
+  assignedAt?: string | Date | null;
+  updatedAt?: string | Date | null;
+  provider?: RequestProvider | null;
+  cancellationCase?: CancellationCaseSummary | null;
+};
+
+type ParsedRequestDetails = {
+  issueType?: string;
+  quantity?: string;
+  timeWindow?: string;
+  photosCount?: number;
+  notes?: string;
+  urgency?: string;
+  location?: string;
+};
+
+type RequestMessageSocketPayload = {
+  requestId: string;
+  message: RequestMessage;
+};
+
+type ServiceRequestUpdateSocketPayload = {
+  type?: string;
+  requestId: string;
+  request?: Record<string, unknown> & { id?: string };
+  at?: string;
+};
+
+type RequestTypingSocketPayload = {
+  requestId: string;
+  userId: string;
+  senderRole: "resident" | "provider" | "admin";
+  isTyping: boolean;
+  at?: string;
+};
+
+type OrdinaryConversationDraftSnapshot = {
+  version: 1;
+  updatedAt: string;
+  stage: FlowStage;
+  selectedCategoryValue: string;
+  categorySelectSearch: string;
+  estateName: string;
+  estateResidenceMode: "estate" | "outside";
+  hasConfirmedEstateResidence: boolean;
+  estateSearch: string;
+  residentState: string;
+  residentLga: string;
+  address: string;
+  unit: string;
+  urgency: string;
+  wizardIndex: number;
+  wizardAnswers: Record<string, string>;
+  notes: string;
+};
+
+const ORDINARY_FLOW_DRAFT_STORAGE_PREFIX = "ordinary_flow_draft_v1";
+
+function parseOrdinaryConversationDraftSnapshot(
+  raw: string | null,
+): OrdinaryConversationDraftSnapshot | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<OrdinaryConversationDraftSnapshot> | null;
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const stageValue: FlowStage =
+      parsed.stage === "wizard" || parsed.stage === "summary" ? parsed.stage : "intake";
+    const estateResidenceMode = parsed.estateResidenceMode === "outside" ? "outside" : "estate";
+    const wizardAnswers =
+      parsed.wizardAnswers && typeof parsed.wizardAnswers === "object" && !Array.isArray(parsed.wizardAnswers)
+        ? Object.entries(parsed.wizardAnswers).reduce<Record<string, string>>((acc, [key, value]) => {
+            if (!key) return acc;
+            acc[key] = String(value ?? "");
+            return acc;
+          }, {})
+        : {};
+    const hasLocationAnswer = Boolean(String(wizardAnswers.location || "").trim());
+    const parsedResidenceMode = parsed.estateResidenceMode === "outside" ? "outside" : "estate";
+    const inferredResidenceMode =
+      hasLocationAnswer &&
+      (String(parsed.residentState || "").trim() || String(parsed.residentLga || "").trim())
+        ? "outside"
+        : parsedResidenceMode;
+
+    return {
+      version: 1,
+      updatedAt: String(parsed.updatedAt || new Date().toISOString()),
+      stage: stageValue,
+      selectedCategoryValue: String(parsed.selectedCategoryValue || ""),
+      categorySelectSearch: String(parsed.categorySelectSearch || ""),
+      estateName: String(parsed.estateName || ""),
+      estateResidenceMode: inferredResidenceMode,
+      hasConfirmedEstateResidence:
+        Boolean(parsed.hasConfirmedEstateResidence) || hasLocationAnswer,
+      estateSearch: String(parsed.estateSearch || ""),
+      residentState: String(parsed.residentState || ""),
+      residentLga: String(parsed.residentLga || ""),
+      address: String(parsed.address || ""),
+      unit: String(parsed.unit || ""),
+      urgency: String(parsed.urgency || ""),
+      wizardIndex: Math.max(0, Number(parsed.wizardIndex || 0)),
+      wizardAnswers,
+      notes: String(parsed.notes || ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
 const URGENCY_OPTIONS = [
-  { value: "emergency", label: "Emergency", tone: "border-rose-200 text-rose-700 bg-rose-50" },
-  { value: "high", label: "High", tone: "border-amber-200 text-amber-700 bg-amber-50" },
-  { value: "medium", label: "Medium", tone: "border-slate-200 text-slate-700 bg-slate-50" },
-  { value: "low", label: "Low", tone: "border-emerald-200 text-emerald-700 bg-emerald-50" },
+  {
+    value: "emergency",
+    label: "Emergency",
+    timeframe: "Within 24 hrs",
+    tone: "border-rose-200 text-rose-700 bg-rose-50",
+  },
+  {
+    value: "high",
+    label: "High",
+    timeframe: "24 - 48 hrs",
+    tone: "border-amber-200 text-amber-700 bg-amber-50",
+  },
+  {
+    value: "medium",
+    label: "Medium",
+    timeframe: "3 - 4 days",
+    tone: "border-slate-200 text-slate-700 bg-slate-50",
+  },
+  {
+    value: "low",
+    label: "Low",
+    timeframe: "In a week",
+    tone: "border-emerald-200 text-emerald-700 bg-emerald-50",
+  },
 ];
+type UrgencyValue = (typeof URGENCY_OPTIONS)[number]["value"];
+
+const STATE_OPTIONS = ["Lagos", "Ogun", "Abuja (FCT)", "Oyo"];
+const BOT_PROMPT_DELAY_MS = 3000;
+
+const LGA_BY_STATE: Record<string, string[]> = {
+  Lagos: ["Alimosho", "Ikeja", "Eti-Osa", "Surulere", "Yaba", "Kosofe"],
+  Ogun: ["Abeokuta North", "Abeokuta South", "Ijebu Ode", "Ado-Odo/Ota"],
+  "Abuja (FCT)": ["Abuja Municipal", "Bwari", "Gwagwalada", "Kuje"],
+  Oyo: ["Ibadan North", "Ibadan South-West", "Ogbomosho North", "Egbeda"],
+};
+
+const CANCELLATION_REVIEW_REQUIRED_STATUSES = new Set([
+  "assigned",
+  "assigned_for_inspection",
+  "assigned_for_job",
+  "in_progress",
+  "work_completed_pending_resident",
+  "disputed",
+  "rework_required",
+  "completed",
+]);
 
 const DEFAULT_QUANTITY_OPTIONS = ["1", "2-3", "4-6", "7+"];
 const DEFAULT_TIME_WINDOWS = ["Today", "Within 3 days", "This week", "Flexible"];
@@ -96,6 +337,21 @@ const CHIP_STYLES =
 
 function normalizeKey(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function normalizeCategoryKey(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeStatusKey(value: unknown) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .trim();
 }
 
 function buildCategoryProfile(categoryName: string): CategoryProfile {
@@ -326,63 +582,507 @@ function ChipButton({
   );
 }
 
-function StepHeader({
-  step,
-  title,
-  subtitle,
-  isActive,
-}: {
-  step: number;
-  title: string;
-  subtitle?: string;
-  isActive?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <div
-        className={cn(
-          "flex h-8 w-8 items-center justify-center rounded-full border text-sm font-semibold",
-          isActive ? "border-[#039855] text-[#039855] bg-[#ECFDF3]" : "border-[#d0d5dd] text-[#667085]",
-        )}
-      >
-        {step}
+function ChatPrompt({ text, status = "active" }: { text: string; status?: "active" | "answered" }) {
+  if (status === "answered") {
+    return (
+      <div className="flex items-center gap-2.5 text-[14px] leading-[20px] font-semibold text-[#475467]">
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#F2F4F7] text-[#667085]">
+          <span className="origin-center scale-[0.52]">
+            <AIAnsweredBotIcon />
+          </span>
+        </span>
+        <span>{text}</span>
       </div>
-      <div>
-        <p className="text-[14px] font-semibold text-[#101828]">{title}</p>
-        {subtitle ? (
-          <p className="text-[12px] text-[#667085]">{subtitle}</p>
-        ) : null}
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-2.5 sm:gap-3">
+      <div className="relative mt-0.5 flex h-10 w-12 shrink-0 items-center justify-center overflow-visible">
+        <AIAskBotIcon />
+      </div>
+      <div className="max-w-[680px] rounded-[999px] bg-[#ECFDF3] px-4 py-2.5 text-[14px] leading-[20px] text-[#065F46] font-semibold">
+        {text}
       </div>
     </div>
   );
 }
 
-export default function OrdinaryConversationFlow() {
-  const [, navigate] = useLocation();
-  const { data: estates } = useMyEstates();
-  const { categories } = useCategories({ scope: "global" });
-  const CONSULTANCY_DRAFT_KEY = "citybuddy_consultancy_draft";
+function WizardTypingIndicator() {
+  return (
+    <div className="flex items-center gap-2.5 sm:gap-3">
+      <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-visible">
+        <AIAskBotIcon />
+      </div>
+      <div className="inline-flex items-center gap-1.5 rounded-[999px] bg-[#ECFDF3] px-4 py-2.5">
+        <span className="h-2 w-2 rounded-full bg-[#12B76A] animate-bounce [animation-delay:-0.3s]" />
+        <span className="h-2 w-2 rounded-full bg-[#12B76A] animate-bounce [animation-delay:-0.15s]" />
+        <span className="h-2 w-2 rounded-full bg-[#12B76A] animate-bounce" />
+      </div>
+    </div>
+  );
+}
 
-  const categoryFromSearch = (() => {
-    if (typeof window === "undefined") return "";
-    const params = new URLSearchParams(window.location.search);
-    return params.get("category") || "";
-  })();
+function WizardAnswerBubble({ text }: { text: string }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[78%] rounded-2xl rounded-br-[8px] bg-[#039855] px-4 py-2 text-[14px] font-semibold leading-[20px] text-white shadow-[0_10px_20px_-14px_rgba(3,152,85,0.8)]">
+        {text}
+      </div>
+    </div>
+  );
+}
+
+function UrgencyIcon({ value }: { value: UrgencyValue }) {
+  if (value === "emergency") {
+    return (
+      <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#D92D20] text-[15px] font-bold leading-none text-white">
+        !
+      </span>
+    );
+  }
+
+  if (value === "high") {
+    return (
+      <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#F79009] text-[15px] font-bold leading-none text-white">
+        !
+      </span>
+    );
+  }
+
+  if (value === "medium") {
+    return <span className="inline-flex h-7 w-7 rounded-full border border-[#FEC84B] bg-[#FDB022]" />;
+  }
+
+  return <span className="inline-flex h-7 w-7 rounded-full border border-[#3CCB7F] bg-[#17B26A]" />;
+}
+
+function formatCategoryLabel(value: string) {
+  if (!value) return "New request";
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatNaira(value: string | number | null | undefined) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return "NGN 0";
+  return `NGN ${amount.toLocaleString()}`;
+}
+
+function readConsultancyReport(report: ActiveServiceRequest["consultancyReport"]) {
+  if (!report || typeof report !== "object") return null;
+  const materialCost = Number((report as any).materialCost || 0);
+  const serviceCost = Number((report as any).serviceCost || 0);
+  const totalRecommendation =
+    Number((report as any).totalRecommendation || 0) || materialCost + serviceCost;
+  return {
+    inspectionDate: String((report as any).inspectionDate || ""),
+    completionDeadline: String((report as any).completionDeadline || ""),
+    actualIssue: String((report as any).actualIssue || ""),
+    causeOfIssue: String((report as any).causeOfIssue || ""),
+    materialCost: Number.isFinite(materialCost) ? materialCost : 0,
+    serviceCost: Number.isFinite(serviceCost) ? serviceCost : 0,
+    totalRecommendation: Number.isFinite(totalRecommendation) ? totalRecommendation : 0,
+    preventiveRecommendation: String((report as any).preventiveRecommendation || ""),
+    evidence: Array.isArray((report as any).evidence)
+      ? (report as any).evidence.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+      : [],
+  };
+}
+
+function formatCountdown(target: Date | null) {
+  if (!target) return "Not scheduled";
+  const diffMs = target.getTime() - Date.now();
+  if (diffMs <= 0) return "Starting soon";
+
+  const totalMinutes = Math.floor(diffMs / (1000 * 60));
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function formatElapsedDuration(startedAt: Date | null) {
+  if (!startedAt) return "00:00:00";
+  const diffMs = Math.max(Date.now() - startedAt.getTime(), 0);
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const hh = String(hours).padStart(2, "0");
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(seconds).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function toDate(value: string | Date | null | undefined) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseRequestDescription(description: string | null | undefined): ParsedRequestDetails {
+  const source = String(description || "").trim();
+  if (!source) return {};
+
+  const boundaryLabels =
+    "Issue|Quantity|Preferred time|Time window|Urgency|Location|Notes|Photos attached|Attachments|Photos";
+
+  const pick = (labelPattern: string) => {
+    const regex = new RegExp(
+      `${labelPattern}:\\s*([\\s\\S]*?)(?=\\n|\\s(?:${boundaryLabels}):|$)`,
+      "i",
+    );
+    const value = source.match(regex)?.[1]?.trim();
+    return value || undefined;
+  };
+
+  const issueType = pick("Issue");
+  const quantity = pick("Quantity");
+  const timeWindow = pick("(?:Preferred time|Time window)");
+  const notes = pick("Notes");
+  const urgency = pick("Urgency");
+  const location = pick("Location");
+  const photoChunk = pick("(?:Photos attached|Attachments|Photos)");
+  const photosMatch = photoChunk?.match(/(\d+)/);
+  const photosCount = photosMatch ? Number(photosMatch[1]) : undefined;
+
+  if (!issueType && !quantity && !timeWindow && !notes && !urgency && !location && photosCount === undefined) {
+    return { notes: source };
+  }
+
+  return {
+    issueType,
+    quantity,
+    timeWindow,
+    photosCount,
+    notes,
+    urgency,
+    location,
+  };
+}
+
+function parseConsultancyReportMessage(text: string) {
+  const source = String(text || "").trim();
+  const hasConsultancyPrefix = /^consultancy report (submitted|approved)\./i.test(source);
+  const hasReportFields =
+    /inspection date:/i.test(source) &&
+    /issue:/i.test(source) &&
+    /cause:/i.test(source) &&
+    /recommended material cost:/i.test(source) &&
+    /recommended service cost:/i.test(source) &&
+    /preventive recommendation:/i.test(source);
+  if (!hasConsultancyPrefix && !hasReportFields) return null;
+
+  const pick = (label: string) => {
+    const regex = new RegExp(`${label}:\\s*(.+)$`, "im");
+    return source.match(regex)?.[1]?.trim() || "";
+  };
+
+  return {
+    inspectionDate: pick("Inspection date") || undefined,
+    completionDeadline: pick("Completion deadline") || undefined,
+    actualIssue: pick("Issue") || "Not provided",
+    causeOfIssue: pick("Cause") || "Not provided",
+    materialCostLabel: pick("Recommended material cost") || "Not provided",
+    serviceCostLabel: pick("Recommended service cost") || "Not provided",
+    preventiveRecommendation: pick("Preventive recommendation") || "Not provided",
+    evidenceCount: Number(pick("Evidence attachments").match(/(\d+)/)?.[1] || 0) || undefined,
+  };
+}
+
+export default function OrdinaryConversationFlow() {
+  const [location, navigate] = useLocation();
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data: estates = [], loading: estatesLoading, error: estatesError } = useMyEstates();
+  const { settings: approvedCategorySettings, isLoading: approvedCategoriesLoading } =
+    useAiConversationFlowSettings();
+  const { categories: fallbackCategories, isLoading: fallbackCategoriesLoading } = useCategories({
+    scope: "global",
+    kind: "service",
+  });
+  const CONSULTANCY_DRAFT_KEY = "citybuddy_consultancy_draft";
+  const ordinaryDraftStorageKey = useMemo(
+    () => `${ORDINARY_FLOW_DRAFT_STORAGE_PREFIX}:${user?.id || "anonymous"}`,
+    [user?.id],
+  );
+
+  const categories = useMemo(() => {
+    if (approvedCategorySettings.length > 0) {
+      return approvedCategorySettings
+        .filter((setting) => setting.isEnabled)
+        .sort((a, b) => a.displayOrder - b.displayOrder)
+        .map((setting) => ({
+          id: setting.id,
+          key: setting.categoryKey,
+          name: setting.categoryName,
+          emoji: setting.emoji || "",
+          description: setting.description || undefined,
+          providerCount: 0,
+        }));
+    }
+    return fallbackCategories;
+  }, [approvedCategorySettings, fallbackCategories]);
+
+  const categoriesLoading = approvedCategoriesLoading || fallbackCategoriesLoading;
+
+  const queryParams = useMemo(() => {
+    const search = typeof window !== "undefined" ? window.location.search : "";
+    const queryString = search ? search.slice(1) : location.includes("?") ? location.split("?")[1] : "";
+    return new URLSearchParams(queryString);
+  }, [location]);
+
+  const categoryFromSearch = queryParams.get("category") || "";
+  const conversationIdFromSearch = queryParams.get("conversationId") || "";
+  const requestIdFromSearch =
+    queryParams.get("requestId") || queryParams.get("serviceRequestId") || conversationIdFromSearch;
 
   const [stage, setStage] = useState<FlowStage>("intake");
-  const [focusedIntake, setFocusedIntake] = useState<"location" | "category" | "urgency" | null>(null);
 
   const [estateName, setEstateName] = useState("");
+  const [estateResidenceMode, setEstateResidenceMode] = useState<"estate" | "outside">("estate");
+  const [hasConfirmedEstateResidence, setHasConfirmedEstateResidence] = useState(false);
+  const [estateSearch, setEstateSearch] = useState("");
+  const [residentState, setResidentState] = useState("");
+  const [residentLga, setResidentLga] = useState("");
   const [address, setAddress] = useState("");
   const [unit, setUnit] = useState("");
   const [selectedCategoryValue, setSelectedCategoryValue] = useState(categoryFromSearch);
+  const [categorySelectSearch, setCategorySelectSearch] = useState("");
   const [urgency, setUrgency] = useState("");
 
   const [wizardIndex, setWizardIndex] = useState(0);
+  const [isWizardBotThinking, setIsWizardBotThinking] = useState(false);
   const [wizardAnswers, setWizardAnswers] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
   const [attachments, setAttachments] = useState<Array<{ id: string; name: string; dataUrl: string }>>([]);
+  const [persistedAttachmentCount, setPersistedAttachmentCount] = useState<number | null>(null);
+  const wizardPromptTimerRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const openedRequestFromQueryRef = useRef<string | null>(null);
+  const skipCategoryResetRef = useRef(false);
+  const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const lastAutoScrollSessionRef = useRef<string>("");
+  const wizardInteractiveScrollRef = useRef<HTMLDivElement | null>(null);
+  const latestWizardPromptRef = useRef<HTMLDivElement | null>(null);
+  const chatBottomRef = useRef<HTMLDivElement | null>(null);
+  const estateSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const stateSelectTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const addressTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const addressSectionRef = useRef<HTMLDivElement | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [loadingRequestId, setLoadingRequestId] = useState<string | null>(null);
+  const [pendingPrefill, setPendingPrefill] = useState(false);
+  const [isProviderDetailsCollapsed, setIsProviderDetailsCollapsed] = useState(true);
+  const [isProgressTrackerCollapsed, setIsProgressTrackerCollapsed] = useState(false);
+  const [residentMessageDraft, setResidentMessageDraft] = useState("");
+  const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
+  const [isPeerTyping, setIsPeerTyping] = useState(false);
+  const [isStartingJobPayment, setIsStartingJobPayment] = useState(false);
+  const [isCategoryRequiredDialogOpen, setIsCategoryRequiredDialogOpen] = useState(false);
+  const [isCancelRequestDialogOpen, setIsCancelRequestDialogOpen] = useState(false);
+  const [cancelReasonCode, setCancelReasonCode] = useState("");
+  const [cancelReasonDetail, setCancelReasonDetail] = useState("");
+  const [cancelPreferredResolution, setCancelPreferredResolution] = useState<
+    "full_refund" | "partial_refund" | "cancel_without_refund"
+  >("full_refund");
+  const [isConfirmDeliveryDialogOpen, setIsConfirmDeliveryDialogOpen] = useState(false);
+  const [isRaiseIssueDialogOpen, setIsRaiseIssueDialogOpen] = useState(false);
+  const [raiseIssueReason, setRaiseIssueReason] = useState("");
+  const [previewAttachment, setPreviewAttachment] = useState<{ name: string; url: string } | null>(null);
+  const [draftSavedAt, setDraftSavedAt] = useState<string>(() => new Date().toISOString());
+  const [storedDraftSnapshot, setStoredDraftSnapshot] = useState<OrdinaryConversationDraftSnapshot | null>(null);
+  const restoreStageAfterCategorySelectionRef = useRef<FlowStage | null>(null);
+  const restoreWizardIndexAfterCategorySelectionRef = useRef<number | null>(null);
+  const draftHydratedRef = useRef(false);
+  const socketRef = useRef<ReturnType<typeof io> | null>(null);
+  const selfTypingRef = useRef(false);
+  const selfTypingStopTimerRef = useRef<number | null>(null);
+  const peerTypingClearTimerRef = useRef<number | null>(null);
+
+  const clearWizardPromptTimer = useCallback(() => {
+    if (wizardPromptTimerRef.current !== null) {
+      window.clearTimeout(wizardPromptTimerRef.current);
+      wizardPromptTimerRef.current = null;
+    }
+  }, []);
+
+  const queueWizardStepAdvance = useCallback(
+    (nextIndex: number) => {
+      if (nextIndex === wizardIndex) return;
+      clearWizardPromptTimer();
+      setIsWizardBotThinking(true);
+      wizardPromptTimerRef.current = window.setTimeout(() => {
+        setWizardIndex(nextIndex);
+        setIsWizardBotThinking(false);
+        wizardPromptTimerRef.current = null;
+      }, BOT_PROMPT_DELAY_MS);
+    },
+    [clearWizardPromptTimer, wizardIndex],
+  );
+
+  const clearSelfTypingStopTimer = useCallback(() => {
+    if (selfTypingStopTimerRef.current !== null) {
+      window.clearTimeout(selfTypingStopTimerRef.current);
+      selfTypingStopTimerRef.current = null;
+    }
+  }, []);
+
+  const clearPeerTypingClearTimer = useCallback(() => {
+    if (peerTypingClearTimerRef.current !== null) {
+      window.clearTimeout(peerTypingClearTimerRef.current);
+      peerTypingClearTimerRef.current = null;
+    }
+  }, []);
+
+  const emitTypingState = useCallback(
+    (requestId: string, isTyping: boolean) => {
+      if (!requestId) return;
+      const socket = socketRef.current;
+      if (socket) {
+        socket.emit("request-typing", {
+          requestId,
+          userId: String(user?.id || ""),
+          senderRole: "resident",
+          isTyping,
+        });
+      }
+      void residentFetch(`/api/service-requests/${requestId}/typing`, {
+        method: "POST",
+        json: { isTyping },
+      }).catch(() => undefined);
+    },
+    [user?.id],
+  );
+
+  const stopSelfTyping = useCallback(
+    (requestId?: string | null) => {
+      clearSelfTypingStopTimer();
+      const targetRequestId = String(requestId || activeRequestId || "").trim();
+      if (!targetRequestId) return;
+      if (!selfTypingRef.current) return;
+      selfTypingRef.current = false;
+      emitTypingState(targetRequestId, false);
+    },
+    [activeRequestId, clearSelfTypingStopTimer, emitTypingState],
+  );
+
+  const handleResidentComposerChange = useCallback(
+    (nextValue: string) => {
+      setResidentMessageDraft(nextValue);
+      if (!activeRequestId) return;
+
+      if (!nextValue.trim()) {
+        stopSelfTyping(activeRequestId);
+        return;
+      }
+
+      if (!selfTypingRef.current) {
+        selfTypingRef.current = true;
+        emitTypingState(activeRequestId, true);
+      }
+
+      clearSelfTypingStopTimer();
+      selfTypingStopTimerRef.current = window.setTimeout(() => {
+        stopSelfTyping(activeRequestId);
+      }, 1800);
+    },
+    [
+      activeRequestId,
+      clearSelfTypingStopTimer,
+      emitTypingState,
+      stopSelfTyping,
+    ],
+  );
+
+  const readOrdinaryDraftSnapshot = (): OrdinaryConversationDraftSnapshot | null => {
+    try {
+      const raw = localStorage.getItem(ordinaryDraftStorageKey);
+      return parseOrdinaryConversationDraftSnapshot(raw);
+    } catch {
+      return null;
+    }
+  };
+
+  const clearOrdinaryDraftSnapshot = useCallback(() => {
+    try {
+      localStorage.removeItem(ordinaryDraftStorageKey);
+    } catch {
+      // ignore storage errors
+    }
+    setStoredDraftSnapshot(null);
+  }, [ordinaryDraftStorageKey]);
+
+  const applyOrdinaryDraftSnapshot = (snapshot: OrdinaryConversationDraftSnapshot) => {
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    skipCategoryResetRef.current = true;
+    setActiveRequestId(null);
+    setStage(snapshot.selectedCategoryValue ? snapshot.stage : "intake");
+    setSelectedCategoryValue(snapshot.selectedCategoryValue || "");
+    setCategorySelectSearch(snapshot.categorySelectSearch || "");
+    setWizardIndex(Math.max(0, snapshot.wizardIndex || 0));
+    setWizardAnswers(snapshot.wizardAnswers || {});
+    setNotes(snapshot.notes || "");
+    setAttachments([]);
+    setPersistedAttachmentCount(null);
+    setUrgency(snapshot.urgency || "");
+    setAddress(snapshot.address || "");
+    setUnit(snapshot.unit || "");
+    setEstateName(snapshot.estateName || "");
+    setEstateResidenceMode(snapshot.estateResidenceMode === "outside" ? "outside" : "estate");
+    setHasConfirmedEstateResidence(Boolean(snapshot.hasConfirmedEstateResidence));
+    setEstateSearch(snapshot.estateSearch || "");
+    setResidentState(snapshot.residentState || "");
+    setResidentLga(snapshot.residentLga || "");
+    setPendingPrefill(false);
+    setDraftSavedAt(snapshot.updatedAt || new Date().toISOString());
+    setStoredDraftSnapshot(snapshot);
+  };
+
+  useEffect(() => {
+    draftHydratedRef.current = false;
+    setStoredDraftSnapshot(null);
+  }, [ordinaryDraftStorageKey]);
+
+  useEffect(() => {
+    return () => {
+      clearWizardPromptTimer();
+    };
+  }, [clearWizardPromptTimer]);
+
+  useEffect(() => {
+    return () => {
+      stopSelfTyping(activeRequestId);
+      clearPeerTypingClearTimer();
+      setIsPeerTyping(false);
+    };
+  }, [activeRequestId, clearPeerTypingClearTimer, stopSelfTyping]);
+
+  useEffect(() => {
+    if (draftHydratedRef.current) return;
+    if (requestIdFromSearch) {
+      draftHydratedRef.current = true;
+      return;
+    }
+
+    const snapshot = readOrdinaryDraftSnapshot();
+    if (snapshot) {
+      applyOrdinaryDraftSnapshot(snapshot);
+    } else {
+      setStoredDraftSnapshot(null);
+    }
+    draftHydratedRef.current = true;
+  }, [ordinaryDraftStorageKey, requestIdFromSearch]);
 
   useEffect(() => {
     if (!categories.length) return;
@@ -396,39 +1096,142 @@ export default function OrdinaryConversationFlow() {
         return name.toLowerCase() === categoryFromSearch.toLowerCase() || key.toLowerCase() === categoryFromSearch.toLowerCase();
       });
       if (match) {
-        setSelectedCategoryValue(String(match.id ?? match.key ?? match.name));
+        setSelectedCategoryValue(String(match.key ?? match.id ?? match.name));
         return;
       }
-    }
-
-    const fallback = categories[0];
-    if (fallback) {
-      setSelectedCategoryValue(String(fallback.id ?? fallback.key ?? fallback.name ?? ""));
     }
   }, [categories, selectedCategoryValue, categoryFromSearch]);
 
   useEffect(() => {
+    if (skipCategoryResetRef.current) {
+      skipCategoryResetRef.current = false;
+      return;
+    }
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
     setWizardIndex(0);
     setWizardAnswers({});
     setNotes("");
     setAttachments([]);
-  }, [selectedCategoryValue]);
+    setPersistedAttachmentCount(null);
+    setHasConfirmedEstateResidence(false);
+  }, [clearWizardPromptTimer, selectedCategoryValue]);
 
-  const selectedCategoryLabel = useMemo(() => {
-    if (!selectedCategoryValue) return "";
+  useEffect(() => {
+    if (selectedCategoryValue && stage === "intake") {
+      clearWizardPromptTimer();
+      setIsWizardBotThinking(false);
+      setStage("wizard");
+      setWizardIndex(0);
+    }
+  }, [clearWizardPromptTimer, selectedCategoryValue, stage]);
+
+  const selectedCategory = useMemo<any | null>(() => {
+    if (!selectedCategoryValue) return null;
     const match = categories.find((cat: any) => {
       const id = String(cat?.id ?? "");
       const key = String(cat?.key ?? "");
       const name = String(cat?.name ?? "");
       return selectedCategoryValue === id || selectedCategoryValue === key || selectedCategoryValue === name;
     });
-    return String(match?.name ?? match?.key ?? selectedCategoryValue);
+    return match || null;
   }, [categories, selectedCategoryValue]);
+
+  const selectedCategoryLabel = useMemo(() => {
+    if (!selectedCategoryValue) return "";
+    return String(selectedCategory?.name ?? selectedCategory?.key ?? selectedCategoryValue);
+  }, [selectedCategory, selectedCategoryValue]);
+
+  const selectedCategoryKey = useMemo(() => {
+    return normalizeCategoryKey(
+      String(selectedCategory?.key ?? selectedCategoryValue ?? selectedCategoryLabel),
+    );
+  }, [selectedCategory, selectedCategoryValue, selectedCategoryLabel]);
+
+  const handleSelectCategoryFromGrid = (categoryName: string) => {
+    const match = categories.find((cat: any) => {
+      const name = String(cat?.name ?? "");
+      const key = String(cat?.key ?? "");
+      return (
+        name.toLowerCase() === categoryName.toLowerCase() ||
+        key.toLowerCase() === categoryName.toLowerCase()
+      );
+    });
+    const value = String(match?.key ?? match?.id ?? match?.name ?? categoryName);
+    const label = String(match?.name ?? match?.key ?? categoryName);
+    const restoreStage = restoreStageAfterCategorySelectionRef.current;
+    const restoreWizardIndex = restoreWizardIndexAfterCategorySelectionRef.current;
+    restoreStageAfterCategorySelectionRef.current = null;
+    restoreWizardIndexAfterCategorySelectionRef.current = null;
+
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    setSelectedCategoryValue(value);
+    setWizardAnswers((prev) => ({ ...prev, category_select: label }));
+    if (restoreStage === "summary") {
+      setStage("summary");
+      return;
+    }
+    if (typeof restoreWizardIndex === "number" && Number.isFinite(restoreWizardIndex)) {
+      setWizardIndex(Math.max(0, restoreWizardIndex));
+      setStage("wizard");
+      return;
+    }
+    setWizardIndex(0);
+    setStage("wizard");
+  };
 
   const categoryProfile = useMemo(
     () => buildCategoryProfile(selectedCategoryLabel || "General"),
     [selectedCategoryLabel],
   );
+
+  const filteredEstates = useMemo(() => {
+    const query = estateSearch.trim().toLowerCase();
+    if (!query) return estates;
+    return estates.filter((estate) => estate.name.toLowerCase().includes(query));
+  }, [estates, estateSearch]);
+
+  const availableLgas = useMemo(() => {
+    return residentState ? LGA_BY_STATE[residentState] || [] : [];
+  }, [residentState]);
+
+  const isLocationComplete = useMemo(() => {
+    if (!hasConfirmedEstateResidence) return false;
+    if (estateResidenceMode === "outside") {
+      return Boolean(residentState && residentLga && address.trim());
+    }
+    return Boolean(estateName && address.trim());
+  }, [
+    hasConfirmedEstateResidence,
+    estateResidenceMode,
+    residentState,
+    residentLga,
+    estateName,
+    address,
+  ]);
+
+  const locationMissingHint = useMemo(() => {
+    if (isLocationComplete) return "";
+    if (!hasConfirmedEstateResidence) return "Select yes or no to continue";
+    if (estateResidenceMode === "outside") {
+      if (!residentState) return "Select your state";
+      if (!residentLga) return "Select your LGA";
+      if (!address.trim()) return "Enter your address";
+    } else {
+      if (!estateName) return "Select your estate";
+      if (!address.trim()) return "Enter your address";
+    }
+    return "Complete the fields above to continue";
+  }, [
+    isLocationComplete,
+    hasConfirmedEstateResidence,
+    estateResidenceMode,
+    residentState,
+    residentLga,
+    address,
+    estateName,
+  ]);
 
   const wizardSteps = useMemo<WizardStep[]>(() => {
     const followUps: WizardStep[] = categoryProfile.followUps.map((f) => ({
@@ -438,6 +1241,17 @@ export default function OrdinaryConversationFlow() {
       options: f.options,
     }));
     return [
+      {
+        id: "location",
+        kind: "location",
+        prompt: "Do you live in a CityConnect estate?",
+      },
+      {
+        id: "urgency",
+        kind: "chips",
+        prompt: "How urgent is this?",
+        options: URGENCY_OPTIONS.map((opt) => opt.label),
+      },
       {
         id: "issue_type",
         kind: "chips",
@@ -475,47 +1289,211 @@ export default function OrdinaryConversationFlow() {
     ];
   }, [categoryProfile]);
 
+  useEffect(() => {
+    if (!wizardSteps.length) {
+      clearWizardPromptTimer();
+      setIsWizardBotThinking(false);
+      if (wizardIndex !== 0) setWizardIndex(0);
+      return;
+    }
+    if (wizardIndex > wizardSteps.length - 1) {
+      setWizardIndex(wizardSteps.length - 1);
+    }
+  }, [clearWizardPromptTimer, wizardSteps, wizardIndex]);
+
+  const focusAddressField = () => {
+    requestAnimationFrame(() => {
+      if (addressSectionRef.current) {
+        addressSectionRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      addressTextareaRef.current?.focus();
+    });
+  };
+
+  const focusNextLocationField = (mode: "estate" | "outside") => {
+    requestAnimationFrame(() => {
+      if (mode === "estate") {
+        estateSearchInputRef.current?.focus();
+      } else {
+        stateSelectTriggerRef.current?.focus();
+      }
+    });
+  };
+
   const intakeLocationLabel = () => {
-    const base = estateName || address || "Not provided";
+    const base =
+      estateResidenceMode === "outside"
+        ? [address, residentLga, residentState].filter(Boolean).join(", ") || "Not provided"
+        : [estateName, address].filter(Boolean).join(", ") || "Not provided";
     if (!unit.trim()) return base;
     return `${base} - Unit ${unit.trim()}`;
   };
 
-  const canContinueIntake =
-    Boolean((estateName || address).trim()) &&
-    Boolean(selectedCategoryLabel.trim()) &&
-    Boolean(urgency.trim());
-
   const currentStep = wizardSteps[wizardIndex];
+  const effectiveAttachmentCount = persistedAttachmentCount ?? attachments.length;
 
   const historyBlocks = wizardSteps
     .filter((step) => {
-      if (step.kind === "photos") return attachments.length > 0 || wizardAnswers[step.id];
+      if (step.kind === "photos") return effectiveAttachmentCount > 0 || wizardAnswers[step.id];
       if (step.kind === "text") return Boolean(notes.trim());
       return Boolean(wizardAnswers[step.id]);
     })
     .map((step) => {
       let answer = wizardAnswers[step.id] || "";
       if (step.kind === "photos") {
-        answer = attachments.length ? `${attachments.length} photo(s) added` : "Skipped";
+        answer = effectiveAttachmentCount ? `${effectiveAttachmentCount} photo(s) added` : "Skipped";
       }
       if (step.kind === "text") {
         answer = notes.trim();
       }
-      return { prompt: step.prompt, answer };
+      return { id: step.id, kind: step.kind, prompt: step.prompt, answer };
     });
 
-  const goToSummary = () => setStage("summary");
+  const persistCurrentDraftSnapshot = useCallback(() => {
+    const hasDraftData = Boolean(
+      selectedCategoryValue ||
+        categorySelectSearch.trim() ||
+        hasConfirmedEstateResidence ||
+        estateName.trim() ||
+        estateSearch.trim() ||
+        residentState.trim() ||
+        residentLga.trim() ||
+        address.trim() ||
+        unit.trim() ||
+        urgency.trim() ||
+        notes.trim() ||
+        Object.keys(wizardAnswers).length,
+    );
+
+    if (!hasDraftData) {
+      clearOrdinaryDraftSnapshot();
+      return null;
+    }
+
+    const nowIso = new Date().toISOString();
+    const sanitizedAnswers = Object.entries(wizardAnswers).reduce<Record<string, string>>(
+      (acc, [key, value]) => {
+        if (!key) return acc;
+        const normalized = String(value ?? "");
+        if (!normalized.trim()) return acc;
+        acc[key] = normalized;
+        return acc;
+      },
+      {},
+    );
+
+    const snapshot: OrdinaryConversationDraftSnapshot = {
+      version: 1,
+      updatedAt: nowIso,
+      stage: selectedCategoryValue ? stage : "intake",
+      selectedCategoryValue: String(selectedCategoryValue || ""),
+      categorySelectSearch: String(categorySelectSearch || ""),
+      estateName: String(estateName || ""),
+      estateResidenceMode,
+      hasConfirmedEstateResidence:
+        hasConfirmedEstateResidence || Boolean(String(sanitizedAnswers.location || "").trim()),
+      estateSearch: String(estateSearch || ""),
+      residentState: String(residentState || ""),
+      residentLga: String(residentLga || ""),
+      address: String(address || ""),
+      unit: String(unit || ""),
+      urgency: String(urgency || ""),
+      wizardIndex: Math.max(0, Number(wizardIndex || 0)),
+      wizardAnswers: sanitizedAnswers,
+      notes: String(notes || ""),
+    };
+
+    try {
+      localStorage.setItem(ordinaryDraftStorageKey, JSON.stringify(snapshot));
+    } catch {
+      // ignore storage errors
+    }
+    setStoredDraftSnapshot(snapshot);
+    setDraftSavedAt(nowIso);
+    return snapshot;
+  }, [
+    address,
+    categorySelectSearch,
+    clearOrdinaryDraftSnapshot,
+    estateName,
+    estateResidenceMode,
+    estateSearch,
+    hasConfirmedEstateResidence,
+    notes,
+    ordinaryDraftStorageKey,
+    residentLga,
+    residentState,
+    selectedCategoryValue,
+    stage,
+    unit,
+    urgency,
+    wizardAnswers,
+    wizardIndex,
+  ]);
+
+  useEffect(() => {
+    if (!draftHydratedRef.current) return;
+    if (activeRequestId) return;
+    persistCurrentDraftSnapshot();
+  }, [
+    activeRequestId,
+    address,
+    categorySelectSearch,
+    estateName,
+    estateResidenceMode,
+    estateSearch,
+    hasConfirmedEstateResidence,
+    notes,
+    ordinaryDraftStorageKey,
+    residentLga,
+    residentState,
+    selectedCategoryValue,
+    stage,
+    unit,
+    urgency,
+    wizardAnswers,
+    wizardIndex,
+    persistCurrentDraftSnapshot,
+  ]);
+
+  useEffect(() => {
+    const persistDraftOnVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") return;
+      if (!draftHydratedRef.current) return;
+      if (activeRequestId) return;
+      persistCurrentDraftSnapshot();
+    };
+
+    const persistDraftOnPageExit = () => {
+      if (!draftHydratedRef.current) return;
+      if (activeRequestId) return;
+      persistCurrentDraftSnapshot();
+    };
+
+    document.addEventListener("visibilitychange", persistDraftOnVisibilityChange);
+    window.addEventListener("beforeunload", persistDraftOnPageExit);
+    window.addEventListener("pagehide", persistDraftOnPageExit);
+    return () => {
+      document.removeEventListener("visibilitychange", persistDraftOnVisibilityChange);
+      window.removeEventListener("beforeunload", persistDraftOnPageExit);
+      window.removeEventListener("pagehide", persistDraftOnPageExit);
+    };
+  }, [activeRequestId, persistCurrentDraftSnapshot]);
 
   const handleSelectChip = (stepId: string, value: string) => {
+    if (isWizardBotThinking) return;
+    if (stepId === "urgency") {
+      setUrgency(value);
+    }
     setWizardAnswers((prev) => ({ ...prev, [stepId]: value }));
     const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
-    setWizardIndex(nextIndex);
+    queueWizardStepAdvance(nextIndex);
   };
 
   const handleUploadClick = () => fileInputRef.current?.click();
 
   const handleAddAttachment = (file: File) => {
+    setPersistedAttachmentCount(null);
     const reader = new FileReader();
     reader.onload = () => {
       const result = typeof reader.result === "string" ? reader.result : "";
@@ -529,97 +1507,369 @@ export default function OrdinaryConversationFlow() {
   };
 
   const handleRemoveAttachment = (id: string) => {
-    setAttachments((prev) => prev.filter((att) => att.id !== id));
+    setPersistedAttachmentCount(null);
+    setAttachments((prev) => {
+      const removed = prev.find((att) => att.id === id);
+      if (removed && previewAttachment?.url === removed.dataUrl) {
+        setPreviewAttachment(null);
+      }
+      return prev.filter((att) => att.id !== id);
+    });
   };
 
   const handleFinishNotes = () => {
     if (!notes.trim()) {
       setNotes("");
     }
-    goToSummary();
+    setStage("summary");
   };
 
-  const jumpToIntake = (focus: "location" | "category" | "urgency") => {
+  const resetFlowForNewRequest = () => {
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    clearOrdinaryDraftSnapshot();
     setStage("intake");
-    setFocusedIntake(focus);
+    setSelectedCategoryValue("");
+    setCategorySelectSearch("");
+    setWizardIndex(0);
+    setWizardAnswers({});
+    setNotes("");
+    setAttachments([]);
+    setPersistedAttachmentCount(null);
+    setUrgency("");
+    setAddress("");
+    setUnit("");
+    setEstateName("");
+    setResidentState("");
+    setResidentLga("");
+    setEstateResidenceMode("estate");
+    setHasConfirmedEstateResidence(false);
+    setActiveRequestId(null);
+    setDraftSavedAt(new Date().toISOString());
+  };
+
+  const handleCancelRequest = async () => {
+    if (!activeRequestId) {
+      resetFlowForNewRequest();
+      return;
+    }
+
+    const statusKey = normalizeStatusKey(activeRequestLive?.status || "");
+    if (CANCELLATION_REVIEW_REQUIRED_STATUSES.has(statusKey)) {
+      if (hasOpenCancellationReview) {
+        toast({
+          title: "Already under review",
+          description: "Your cancellation request is already waiting for admin decision.",
+        });
+        return;
+      }
+      setIsCancelRequestDialogOpen(true);
+      return;
+    }
+
+    try {
+      await residentFetch(`/api/service-requests/${activeRequestId}`, {
+        method: "DELETE",
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["my-recent-requests"] }),
+        queryClient.invalidateQueries({ queryKey: ["resident-active-request", activeRequestId] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+      toast({
+        title: "Request cancelled",
+        description: "Your request has been cancelled.",
+      });
+      resetFlowForNewRequest();
+    } catch (error: any) {
+      const message = String(error?.message || "");
+      if (/requiresCancellationReview|assigned or active|under review|409/i.test(message)) {
+        setIsCancelRequestDialogOpen(true);
+        return;
+      }
+      toast({
+        title: "Cancel failed",
+        description: message || "Could not cancel request",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleChangeCategory = () => {
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    clearOrdinaryDraftSnapshot();
+    setStage("intake");
+    setSelectedCategoryValue("");
+    setCategorySelectSearch("");
+    setWizardIndex(0);
+    setWizardAnswers({});
+    setNotes("");
+    setAttachments([]);
+    setPersistedAttachmentCount(null);
+    setUrgency("");
+    setActiveRequestId(null);
+    setDraftSavedAt(new Date().toISOString());
   };
 
   const jumpToWizard = (stepId: string) => {
     const idx = wizardSteps.findIndex((s) => s.id === stepId);
     if (idx >= 0) {
+      clearWizardPromptTimer();
+      setIsWizardBotThinking(false);
       setStage("wizard");
       setWizardIndex(idx);
     }
   };
 
-  const summaryItems = [
-    {
-      label: "Category",
-      value: selectedCategoryLabel || "Not selected",
-      onEdit: () => jumpToIntake("category"),
-    },
-    {
-      label: "Location",
-      value: intakeLocationLabel(),
-      onEdit: () => jumpToIntake("location"),
-    },
-    {
-      label: "Urgency",
-      value: urgency || "Not set",
-      onEdit: () => jumpToIntake("urgency"),
-    },
-    {
-      label: "Problem type",
-      value: wizardAnswers.issue_type || "Not set",
-      onEdit: () => jumpToWizard("issue_type"),
-    },
-    {
-      label: "Quantity",
-      value: wizardAnswers.quantity || "Not set",
-      onEdit: () => jumpToWizard("quantity"),
-    },
-    {
-      label: "Time window",
-      value: wizardAnswers.time_window || "Not set",
-      onEdit: () => jumpToWizard("time_window"),
-    },
-    {
-      label: "Attachments",
-      value: `${attachments.length} photo(s)`,
-      onEdit: () => jumpToWizard("photos"),
-    },
-  ];
+  const hydrateFromRequest = (request: any) => {
+    const parsedDetails = parseRequestDescription(request?.description);
+    const urgencyLabel =
+      URGENCY_OPTIONS.find((opt) => opt.value.toLowerCase() === String(request?.urgency || "").toLowerCase())?.label ||
+      parsedDetails.urgency ||
+      String(request?.urgency || "");
+
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    setActiveRequestId(request?.id || null);
+    skipCategoryResetRef.current = true;
+    setSelectedCategoryValue(request?.categoryLabel || request?.category || "");
+    setUrgency(urgencyLabel);
+    setWizardAnswers((prev) => ({
+      ...prev,
+      location: request?.location || parsedDetails.location || "",
+      urgency: urgencyLabel,
+      issue_type:
+        parsedDetails.issueType ||
+        (request?.categoryLabel || request?.category
+          ? formatCategoryLabel(request?.categoryLabel || request?.category || "")
+          : prev.issue_type),
+      quantity: parsedDetails.quantity || prev.quantity,
+      time_window:
+        parsedDetails.timeWindow ||
+        (request?.preferredTime ? new Date(request.preferredTime).toLocaleString() : prev.time_window),
+    }));
+    setNotes(parsedDetails.notes || "");
+    setAddress(request?.location || parsedDetails.location || "");
+    setHasConfirmedEstateResidence(true);
+    const locationSource = String(request?.location || parsedDetails.location || "");
+    const matchedEstate = estates.find((estate: any) => locationSource.includes(String(estate?.name || "")));
+    if (matchedEstate) {
+      setEstateResidenceMode("estate");
+      setEstateName(String(matchedEstate.name || ""));
+    } else {
+      setEstateResidenceMode("outside");
+      setEstateName("");
+    }
+    setResidentState("");
+    setResidentLga("");
+    setUnit("");
+    setAttachments([]);
+    setPersistedAttachmentCount(parsedDetails.photosCount ?? 0);
+    setStage("wizard");
+    setPendingPrefill(true);
+  };
+
+  const handleOpenRecentRequest = async (requestId: string) => {
+    if (requestId === draftSessionId) {
+      setActiveRequestId(null);
+      const snapshot = storedDraftSnapshot ?? readOrdinaryDraftSnapshot();
+      if (snapshot) {
+        applyOrdinaryDraftSnapshot(snapshot);
+      } else {
+        resetFlowForNewRequest();
+      }
+      return true;
+    }
+    if (!activeRequestId) {
+      persistCurrentDraftSnapshot();
+    }
+    try {
+      setLoadingRequestId(requestId);
+      const data = await residentFetch(`/api/app/service-requests/${requestId}`);
+      hydrateFromRequest(data);
+      return true;
+    } catch (error) {
+      console.error("Failed to load request", error);
+      return false;
+    } finally {
+      setLoadingRequestId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!requestIdFromSearch) return;
+    if (openedRequestFromQueryRef.current === requestIdFromSearch) return;
+    let cancelled = false;
+    let retries = 0;
+
+    const openFromQuery = async () => {
+      if (cancelled) return;
+      const success = await handleOpenRecentRequest(requestIdFromSearch);
+      if (success) {
+        openedRequestFromQueryRef.current = requestIdFromSearch;
+        return;
+      }
+      if (!cancelled && retries < 4) {
+        retries += 1;
+        window.setTimeout(() => {
+          void openFromQuery();
+        }, 600);
+      }
+    };
+
+    void openFromQuery();
+    return () => {
+      cancelled = true;
+    };
+  }, [requestIdFromSearch]);
 
   const photoGuard =
     categoryProfile.photoRequired && attachments.length === 0
       ? "This category needs at least one photo before continuing."
       : "";
 
-  const handleBookConsultancy = () => {
-    const selectedCategory = categories.find((cat: any) => {
-      const id = String(cat?.id ?? "");
-      const key = String(cat?.key ?? "");
-      const name = String(cat?.name ?? "");
-      return selectedCategoryValue === id || selectedCategoryValue === key || selectedCategoryValue === name;
+  const { data: activeRequestLive } = useQuery<ActiveServiceRequest>({
+    queryKey: ["resident-active-request", activeRequestId],
+    enabled: Boolean(activeRequestId),
+    queryFn: async () => residentFetch<ActiveServiceRequest>(`/api/app/service-requests/${activeRequestId}`),
+  });
+
+  const [countdownTick, setCountdownTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!activeRequestId) return;
+    const timer = window.setInterval(() => setCountdownTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [activeRequestId]);
+
+  const providerCount = activeRequestLive?.providerId ? 1 : 0;
+  const providerStatusLabel = activeRequestId
+    ? providerCount > 0
+      ? "Provider assigned"
+      : "No provider assigned yet"
+    : "Providers will be matched after booking";
+
+  const assignedProvider = useMemo(() => {
+    if (!activeRequestLive?.providerId) return null;
+
+    const scheduledAt = toDate(activeRequestLive.preferredTime) || toDate(activeRequestLive.assignedAt);
+    const providerName = activeRequestLive.provider?.name || "Assigned consultant";
+    const providerRole = formatCategoryLabel(
+      activeRequestLive.provider?.serviceCategory ||
+        activeRequestLive.categoryLabel ||
+        activeRequestLive.category ||
+        selectedCategoryLabel ||
+        wizardAnswers.issue_type ||
+        "Consultant",
+    );
+    const providerCompany = activeRequestLive.provider?.company || "Assigned provider";
+    const providerAvatar =
+      activeRequestLive.provider?.avatarUrl ||
+      `https://api.dicebear.com/7.x/personas/svg?seed=${encodeURIComponent(activeRequestLive.providerId)}`;
+
+    return {
+      name: providerName,
+      role: providerRole,
+      company: providerCompany,
+      scheduledAt,
+      countdown: formatCountdown(scheduledAt),
+      photo: providerAvatar,
+    };
+  }, [
+    activeRequestLive?.providerId,
+    activeRequestLive?.provider?.name,
+    activeRequestLive?.provider?.company,
+    activeRequestLive?.provider?.serviceCategory,
+    activeRequestLive?.provider?.avatarUrl,
+    activeRequestLive?.category,
+    activeRequestLive?.preferredTime,
+    activeRequestLive?.assignedAt,
+    selectedCategoryLabel,
+    wizardAnswers.issue_type,
+    countdownTick,
+  ]);
+
+  useEffect(() => {
+    if (!pendingPrefill) return;
+    const firstUnansweredIdx = wizardSteps.findIndex((step) => {
+      if (step.kind === "photos") return effectiveAttachmentCount === 0;
+      if (step.kind === "text") return notes.trim().length === 0;
+      return !wizardAnswers[step.id];
     });
+    const targetIdx = firstUnansweredIdx === -1 ? Math.max(wizardSteps.length - 1, 0) : firstUnansweredIdx;
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    setWizardIndex(targetIdx);
+    setPendingPrefill(false);
+  }, [clearWizardPromptTimer, pendingPrefill, wizardSteps, wizardAnswers, notes, effectiveAttachmentCount]);
+
+  const handleBookConsultancy = () => {
+    const requestStatus = String(activeRequestLive?.status || "").toLowerCase();
+    const paymentStatus = String(activeRequestLive?.paymentStatus || "").toLowerCase();
+    const alreadyBooked =
+      Boolean(activeRequestId) &&
+      (paymentStatus === "paid" ||
+        [
+          "pending_inspection",
+          "assigned",
+          "assigned_for_job",
+          "in_progress",
+          "work_completed_pending_resident",
+          "disputed",
+          "rework_required",
+          "completed",
+          "cancelled",
+        ].includes(
+          requestStatus,
+        ));
+    if (alreadyBooked) {
+      return;
+    }
 
     const descriptionParts = [
       wizardAnswers.issue_type ? `Issue: ${wizardAnswers.issue_type}` : null,
       ...categoryProfile.followUps.map((f) =>
-        wizardAnswers[f.id] ? `${f.prompt} ${wizardAnswers[f.id]}` : null,
+        wizardAnswers[f.id] ? `${f.prompt}: ${wizardAnswers[f.id]}` : null,
       ),
       wizardAnswers.quantity ? `Quantity: ${wizardAnswers.quantity}` : null,
-      wizardAnswers.time_window ? `Time window: ${wizardAnswers.time_window}` : null,
+      wizardAnswers.time_window ? `Preferred time: ${wizardAnswers.time_window}` : null,
+      urgency ? `Urgency: ${urgency}` : null,
+      `Location: ${intakeLocationLabel()}`,
       notes.trim() ? `Notes: ${notes.trim()}` : null,
+      effectiveAttachmentCount
+        ? `Photos attached: ${effectiveAttachmentCount}`
+        : "Photos attached: 0",
     ].filter(Boolean);
+    const categoryKeyCandidate =
+      selectedCategoryKey || normalizeCategoryKey(String(selectedCategoryLabel || selectedCategoryValue || ""));
+    if (!categoryKeyCandidate) {
+      restoreStageAfterCategorySelectionRef.current = stage;
+      restoreWizardIndexAfterCategorySelectionRef.current = wizardIndex;
+      setIsCategoryRequiredDialogOpen(true);
+      return;
+    }
+
+    const primaryFollowUpId = categoryProfile.followUps[0]?.id;
+    const primaryFollowUpAnswer = primaryFollowUpId ? wizardAnswers[primaryFollowUpId] : "";
 
     const draft = {
-      categoryKey: String(selectedCategory?.key ?? selectedCategory?.id ?? selectedCategoryLabel ?? "maintenance_repair"),
+      categoryKey: categoryKeyCandidate,
       categoryLabel: selectedCategoryLabel || String(selectedCategory?.name ?? ""),
       urgency,
+      issueType: wizardAnswers.issue_type || "",
+      areaAffected: primaryFollowUpAnswer || "",
+      quantityLabel: wizardAnswers.quantity || "",
+      timeWindowLabel: wizardAnswers.time_window || "",
+      notes: notes.trim(),
       location: intakeLocationLabel(),
+      addressLine: address.trim(),
+      estateName: estateResidenceMode === "estate" ? estateName : "",
+      stateName: estateResidenceMode === "outside" ? residentState : "",
+      lgaName: estateResidenceMode === "outside" ? residentLga : "",
+      unit: unit.trim(),
+      residenceMode: estateResidenceMode,
       description: descriptionParts.join("\n"),
-      attachmentsCount: attachments.length,
+      attachmentsCount: effectiveAttachmentCount,
     };
 
     try {
@@ -630,6 +1880,995 @@ export default function OrdinaryConversationFlow() {
 
     navigate("/checkout-diagnosis");
   };
+
+  const draftSessionId = "draft-ordinary-flow";
+  const liveDraftHasContent = Boolean(
+    selectedCategoryValue ||
+      Object.keys(wizardAnswers).length ||
+      notes.trim() ||
+      attachments.length ||
+      urgency.trim() ||
+      address.trim() ||
+      unit.trim() ||
+      estateName.trim() ||
+      residentState.trim() ||
+      residentLga.trim(),
+  );
+  const liveDraftSnippet = useMemo(() => {
+    const lastAnswered = historyBlocks.length
+      ? String(historyBlocks[historyBlocks.length - 1]?.answer || "").trim()
+      : "";
+    if (lastAnswered) return lastAnswered;
+
+    const locationDraft =
+      estateResidenceMode === "outside"
+        ? [address, residentLga, residentState].filter(Boolean).join(", ")
+        : [estateName, address].filter(Boolean).join(", ");
+    return locationDraft || "Not provided";
+  }, [address, estateName, estateResidenceMode, historyBlocks, residentLga, residentState]);
+  const storedDraftTitle = useMemo(() => {
+    const draftCategory = String(storedDraftSnapshot?.selectedCategoryValue || "");
+    if (!draftCategory) return "New request";
+    const match = categories.find((cat: any) => {
+      const id = String(cat?.id ?? "");
+      const key = String(cat?.key ?? "");
+      const name = String(cat?.name ?? "");
+      return draftCategory === id || draftCategory === key || draftCategory === name;
+    });
+    return String(match?.name ?? match?.key ?? draftCategory ?? "New request");
+  }, [categories, storedDraftSnapshot]);
+  const storedDraftSnippet = useMemo(() => {
+    if (!storedDraftSnapshot) return "Not provided";
+
+    const answers = Object.values(storedDraftSnapshot.wizardAnswers || {})
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    const lastAnswered = answers.length ? answers[answers.length - 1] : "";
+    if (lastAnswered) return lastAnswered;
+
+    const locationDraft =
+      storedDraftSnapshot.estateResidenceMode === "outside"
+        ? [storedDraftSnapshot.address, storedDraftSnapshot.residentLga, storedDraftSnapshot.residentState]
+            .filter(Boolean)
+            .join(", ")
+        : [storedDraftSnapshot.estateName, storedDraftSnapshot.address].filter(Boolean).join(", ");
+    return locationDraft || "Not provided";
+  }, [storedDraftSnapshot]);
+  const draftSessionPreview = useMemo(() => {
+    if (!activeRequestId && liveDraftHasContent) {
+      return {
+        id: draftSessionId,
+        title: selectedCategoryLabel || "New request",
+        updatedAt: draftSavedAt || new Date().toISOString(),
+        snippet: liveDraftSnippet,
+        status: "draft",
+      };
+    }
+    if (!storedDraftSnapshot) return null;
+    return {
+      id: draftSessionId,
+      title: storedDraftTitle || "New request",
+      updatedAt: storedDraftSnapshot.updatedAt || draftSavedAt || new Date().toISOString(),
+      snippet: storedDraftSnippet,
+      status: "draft",
+    };
+  }, [
+    activeRequestId,
+    draftSavedAt,
+    liveDraftHasContent,
+    liveDraftSnippet,
+    selectedCategoryLabel,
+    storedDraftSnapshot,
+    storedDraftSnippet,
+    storedDraftTitle,
+  ]);
+  const draftSessions = useMemo(
+    () => (draftSessionPreview ? [draftSessionPreview] : []),
+    [draftSessionPreview],
+  );
+
+  const activeSessionId =
+    activeRequestId ||
+    loadingRequestId ||
+    (requestIdFromSearch ? null : draftSessions.length ? draftSessionId : null);
+
+  const handleOpenCategorySelectionFromModal = () => {
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    setIsCategoryRequiredDialogOpen(false);
+    skipCategoryResetRef.current = true;
+    setStage("intake");
+  };
+
+  const { data: serviceRequestMessages = [] } = useQuery<RequestMessage[]>({
+    queryKey: ["resident-request-messages", activeRequestId],
+    enabled: Boolean(activeRequestId),
+    queryFn: async () => {
+      return residentFetch<RequestMessage[]>(`/api/service-requests/${activeRequestId}/messages`);
+    },
+  });
+
+  const sendResidentMessageMutation = useMutation({
+    mutationFn: async (payload: { requestId: string; message: string; attachmentUrl?: string }) =>
+      residentFetch<RequestMessage>(`/api/service-requests/${payload.requestId}/messages`, {
+        method: "POST",
+        json: payload.attachmentUrl
+          ? { message: payload.message, attachmentUrl: payload.attachmentUrl }
+          : { message: payload.message },
+      }),
+    onSuccess: (createdMessage) => {
+      queryClient.setQueryData<RequestMessage[]>(
+        ["resident-request-messages", createdMessage.requestId],
+        (prev = []) => {
+          if (prev.some((item) => item.id === createdMessage.id)) return prev;
+          return [...prev, createdMessage];
+        },
+      );
+    },
+  });
+
+  const declineJobPaymentMutation = useMutation({
+    mutationFn: async (payload: { requestId: string; reason?: string }) =>
+      residentFetch(`/api/service-requests/${payload.requestId}/payment/decline`, {
+        method: "POST",
+        json: payload.reason ? { reason: payload.reason } : {},
+      }),
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["resident-active-request", variables.requestId] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+    },
+  });
+
+  const confirmDeliveryMutation = useMutation({
+    mutationFn: async (payload: { requestId: string }) =>
+      residentFetch(`/api/service-requests/${payload.requestId}/confirm-delivery`, {
+        method: "POST",
+      }),
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["resident-active-request", variables.requestId] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+    },
+  });
+
+  const disputeDeliveryMutation = useMutation({
+    mutationFn: async (payload: { requestId: string; reason: string }) =>
+      residentFetch(`/api/service-requests/${payload.requestId}/dispute-delivery`, {
+        method: "POST",
+        json: { reason: payload.reason },
+      }),
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["resident-active-request", variables.requestId] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+    },
+  });
+
+  const requestCancellationReviewMutation = useMutation({
+    mutationFn: async (payload: {
+      requestId: string;
+      reasonCode: string;
+      reasonDetail: string;
+      preferredResolution: "full_refund" | "partial_refund" | "cancel_without_refund";
+    }) =>
+      residentFetch(`/api/service-requests/${payload.requestId}/cancellation-cases`, {
+        method: "POST",
+        json: {
+          reasonCode: payload.reasonCode,
+          reasonDetail: payload.reasonDetail,
+          preferredResolution: payload.preferredResolution,
+        },
+      }),
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["resident-active-request", variables.requestId] }),
+        queryClient.invalidateQueries({ queryKey: ["my-recent-requests"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin.bridge.service-requests"] }),
+      ]);
+      setIsCancelRequestDialogOpen(false);
+      setCancelReasonCode("");
+      setCancelReasonDetail("");
+      setCancelPreferredResolution("full_refund");
+      toast({
+        title: "Cancellation request submitted",
+        description: "Admin will review your reason and update you.",
+      });
+    },
+    onError: (error: any) => {
+      const message = error?.message || "Unable to submit cancellation request";
+      toast({
+        title: "Could not submit request",
+        description: message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  useEffect(() => {
+    const socket = io();
+    socketRef.current = socket;
+    const joinIdentity = String(user?.id || activeRequestLive?.residentId || "").trim();
+    if (joinIdentity) {
+      socket.emit("join", joinIdentity);
+    }
+
+    socket.on("request-message:new", (payload: RequestMessageSocketPayload) => {
+      if (!payload?.requestId || !payload?.message) return;
+      queryClient.setQueryData<RequestMessage[]>(
+        ["resident-request-messages", payload.requestId],
+        (prev = []) => {
+          if (prev.some((item) => item.id === payload.message.id)) return prev;
+          return [...prev, payload.message];
+        },
+      );
+    });
+
+    socket.on("service-request:updated", (payload: ServiceRequestUpdateSocketPayload) => {
+      if (!payload?.requestId) return;
+
+      queryClient.invalidateQueries({ queryKey: ["resident-active-request", payload.requestId] });
+      queryClient.invalidateQueries({ queryKey: ["resident-request-messages", payload.requestId] });
+
+      queryClient.setQueryData<any[]>(["my-recent-requests"], (prev = []) =>
+        prev.map((item) => {
+          if (item?.id !== payload.requestId) return item;
+          return {
+            ...item,
+            ...(payload.request || {}),
+            id: item.id,
+            updatedAt: (payload.request as any)?.updatedAt || payload.at || item.updatedAt,
+          };
+        }),
+      );
+    });
+
+    socket.on("request-typing", (payload: RequestTypingSocketPayload) => {
+      if (!payload?.requestId) return;
+      if (payload.userId === user?.id) return;
+      if (payload.senderRole !== "provider" && payload.senderRole !== "admin") return;
+
+      if (!payload.isTyping) {
+        clearPeerTypingClearTimer();
+        setIsPeerTyping(false);
+        return;
+      }
+
+      setIsPeerTyping(true);
+      clearPeerTypingClearTimer();
+      peerTypingClearTimerRef.current = window.setTimeout(() => {
+        setIsPeerTyping(false);
+      }, 4500);
+    });
+
+    return () => {
+      socketRef.current = null;
+      clearPeerTypingClearTimer();
+      socket.disconnect();
+    };
+  }, [activeRequestId, activeRequestLive?.residentId, clearPeerTypingClearTimer, queryClient, user?.id]);
+
+  const orderedServiceMessages = useMemo(
+    () =>
+      [...serviceRequestMessages].sort((a, b) => {
+        const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return aTime - bTime;
+      }),
+    [serviceRequestMessages],
+  );
+
+  const providerDisplayName = assignedProvider?.name || "CityConnect Assistant";
+  const activeRequestStatusValue = normalizeStatusKey(activeRequestLive?.status || "");
+  const activeCancellationCase = activeRequestLive?.cancellationCase || null;
+  const activeCancellationCaseStatus = normalizeStatusKey(activeCancellationCase?.status || "");
+  const hasOpenCancellationReview = ["requested", "under_review"].includes(activeCancellationCaseStatus);
+  const canRequestCancellationReview =
+    Boolean(activeRequestId) &&
+    CANCELLATION_REVIEW_REQUIRED_STATUSES.has(activeRequestStatusValue) &&
+    !hasOpenCancellationReview;
+  const isAwaitingResidentConfirmation = [
+    "work_completed_pending_resident",
+    "awaiting_resident_confirmation",
+    "awaiting_confirmation",
+  ].includes(activeRequestStatusValue);
+  const canMessageAssignedProvider =
+    Boolean(activeRequestLive?.providerId) &&
+    !["cancelled", "completed"].includes(activeRequestStatusValue);
+  const inProgressStartedAt =
+    activeRequestStatusValue === "in_progress"
+      ? toDate(activeRequestLive?.updatedAt) || toDate(activeRequestLive?.assignedAt)
+      : null;
+  const inProgressElapsedLabel = formatElapsedDuration(inProgressStartedAt);
+
+  useEffect(() => {
+    if (canMessageAssignedProvider && activeRequestId) return;
+    stopSelfTyping(activeRequestId);
+    clearPeerTypingClearTimer();
+    setIsPeerTyping(false);
+  }, [activeRequestId, canMessageAssignedProvider, clearPeerTypingClearTimer, stopSelfTyping]);
+
+  useEffect(() => {
+    if (!activeRequestId || !canMessageAssignedProvider) return;
+
+    let cancelled = false;
+    const syncTypingState = async () => {
+      try {
+        const typingState = await residentFetch<{
+          provider?: boolean;
+          admin?: boolean;
+        }>(`/api/service-requests/${activeRequestId}/typing`);
+        if (cancelled) return;
+        setIsPeerTyping(Boolean(typingState?.provider || typingState?.admin));
+      } catch {
+        if (!cancelled) {
+          setIsPeerTyping(false);
+        }
+      }
+    };
+
+    void syncTypingState();
+    const interval = window.setInterval(() => {
+      void syncTypingState();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeRequestId, canMessageAssignedProvider]);
+
+  const activeRequestCategoryDisplay =
+    activeRequestLive?.categoryLabel || activeRequestLive?.category || selectedCategoryLabel;
+  const activeRequestStatusLabel = activeRequestLive?.status
+    ? formatServiceRequestStatusLabel(activeRequestLive.status, activeRequestLive?.category || selectedCategoryLabel)
+    : "";
+  const activeRequestPaymentStatusValue = String(activeRequestLive?.paymentStatus || "").toLowerCase();
+  const activeConsultancyReport = useMemo(
+    () => readConsultancyReport(activeRequestLive?.consultancyReport || null),
+    [activeRequestLive?.consultancyReport],
+  );
+  const hasJobPaymentRequest = Boolean(activeRequestLive?.paymentRequestedAt) && Number(activeRequestLive?.billedAmount || 0) > 0;
+  const canPayJobRequest =
+    hasJobPaymentRequest && !["paid", "cancelled", "failed", "unpaid"].includes(activeRequestPaymentStatusValue);
+  const paymentCardStatusLabel =
+    activeRequestPaymentStatusValue === "paid"
+      ? "Paid"
+      : activeRequestPaymentStatusValue === "cancelled" || activeRequestPaymentStatusValue === "failed"
+        ? "Declined"
+        : canPayJobRequest
+          ? "Pending payment"
+          : "Pending";
+  const parsedActiveRequestDetails = useMemo(
+    () => parseRequestDescription(activeRequestLive?.description),
+    [activeRequestLive?.description],
+  );
+  const summaryLocationValue = activeRequestLive?.location || intakeLocationLabel();
+  const summaryUrgencyValue =
+    URGENCY_OPTIONS.find(
+      (opt) => opt.value.toLowerCase() === String(activeRequestLive?.urgency || "").toLowerCase(),
+    )?.label ||
+    parsedActiveRequestDetails.urgency ||
+    urgency ||
+    "Not set";
+  const summaryProblemTypeValue = parsedActiveRequestDetails.issueType || wizardAnswers.issue_type || "Not set";
+  const summaryQuantityValue = parsedActiveRequestDetails.quantity || wizardAnswers.quantity || "Not set";
+  const summaryTimeWindowValue =
+    parsedActiveRequestDetails.timeWindow || wizardAnswers.time_window || "Not set";
+  const summaryAttachmentCount =
+    parsedActiveRequestDetails.photosCount ?? persistedAttachmentCount ?? attachments.length;
+  const consultancyAlreadyBooked = Boolean(activeRequestId) && (
+    activeRequestPaymentStatusValue === "paid" ||
+    [
+      "pending_inspection",
+      "assigned",
+      "assigned_for_job",
+      "in_progress",
+      "work_completed_pending_resident",
+      "awaiting_resident_confirmation",
+      "awaiting_confirmation",
+      "disputed",
+      "rework_required",
+      "completed",
+      "cancelled",
+    ].includes(
+      activeRequestStatusValue,
+    )
+  );
+  const canBookConsultancy = !consultancyAlreadyBooked;
+  const summaryItems = [
+    {
+      label: "Category",
+      value: formatCategoryLabel(activeRequestCategoryDisplay) || "Not selected",
+      onEdit: () => {
+        clearWizardPromptTimer();
+        setIsWizardBotThinking(false);
+        setStage("intake");
+        setWizardIndex(0);
+      },
+    },
+    {
+      label: "Location",
+      value: summaryLocationValue,
+      onEdit: () => jumpToWizard("location"),
+    },
+    {
+      label: "Urgency",
+      value: summaryUrgencyValue,
+      onEdit: () => jumpToWizard("urgency"),
+    },
+    {
+      label: "Problem type",
+      value: summaryProblemTypeValue,
+      onEdit: () => jumpToWizard("issue_type"),
+    },
+    {
+      label: "Quantity",
+      value: summaryQuantityValue,
+      onEdit: () => jumpToWizard("quantity"),
+    },
+    {
+      label: "Time window",
+      value: summaryTimeWindowValue,
+      onEdit: () => jumpToWizard("time_window"),
+    },
+    {
+      label: "Attachments",
+      value: `${summaryAttachmentCount} photo(s)`,
+      onEdit: () => jumpToWizard("photos"),
+    },
+  ];
+  const showWizardInteractiveStep = !activeRequestId || activeRequestStatusValue === "pending";
+  const isConversationStage = stage === "wizard" || stage === "summary";
+  const showInProgressCounter =
+    isConversationStage && !showWizardInteractiveStep && activeRequestStatusValue === "in_progress";
+
+  useEffect(() => {
+    if (stage === "wizard" && showWizardInteractiveStep) return;
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+  }, [clearWizardPromptTimer, showWizardInteractiveStep, stage]);
+
+  const providerAvailabilityLabel = canMessageAssignedProvider
+    ? "Assigned to this request"
+    : "Awaiting assignment";
+  const providerEtaLabel = assignedProvider?.scheduledAt
+    ? `Scheduled ${assignedProvider.scheduledAt.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })}`
+      : "Schedule pending";
+
+  const handlePayRequestedJob = async () => {
+    if (!activeRequestId) return;
+    const amount = Number(activeRequestLive?.billedAmount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast({
+        title: "Payment amount missing",
+        description: "No valid amount is set for this request yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setIsStartingJobPayment(true);
+      const session = await residentFetch<{ reference: string }>("/api/payments/paystack/session", {
+        method: "POST",
+        json: {
+          amount,
+          serviceRequestId: activeRequestId,
+          description: `Job payment for ${formatCategoryLabel(activeRequestCategoryDisplay || "service request")}`,
+        },
+      });
+
+      const init = await residentFetch<{ authorization_url?: string; authorizationUrl?: string }>(
+        "/api/paystack/init",
+        {
+          method: "POST",
+          json: {
+            email: user?.email || "resident@example.com",
+            amountInNaira: amount,
+            metadata: {
+              residentId: user?.id,
+              serviceRequestId: activeRequestId,
+              sessionReference: session.reference,
+              paymentKind: "job_request_payment",
+            },
+            reference: session.reference,
+            callbackUrl: `${window.location.origin}/payment-confirmation?source=ordinary&conversationId=${encodeURIComponent(activeRequestId)}&requestId=${encodeURIComponent(activeRequestId)}&serviceRequestId=${encodeURIComponent(activeRequestId)}`,
+          },
+        },
+      );
+
+      const authUrl = init.authorization_url || init.authorizationUrl;
+      if (!authUrl) {
+        throw new Error("Missing authorization URL from Paystack initialization");
+      }
+
+      window.location.href = authUrl;
+    } catch (error: any) {
+      toast({
+        title: "Payment error",
+        description: error?.message || "Could not start payment.",
+        variant: "destructive",
+      });
+      setIsStartingJobPayment(false);
+    }
+  };
+
+  const handleDeclineRequestedPayment = async () => {
+    if (!activeRequestId || declineJobPaymentMutation.isPending) return;
+    const shouldDecline = window.confirm("Decline this payment request?");
+    if (!shouldDecline) return;
+
+    try {
+      await declineJobPaymentMutation.mutateAsync({ requestId: activeRequestId });
+      toast({
+        title: "Payment declined",
+        description: "The request has been marked as declined.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Could not decline payment",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSubmitCancellationReview = async () => {
+    if (!activeRequestId || requestCancellationReviewMutation.isPending) return;
+
+    const reasonCode = cancelReasonCode.trim();
+    const reasonDetail = cancelReasonDetail.trim();
+    if (!reasonCode) {
+      toast({
+        title: "Reason category required",
+        description: "Select a reason category before submitting.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (reasonDetail.length < 10) {
+      toast({
+        title: "Add more detail",
+        description: "Please provide a clear reason (at least 10 characters).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    await requestCancellationReviewMutation.mutateAsync({
+      requestId: activeRequestId,
+      reasonCode,
+      reasonDetail,
+      preferredResolution: cancelPreferredResolution,
+    });
+  };
+
+  const handleConfirmDelivery = async () => {
+    if (!activeRequestId || confirmDeliveryMutation.isPending) return;
+    try {
+      await confirmDeliveryMutation.mutateAsync({ requestId: activeRequestId });
+      setIsConfirmDeliveryDialogOpen(false);
+      toast({
+        title: "Delivery confirmed",
+        description: "This request has been marked as completed.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Could not confirm delivery",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDisputeDelivery = async () => {
+    if (!activeRequestId || disputeDeliveryMutation.isPending) return;
+    const trimmedReason = raiseIssueReason.trim();
+    if (!trimmedReason) return;
+
+    try {
+      await disputeDeliveryMutation.mutateAsync({ requestId: activeRequestId, reason: trimmedReason });
+      setRaiseIssueReason("");
+      setIsRaiseIssueDialogOpen(false);
+      toast({
+        title: "Issue submitted",
+        description: "Your dispute was sent to admin for review.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Could not submit issue",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const openConfirmDeliveryDialog = () => {
+    if (!activeRequestId || confirmDeliveryMutation.isPending) return;
+    setIsConfirmDeliveryDialogOpen(true);
+  };
+
+  const openRaiseIssueDialog = () => {
+    if (!activeRequestId || disputeDeliveryMutation.isPending) return;
+    setIsRaiseIssueDialogOpen(true);
+  };
+
+  const conversationItems = useMemo<ThreadItem[]>(() => {
+    const items: ThreadItem[] = [];
+
+    if (assignedProvider) {
+      items.push({
+        id: "provider-assigned-event",
+        kind: "event",
+        title: "We've assigned a consultant for your visit",
+        body: `${assignedProvider.name} (${assignedProvider.role}) is now linked to your request.`,
+        scheduleLabel: assignedProvider.scheduledAt
+          ? assignedProvider.scheduledAt.toLocaleString(undefined, {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })
+          : "Schedule to be confirmed",
+        countdownLabel:
+          assignedProvider.countdown === "Not scheduled"
+            ? "Awaiting schedule"
+            : `${assignedProvider.countdown} remaining`,
+      });
+    }
+
+    if (activeRequestStatusValue === "assigned_for_job") {
+      const jobTimerScheduleAt =
+        toDate(activeRequestLive?.preferredTime) ||
+        assignedProvider?.scheduledAt ||
+        toDate(activeRequestLive?.assignedAt);
+      const jobTimerCountdownRaw = assignedProvider?.countdown || formatCountdown(jobTimerScheduleAt);
+      const jobTimerCountdownLabel =
+        jobTimerCountdownRaw === "Not scheduled"
+          ? "Awaiting agreed date"
+          : jobTimerCountdownRaw === "Starting soon"
+            ? "Starting soon"
+            : `${jobTimerCountdownRaw} remaining`;
+
+      items.push({
+        id: "assigned-for-job-timer-event",
+        kind: "event",
+        title: "Assigned for job timer is active",
+        body: jobTimerScheduleAt
+          ? "Countdown is running to the agreed job date."
+          : "Waiting for the agreed job date to start the countdown.",
+        scheduleLabel: jobTimerScheduleAt
+          ? jobTimerScheduleAt.toLocaleString(undefined, {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })
+          : "Agreed date pending",
+        countdownLabel: jobTimerCountdownLabel,
+      });
+    }
+
+    const deliveryConfirmationItem: ThreadItem | null = isAwaitingResidentConfirmation
+      ? {
+          id: "delivery-confirmation-card",
+          kind: "delivery_confirmation",
+          statusLabel: activeRequestStatusLabel || "Awaiting confirmation",
+          note: "Provider marked this job as done. Confirm delivery if satisfied or raise an issue for admin review.",
+          requestedAt:
+            typeof activeRequestLive?.updatedAt === "string"
+              ? activeRequestLive.updatedAt
+              : activeRequestLive?.updatedAt
+                ? new Date(activeRequestLive.updatedAt).toISOString()
+                : undefined,
+          canConfirm: true,
+          onConfirm: openConfirmDeliveryDialog,
+          onDispute: openRaiseIssueDialog,
+          isConfirming: confirmDeliveryMutation.isPending,
+          isDisputing: disputeDeliveryMutation.isPending,
+        }
+      : null;
+
+    if (activeRequestStatusValue === "disputed") {
+      items.push({
+        id: "delivery-disputed-event",
+        kind: "event",
+        title: "Delivery issue under review",
+        body: "Your dispute is currently being reviewed by admin.",
+      });
+    }
+
+    if (activeRequestStatusValue === "rework_required") {
+      items.push({
+        id: "delivery-rework-event",
+        kind: "event",
+        title: "Rework approved",
+        body: "Admin requested provider rework. Progress updates will continue in this chat.",
+      });
+    }
+
+    if (!showWizardInteractiveStep) {
+      historyBlocks.forEach((block, idx) => {
+        items.push({
+          id: `prompt-${idx}`,
+          kind: "message",
+          role: "provider",
+          text: block.prompt,
+        });
+        items.push({
+          id: `answer-${idx}`,
+          kind: "message",
+          role: "resident",
+          text: block.answer,
+        });
+      });
+    }
+
+
+    const shouldShowProviderDivider = Boolean(assignedProvider && orderedServiceMessages.length > 0);
+    if (shouldShowProviderDivider) {
+      items.push({
+        id: "provider-chat-divider",
+        kind: "divider",
+        text: "Conversation with your provider",
+      });
+    }
+
+    orderedServiceMessages.forEach((message) => {
+      const consultancyReport = parseConsultancyReportMessage(message.message);
+      if (consultancyReport) {
+        items.push({
+          id: `consultancy-report-${message.id}`,
+          kind: "consultancy_report",
+          inspectionDate: consultancyReport.inspectionDate,
+          completionDeadline: consultancyReport.completionDeadline || activeConsultancyReport?.completionDeadline || undefined,
+          actualIssue: consultancyReport.actualIssue,
+          causeOfIssue: consultancyReport.causeOfIssue,
+          materialCostLabel: consultancyReport.materialCostLabel,
+          serviceCostLabel: consultancyReport.serviceCostLabel,
+          preventiveRecommendation: consultancyReport.preventiveRecommendation,
+          evidenceUrls: activeConsultancyReport?.evidence || [],
+          evidenceCount: consultancyReport.evidenceCount,
+          timestamp: message.createdAt,
+        });
+        return;
+      }
+
+      items.push({
+        id: `thread-${message.id}`,
+        kind: "message",
+        role: message.senderRole === "resident" ? "resident" : message.senderRole,
+        text: message.message,
+        attachmentUrl: message.attachmentUrl || undefined,
+        timestamp: message.createdAt,
+      });
+    });
+
+    if (hasJobPaymentRequest) {
+      const reportNoteParts = activeConsultancyReport
+        ? [
+            activeConsultancyReport.inspectionDate
+              ? `Inspection date: ${new Date(activeConsultancyReport.inspectionDate).toLocaleString()}`
+              : "",
+            activeConsultancyReport.completionDeadline
+              ? `Completion deadline: ${new Date(activeConsultancyReport.completionDeadline).toLocaleString()}`
+              : "",
+            activeConsultancyReport.actualIssue
+              ? `Issue: ${activeConsultancyReport.actualIssue}`
+              : "",
+            activeConsultancyReport.causeOfIssue
+              ? `Cause: ${activeConsultancyReport.causeOfIssue}`
+              : "",
+            activeConsultancyReport.materialCost >= 0
+              ? `Material cost: NGN ${activeConsultancyReport.materialCost.toLocaleString()}`
+              : "",
+            activeConsultancyReport.serviceCost >= 0
+              ? `Service cost: NGN ${activeConsultancyReport.serviceCost.toLocaleString()}`
+              : "",
+            activeConsultancyReport.totalRecommendation > 0
+              ? `Total recommendation: NGN ${activeConsultancyReport.totalRecommendation.toLocaleString()}`
+              : "",
+            activeConsultancyReport.preventiveRecommendation
+              ? `Prevention: ${activeConsultancyReport.preventiveRecommendation}`
+              : "",
+            activeConsultancyReport.evidence?.length
+              ? `Evidence attachments: ${activeConsultancyReport.evidence.length}`
+              : "",
+          ].filter(Boolean)
+        : [];
+
+      items.push({
+        id: "payment-request-card",
+        kind: "payment",
+        amountLabel: formatNaira(activeRequestLive?.billedAmount),
+        statusLabel: paymentCardStatusLabel,
+        note:
+          reportNoteParts.length > 0
+            ? reportNoteParts.join("\n")
+            : "Review the amount and complete payment to continue to job assignment.",
+        requestedAt:
+          typeof activeRequestLive?.paymentRequestedAt === "string"
+            ? activeRequestLive.paymentRequestedAt
+            : activeRequestLive?.paymentRequestedAt
+              ? new Date(activeRequestLive.paymentRequestedAt).toISOString()
+              : undefined,
+        canPay: canPayJobRequest,
+        onPay: handlePayRequestedJob,
+        onDecline: handleDeclineRequestedPayment,
+        isPaying: isStartingJobPayment,
+        isDeclining: declineJobPaymentMutation.isPending,
+      });
+    }
+
+    // Keep delivery confirmation CTA near the latest thread content.
+    if (deliveryConfirmationItem) {
+      items.push(deliveryConfirmationItem);
+    }
+
+    return items;
+  }, [
+    activeRequestLive?.billedAmount,
+    activeRequestLive?.assignedAt,
+    activeRequestLive?.updatedAt,
+    activeConsultancyReport,
+    activeRequestLive?.preferredTime,
+    activeRequestLive?.paymentRequestedAt,
+    activeRequestStatusLabel,
+    activeRequestStatusValue,
+    assignedProvider,
+    canPayJobRequest,
+    confirmDeliveryMutation.isPending,
+    declineJobPaymentMutation.isPending,
+    disputeDeliveryMutation.isPending,
+    handleDeclineRequestedPayment,
+    openConfirmDeliveryDialog,
+    openRaiseIssueDialog,
+    handlePayRequestedJob,
+    hasJobPaymentRequest,
+    historyBlocks,
+    isAwaitingResidentConfirmation,
+    isStartingJobPayment,
+    orderedServiceMessages,
+    paymentCardStatusLabel,
+    showWizardInteractiveStep,
+  ]);
+  const shouldPrioritizeInteractiveStep = showWizardInteractiveStep && conversationItems.length === 0;
+
+  const handleComposerAttachFiles = (files: File[]) => {
+    const supportedFiles = files.filter(
+      (file) => file.type.startsWith("image/") || file.type.startsWith("audio/"),
+    );
+    const roomLeft = Math.max(0, 3 - composerAttachments.length);
+    if (!roomLeft) return;
+
+    supportedFiles.slice(0, roomLeft).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        if (!result) return;
+        const kind = file.type.startsWith("audio/") ? "audio" : "image";
+        setComposerAttachments((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}-${Math.random()}`,
+            name: file.name,
+            previewUrl: result,
+            kind,
+            mimeType: file.type,
+          },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveComposerAttachment = (attachmentId: string) => {
+    setComposerAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
+  };
+
+  const handleShareLocationToComposer = () => {
+    const locationSnippet = intakeLocationLabel();
+    if (!locationSnippet || locationSnippet === "Not provided") return;
+    setResidentMessageDraft((prev) =>
+      prev.trim() ? `${prev}\nLocation: ${locationSnippet}` : `Location: ${locationSnippet}`,
+    );
+  };
+
+  const handleSendComposerMessage = async () => {
+    if (!activeRequestId) return;
+    const trimmed = residentMessageDraft.trim();
+    if (!trimmed && composerAttachments.length === 0) return;
+    if (sendResidentMessageMutation.isPending) return;
+    stopSelfTyping(activeRequestId);
+
+    try {
+      if (composerAttachments.length === 0) {
+        await sendResidentMessageMutation.mutateAsync({
+          requestId: activeRequestId,
+          message: trimmed,
+        });
+      } else {
+        for (let index = 0; index < composerAttachments.length; index += 1) {
+          const attachment = composerAttachments[index];
+          const attachmentLabel =
+            attachment.kind === "audio" ? "Shared a voice note." : "Shared an attachment.";
+          const messageText = index === 0 && trimmed ? trimmed : attachmentLabel;
+
+          await sendResidentMessageMutation.mutateAsync({
+            requestId: activeRequestId,
+            message: messageText,
+            attachmentUrl: attachment.previewUrl,
+          });
+        }
+      }
+
+      setResidentMessageDraft("");
+      setComposerAttachments([]);
+    } catch {
+      // handled by mutation error state/UI
+    }
+  };
+
+  useEffect(() => {
+    if (!isConversationStage) return;
+    const container = chatScrollContainerRef.current;
+    if (!container) return;
+    const sessionKey = activeRequestId || "draft";
+    const isFirstForSession = lastAutoScrollSessionRef.current !== sessionKey;
+    lastAutoScrollSessionRef.current = sessionKey;
+    const frame = window.requestAnimationFrame(() => {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: isFirstForSession ? "auto" : "smooth",
+      });
+      chatBottomRef.current?.scrollIntoView({
+        behavior: isFirstForSession ? "auto" : "smooth",
+        block: "end",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    activeRequestId,
+    isConversationStage,
+    canMessageAssignedProvider,
+    conversationItems.length,
+    historyBlocks.length,
+    showWizardInteractiveStep,
+  ]);
+
+  useEffect(() => {
+    if (!isConversationStage || !showWizardInteractiveStep) return;
+    const container = wizardInteractiveScrollRef.current;
+    if (!container) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      latestWizardPromptRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: "smooth",
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    currentStep?.id,
+    historyBlocks.length,
+    isConversationStage,
+    isWizardBotThinking,
+    showWizardInteractiveStep,
+    wizardIndex,
+  ]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#054f31]">
@@ -655,181 +2894,474 @@ export default function OrdinaryConversationFlow() {
         />
       </div>
 
-      <div className="flex-1 min-w-0 h-full bg-white rounded-bl-[40px] rounded-tl-[40px] lg:ml-[14px] lg:mt-[12px] overflow-y-auto">
-        <div className="max-w-5xl mx-auto p-[32px] space-y-[20px]">
-          <div>
-            <p className="text-[20px] font-semibold text-[#101828]">Smart Intake (Ordinary Mode)</p>
-            <p className="text-[14px] text-[#667085]">
-              Location and urgency are captured first to reduce pricing errors. Then we guide you with quick chips.
-            </p>
-          </div>
-
-          {stage === "intake" ? (
-            <Card className="rounded-3xl border border-[#EAECF0] shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-[18px]">3-step intake</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className={cn("rounded-2xl border p-4", focusedIntake === "location" ? "border-[#039855]" : "border-[#EAECF0]")}>
-                  <StepHeader
-                    step={1}
-                    title="Where?"
-                    subtitle="Estate or address, plus unit"
-                    isActive={focusedIntake === "location"}
-                  />
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <div>
-                      <p className="text-[12px] text-[#667085] mb-2">Estate (if applicable)</p>
-                      <Select
-                        value={estateName || ""}
-                        onValueChange={(value) => {
-                          setEstateName(value);
-                        }}
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select estate" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {estates.map((estate) => (
-                            <SelectItem key={estate.id} value={estate.name}>
-                              {estate.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <p className="text-[12px] text-[#667085] mb-2">Address</p>
-                      <input
-                        value={address}
-                        onChange={(e) => {
-                          setAddress(e.target.value);
-                        }}
-                        placeholder="Street, area, landmark"
-                        className="w-full rounded-md border border-[#D0D5DD] px-3 py-2 text-sm"
-                      />
-                    </div>
-                    <div className="md:col-span-2">
-                      <p className="text-[12px] text-[#667085] mb-2">Unit / Apartment number</p>
-                      <input
-                        value={unit}
-                        onChange={(e) => setUnit(e.target.value)}
-                        placeholder="e.g. Flat 12B"
-                        className="w-full rounded-md border border-[#D0D5DD] px-3 py-2 text-sm"
-                      />
-                    </div>
+      <div className="flex h-full min-w-0 flex-1 gap-4 overflow-hidden lg:ml-[14px] lg:mt-[12px]">
+        <div className="hidden h-full w-[340px] shrink-0 overflow-hidden lg:block">
+          <RequestsSidebar
+            onCreateNew={resetFlowForNewRequest}
+            activeSessionId={activeSessionId}
+            onSelectSession={handleOpenRecentRequest}
+            loadingSessionId={loadingRequestId}
+            draftSessions={draftSessions}
+          />
+        </div>
+        <div
+          className={cn(
+            "flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-l-[40px]",
+            stage === "intake"
+              ? "bg-[#F2F4F7]"
+              : "border border-[#E4E7EC]/60 bg-[#F8FAFC] shadow-[inset_0_1px_0_rgba(255,255,255,0.4)]",
+          )}
+        >
+          {stage !== "intake" ? (
+            <>
+              <div className="border-b border-[#EAECF0] bg-white px-4 py-3 sm:px-6 lg:px-10">
+                <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0 flex items-center gap-3">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#D0D5DD] bg-[#F9FAFB] text-[12px] font-semibold text-[#344054]">
+                      R
+                    </span>
+                    <p className="truncate text-[16px] font-semibold text-[#101828]">
+                      {selectedCategoryLabel
+                        ? `You selected ${formatCategoryLabel(selectedCategoryLabel)}.`
+                        : "Select a category to continue."}
+                    </p>
                   </div>
-                </div>
 
-                <div className={cn("rounded-2xl border p-4", focusedIntake === "category" ? "border-[#039855]" : "border-[#EAECF0]")}>
-                  <StepHeader
-                    step={2}
-                    title="What category?"
-                    subtitle="Already chosen, but you can change it"
-                    isActive={focusedIntake === "category"}
+                  {isConversationStage ? (
+                    showWizardInteractiveStep ? (
+                      <div className="flex items-center gap-4 text-[14px] font-semibold">
+                        <button
+                          type="button"
+                          onClick={handleCancelRequest}
+                          className="text-[#667085] transition hover:text-[#344054]"
+                        >
+                          Cancel Request
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleChangeCategory}
+                          className="text-[#027A48] transition hover:text-[#039855]"
+                        >
+                          Change category
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        {showInProgressCounter ? (
+                          <div
+                            className="inline-flex h-8 items-center rounded-full border border-[#12B76A]/30 bg-[#ECFDF3] px-3 text-[12px] font-semibold text-[#027A48]"
+                            title={
+                              inProgressStartedAt
+                                ? `Tracking since ${inProgressStartedAt.toLocaleString()}`
+                                : "Tracking in-progress duration"
+                            }
+                          >
+                            In progress: {inProgressElapsedLabel}
+                          </div>
+                        ) : null}
+                        {activeRequestId && !["cancelled"].includes(activeRequestStatusValue) ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 rounded-full border-[#D0D5DD] bg-white px-3 text-[13px] font-semibold text-[#344054] hover:bg-[#F9FAFB]"
+                            onClick={handleCancelRequest}
+                            disabled={requestCancellationReviewMutation.isPending}
+                          >
+                            {hasOpenCancellationReview ? "Cancellation under review" : "Cancel Request"}
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-full border-[#D0D5DD] bg-white px-3 text-[13px] font-semibold text-[#344054] hover:bg-[#F9FAFB]"
+                          onClick={() => setIsProviderDetailsCollapsed((prev) => !prev)}
+                          aria-label={isProviderDetailsCollapsed ? "Show provider details" : "Hide provider details"}
+                        >
+                          {isProviderDetailsCollapsed ? "Show Provider Details" : "Hide Provider Details"}
+                        </Button>
+                      </div>
+                    )
+                  ) : null}
+                </div>
+              </div>
+
+              {isConversationStage && !showWizardInteractiveStep ? (
+                <div>
+                  {!isProviderDetailsCollapsed ? (
+                    <ProviderHeader
+                      providerName={providerDisplayName}
+                      providerRole={assignedProvider?.role || "Service coordinator"}
+                      availabilityLabel={providerAvailabilityLabel}
+                      etaLabel={providerEtaLabel}
+                      coverageLabel={intakeLocationLabel()}
+                      onReviewSummary={() => setStage("summary")}
+                    />
+                  ) : null}
+                  <RequestProgressTracker
+                    status={activeRequestLive?.status || (activeRequestId ? "pending" : "draft")}
+                    collapsed={isProgressTrackerCollapsed}
+                    onToggleCollapsed={() => setIsProgressTrackerCollapsed((prev) => !prev)}
                   />
-                  <div className="mt-4 flex flex-wrap gap-3 items-center">
-                    <Select value={selectedCategoryValue} onValueChange={setSelectedCategoryValue}>
-                      <SelectTrigger className="w-[280px]">
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {categories.map((cat: any) => (
-                          <SelectItem key={cat.id || cat.key || cat.name} value={String(cat.id ?? cat.key ?? cat.name ?? "")}>
-                            {cat.name || cat.key || cat.id}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {selectedCategoryLabel ? (
-                      <Badge className="rounded-full bg-[#ECFDF3] text-[#039855] border border-[#D1FADF]">
-                        Selected: {selectedCategoryLabel}
-                      </Badge>
-                    ) : null}
-                  </div>
                 </div>
-
-                <div className={cn("rounded-2xl border p-4", focusedIntake === "urgency" ? "border-[#039855]" : "border-[#EAECF0]")}>
-                  <StepHeader
-                    step={3}
-                    title="Urgency?"
-                    subtitle="Quick pick"
-                    isActive={focusedIntake === "urgency"}
-                  />
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    {URGENCY_OPTIONS.map((opt) => (
-                      <ChipButton
-                        key={opt.value}
-                        label={opt.label}
-                        selected={urgency === opt.label}
-                        className={urgency === opt.label ? "" : opt.tone}
-                        selectedClassName={opt.value === "emergency" ? "border-rose-600 bg-rose-600 text-white" : undefined}
-                        onClick={() => setUrgency(opt.label)}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex justify-end">
-                  <Button
-                    onClick={() => {
-                      if (!canContinueIntake) {
-                        setFocusedIntake(!estateName && !address ? "location" : !selectedCategoryLabel ? "category" : "urgency");
-                        return;
-                      }
-                      setFocusedIntake(null);
-                      setStage("wizard");
-                    }}
-                    className="rounded-full"
-                  >
-                    Continue to chat wizard
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+              ) : null}
+            </>
           ) : null}
 
-          {stage === "wizard" ? (
-            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-              <Card className="rounded-3xl border border-[#EAECF0] shadow-sm">
-                <CardHeader>
-                  <CardTitle className="text-[18px]">Chat wizard</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center justify-between rounded-2xl border border-[#EAECF0] bg-[#f9fafb] px-4 py-3">
-                    <div>
-                      <p className="text-[12px] uppercase tracking-[0.08em] text-[#98A2B3]">Step</p>
-                      <p className="text-[16px] font-semibold text-[#101828]">
-                        {wizardIndex + 1} of {wizardSteps.length}
-                      </p>
+          <div className="min-h-0 flex-1 overflow-hidden">
+
+          {stage === "intake" ? (
+            <div className="h-full overflow-y-auto">
+              <MainWrapSelectCategory
+                searchQuery={categorySelectSearch}
+                setSearchQuery={setCategorySelectSearch}
+                onCategorySelect={handleSelectCategoryFromGrid}
+                categoriesData={categories}
+                catsLoading={categoriesLoading}
+              />
+            </div>
+          ) : null}
+
+          {isConversationStage ? (
+            <div className="mx-auto flex h-full max-w-[1100px] min-h-0 w-full flex-col gap-1.5 px-4 sm:px-6 lg:px-10 pb-2 pt-1.5">
+              <div className="flex min-h-0 flex-1 flex-col">
+                    <div
+                      ref={chatScrollContainerRef}
+                      className={cn(
+                        "city-scrollbar overflow-y-auto overscroll-contain px-1 pb-2 pr-2 scroll-smooth",
+                        shouldPrioritizeInteractiveStep ? "hidden" : "min-h-0 flex-1",
+                      )}
+                    >
+                      {conversationItems.length > 0 ? (
+                        <ChatThread items={conversationItems} />
+                      ) : (
+                        <SystemMessage text="Conversation starts once the first response is captured." />
+                      )}
+                      {isPeerTyping && canMessageAssignedProvider ? (
+                        <TypingPresenceIndicator label={`${providerDisplayName} is typing...`} className="mt-2" />
+                      ) : null}
+                      <div ref={chatBottomRef} />
                     </div>
-                      <Badge className="rounded-full bg-[#ECFDF3] text-[#039855] border border-[#D1FADF]">
-                        {selectedCategoryLabel || "General"}
-                      </Badge>
-                  </div>
 
-                  <div className="space-y-4">
-                    {historyBlocks.map((block, idx) => (
-                      <div key={`${idx}-${block.prompt}`} className="space-y-2">
-                        <AIMessage text={block.prompt} />
-                        <UserResponse text={block.answer} />
-                      </div>
-                    ))}
-
-                    {currentStep ? (
-                      <div className="space-y-4">
-                        <AIMessage text={currentStep.prompt} />
-                        {currentStep.kind === "chips" ? (
-                          <div className="flex flex-wrap gap-3">
-                            {currentStep.options.map((opt) => (
-                              <ChipButton
-                                key={opt}
-                                label={opt}
-                                selected={wizardAnswers[currentStep.id] === opt}
-                                onClick={() => handleSelectChip(currentStep.id, opt)}
-                              />
+                    {showWizardInteractiveStep && currentStep ? (
+                      <div
+                        className={cn(
+                          shouldPrioritizeInteractiveStep
+                            ? "min-h-0 flex-1"
+                            : "mt-1 shrink-0 border-t border-[#EAECF0] pt-2",
+                        )}
+                      >
+                        <div
+                          ref={wizardInteractiveScrollRef}
+                          className={cn(
+                            "space-y-4 pr-1",
+                            shouldPrioritizeInteractiveStep
+                              ? "city-scrollbar h-full min-h-0 overflow-y-auto"
+                              : "city-scrollbar max-h-[32vh] overflow-y-auto",
+                          )}
+                        >
+                        {showWizardInteractiveStep ? (
+                          <div className="space-y-3">
+                            {historyBlocks.map((block, idx) => (
+                              <div key={`wizard-history-${idx}`} className="space-y-2.5">
+                                <ChatPrompt text={block.prompt} status="answered" />
+                                <WizardAnswerBubble text={block.answer} />
+                                {block.kind === "photos" && attachments.length > 0 ? (
+                                  <div className="flex justify-end">
+                                    <div className="grid max-w-[260px] grid-cols-3 gap-2">
+                                      {attachments.map((file) => (
+                                        <div
+                                          key={`history-photo-${file.id}`}
+                                          className="relative overflow-hidden rounded-lg border border-[#D0D5DD] bg-white"
+                                        >
+                                          <button
+                                            type="button"
+                                            className="block w-full"
+                                            onClick={() => setPreviewAttachment({ name: file.name, url: file.dataUrl })}
+                                          >
+                                            <img
+                                              src={file.dataUrl}
+                                              alt={file.name}
+                                              className="h-16 w-full object-cover"
+                                            />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            aria-label={`Remove ${file.name}`}
+                                            className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-[11px] font-semibold text-white transition hover:bg-black"
+                                            onClick={(event) => {
+                                              event.preventDefault();
+                                              event.stopPropagation();
+                                              handleRemoveAttachment(file.id);
+                                            }}
+                                          >
+                                            x
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
                             ))}
                           </div>
+                        ) : null}
+
+                        {isWizardBotThinking ? (
+                          <WizardTypingIndicator />
+                        ) : (
+                          <>
+                            <div ref={latestWizardPromptRef}>
+                              <ChatPrompt text={currentStep.prompt} />
+                            </div>
+                        {currentStep.kind === "location" ? (
+                          <div className="space-y-3">
+                            <div className="rounded-2xl border border-[#EAECF0] bg-[#f9fafb] p-4 space-y-3">
+                              <div className="flex flex-wrap gap-2">
+                                <ChipButton
+                                  label="Yes"
+                                  selected={hasConfirmedEstateResidence && estateResidenceMode === "estate"}
+                                  selectedClassName="border-[#039855] bg-[#ECFDF3] text-[#027A48]"
+                                  onClick={() => {
+                                    setHasConfirmedEstateResidence(true);
+                                    setEstateResidenceMode("estate");
+                                    setResidentState("");
+                                    setResidentLga("");
+                                    focusNextLocationField("estate");
+                                  }}
+                                />
+                                <ChipButton
+                                  label="No"
+                                  selected={hasConfirmedEstateResidence && estateResidenceMode === "outside"}
+                                  selectedClassName="border-[#039855] bg-[#ECFDF3] text-[#027A48]"
+                                  onClick={() => {
+                                    setHasConfirmedEstateResidence(true);
+                                    setEstateResidenceMode("outside");
+                                    setEstateName("");
+                                    setUnit("");
+                                    focusNextLocationField("outside");
+                                  }}
+                                />
+                              </div>
+                            </div>
+
+                            {hasConfirmedEstateResidence ? (
+                              <>
+                                <ChatPrompt
+                                  text={estateResidenceMode === "outside" ? "Select state/LGA" : "Select your estate"}
+                                />
+                                <div className="rounded-2xl border border-[#EAECF0] bg-[#f9fafb] p-4 space-y-3">
+                                  {estateResidenceMode === "outside" ? (
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                      <div>
+                                        <p className="text-[12px] text-[#667085] mb-2">State</p>
+                                        <Select
+                                          value={residentState || ""}
+                                          onValueChange={(value) => {
+                                            setResidentState(value);
+                                            setResidentLga("");
+                                          }}
+                                        >
+                                          <SelectTrigger ref={stateSelectTriggerRef} className="w-full bg-white">
+                                            <SelectValue placeholder="Select state" />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {STATE_OPTIONS.map((stateOption) => (
+                                              <SelectItem key={stateOption} value={stateOption}>
+                                                {stateOption}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                      <div>
+                                        <p className="text-[12px] text-[#667085] mb-2">LGA</p>
+                                        <Select
+                                          value={residentLga || ""}
+                                          onValueChange={(value) => {
+                                            setResidentLga(value);
+                                            focusAddressField();
+                                          }}
+                                          disabled={!residentState}
+                                        >
+                                          <SelectTrigger ref={stateSelectTriggerRef} className="w-full bg-white">
+                                            <SelectValue
+                                              placeholder={residentState ? "Select LGA" : "Select state first"}
+                                            />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {availableLgas.map((lga) => (
+                                              <SelectItem key={lga} value={lga}>
+                                                {lga}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <input
+                                        ref={estateSearchInputRef}
+                                        value={estateSearch}
+                                        onChange={(event) => setEstateSearch(event.target.value)}
+                                        placeholder="Search estate"
+                                        className="w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
+                                      />
+                                      <div className="flex flex-wrap gap-2">
+                                        {estatesLoading ? (
+                                          <p className="text-sm text-[#667085]">Loading estates...</p>
+                                        ) : filteredEstates.length > 0 ? (
+                                          filteredEstates.slice(0, 8).map((estate) => (
+                                            <button
+                                              key={estate.id}
+                                              type="button"
+                                              onClick={() => {
+                                                setEstateResidenceMode("estate");
+                                                setEstateName(estate.name);
+                                                setResidentState("");
+                                                setResidentLga("");
+                                                focusAddressField();
+                                              }}
+                                              className={cn(
+                                                "rounded-xl border px-4 py-2 text-sm font-semibold transition",
+                                                estateResidenceMode === "estate" && estateName === estate.name
+                                                  ? "border-[#039855] bg-[#ECFDF3] text-[#027A48]"
+                                                  : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#f9fafb]",
+                                              )}
+                                            >
+                                              {estate.name}
+                                            </button>
+                                          ))
+                                        ) : (
+                                          <p className="text-sm text-[#667085]">
+                                            {estatesError
+                                              ? "Could not load estates. Try refreshing."
+                                              : estateSearch.trim()
+                                                ? "No estates match your search."
+                                                : "No estates available."}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                                {(estateResidenceMode === "outside"
+                                  ? Boolean(residentState && residentLga)
+                                  : Boolean(estateName)) ? (
+                                  <>
+                                    <ChatPrompt
+                                      text={
+                                        estateResidenceMode === "outside"
+                                          ? "Enter your address."
+                                          : "Enter your address/unit."
+                                      }
+                                    />
+                                    <div ref={addressSectionRef} className="rounded-2xl border border-[#EAECF0] bg-[#f9fafb] p-4 space-y-3">
+                                      {estateResidenceMode === "outside" ? (
+                                        <div>
+                                          <p className="text-[12px] text-[#667085] mb-2">Address</p>
+                                          <textarea
+                                            ref={addressTextareaRef}
+                                            value={address}
+                                            onChange={(e) => setAddress(e.target.value)}
+                                            placeholder="Enter your address"
+                                            className="min-h-[110px] w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
+                                          />
+                                        </div>
+                                      ) : (
+                                        <div className="space-y-3">
+                                          <div>
+                                            <p className="text-[12px] text-[#667085] mb-2">Address</p>
+                                            <textarea
+                                              ref={addressTextareaRef}
+                                              value={address}
+                                              onChange={(e) => setAddress(e.target.value)}
+                                              placeholder="Enter your address"
+                                              className="min-h-[110px] w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
+                                            />
+                                          </div>
+                                          <div>
+                                            <p className="text-[12px] text-[#667085] mb-2">Unit / Apartment number</p>
+                                            <input
+                                              value={unit}
+                                              onChange={(e) => setUnit(e.target.value)}
+                                              placeholder="Enter unit/apartment number"
+                                              className="w-full rounded-xl border border-[#D0D5DD] bg-white px-3 py-2 text-sm"
+                                            />
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </>
+                                ) : null}
+                              </>
+                            ) : null}
+                            {locationMissingHint ? (
+                              <p className="text-[13px] text-[#667085]">{locationMissingHint}</p>
+                            ) : null}
+                            <div className="flex justify-start">
+                              <Button
+                                variant="outline"
+                                className="rounded-full"
+                                disabled={!isLocationComplete || isWizardBotThinking}
+                                onClick={() => {
+                                  if (isWizardBotThinking || !isLocationComplete) return;
+                                  setWizardAnswers((prev) => ({ ...prev, [currentStep.id]: intakeLocationLabel() }));
+                                  const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
+                                  queueWizardStepAdvance(nextIndex);
+                                }}
+                              >
+                                Add location
+                              </Button>
+                            </div>
+                          </div>
+                        ) : null}
+                        {currentStep.kind === "chips" ? (
+                          currentStep.id === "urgency" ? (
+                            <div className="rounded-2xl border border-[#E4E7EC] bg-[#F2F4F7] p-4">
+                              <div className="flex flex-wrap gap-3">
+                                {URGENCY_OPTIONS.map((opt) => {
+                                  const selected = wizardAnswers[currentStep.id] === opt.label;
+                                  return (
+                                    <button
+                                      key={opt.value}
+                                      type="button"
+                                      onClick={() => handleSelectChip(currentStep.id, opt.label)}
+                                      className={cn(
+                                        "flex min-w-[124px] items-center gap-3 rounded-2xl border px-4 py-3 text-left transition",
+                                        selected
+                                          ? "border-[#039855] bg-white shadow-sm"
+                                          : "border-[#D0D5DD] bg-white hover:border-[#98A2B3]",
+                                      )}
+                                    >
+                                      <UrgencyIcon value={opt.value} />
+                                      <span className="space-y-0.5">
+                                        <span className="block text-[16px] font-semibold leading-[20px] text-[#101828]">
+                                          {opt.label}
+                                        </span>
+                                        <span className="block text-[11px] leading-[14px] text-[#667085]">
+                                          {opt.timeframe}
+                                        </span>
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap gap-3">
+                              {currentStep.options.map((opt) => (
+                                <ChipButton
+                                  key={opt}
+                                  label={opt}
+                                  selected={wizardAnswers[currentStep.id] === opt}
+                                  onClick={() => handleSelectChip(currentStep.id, opt)}
+                                />
+                              ))}
+                            </div>
+                          )
                         ) : null}
 
                         {currentStep.kind === "photos" ? (
@@ -869,23 +3401,33 @@ export default function OrdinaryConversationFlow() {
                               }}
                             />
                             {attachments.length ? (
-                              <div className="space-y-2">
+                              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                                 {attachments.map((file) => (
-                                  <div
-                                    key={file.id}
-                                    className="flex items-center justify-between rounded-xl border border-[#EAECF0] px-3 py-2"
-                                  >
-                                    <div className="flex items-center gap-2 text-sm text-[#344054]">
-                                      <UploadItem />
-                                      <span>{file.name}</span>
+                                  <div key={file.id} className="space-y-1.5">
+                                    <div className="relative overflow-hidden rounded-xl border border-[#D0D5DD] bg-white">
+                                      <button
+                                        type="button"
+                                        className="block w-full"
+                                        onClick={() => setPreviewAttachment({ name: file.name, url: file.dataUrl })}
+                                      >
+                                        <img src={file.dataUrl} alt={file.name} className="h-24 w-full object-cover" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        aria-label={`Remove ${file.name}`}
+                                        className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-sm font-semibold text-white transition hover:bg-black"
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          handleRemoveAttachment(file.id);
+                                        }}
+                                      >
+                                        x
+                                      </button>
                                     </div>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => handleRemoveAttachment(file.id)}
-                                    >
-                                      Remove
-                                    </Button>
+                                    <p className="truncate text-[11px] text-[#475467]" title={file.name}>
+                                      {file.name}
+                                    </p>
                                   </div>
                                 ))}
                               </div>
@@ -895,15 +3437,31 @@ export default function OrdinaryConversationFlow() {
                             {photoGuard ? (
                               <p className="text-[13px] text-rose-600">{photoGuard}</p>
                             ) : null}
-                            <div className="flex justify-end">
+                            <div className="flex justify-start gap-2">
+                              {!currentStep.required ? (
+                                <Button
+                                  variant="outline"
+                                  disabled={isWizardBotThinking}
+                                  onClick={() => {
+                                    if (isWizardBotThinking) return;
+                                    const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
+                                    queueWizardStepAdvance(nextIndex);
+                                  }}
+                                >
+                                  Skip for now
+                                </Button>
+                              ) : null}
                               <Button
+                                disabled={isWizardBotThinking}
                                 onClick={() => {
+                                  if (isWizardBotThinking) return;
                                   if (currentStep.required && attachments.length === 0) return;
-                                  setWizardIndex((prev) => Math.min(prev + 1, wizardSteps.length - 1));
+                                  const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
+                                  queueWizardStepAdvance(nextIndex);
                                 }}
                                 className="rounded-full"
                               >
-                                {currentStep.required || attachments.length ? "Continue" : "Skip for now"}
+                                Continue
                               </Button>
                             </div>
                           </div>
@@ -917,58 +3475,225 @@ export default function OrdinaryConversationFlow() {
                               placeholder={currentStep.placeholder}
                               className="min-h-[120px] w-full rounded-xl border border-[#D0D5DD] px-3 py-2 text-sm"
                             />
-                            <div className="flex justify-end">
-                              <Button onClick={handleFinishNotes} className="rounded-full">
-                                Review job summary
+                            <div className="flex justify-start">
+                              <Button variant="outline" onClick={handleFinishNotes}>
+                                Continue to summary
                               </Button>
                             </div>
                           </div>
                         ) : null}
+                          </>
+                        )}
+                        </div>
                       </div>
                     ) : null}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <div className="space-y-4">
-                <Card className="rounded-3xl border border-[#EAECF0] shadow-sm">
-                  <CardHeader>
-                    <CardTitle className="text-[16px]">Session snapshot</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="rounded-2xl border border-[#EAECF0] p-3">
-                      <p className="text-[12px] text-[#667085]">Location</p>
-                      <p className="text-[14px] font-semibold text-[#101828]">{intakeLocationLabel()}</p>
-                    </div>
-                    <div className="rounded-2xl border border-[#EAECF0] p-3">
-                      <p className="text-[12px] text-[#667085]">Urgency</p>
-                      <p className="text-[14px] font-semibold text-[#101828]">{urgency || "Not set"}</p>
-                    </div>
-                    <div className="rounded-2xl border border-[#EAECF0] p-3">
-                      <p className="text-[12px] text-[#667085]">Selected issue</p>
-                      <p className="text-[14px] font-semibold text-[#101828]">
-                        {wizardAnswers.issue_type || "Pending"}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-[#EAECF0] p-3">
-                      <p className="text-[12px] text-[#667085]">Photos</p>
-                      <p className="text-[14px] font-semibold text-[#101828]">{attachments.length} attached</p>
-                    </div>
-                    <Button
-                      variant="outline"
-                      className="w-full rounded-full"
-                      onClick={() => setStage("summary")}
-                    >
-                      Go to job summary
-                    </Button>
-                  </CardContent>
-                </Card>
               </div>
+
             </div>
           ) : null}
 
+          </div>
+          {isConversationStage ? (
+            canMessageAssignedProvider ? (
+              <MessageComposer
+                variant="citybuddy"
+                label={`Message ${providerDisplayName}`}
+                value={residentMessageDraft}
+                onChange={handleResidentComposerChange}
+                onSend={handleSendComposerMessage}
+                isSending={sendResidentMessageMutation.isPending}
+                attachments={composerAttachments}
+                onAttachFiles={handleComposerAttachFiles}
+                onRemoveAttachment={handleRemoveComposerAttachment}
+                onShareLocation={handleShareLocationToComposer}
+              />
+            ) : (
+              <div className="border-t border-[#EAECF0] bg-white px-5 py-2.5">
+                <div className="mx-auto max-w-[1100px] rounded-xl border border-[#EAECF0] bg-[#F9FAFB] p-2.5">
+                  <p className="text-xs text-[#475467]">
+                    Your provider has not been assigned yet. Chat opens immediately once assignment happens.
+                  </p>
+                </div>
+              </div>
+            )
+          ) : null}
         </div>
       </div>
+
+      <Dialog open={isCategoryRequiredDialogOpen} onOpenChange={setIsCategoryRequiredDialogOpen}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>Select category first</DialogTitle>
+            <DialogDescription>
+              You need to select a service category before booking for consultancy.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCategoryRequiredDialogOpen(false)}>
+              Continue editing
+            </Button>
+            <Button onClick={handleOpenCategorySelectionFromModal}>Select category</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isCancelRequestDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !requestCancellationReviewMutation.isPending) {
+            setCancelReasonCode("");
+            setCancelReasonDetail("");
+            setCancelPreferredResolution("full_refund");
+          }
+          setIsCancelRequestDialogOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>Request cancellation review</DialogTitle>
+            <DialogDescription>
+              This request is already assigned/active. Tell us why you want to cancel so admin can review and decide.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-[#101828]">Reason category</p>
+              <Select value={cancelReasonCode} onValueChange={setCancelReasonCode}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select reason" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="wrong_provider">Wrong provider assigned</SelectItem>
+                  <SelectItem value="quality_concern">Quality concern</SelectItem>
+                  <SelectItem value="delay_no_show">Delay or no-show</SelectItem>
+                  <SelectItem value="pricing_dispute">Pricing dispute</SelectItem>
+                  <SelectItem value="safety_issue">Safety issue</SelectItem>
+                  <SelectItem value="duplicate_request">Duplicate request</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-[#101828]">Details</p>
+              <textarea
+                value={cancelReasonDetail}
+                onChange={(event) => setCancelReasonDetail(event.target.value)}
+                placeholder="Explain what happened and why cancellation is needed."
+                className="min-h-[120px] w-full rounded-xl border border-[#D0D5DD] px-3 py-2 text-sm text-[#344054]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-[#101828]">Preferred resolution</p>
+              <Select
+                value={cancelPreferredResolution}
+                onValueChange={(value: "full_refund" | "partial_refund" | "cancel_without_refund") =>
+                  setCancelPreferredResolution(value)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="full_refund">Full refund</SelectItem>
+                  <SelectItem value="partial_refund">Partial refund</SelectItem>
+                  <SelectItem value="cancel_without_refund">Cancel without refund</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsCancelRequestDialogOpen(false)}
+              disabled={requestCancellationReviewMutation.isPending}
+            >
+              Close
+            </Button>
+            <Button
+              onClick={handleSubmitCancellationReview}
+              disabled={requestCancellationReviewMutation.isPending}
+            >
+              {requestCancellationReviewMutation.isPending ? "Submitting..." : "Submit for admin review"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isConfirmDeliveryDialogOpen} onOpenChange={setIsConfirmDeliveryDialogOpen}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Confirm job delivery</DialogTitle>
+            <DialogDescription>
+              Confirm that this job was delivered satisfactorily. This will mark the request as completed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsConfirmDeliveryDialogOpen(false)}
+              disabled={confirmDeliveryMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmDelivery} disabled={confirmDeliveryMutation.isPending}>
+              {confirmDeliveryMutation.isPending ? "Confirming..." : "Confirm delivery"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isRaiseIssueDialogOpen}
+        onOpenChange={(open) => {
+          setIsRaiseIssueDialogOpen(open);
+          if (!open && !disputeDeliveryMutation.isPending) {
+            setRaiseIssueReason("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Raise delivery issue</DialogTitle>
+            <DialogDescription>
+              Tell admin what should be reviewed before this request can be completed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-[#344054]">Issue details</p>
+            <textarea
+              value={raiseIssueReason}
+              onChange={(event) => setRaiseIssueReason(event.target.value)}
+              placeholder="Describe what is incomplete or incorrect."
+              className="min-h-[120px] w-full rounded-xl border border-[#D0D5DD] px-3 py-2 text-sm"
+              disabled={disputeDeliveryMutation.isPending}
+            />
+            <p className="text-xs text-[#667085]">Required to submit dispute.</p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (disputeDeliveryMutation.isPending) return;
+                setIsRaiseIssueDialogOpen(false);
+                setRaiseIssueReason("");
+              }}
+              disabled={disputeDeliveryMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleDisputeDelivery}
+              disabled={disputeDeliveryMutation.isPending || raiseIssueReason.trim().length === 0}
+            >
+              {disputeDeliveryMutation.isPending ? "Submitting..." : "Submit issue"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {stage === "summary" ? (
         <div className="fixed inset-0 z-50">
@@ -1022,48 +3747,78 @@ export default function OrdinaryConversationFlow() {
                 </p>
               </div>
 
+              <div className="rounded-2xl border border-[#D1FADF] bg-[#ECFDF3] p-4 space-y-1.5">
+                <p className="text-[14px] font-semibold text-[#027A48]">Why consultancy comes first</p>
+                <p className="text-[13px] leading-[20px] text-[#065F46]">
+                  CityConnect policy requires a consultancy inspection before job execution so scope, safety checks,
+                  timeline, and cost are verified before provider dispatch.
+                </p>
+              </div>
+
               <div className="rounded-2xl border border-[#EAECF0] overflow-hidden">
                 <div className="px-4 py-3 border-b border-[#EAECF0]">
                   <p className="text-[14px] font-semibold text-[#101828]">Provider preview</p>
                   <p className="text-[12px] text-[#667085]">
-                    Placeholder card until backend matching is wired.
+                    {activeRequestId
+                      ? "This preview reflects the latest backend assignment for your request."
+                      : "Provider matching starts after you book consultancy."}
                   </p>
+                  <div className="mt-2">
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-[6px] rounded-full px-[10px] py-[4px] text-[12px] border",
+                        providerCount > 0
+                          ? "bg-[#ECFDF3] text-[#027A48] border-[#D1FADF]"
+                          : "bg-[#FFFAEB] text-[#B54708] border-[#FEDF89]",
+                      )}
+                    >
+                      {providerStatusLabel}
+                    </span>
+                  </div>
                 </div>
                 <div className="px-4 py-3 space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[14px] font-semibold text-[#101828]">PrimeFix Electricals</p>
-                      <p className="text-[12px] text-[#667085]">★★★★☆ · 4.6</p>
-                      <p className="text-[12px] text-[#667085] mt-1">Coverage: {intakeLocationLabel()}</p>
+                      <p className="text-[14px] font-semibold text-[#101828]">
+                        {formatCategoryLabel(activeRequestCategoryDisplay || "General Provider")}
+                      </p>
+                      <p className="text-[12px] text-[#667085]">
+                        Issue: {summaryProblemTypeValue}
+                      </p>
+                      <p className="text-[12px] text-[#667085] mt-1">
+                        Coverage: {summaryLocationValue}
+                      </p>
                     </div>
                     <span className="inline-flex items-center gap-[6px] text-[12px] text-[#475467] bg-[#f9fafb] border border-[#EAECF0] rounded-[999px] px-[10px] py-[4px]">
-                      Verified
+                      {activeRequestStatusLabel || urgency || "Draft"}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <p className="text-[12px] text-[#667085]">Completed jobs</p>
-                      <p className="text-[12px] text-[#101828] font-semibold">320+</p>
+                      <p className="text-[12px] text-[#667085]">Preferred time</p>
+                      <p className="text-[12px] text-[#101828] font-semibold">
+                        {summaryTimeWindowValue === "Not set" ? "Flexible" : summaryTimeWindowValue}
+                      </p>
                     </div>
                     <div>
-                      <p className="text-[12px] text-[#667085]">Response time</p>
-                      <p className="text-[12px] text-[#101828] font-semibold">Within 2 hours</p>
+                      <p className="text-[12px] text-[#667085]">Photos</p>
+                      <p className="text-[12px] text-[#101828] font-semibold">{summaryAttachmentCount} attached</p>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {["Fast response", "Licensed", "Tools included"].map((badge) => (
-                      <span
-                        key={badge}
-                        className="text-[12px] text-[#475467] bg-[#f9fafb] border border-[#EAECF0] rounded-[999px] px-[10px] py-[4px]"
-                      >
-                        {badge}
-                      </span>
-                    ))}
+                    {[summaryQuantityValue, summaryUrgencyValue, summaryProblemTypeValue]
+                      .filter(Boolean)
+                      .filter((badge) => badge !== "Not set")
+                      .map((badge, idx) => (
+                        <span
+                          key={`${badge}-${idx}`}
+                          className="text-[12px] text-[#475467] bg-[#f9fafb] border border-[#EAECF0] rounded-[999px] px-[10px] py-[4px]"
+                        >
+                          {badge}
+                        </span>
+                      ))}
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button className="rounded-full" onClick={handleBookConsultancy}>
-                      Book for consultancy · NGN 6,500
-                    </Button>
                     <Button variant="outline" onClick={() => setStage("wizard")}>
                       Change details
                     </Button>
@@ -1071,18 +3826,100 @@ export default function OrdinaryConversationFlow() {
                 </div>
               </div>
 
+              {assignedProvider ? (
+                <div className="rounded-2xl border border-[#EAECF0] overflow-hidden">
+                  <div className="px-4 py-3 border-b border-[#EAECF0] flex items-center justify-between">
+                    <div>
+                      <p className="text-[14px] font-semibold text-[#101828]">Assigned consultant</p>
+                      <p className="text-[12px] text-[#667085]">You will receive reminders before the session starts.</p>
+                    </div>
+                    <span className="text-[12px] font-semibold text-[#027A48] bg-[#ECFDF3] border border-[#D1FADF] rounded-full px-3 py-1">
+                      {assignedProvider.countdown === "Not scheduled"
+                        ? "Awaiting schedule"
+                        : `Starts in ${assignedProvider.countdown}`}
+                    </span>
+                  </div>
+                  <div className="p-4">
+                    <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-500 via-rose-500 to-emerald-600 text-white">
+                      <img
+                        src={assignedProvider.photo}
+                        alt={assignedProvider.name}
+                        className="w-full h-48 object-cover opacity-90"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-black/10" />
+                      <div className="absolute bottom-4 left-4 right-4 space-y-2">
+                        <div>
+                          <p className="text-lg font-semibold">{assignedProvider.name}</p>
+                          <p className="text-sm">{assignedProvider.role}</p>
+                        </div>
+                        <p className="text-sm font-semibold">{assignedProvider.company}</p>
+                        <div className="flex flex-wrap gap-2 text-sm">
+                          <span className="inline-flex items-center gap-2 bg-white/15 px-3 py-1 rounded-full">
+                            Scheduled:{" "}
+                            {assignedProvider.scheduledAt
+                              ? assignedProvider.scheduledAt.toLocaleString(undefined, {
+                                  weekday: "short",
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                })
+                              : "To be confirmed"}
+                          </span>
+                          <span className="inline-flex items-center gap-2 bg-white/15 px-3 py-1 rounded-full">
+                            Countdown: {assignedProvider.countdown}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <Button variant="outline" onClick={() => setStage("wizard")}>
                   Back to wizard
                 </Button>
-                <Button className="rounded-full" onClick={handleBookConsultancy}>
-                  Book for consultancy
-                </Button>
+                {canBookConsultancy ? (
+                  <Button className="rounded-full" onClick={handleBookConsultancy}>
+                    Book for consultancy
+                  </Button>
+                ) : (
+                  <Button className="rounded-full" variant="secondary" disabled>
+                    Consultancy already booked
+                  </Button>
+                )}
               </div>
             </div>
           </div>
         </div>
       ) : null}
+
+      <Dialog
+        open={Boolean(previewAttachment)}
+        onOpenChange={(open) => {
+          if (!open) setPreviewAttachment(null);
+        }}
+      >
+        <DialogContent className="max-w-[720px]">
+          <DialogHeader>
+            <DialogTitle>{previewAttachment?.name || "Attachment preview"}</DialogTitle>
+            <DialogDescription>Preview uploaded image.</DialogDescription>
+          </DialogHeader>
+          {previewAttachment?.url ? (
+            <div className="overflow-hidden rounded-xl border border-[#EAECF0]">
+              <img
+                src={previewAttachment.url}
+                alt={previewAttachment.name || "Uploaded attachment"}
+                className="max-h-[70vh] w-full object-contain bg-[#F9FAFB]"
+              />
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
+
+
+

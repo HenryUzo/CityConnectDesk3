@@ -4,6 +4,10 @@ import type { Wallet } from "@prisma/client";
 import { storage } from "./storage";
 import { verifyPaystackTransaction } from "./paystack";
 import { Prisma } from "@prisma/client";
+import {
+  normalizeCategoryKey,
+  tryResolveServiceRequestCategory,
+} from "./serviceCategoryResolver";
 
 type CreatePendingTxArgs = {
   userId: string;
@@ -26,47 +30,6 @@ function requirePositiveAmount(amount: number) {
   }
 }
 
-function normalizeCategoryKey(value: string): string {
-  return String(value || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[\s-]+/g, "_");
-}
-
-const ALLOWED_CATEGORIES = new Set([
-  "electrician",
-  "plumber",
-  "carpenter",
-  "hvac_technician",
-  "painter",
-  "tiler",
-  "mason",
-  "roofer",
-  "gardener",
-  "cleaner",
-  "security_guard",
-  "cook",
-  "laundry_service",
-  "pest_control",
-  "welder",
-  "mechanic",
-  "phone_repair",
-  "appliance_repair",
-  "tailor",
-  "surveillance_monitoring",
-  "alarm_system",
-  "cleaning_janitorial",
-  "catering_services",
-  "it_support",
-  "maintenance_repair",
-  "packaging_solutions",
-  "marketing_advertising",
-  "home_tutors",
-  "furniture_making",
-  "market_runner",
-  "item_vendor",
-]);
-
 async function ensureConsultancyServiceRequest(params: {
   userId: string;
   txMeta?: Prisma.JsonValue | null;
@@ -75,12 +38,11 @@ async function ensureConsultancyServiceRequest(params: {
   const consultancy = meta?.consultancyRequest;
   if (!consultancy || typeof consultancy !== "object") return null;
 
-  const normalizedCategory = normalizeCategoryKey(
-    consultancy.categoryKey || consultancy.categoryLabel || "",
+  const category = tryResolveServiceRequestCategory(
+    consultancy.categoryKey || "",
+    consultancy.categoryLabel || "",
   );
-  const category = ALLOWED_CATEGORIES.has(normalizedCategory)
-    ? normalizedCategory
-    : "maintenance_repair";
+  if (!category) return null;
   const urgencyInput = normalizeCategoryKey(consultancy.urgency || "");
   const urgency =
     urgencyInput === "emergency" ||
@@ -96,14 +58,28 @@ async function ensureConsultancyServiceRequest(params: {
 
   const created = await storage.createServiceRequest({
     category: category as any,
+    categoryLabel:
+      String(consultancy.categoryLabel || "").trim() ||
+      category.replace(/_/g, " "),
     description,
     residentId: params.userId,
     budget: "Consultancy",
     urgency: urgency as any,
+    issueType: String((consultancy as any).issueType || "").trim() || null,
+    areaAffected: String((consultancy as any).areaAffected || "").trim() || null,
+    quantityLabel: String((consultancy as any).quantityLabel || "").trim() || null,
+    timeWindowLabel: String((consultancy as any).timeWindowLabel || "").trim() || null,
     location,
-    status: "pending_inspection" as any,
+    addressLine: String((consultancy as any).addressLine || location).trim() || location,
+    estateName: String((consultancy as any).estateName || "").trim() || null,
+    stateName: String((consultancy as any).stateName || "").trim() || null,
+    lgaName: String((consultancy as any).lgaName || "").trim() || null,
+    specialInstructions: String((consultancy as any).notes || "").trim() || null,
+    photosCount: Number((consultancy as any).attachmentsCount || 0) || 0,
+    paymentPurpose: "Consultancy / inspection",
+    status: "pending" as any,
     paymentStatus: "pending",
-  });
+  } as any);
 
   return created?.id ?? null;
 }

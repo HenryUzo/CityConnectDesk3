@@ -1,6 +1,0 @@
-Browserslist: browsers data (caniuse-lite) is 13 months old. Please run:
-  npx update-browserslist-db@latest
-  Why you should do it regularly: https://github.com/browserslist/update-db#readme
-[admin] dashboard stats error relation "orders" does not exist
-[admin] dashboard stats error relation "orders" does not exist
-^C^C

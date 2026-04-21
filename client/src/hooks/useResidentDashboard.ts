@@ -74,7 +74,11 @@ export function useResidentDashboard() {
     nextMaintenance: statsQuery.data?.nextMaintenance ?? "No scheduled maintenance",
     nextMaintenanceCost: statsQuery.data?.nextMaintenanceCost ?? null,
     activeContractsCount: statsQuery.data?.activeContractsCount ?? 
-      (requestsQuery.data?.filter(r => r.status === "in_progress" || r.status === "assigned").length ?? 0),
+      (
+        requestsQuery.data?.filter((r) =>
+          ["in_progress", "assigned", "assigned_for_job"].includes(String(r.status || "").toLowerCase()),
+        ).length ?? 0
+      ),
     contractsChangePercent: statsQuery.data?.contractsChangePercent ?? 0,
     completedRequestsCount: statsQuery.data?.completedRequestsCount ?? 
       (requestsQuery.data?.filter(r => r.status === "completed").length ?? 0),

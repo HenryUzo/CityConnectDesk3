@@ -25,6 +25,11 @@ type NotificationsContextValue = {
 
 const NotificationsContext = createContext<NotificationsContextValue | null>(null);
 
+function isIgnorableNotificationsError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /\b401\b|\b403\b|\b404\b/i.test(message);
+}
+
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -41,11 +46,20 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
   const refresh = useCallback(async () => {
     if (!user) return;
-    const res = await apiRequest("GET", "/api/notifications");
-    const data = (await res.json()) as Notification[];
-    const normalized = Array.isArray(data) ? data : [];
-    setNotifications(normalized);
-    setProviderApproved(normalized.some(isProviderApprovedNotification));
+    try {
+      const res = await apiRequest("GET", "/api/notifications");
+      const data = (await res.json()) as Notification[];
+      const normalized = Array.isArray(data) ? data : [];
+      setNotifications(normalized);
+      setProviderApproved(normalized.some(isProviderApprovedNotification));
+    } catch (error) {
+      if (isIgnorableNotificationsError(error)) {
+        setNotifications([]);
+        setProviderApproved(false);
+        return;
+      }
+      throw error;
+    }
   }, [isProviderApprovedNotification, user]);
 
   useEffect(() => {
@@ -82,16 +96,53 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     };
   }, [isProviderApprovedNotification, toast, user]);
 
+  useEffect(() => {
+    if (!user) return;
+
+    const intervalId = window.setInterval(() => {
+      void refresh().catch(() => undefined);
+    }, 90_000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refresh().catch(() => undefined);
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [refresh, user]);
+
+
   const markRead = useCallback(async (id: string) => {
-    await apiRequest("PATCH", `/api/notifications/${id}/read`);
-    setNotifications((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, isRead: true } : item)),
-    );
+    try {
+      await apiRequest("PATCH", `/api/notifications/${id}/read`);
+    } catch (error) {
+      if (!isIgnorableNotificationsError(error)) {
+        throw error;
+      }
+    } finally {
+      // Keep UI responsive even if backend mark-read failed.
+      setNotifications((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, isRead: true } : item)),
+      );
+    }
   }, []);
 
   const markAllRead = useCallback(async () => {
-    await apiRequest("POST", "/api/notifications/mark-all-read");
-    setNotifications((prev) => prev.map((item) => ({ ...item, isRead: true })));
+    try {
+      await apiRequest("POST", "/api/notifications/mark-all-read");
+    } catch (error) {
+      if (!isIgnorableNotificationsError(error)) {
+        throw error;
+      }
+    } finally {
+      setNotifications((prev) => prev.map((item) => ({ ...item, isRead: true })));
+    }
   }, []);
 
   const unreadCount = useMemo(

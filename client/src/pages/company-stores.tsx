@@ -42,9 +42,10 @@ import {
   Phone,
   Mail,
   Edit,
-  Trash2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
+import { DisabledActionHint } from "@/components/provider/DisabledActionHint";
+import { EmptyState, InlineErrorState, PageSkeleton } from "@/components/shared/page-states";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -133,7 +134,11 @@ export default function CompanyStores() {
     },
   });
 
-  const { data: stores = [], isLoading: storesLoading } = useQuery<CompanyStore[]>({
+  const {
+    data: stores = [],
+    isLoading: storesLoading,
+    error: storesError,
+  } = useQuery<CompanyStore[]>({
     queryKey: ["/api/company/stores"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/company/stores");
@@ -319,31 +324,34 @@ export default function CompanyStores() {
         </div>
 
         {/* Stores Grid */}
-        {storesLoading ? (
-          <div className="text-center py-12 text-slate-500">
-            Loading stores...
-          </div>
+        {storesError ? (
+          <InlineErrorState
+            description={storesError instanceof Error ? storesError.message : "Unable to load stores."}
+          />
+        ) : storesLoading ? (
+          <PageSkeleton withHeader={false} rows={3} />
         ) : stores.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center justify-center py-12">
-              <Store className="h-12 w-12 text-slate-300 mb-4" />
-              <h3 className="text-lg font-semibold text-slate-900">
-                No stores yet
-              </h3>
-              <p className="text-slate-500 mt-2">
-                Create your first store to get started
-              </p>
-              <Button
-                onClick={() => setShowStoreModal(true)}
-                className="mt-4"
-              >
+          <EmptyState
+            icon={Store}
+            title="No stores yet"
+            description="Create your first store to get started."
+            action={
+              <Button onClick={() => setShowStoreModal(true)} className="mt-1">
                 Create Store
               </Button>
-            </CardContent>
-          </Card>
+            }
+          />
         ) : (
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {stores.map((store) => (
+            {stores.map((store) => {
+              const isStoreOwner = Boolean(store.ownerId && user?.id === store.ownerId);
+              const transferBlockedReason = isStoreOwner
+                ? null
+                : "Only the current store owner can transfer ownership.";
+              const editBlockedReason =
+                "Store profile editing is currently managed through the admin review workflow.";
+
+              return (
               <Card key={store.id} className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <div className="flex items-start justify-between">
@@ -379,7 +387,7 @@ export default function CompanyStores() {
                       </div>
                     )}
                   </div>
-                  <div className="flex flex-wrap gap-2 pt-4 border-t border-slate-100">
+                  <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4">
                     <Button
                       variant="outline"
                       size="sm"
@@ -389,30 +397,35 @@ export default function CompanyStores() {
                       }}
                       className="flex-1"
                     >
-                      <Users className="h-4 w-4 mr-2" />
+                      <Users className="mr-2 h-4 w-4" />
                       Assign Staff
                     </Button>
-                    {store.ownerId && user?.id === store.ownerId && (
+                    <DisabledActionHint reason={transferBlockedReason}>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => {
+                          if (!isStoreOwner) return;
                           setTransferStore(store);
                           setTransferTargetId("");
                           setShowTransferModal(true);
                         }}
                         className="flex-1"
+                        disabled={!isStoreOwner}
                       >
                         Transfer Ownership
                       </Button>
-                    )}
-                    <Button variant="outline" size="sm">
-                      <Edit className="h-4 w-4" />
-                    </Button>
+                    </DisabledActionHint>
+                    <DisabledActionHint reason={editBlockedReason}>
+                      <Button variant="outline" size="sm" disabled>
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    </DisabledActionHint>
                   </div>
                 </CardContent>
               </Card>
-            ))}
+              );
+            })}
           </div>
         )}
       </main>

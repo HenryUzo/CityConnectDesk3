@@ -7,6 +7,7 @@ import { db, dbReady } from "./db";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { setupAuth } from "./auth";
+import { ensureInventoryUploadsDir, uploadsRootDir } from "./utils/inventory-image-storage";
 
 // Intercept process.exit to see if anything is trying to exit
 const originalExit = process.exit;
@@ -19,6 +20,10 @@ process.exit = function(code?: number | string) {
 
 const app = express();
 app.set("trust proxy", 1);
+
+// Serve locally uploaded assets (intermediate storage before object storage rollout)
+await ensureInventoryUploadsDir();
+app.use("/uploads", express.static(uploadsRootDir));
 
 // Body parsers (use raw body for Paystack webhooks to validate signatures)
 const paystackWebhookPaths = new Set([
@@ -95,7 +100,7 @@ app.use(cors({
   },
   credentials: true, // <-- cookies allowed
   methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-estate-id", "x-user-id", "x-user-email"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-estate-id", "x-user-id", "x-user-email", "x-file-name"],
 }));
 app.options("*", cors());
 
@@ -152,6 +157,12 @@ async function ensureServiceRequestsColumns() {
     ALTER TABLE service_requests
       ADD COLUMN IF NOT EXISTS admin_notes      text,
       ADD COLUMN IF NOT EXISTS assigned_at      timestamp NULL,
+      ADD COLUMN IF NOT EXISTS payment_requested_at timestamp NULL,
+      ADD COLUMN IF NOT EXISTS approved_for_job_at timestamp NULL,
+      ADD COLUMN IF NOT EXISTS approved_for_job_by varchar(255) NULL,
+      ADD COLUMN IF NOT EXISTS consultancy_report jsonb,
+      ADD COLUMN IF NOT EXISTS consultancy_report_submitted_at timestamp NULL,
+      ADD COLUMN IF NOT EXISTS consultancy_report_submitted_by varchar(255) NULL,
       ADD COLUMN IF NOT EXISTS closed_at        timestamp NULL,
       ADD COLUMN IF NOT EXISTS close_reason     text,
       ADD COLUMN IF NOT EXISTS billed_amount    numeric(10,2) DEFAULT '0',
@@ -168,6 +179,73 @@ async function ensureServiceRequestsColumns() {
       ADD COLUMN IF NOT EXISTS location text,
       ADD COLUMN IF NOT EXISTS latitude double precision,
       ADD COLUMN IF NOT EXISTS longitude double precision;
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE service_requests
+      ADD COLUMN IF NOT EXISTS category_label text,
+      ADD COLUMN IF NOT EXISTS issue_type text,
+      ADD COLUMN IF NOT EXISTS area_affected text,
+      ADD COLUMN IF NOT EXISTS quantity_label text,
+      ADD COLUMN IF NOT EXISTS time_window_label text,
+      ADD COLUMN IF NOT EXISTS photos_count integer,
+      ADD COLUMN IF NOT EXISTS address_line text,
+      ADD COLUMN IF NOT EXISTS estate_name text,
+      ADD COLUMN IF NOT EXISTS state_name text,
+      ADD COLUMN IF NOT EXISTS lga_name text,
+      ADD COLUMN IF NOT EXISTS payment_purpose text,
+      ADD COLUMN IF NOT EXISTS consultancy_fee numeric(10,2),
+      ADD COLUMN IF NOT EXISTS material_cost numeric(10,2),
+      ADD COLUMN IF NOT EXISTS service_cost numeric(10,2),
+      ADD COLUMN IF NOT EXISTS requested_total numeric(10,2),
+      ADD COLUMN IF NOT EXISTS assigned_inspector_id varchar(255),
+      ADD COLUMN IF NOT EXISTS assigned_job_provider_id varchar(255);
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'users'
+      ) THEN
+        BEGIN
+          ALTER TABLE service_requests
+            ADD CONSTRAINT service_requests_approved_for_job_by_fkey
+            FOREIGN KEY (approved_for_job_by) REFERENCES users(id);
+        EXCEPTION
+          WHEN duplicate_object THEN
+            NULL;
+        END;
+
+        BEGIN
+          ALTER TABLE service_requests
+            ADD CONSTRAINT service_requests_consultancy_report_submitted_by_fkey
+            FOREIGN KEY (consultancy_report_submitted_by) REFERENCES users(id);
+        EXCEPTION
+          WHEN duplicate_object THEN
+            NULL;
+        END;
+      END IF;
+    END$$;
+  `);
+}
+
+async function ensureServiceStatusValues() {
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'service_status'
+      ) THEN
+        ALTER TYPE service_status ADD VALUE IF NOT EXISTS 'assigned_for_job';
+        ALTER TYPE service_status ADD VALUE IF NOT EXISTS 'work_completed_pending_resident';
+        ALTER TYPE service_status ADD VALUE IF NOT EXISTS 'disputed';
+        ALTER TYPE service_status ADD VALUE IF NOT EXISTS 'rework_required';
+      END IF;
+    END$$;
   `);
 }
 
@@ -344,6 +422,46 @@ async function ensureServiceRequestsTable() {
   `);
 }
 
+async function ensureServiceRequestCancellationCasesTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS service_request_cancellation_cases (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_id varchar NOT NULL REFERENCES service_requests(id) ON DELETE CASCADE,
+      resident_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status text NOT NULL DEFAULT 'requested',
+      reason_code text NOT NULL,
+      reason_detail text NOT NULL,
+      preferred_resolution text NOT NULL DEFAULT 'full_refund',
+      evidence jsonb NOT NULL DEFAULT '[]'::jsonb,
+      admin_decision text,
+      admin_note text,
+      refund_decision text NOT NULL DEFAULT 'none',
+      refund_amount numeric(10,2),
+      assigned_admin_id varchar REFERENCES users(id),
+      provider_feedback text,
+      company_feedback text,
+      resolved_at timestamp,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_src_cases_request_id
+      ON service_request_cancellation_cases(request_id);
+    CREATE INDEX IF NOT EXISTS idx_src_cases_status_created_at
+      ON service_request_cancellation_cases(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_src_cases_resident_id
+      ON service_request_cancellation_cases(resident_id);
+  `);
+
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_open_src_case_per_request
+      ON service_request_cancellation_cases(request_id)
+      WHERE status IN ('requested', 'under_review');
+  `);
+}
+
 // Ensure required Postgres extensions and enums exist before column ALTERs
 async function ensureExtensionsAndEnums() {
   // gen_random_uuid() requires pgcrypto
@@ -378,10 +496,19 @@ async function ensureExtensionsAndEnums() {
         CREATE TYPE service_category AS ENUM (
           'electrician', 'plumber', 'carpenter', 'hvac_technician', 'painter', 'tiler', 'mason',
           'roofer', 'gardener', 'cleaner', 'security_guard', 'cook', 'laundry_service', 'pest_control',
-          'welder', 'mechanic', 'phone_repair', 'appliance_repair', 'tailor', 'market_runner', 'item_vendor'
+          'welder', 'mechanic', 'phone_repair', 'appliance_repair', 'tailor', 'market_runner', 'item_vendor',
+          'surveillance_monitoring', 'alarm_system', 'cleaning_janitorial', 'catering_services', 'it_support',
+          'maintenance_repair', 'general_repairs', 'locksmith', 'glass_windows', 'packaging_solutions',
+          'marketing_advertising', 'home_tutors', 'furniture_making'
         );
       END IF;
     END$$;
+  `);
+
+  await db.execute(sql`
+    ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'general_repairs';
+    ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'locksmith';
+    ALTER TYPE service_category ADD VALUE IF NOT EXISTS 'glass_windows';
   `);
 
   await db.execute(sql`
@@ -652,7 +779,48 @@ async function ensureConversationMessagesTable() {
   `);
 }
 
+async function ensureCompanyTasksTables() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS company_tasks (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id varchar NOT NULL REFERENCES companies(id),
+      title text NOT NULL,
+      description text,
+      assignee_id varchar REFERENCES users(id),
+      created_by varchar NOT NULL REFERENCES users(id),
+      priority text NOT NULL DEFAULT 'medium',
+      status text NOT NULL DEFAULT 'open',
+      due_date timestamp,
+      service_request_id varchar REFERENCES service_requests(id),
+      metadata jsonb NOT NULL DEFAULT '{}',
+      completed_at timestamp,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS company_task_updates (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      task_id varchar NOT NULL REFERENCES company_tasks(id) ON DELETE CASCADE,
+      author_id varchar NOT NULL REFERENCES users(id),
+      message text NOT NULL,
+      attachments jsonb NOT NULL DEFAULT '[]',
+      created_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_company_tasks_company_id ON company_tasks(company_id);
+    CREATE INDEX IF NOT EXISTS idx_company_tasks_assignee_id ON company_tasks(assignee_id);
+    CREATE INDEX IF NOT EXISTS idx_company_tasks_status ON company_tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_company_task_updates_task_id_created_at
+      ON company_task_updates(task_id, created_at);
+  `);
+}
+
 async function ensureRequestConversationSettingsTable() {
+
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS request_conversation_settings (
       id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -805,7 +973,7 @@ async function seedCityMartBanners() {
         'Food items',
         'Shop now',
         'primary',
-        '₦299,000',
+        'â‚¦299,000',
         'Just',
         'Only!',
         'Groceries',
@@ -821,7 +989,7 @@ async function seedCityMartBanners() {
         'Google Pixel 6 Pro',
         'Bid Now',
         'dark',
-        '₦450,000',
+        'â‚¦450,000',
         'Starting from',
         null,
         'Electronics',
@@ -869,7 +1037,7 @@ async function seedCityMartBanners() {
         'MacBook Pro',
         'Shop now',
         'primary',
-        '₦2,499,000',
+        'â‚¦2,499,000',
         'Just',
         'Only!',
         'Electronics',
@@ -926,7 +1094,7 @@ async function seedRequestConfigDefaults() {
   `);
 }
 
-// ── Marketplace V2 tables ──
+// â”€â”€ Marketplace V2 tables â”€â”€
 async function ensureMarketplaceV2Tables() {
   // Enum types (CREATE TYPE IF NOT EXISTS workaround)
   for (const [name, values] of Object.entries({
@@ -1090,10 +1258,12 @@ let bootPromise = (async () => {
     await dbReady;
     // Create required extensions and enums first to avoid ALTER type errors
     await ensureExtensionsAndEnums();
+    await ensureServiceStatusValues();
     await ensureServiceRequestsTable();
-    await ensureServiceRequestsColumns();
+    await ensureServiceRequestCancellationCasesTable();
     await ensureUsersTable();
     await ensureUsersColumns();
+    await ensureServiceRequestsColumns();
     await ensureEstatesColumns();
     await ensureStoresColumns();
     await ensureCompaniesTable();
@@ -1103,6 +1273,7 @@ let bootPromise = (async () => {
     await ensureMongoIdMappingTable();
     await ensureConversationsTable();
     await ensureConversationMessagesTable();
+    await ensureCompanyTasksTables();
     await ensureRequestConversationSettingsTable();
     await ensureRequestQuestionsTable();
     await ensureAiSessionsTables();
@@ -1126,7 +1297,7 @@ let bootPromise = (async () => {
     process.exit(1);
   }
 
-  // Global error handler — do NOT throw/rethrow
+  // Global error handler â€” do NOT throw/rethrow
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err?.status || err?.statusCode || 500;
     const message = err?.message || "Internal Server Error";
@@ -1198,7 +1369,7 @@ let bootPromise = (async () => {
     console.error('[SERVER ERROR]', err);
   });
   server.on('listening', () => {
-    log(`✓ Server is now listening on ${host}:${port}`);
+    log(`âœ“ Server is now listening on ${host}:${port}`);
     console.log("[TIMESTAMP] Server listening at " + new Date().toISOString());
   });
   
