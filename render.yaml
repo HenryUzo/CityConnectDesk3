@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: cityconnectdesk-backend
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20.19.0
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: VITE_PAYSTACK_PUBLIC_KEY
+        sync: false
+      - key: VITE_API_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-1.5-flash
+      - key: OTP_EMAIL_PROVIDER
+        value: console
+      - key: OTP_SMS_PROVIDER
+        value: console
+      - key: WORK_COMPLETION_SLA_HOURS
+        value: "72"
+      - key: WORK_COMPLETION_SLA_SWEEP_MS
+        value: "900000"
