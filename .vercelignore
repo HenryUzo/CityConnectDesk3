@@ -1,0 +1,16 @@
+.env
+.env.*
+.git
+.tools
+.worktrees
+.npm-vercel-cache
+.npm-vercel-cache-2
+.npm-vercel-install-cache
+.npm10-cache
+.vercel-cli-temp
+node_modules
+dist
+test-results
+output
+uploads
+playwright-report

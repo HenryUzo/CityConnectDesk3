@@ -1,8 +1,21 @@
 // client/src/lib/adminApi.ts
 import type { QueryFunction } from "@tanstack/react-query";
 
+function normalizeApiPath(path: string) {
+  return String(path || "")
+    .trim()
+    .replace(/^\$\{import\.meta\.env\.VITE_API_URL\}/, "")
+    .replace(/^(undefined|null)(?=\/api\/)/, "");
+}
+
+const configuredApiBase = ((import.meta as any).env?.VITE_API_URL || "")
+  .replace(/\/$/, "")
+  .trim();
+
 const API_BASE =
-  (import.meta as any).env?.VITE_API_URL?.replace(/\/$/, "") ||
+  (configuredApiBase && configuredApiBase !== "undefined" && configuredApiBase !== "null"
+    ? configuredApiBase
+    : "") ||
   (typeof window !== "undefined" ? window.location.origin : "") ||
   "";
 
@@ -54,9 +67,10 @@ export async function adminFetch<T = any>(
   path: string,
   init?: (RequestInit & { json?: any; query?: Record<string, any> }) | undefined
 ): Promise<T> {
-  let url = path.startsWith("http")
-    ? path
-    : `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  const normalizedPath = normalizeApiPath(path);
+  let url = normalizedPath.startsWith("http")
+    ? normalizedPath
+    : `${API_BASE}${normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`}`;
 
   if (init?.query && Object.keys(init.query).length > 0) {
     const qs = new URLSearchParams();

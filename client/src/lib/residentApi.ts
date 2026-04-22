@@ -4,8 +4,11 @@ function getResidentApiBase() {
   if (import.meta.env.DEV && origin) {
     return origin;
   }
+  const configuredApiBase = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "").trim();
   return (
-    import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
+    (configuredApiBase && configuredApiBase !== "undefined" && configuredApiBase !== "null"
+      ? configuredApiBase
+      : "") ||
     origin ||
     "http://localhost:5000"
   );
@@ -13,12 +16,20 @@ function getResidentApiBase() {
 
 const API_BASE = getResidentApiBase();
 
+function normalizeApiPath(path: string) {
+  return String(path || "")
+    .trim()
+    .replace(/^\$\{import\.meta\.env\.VITE_API_URL\}/, "")
+    .replace(/^(undefined|null)(?=\/api\/)/, "");
+}
+
 type FetchInit = RequestInit & { json?: any; headers?: Record<string, string> };
 
 export async function residentFetch<T = any>(path: string, init?: FetchInit): Promise<T> {
-  const url = path.startsWith("http")
-    ? path
-    : `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  const normalizedPath = normalizeApiPath(path);
+  const url = normalizedPath.startsWith("http")
+    ? normalizedPath
+    : `${API_BASE}${normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`}`;
 
   const headers: Record<string, string> = { ...(init?.headers || {}) };
 

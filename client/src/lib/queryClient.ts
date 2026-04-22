@@ -16,9 +16,16 @@ function getBaseUrl(): string {
   return import.meta.env.VITE_API_URL || origin || "https://cityconnect.replit.app";
 }
 
+function normalizeApiPath(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed
+    .replace(/^\$\{import\.meta\.env\.VITE_API_URL\}/, "")
+    .replace(/^(undefined|null)(?=\/api\/)/, "");
+}
+
 /** Build an absolute URL from a queryKey (expects key[0] to be the path or URL) */
 function resolveUrlFromQueryKey(queryKey: readonly unknown[]): string {
-  const raw = String(queryKey[0] ?? "");
+  const raw = normalizeApiPath(String(queryKey[0] ?? ""));
   if (/^https?:\/\//i.test(raw)) return raw;
   const base = getBaseUrl();
   const path = raw.startsWith("/") ? raw : `/${raw}`;
@@ -58,9 +65,10 @@ export async function apiRequest(
   data?: unknown | undefined,
   options?: { signal?: AbortSignal },
 ): Promise<Response> {
-  const finalUrl = /^https?:\/\//i.test(url)
-    ? url
-    : resolveUrlFromQueryKey([url]);
+  const normalizedUrl = normalizeApiPath(url);
+  const finalUrl = /^https?:\/\//i.test(normalizedUrl)
+    ? normalizedUrl
+    : resolveUrlFromQueryKey([normalizedUrl]);
 
   const headers: Record<string, string> = { ...getRequestHeaders() };
   if (data) headers["Content-Type"] = "application/json";

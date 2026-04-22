@@ -1,7 +1,7 @@
 import "./env";
 import express, { type Request, type Response, type NextFunction } from "express";
 import cookieParser from "cookie-parser";
-import cors from "cors";
+import cors, { type CorsOptions } from "cors";
 import { sql } from "drizzle-orm";
 import { db, dbReady } from "./db";
 import { registerRoutes } from "./routes";
@@ -80,8 +80,19 @@ app.use(async (req, _res, next) => {
   next();
 });
 
+const configuredFrontendOrigins = new Set(
+  [
+    process.env.FRONTEND_ORIGIN,
+    process.env.FRONTEND_URL,
+    process.env.CLIENT_URL,
+  ]
+    .flatMap((value) => String(value || "").split(","))
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
+
 // CORS (safe defaults for dev; keep credentials if you use cookies)
-app.use(cors({
+const corsOptions: CorsOptions = {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     try {
@@ -91,6 +102,8 @@ app.use(cors({
         u.hostname === 'localhost' ||
         u.hostname === '127.0.0.1' ||
         u.hostname.endsWith('.replit.dev') ||
+        u.hostname.endsWith('.vercel.app') ||
+        configuredFrontendOrigins.has(origin) ||
         origin === 'https://cityconnect.replit.app'
       ) {
         return cb(null, true);
@@ -101,8 +114,9 @@ app.use(cors({
   credentials: true, // <-- cookies allowed
   methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "x-estate-id", "x-user-id", "x-user-email", "x-file-name"],
-}));
-app.options("*", cors());
+};
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // Setup Passport.js and express-session for authentication
 setupAuth(app);
