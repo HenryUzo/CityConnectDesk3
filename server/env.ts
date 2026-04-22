@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
 const rootDir = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const envFiles = [".env.local", ".env"];
+const isProd = process.env.NODE_ENV === "production";
+const envFiles = isProd ? [] : [".env.local", ".env"];
 
 for (const file of envFiles) {
   const envPath = path.join(rootDir, file);
@@ -12,8 +13,6 @@ for (const file of envFiles) {
     dotenv.config({ path: envPath, override: true });
   }
 }
-
-const isProd = process.env.NODE_ENV === "production";
 
 function ensureEnv(key: string, fallback?: string) {
   if (process.env[key] && process.env[key]!.length > 0) {
