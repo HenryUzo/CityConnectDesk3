@@ -20,6 +20,12 @@ test.describe("Ordinary draft autosave", () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
       window.localStorage.setItem("dev_user_email", "testresident@gmail.com");
+      if (!window.sessionStorage.getItem("ordinary_flow_e2e_started")) {
+        Object.keys(window.localStorage)
+          .filter((key) => key.startsWith("ordinary_flow_draft_v1:"))
+          .forEach((key) => window.localStorage.removeItem(key));
+        window.sessionStorage.setItem("ordinary_flow_e2e_started", "1");
+      }
     });
     await page.setExtraHTTPHeaders({
       "x-user-email": "testresident@gmail.com",
@@ -29,7 +35,7 @@ test.describe("Ordinary draft autosave", () => {
   test("answered prompts persist and restore after reload", async ({ page }) => {
     await openOrdinaryFlowAndSelectFirstCategory(page);
 
-    await expect(page.getByText("Do you live in a CityConnect estate?")).toBeVisible();
+    await expect(page.getByText("Do you live in an estate registered with CityConnect?")).toBeVisible();
     await page.getByRole("button", { name: /^No$/i }).click();
     await expect(page.getByText("Select state/LGA")).toBeVisible();
 
@@ -64,7 +70,7 @@ test.describe("Ordinary draft autosave", () => {
     await page.waitForLoadState("domcontentloaded");
 
     await expect(page.getByText(/You selected/i).first()).toBeVisible();
-    await expect(page.getByText("Do you live in a CityConnect estate?").first()).toBeVisible();
+    await expect(page.getByText("Do you live in an estate registered with CityConnect?").first()).toBeVisible();
     await expect(page.getByText(addressValue).first()).toBeVisible();
     await expect(page.getByText("Draft").first()).toBeVisible();
   });

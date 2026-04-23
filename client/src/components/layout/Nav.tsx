@@ -10,6 +10,7 @@ import {
   LogOut,
   Settings,
   ShoppingBag,
+  Wrench,
 } from "lucide-react";
 
 import { ProfilePics } from "@/components/resident/CityBuddyMessage";
@@ -24,6 +25,7 @@ export type LayoutNavPage =
   | "requests"
   | "settings"
   | "marketplace"
+  | "maintenance"
   | "ordinary_flow"
   | "playground";
 
@@ -32,6 +34,7 @@ export type LayoutNavProps = {
   onNavigateToHomepage?: () => void;
   onNavigateToSettings?: () => void;
   onNavigateToMarketplace?: () => void;
+  onNavigateToMaintenance?: () => void;
   onNavigateToServiceRequests?: () => void;
   onNavigateToOrdinaryFlow?: () => void;
   currentPage: LayoutNavPage;
@@ -54,6 +57,7 @@ export default function Nav({
   onNavigateToHomepage,
   onNavigateToSettings,
   onNavigateToMarketplace,
+  onNavigateToMaintenance,
   onNavigateToServiceRequests,
   onNavigateToOrdinaryFlow,
   currentPage,
@@ -112,6 +116,12 @@ export default function Nav({
       label: "Marketplace",
       Icon: ShoppingBag,
       action: onNavigateToMarketplace,
+    },
+    {
+      key: "maintenance",
+      label: "Maintenance",
+      Icon: Wrench,
+      action: onNavigateToMaintenance ?? (() => setLocation("/resident/maintenance")),
     },
     {
       key: "requests",
@@ -186,7 +196,7 @@ export default function Nav({
 
   return (
     <aside
-      className="flex flex-col h-full min-h-screen bg-[#054f31] text-white transition-all duration-200"
+      className="flex h-[100dvh] min-h-[100dvh] flex-col bg-[#054f31] text-white transition-all duration-200"
       style={{ width }}
     >
       {/* TOP SECTION: Logo / Estate */}

@@ -17,6 +17,24 @@ type CreatePendingTxArgs = {
   meta?: Record<string, unknown>;
 };
 
+export type ConsultancyRequestDraft = {
+  categoryKey?: string | null;
+  categoryLabel?: string | null;
+  urgency?: string | null;
+  location?: string | null;
+  description?: string | null;
+  issueType?: string | null;
+  areaAffected?: string | null;
+  quantityLabel?: string | null;
+  timeWindowLabel?: string | null;
+  addressLine?: string | null;
+  estateName?: string | null;
+  stateName?: string | null;
+  lgaName?: string | null;
+  notes?: string | null;
+  attachmentsCount?: number | string | null;
+};
+
 export type PaystackSession = {
   reference: string;
   amountKobo: number;
@@ -30,12 +48,16 @@ function requirePositiveAmount(amount: number) {
   }
 }
 
-async function ensureConsultancyServiceRequest(params: {
-  userId: string;
-  txMeta?: Prisma.JsonValue | null;
+function trimOrNull(value: unknown) {
+  const next = String(value ?? "").trim();
+  return next || null;
+}
+
+export function buildConsultancyServiceRequestInput(params: {
+  residentId: string;
+  consultancy: ConsultancyRequestDraft | null | undefined;
 }) {
-  const meta = (params.txMeta as any) || {};
-  const consultancy = meta?.consultancyRequest;
+  const consultancy = params.consultancy;
   if (!consultancy || typeof consultancy !== "object") return null;
 
   const category = tryResolveServiceRequestCategory(
@@ -43,6 +65,7 @@ async function ensureConsultancyServiceRequest(params: {
     consultancy.categoryLabel || "",
   );
   if (!category) return null;
+
   const urgencyInput = normalizeCategoryKey(consultancy.urgency || "");
   const urgency =
     urgencyInput === "emergency" ||
@@ -51,37 +74,61 @@ async function ensureConsultancyServiceRequest(params: {
     urgencyInput === "low"
       ? urgencyInput
       : "medium";
-  const location = String(consultancy.location || "Not specified");
+
+  const location = String(consultancy.location || "Not specified").trim() || "Not specified";
   const description =
     String(consultancy.description || "Consultancy request").trim() ||
     "Consultancy request";
+  const photosCount = Number(consultancy.attachmentsCount || 0);
 
-  const created = await storage.createServiceRequest({
+  return {
     category: category as any,
-    categoryLabel:
-      String(consultancy.categoryLabel || "").trim() ||
-      category.replace(/_/g, " "),
+    categoryLabel: String(consultancy.categoryLabel || "").trim() || category.replace(/_/g, " "),
     description,
-    residentId: params.userId,
+    residentId: params.residentId,
     budget: "Consultancy",
     urgency: urgency as any,
-    issueType: String((consultancy as any).issueType || "").trim() || null,
-    areaAffected: String((consultancy as any).areaAffected || "").trim() || null,
-    quantityLabel: String((consultancy as any).quantityLabel || "").trim() || null,
-    timeWindowLabel: String((consultancy as any).timeWindowLabel || "").trim() || null,
+    issueType: trimOrNull(consultancy.issueType),
+    areaAffected: trimOrNull(consultancy.areaAffected),
+    quantityLabel: trimOrNull(consultancy.quantityLabel),
+    timeWindowLabel: trimOrNull(consultancy.timeWindowLabel),
     location,
-    addressLine: String((consultancy as any).addressLine || location).trim() || location,
-    estateName: String((consultancy as any).estateName || "").trim() || null,
-    stateName: String((consultancy as any).stateName || "").trim() || null,
-    lgaName: String((consultancy as any).lgaName || "").trim() || null,
-    specialInstructions: String((consultancy as any).notes || "").trim() || null,
-    photosCount: Number((consultancy as any).attachmentsCount || 0) || 0,
+    addressLine: String(consultancy.addressLine || location).trim() || location,
+    estateName: trimOrNull(consultancy.estateName),
+    stateName: trimOrNull(consultancy.stateName),
+    lgaName: trimOrNull(consultancy.lgaName),
+    specialInstructions: trimOrNull(consultancy.notes),
+    photosCount: Number.isFinite(photosCount) && photosCount > 0 ? photosCount : 0,
     paymentPurpose: "Consultancy / inspection",
     status: "pending" as any,
     paymentStatus: "pending",
-  } as any);
+  };
+}
 
+export async function createConsultancyServiceRequest(params: {
+  storage: Pick<typeof storage, "createServiceRequest">;
+  residentId: string;
+  consultancy: ConsultancyRequestDraft | null | undefined;
+}) {
+  const input = buildConsultancyServiceRequestInput({
+    residentId: params.residentId,
+    consultancy: params.consultancy,
+  });
+  if (!input) return null;
+  const created = await params.storage.createServiceRequest(input);
   return created?.id ?? null;
+}
+
+async function ensureConsultancyServiceRequest(params: {
+  userId: string;
+  txMeta?: Prisma.JsonValue | null;
+}) {
+  const meta = (params.txMeta as any) || {};
+  return createConsultancyServiceRequest({
+    storage,
+    residentId: params.userId,
+    consultancy: meta?.consultancyRequest as ConsultancyRequestDraft | undefined,
+  });
 }
 
 async function ensureWallet(userId: string): Promise<Wallet> {

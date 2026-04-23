@@ -3,14 +3,19 @@ import { useLocation, Link } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { residentFetch } from "@/lib/residentApi";
 import ResidentShell from "@/components/layout/ResidentShell";
+
+const CONSULTANCY_DRAFT_KEY = "citybuddy_consultancy_draft";
+const ORDINARY_FLOW_DRAFT_STORAGE_PREFIX = "ordinary_flow_draft_v1";
 
 export default function PaymentConfirmation() {
   const [status, setStatus] = useState<"loading" | "success" | "failed">("loading");
   const [reference, setReference] = useState<string | null>(null);
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
   const { toast } = useToast();
+  const { user } = useAuth();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
@@ -31,6 +36,22 @@ export default function PaymentConfirmation() {
 
     (async () => {
       try {
+        const clearOrdinaryPaymentDrafts = () => {
+          try {
+            sessionStorage.removeItem(CONSULTANCY_DRAFT_KEY);
+          } catch {
+            // ignore storage errors
+          }
+
+          try {
+            localStorage.removeItem(
+              `${ORDINARY_FLOW_DRAFT_STORAGE_PREFIX}:${user?.id || "anonymous"}`,
+            );
+          } catch {
+            // ignore storage errors
+          }
+        };
+
         const verifyOnce = async () =>
           residentFetch<{
             status: "success" | "failed";
@@ -41,6 +62,29 @@ export default function PaymentConfirmation() {
             method: "POST",
             json: { reference: ref },
           });
+
+        if (source === "maintenance_subscription") {
+          const verified = await residentFetch<{
+            status: "success";
+            reference: string;
+            subscriptionId: string;
+          }>("/api/app/resident/maintenance/subscriptions/verify", {
+            method: "POST",
+            json: { reference: ref },
+          });
+
+          toast({
+            title: "Payment received",
+            description: "Your maintenance subscription has been activated.",
+          });
+
+          setLocation(
+            `/resident/maintenance?paid=1&subscriptionId=${encodeURIComponent(
+              verified.subscriptionId,
+            )}&reference=${encodeURIComponent(ref)}`,
+          );
+          return;
+        }
 
         const maxAttempts = source === "ordinary" && orderType !== "marketplace" ? 5 : 1;
         let verified:
@@ -81,6 +125,9 @@ export default function PaymentConfirmation() {
         }
 
         if (verified?.status === "success") {
+          if (source === "ordinary") {
+            clearOrdinaryPaymentDrafts();
+          }
           toast({
             title: "Payment received",
             description:
@@ -115,6 +162,7 @@ export default function PaymentConfirmation() {
         toast({
           title: "Verification failed",
           description: verified?.message || "The payment could not be confirmed",
+          source: "payment.verify",
           variant: "destructive",
         });
       } catch (err: any) {
@@ -123,11 +171,13 @@ export default function PaymentConfirmation() {
         toast({
           title: "Verification error",
           description: err?.message || "Could not verify payment",
+          error: err,
+          source: "payment.verify",
           variant: "destructive",
         });
       }
     })();
-  }, []);
+  }, [setLocation, toast, user?.id]);
 
   return (
     <ResidentShell currentPage="chat">

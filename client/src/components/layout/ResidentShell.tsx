@@ -24,6 +24,7 @@ export default function ResidentShell({
     onNavigateToHomepage: () => navigate("/resident"),
     onNavigateToSettings: () => navigate("/resident/settings"),
     onNavigateToMarketplace: () => navigate("/resident/citymart"),
+    onNavigateToMaintenance: () => navigate("/resident/maintenance"),
     onNavigateToServiceRequests: () => navigate("/service-requests"),
     onNavigateToOrdinaryFlow: () => navigate("/resident/requests/ordinary"),
     currentPage,
@@ -31,16 +32,16 @@ export default function ResidentShell({
 
   return (
     <div
-      className="flex h-screen overflow-hidden bg-[#054f31]"
+      className="flex min-h-[100dvh] bg-[#054f31] lg:h-[100dvh] lg:overflow-hidden"
       data-name="ResidentShell"
     >
       <MobileNavDrawer {...navProps} />
 
-      <div className="hidden lg:block h-full">
+      <div className="hidden lg:block h-[100dvh] shrink-0">
         <Nav {...navProps} />
       </div>
 
-      <div className="flex-1 min-w-0 h-full bg-white rounded-tl-[40px] rounded-bl-[40px] lg:ml-[14px] lg:mt-[12px] overflow-y-auto">
+      <div className="flex-1 min-w-0 min-h-[100dvh] bg-white rounded-tl-[40px] rounded-bl-[40px] lg:my-[8px] lg:ml-[8px] lg:min-h-0 lg:overflow-y-auto lg:h-[calc(100dvh-16px)]">
         {children}
       </div>
     </div>

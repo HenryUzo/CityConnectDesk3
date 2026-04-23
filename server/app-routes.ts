@@ -5,6 +5,7 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import {
+  assetSubscriptions,
   aiConversationFlowSettings,
   aiSessionAttachments,
   aiSessionMessages,
@@ -12,10 +13,20 @@ import {
   conversationMessages,
   conversations,
   insertServiceRequestSchema,
+  maintenanceCategories,
+  maintenanceItemTypes,
+  maintenancePlans,
+  maintenanceSchedules,
   memberships,
+  residentAssets,
+  residentNotificationPreferences,
+  residentSettings,
   requestConversationSettings,
   requestQuestions,
+  serviceRequests,
   serviceRequestCancellationCases,
+  userDeviceSessions,
+  users,
 } from "@shared/schema";
 import { requireAuth, requireResident } from "./auth-middleware";
 import { ollamaChat } from "./ai/ollama";
@@ -24,6 +35,24 @@ import { getProviderMatches } from "./providers/matching";
 import { generateGeminiContent } from "./ai/geminiClient";
 import { IMAGE_LIMITS, validateDataUrl } from "./utils/validate-dataurl";
 import { backfillApprovedCategoriesFromServiceCategories } from "./approvedCategorySync";
+import { comparePasswords, hashPassword } from "./auth-utils";
+import {
+  completeOrdinaryFlowSession,
+  getOrdinaryFlowSessionById,
+  startOrGetOrdinaryFlowSession,
+  writeOrdinaryFlowAnswer,
+} from "./services/ordinaryFlowEngine";
+import { getMaintenanceCatalog } from "./services/maintenanceCatalogService";
+import {
+  cancelMaintenanceSubscription,
+  activateMaintenanceSubscriptionFromReference,
+  createMaintenanceSubscriptionCheckout,
+  pauseMaintenanceSubscription,
+  resumeMaintenanceSubscription,
+} from "./services/maintenanceSubscriptionService";
+import { getMaintenanceSummaryForRequest } from "./services/maintenanceRequestIntegrationService";
+import { verifyAndFinalizePaystackCharge } from "./payments";
+import { rescheduleMaintenanceVisit } from "./services/maintenanceScheduleService";
 
 const router = Router();
 
@@ -38,11 +67,941 @@ const CANCELLATION_REVIEW_REQUIRED_STATUSES = new Set([
   "completed",
 ]);
 
+const SETTINGS_NOTIFICATION_EVENT_KEYS = [
+  "provider_assigned",
+  "inspection_scheduled",
+  "report_ready",
+  "payment_requested",
+  "status_changed",
+  "job_completed",
+  "refund_update",
+  "new_message",
+  "system_announcements",
+] as const;
+
+const DIGEST_FREQUENCIES = ["off", "daily", "weekly"] as const;
+const PROFILE_VISIBILITIES = ["private", "contacts", "public"] as const;
+
+const NotificationEventPreferenceSchema = z
+  .object({
+    eventKey: z.enum(SETTINGS_NOTIFICATION_EVENT_KEYS),
+    inApp: z.boolean(),
+    email: z.boolean(),
+    sms: z.boolean(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.inApp && !value.email && !value.sms) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one channel must be enabled for each event.",
+      });
+    }
+  });
+
+const SettingsProfilePatchSchema = z
+  .object({
+    firstName: z.string().trim().min(1).max(80).optional(),
+    lastName: z.string().trim().min(1).max(80).optional(),
+    username: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[a-z0-9._-]{3,30}$/)
+      .optional()
+      .or(z.literal("").transform(() => null)),
+    email: z.string().trim().email().toLowerCase().optional(),
+    phone: z
+      .string()
+      .trim()
+      .regex(/^\+[1-9]\d{7,14}$/)
+      .optional(),
+    profileImage: z
+      .string()
+      .trim()
+      .max(10_000_000)
+      .optional()
+      .or(z.literal("").transform(() => null)),
+    bio: z.string().trim().max(500).optional().or(z.literal("").transform(() => null)),
+    website: z
+      .string()
+      .trim()
+      .max(200)
+      .url()
+      .refine((value) => /^https?:\/\//i.test(value), "Website must start with http:// or https://")
+      .optional()
+      .or(z.literal("").transform(() => null)),
+    countryCode: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z]{2}$/)
+      .optional()
+      .or(z.literal("").transform(() => null)),
+    timezone: z
+      .string()
+      .trim()
+      .optional()
+      .or(z.literal("").transform(() => null)),
+  })
+  .strict();
+
+const SettingsNotificationsPatchSchema = z
+  .object({
+    quietHoursEnabled: z.boolean().optional(),
+    quietHoursStart: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+    quietHoursEnd: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+    digestFrequency: z.enum(DIGEST_FREQUENCIES).optional(),
+    events: z.array(NotificationEventPreferenceSchema).optional(),
+  })
+  .strict();
+
+const SettingsPrivacyPatchSchema = z
+  .object({
+    profileVisibility: z.enum(PROFILE_VISIBILITIES).optional(),
+    showPhoneToProvider: z.boolean().optional(),
+    showEmailToProvider: z.boolean().optional(),
+    allowMarketing: z.boolean().optional(),
+    allowAnalytics: z.boolean().optional(),
+    allowPersonalization: z.boolean().optional(),
+  })
+  .strict();
+
+const SettingsSecurityPatchSchema = z
+  .object({
+    loginAlertsEnabled: z.boolean(),
+  })
+  .strict();
+
+const ChangePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1),
+    newPassword: z
+      .string()
+      .min(8)
+      .max(128)
+      .regex(/[A-Z]/, "Password must include an uppercase letter")
+      .regex(/[a-z]/, "Password must include a lowercase letter")
+      .regex(/[0-9]/, "Password must include a number")
+      .regex(/[^A-Za-z0-9]/, "Password must include a special character"),
+  })
+  .refine((value) => value.currentPassword !== value.newPassword, {
+    message: "New password must be different from current password.",
+    path: ["newPassword"],
+  });
+
+const MaintenanceAssetBaseSchema = z.object({
+  maintenanceItemTypeId: z.string().trim().min(1).optional(),
+  maintenanceItemId: z.string().trim().min(1).optional(),
+  categoryId: z.string().trim().min(1).optional(),
+  estateId: z.string().trim().optional().nullable(),
+  customName: z.string().trim().max(120).optional().nullable(),
+  nickname: z.string().trim().max(120).optional().nullable(),
+  locationLabel: z.string().trim().max(160).optional().nullable(),
+  brand: z.string().trim().max(120).optional().nullable(),
+  model: z.string().trim().max(120).optional().nullable(),
+  serialNumber: z.string().trim().max(120).optional().nullable(),
+  purchaseDate: z.string().trim().max(40).optional().nullable(),
+  installedAt: z.string().trim().max(40).optional().nullable(),
+  lastServiceDate: z.string().trim().max(40).optional().nullable(),
+  condition: z.enum(["new", "good", "fair", "poor"]).optional(),
+  notes: z.string().trim().max(2000).optional().nullable(),
+  metadata: z.record(z.any()).optional().nullable(),
+  isActive: z.boolean().optional(),
+});
+
+const MaintenanceAssetUpsertSchema = MaintenanceAssetBaseSchema.superRefine((value, ctx) => {
+  if (!value.maintenanceItemId && !value.maintenanceItemTypeId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Select an item type.",
+      path: ["maintenanceItemId"],
+    });
+  }
+});
+
+const MaintenanceSubscriptionCreateSchema = z.object({
+  residentAssetId: z.string().trim().min(1),
+  maintenancePlanId: z.string().trim().min(1),
+  startDate: z.string().datetime().optional().nullable(),
+});
+
+const MaintenanceSubscriptionVerifySchema = z.object({
+  reference: z.string().trim().min(6),
+});
+
+const MaintenanceScheduleRescheduleSchema = z.object({
+  scheduledDate: z.string().trim().min(1),
+  notes: z.string().trim().max(1000).optional().nullable(),
+});
+
 function normalizeServiceRequestStatusKey(value: unknown) {
   return String(value || "")
     .toLowerCase()
     .replace(/[\s-]+/g, "_")
     .trim();
+}
+
+function normalizeDigestFrequency(value: unknown): (typeof DIGEST_FREQUENCIES)[number] {
+  const normalized = String(value || "").toLowerCase().trim();
+  if ((DIGEST_FREQUENCIES as readonly string[]).includes(normalized)) {
+    return normalized as (typeof DIGEST_FREQUENCIES)[number];
+  }
+  return "off";
+}
+
+function normalizeProfileVisibility(value: unknown): (typeof PROFILE_VISIBILITIES)[number] {
+  const normalized = String(value || "").toLowerCase().trim();
+  if ((PROFILE_VISIBILITIES as readonly string[]).includes(normalized)) {
+    return normalized as (typeof PROFILE_VISIBILITIES)[number];
+  }
+  return "private";
+}
+
+function normalizeOptionalMaintenanceDate(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+
+  const normalized = String(value || "").trim();
+  if (!normalized) return null;
+
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(normalized)
+    ? new Date(`${normalized}T00:00:00.000Z`)
+    : new Date(normalized);
+
+  if (Number.isNaN(date.getTime())) {
+    const error = new Error("Invalid date value supplied.");
+    (error as any).status = 400;
+    throw error;
+  }
+
+  return date;
+}
+
+function buildResidentAssetPayload(parsed: z.infer<typeof MaintenanceAssetUpsertSchema>) {
+  return {
+    maintenanceItemId: parsed.maintenanceItemId ?? parsed.maintenanceItemTypeId,
+    estateId: parsed.estateId ?? null,
+    customName: parsed.customName ?? parsed.nickname ?? null,
+    locationLabel: parsed.locationLabel ?? null,
+    brand: parsed.brand ?? null,
+    model: parsed.model ?? null,
+    serialNumber: parsed.serialNumber ?? null,
+    purchaseDate: normalizeOptionalMaintenanceDate(parsed.purchaseDate) ?? null,
+    installedAt: normalizeOptionalMaintenanceDate(parsed.installedAt) ?? null,
+    lastServiceDate: normalizeOptionalMaintenanceDate(parsed.lastServiceDate) ?? null,
+    condition: parsed.condition ?? "good",
+    notes: parsed.notes ?? null,
+    metadata: parsed.metadata ?? null,
+    isActive: parsed.isActive ?? true,
+  };
+}
+
+function serializeMaintenanceCategoryForResident(category: typeof maintenanceCategories.$inferSelect, itemCount = 0) {
+  return {
+    id: category.id,
+    name: category.name,
+    slug: category.slug,
+    icon: category.icon,
+    description: category.description,
+    isActive: category.isActive,
+    createdAt: category.createdAt,
+    itemCount,
+  };
+}
+
+function serializeMaintenanceItemForResident(
+  item: typeof maintenanceItemTypes.$inferSelect,
+  category?: typeof maintenanceCategories.$inferSelect | null,
+) {
+  return {
+    id: item.id,
+    categoryId: item.categoryId,
+    name: item.name,
+    slug: item.slug,
+    description: item.description,
+    defaultFrequency: item.defaultFrequency,
+    recommendedTasks: item.recommendedTasks,
+    imageUrl: item.imageUrl ?? null,
+    isActive: item.isActive,
+    createdAt: item.createdAt,
+    category: category
+      ? {
+          id: category.id,
+          name: category.name,
+          icon: category.icon,
+          description: category.description,
+        }
+      : null,
+  };
+}
+
+function serializeResidentAssetRow(row: {
+  asset: typeof residentAssets.$inferSelect;
+  itemType: typeof maintenanceItemTypes.$inferSelect;
+  category: typeof maintenanceCategories.$inferSelect;
+}) {
+  const displayName = row.asset.customName?.trim() || row.itemType.name;
+  return {
+    id: row.asset.id,
+    displayName,
+    customName: row.asset.customName,
+    locationLabel: row.asset.locationLabel,
+    purchaseDate: row.asset.purchaseDate,
+    installedAt: row.asset.installedAt,
+    lastServiceDate: row.asset.lastServiceDate,
+    condition: row.asset.condition,
+    notes: row.asset.notes,
+    metadata: row.asset.metadata,
+    isActive: row.asset.isActive,
+    createdAt: row.asset.createdAt,
+    updatedAt: row.asset.updatedAt,
+    item: serializeMaintenanceItemForResident(row.itemType, row.category),
+    category: {
+      id: row.category.id,
+      name: row.category.name,
+      icon: row.category.icon,
+      description: row.category.description,
+      slug: row.category.slug,
+    },
+  };
+}
+
+function addMonths(baseDate: Date, months: number) {
+  const next = new Date(baseDate);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function maintenanceDurationToMonths(value: unknown) {
+  switch (String(value || "")) {
+    case "monthly":
+      return 1;
+    case "quarterly_3m":
+      return 3;
+    case "halfyearly_6m":
+      return 6;
+    case "yearly":
+      return 12;
+    default:
+      return 1;
+  }
+}
+
+function formatMaintenanceDurationLabel(value: unknown) {
+  switch (String(value || "")) {
+    case "monthly":
+      return "Monthly";
+    case "quarterly_3m":
+      return "3 months";
+    case "halfyearly_6m":
+      return "6 months";
+    case "yearly":
+      return "Yearly";
+    default:
+      return "Custom";
+  }
+}
+
+function serializeResidentPlanRow(params: {
+  plan: typeof maintenancePlans.$inferSelect;
+  itemType: typeof maintenanceItemTypes.$inferSelect;
+  category: typeof maintenanceCategories.$inferSelect;
+  currentSubscription?: typeof assetSubscriptions.$inferSelect | null;
+  nextScheduledDate?: Date | null;
+}) {
+  return {
+    id: params.plan.id,
+    name: params.plan.name,
+    description: params.plan.description,
+    durationType: params.plan.durationType,
+    durationLabel: formatMaintenanceDurationLabel(params.plan.durationType),
+    price: params.plan.price,
+    currency: params.plan.currency,
+    visitsIncluded: params.plan.visitsIncluded,
+    includedTasks: params.plan.includedTasks,
+    requestLeadDays: params.plan.requestLeadDays,
+    isActive: params.plan.isActive,
+    item: {
+      id: params.itemType.id,
+      name: params.itemType.name,
+      imageUrl: params.itemType.imageUrl ?? null,
+    },
+    category: {
+      id: params.category.id,
+      name: params.category.name,
+      icon: params.category.icon,
+    },
+    currentSubscription: params.currentSubscription
+      ? {
+          id: params.currentSubscription.id,
+          status: params.currentSubscription.status,
+          startDate: params.currentSubscription.startDate,
+          endDate: params.currentSubscription.endDate,
+          nextScheduledDate: params.nextScheduledDate ?? null,
+        }
+      : null,
+  };
+}
+
+async function getNextScheduleForSubscription(subscriptionId: string) {
+  const allRows = await db
+    .select({
+      scheduledDate: maintenanceSchedules.scheduledDate,
+      status: maintenanceSchedules.status,
+    })
+    .from(maintenanceSchedules)
+    .where(eq(maintenanceSchedules.subscriptionId, subscriptionId))
+    .orderBy(asc(maintenanceSchedules.scheduledDate));
+
+  return (
+    allRows.find(
+      (schedule: any) =>
+        !["completed", "cancelled", "missed", "rescheduled"].includes(
+          String(schedule.status || "").toLowerCase(),
+        ),
+    ) ||
+    allRows[0] ||
+    null
+  );
+}
+
+async function getResidentSubscriptionRow(params: {
+  userId: string;
+  subscriptionId: string;
+}) {
+  const rows = await db
+    .select({
+      subscription: assetSubscriptions,
+      asset: residentAssets,
+      plan: maintenancePlans,
+      itemType: maintenanceItemTypes,
+      category: maintenanceCategories,
+    })
+    .from(assetSubscriptions)
+    .innerJoin(
+      residentAssets,
+      eq(assetSubscriptions.residentAssetId, residentAssets.id),
+    )
+    .innerJoin(
+      maintenancePlans,
+      eq(assetSubscriptions.maintenancePlanId, maintenancePlans.id),
+    )
+    .innerJoin(
+      maintenanceItemTypes,
+      eq(residentAssets.maintenanceItemId, maintenanceItemTypes.id),
+    )
+    .innerJoin(
+      maintenanceCategories,
+      eq(maintenanceItemTypes.categoryId, maintenanceCategories.id),
+    )
+    .where(
+      and(
+        eq(assetSubscriptions.id, params.subscriptionId),
+        eq(assetSubscriptions.userId, params.userId),
+      ),
+    )
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
+async function serializeResidentSubscriptionRow(params: {
+  subscription: typeof assetSubscriptions.$inferSelect;
+  asset: typeof residentAssets.$inferSelect;
+  plan: typeof maintenancePlans.$inferSelect;
+  itemType: typeof maintenanceItemTypes.$inferSelect;
+  category: typeof maintenanceCategories.$inferSelect;
+}) {
+  const schedules = await db
+    .select({
+      id: maintenanceSchedules.id,
+      scheduledDate: maintenanceSchedules.scheduledDate,
+      status: maintenanceSchedules.status,
+      sourceRequestId: maintenanceSchedules.sourceRequestId,
+    })
+    .from(maintenanceSchedules)
+    .where(eq(maintenanceSchedules.subscriptionId, params.subscription.id))
+    .orderBy(asc(maintenanceSchedules.scheduledDate));
+
+  const nextSchedule =
+    schedules.find((schedule: any) =>
+      !["completed", "cancelled", "missed", "rescheduled"].includes(
+        String(schedule.status || "").toLowerCase(),
+      ),
+    ) || schedules[0] || null;
+
+  return {
+    id: params.subscription.id,
+    status: params.subscription.status,
+    autoRenew: params.subscription.autoRenew,
+    startDate: params.subscription.startDate,
+    endDate: params.subscription.endDate,
+    activatedAt: params.subscription.activatedAt,
+    pausedAt: params.subscription.pausedAt,
+    expiredAt: params.subscription.expiredAt,
+    cancelledAt: params.subscription.cancelledAt,
+    billingAmount: params.subscription.billingAmount,
+    currency: params.subscription.currency,
+    nextScheduleAt: params.subscription.nextScheduleAt,
+    asset: {
+      id: params.asset.id,
+      displayName: params.asset.customName?.trim() || params.itemType.name,
+      customName: params.asset.customName,
+      locationLabel: params.asset.locationLabel,
+      condition: params.asset.condition,
+    },
+    plan: {
+      id: params.plan.id,
+      name: params.plan.name,
+      description: params.plan.description,
+      durationType: params.plan.durationType,
+      durationLabel: formatMaintenanceDurationLabel(params.plan.durationType),
+      price: params.plan.price,
+      currency: params.plan.currency,
+      visitsIncluded: params.plan.visitsIncluded,
+      includedTasks: params.plan.includedTasks,
+    },
+    item: {
+      id: params.itemType.id,
+      name: params.itemType.name,
+      imageUrl: params.itemType.imageUrl ?? null,
+    },
+    category: {
+      id: params.category.id,
+      name: params.category.name,
+      icon: params.category.icon,
+    },
+    scheduleSummary: {
+      total: schedules.length,
+      next: nextSchedule
+        ? {
+            id: nextSchedule.id,
+            scheduledDate: nextSchedule.scheduledDate,
+            status: nextSchedule.status,
+            sourceRequestId: nextSchedule.sourceRequestId ?? null,
+          }
+        : null,
+      preview: schedules.slice(0, 3).map((schedule: any) => ({
+        id: schedule.id,
+        scheduledDate: schedule.scheduledDate,
+        status: schedule.status,
+      })),
+    },
+  };
+}
+
+function serializeResidentScheduleRow(params: {
+  schedule: typeof maintenanceSchedules.$inferSelect;
+  subscription: typeof assetSubscriptions.$inferSelect;
+  asset: typeof residentAssets.$inferSelect;
+  plan: typeof maintenancePlans.$inferSelect;
+  itemType: typeof maintenanceItemTypes.$inferSelect;
+  category: typeof maintenanceCategories.$inferSelect;
+  request?: typeof serviceRequests.$inferSelect | null;
+  provider?: typeof users.$inferSelect | null;
+}) {
+  const providerName = params.provider
+    ? [params.provider.firstName, params.provider.lastName].filter(Boolean).join(" ").trim() ||
+      params.provider.name ||
+      params.provider.email
+    : null;
+
+  return {
+    id: params.schedule.id,
+    scheduledDate: params.schedule.scheduledDate,
+    status: params.schedule.status,
+    completedAt: params.schedule.completedAt,
+    skippedAt: params.schedule.skippedAt,
+    rescheduledFrom: params.schedule.rescheduledFrom ?? null,
+    notes: params.schedule.notes ?? null,
+    asset: {
+      id: params.asset.id,
+      displayName: params.asset.customName?.trim() || params.itemType.name,
+      itemType: params.itemType.name,
+      locationLabel: params.asset.locationLabel ?? null,
+      condition: params.asset.condition,
+      category: {
+        id: params.category.id,
+        name: params.category.name,
+        icon: params.category.icon,
+      },
+    },
+    subscription: {
+      id: params.subscription.id,
+      status: params.subscription.status,
+      startDate: params.subscription.startDate,
+      endDate: params.subscription.endDate,
+    },
+    plan: {
+      id: params.plan.id,
+      name: params.plan.name,
+      durationType: params.plan.durationType,
+      durationLabel: formatMaintenanceDurationLabel(params.plan.durationType),
+      price: params.plan.price,
+      currency: params.plan.currency,
+      visitsIncluded: params.plan.visitsIncluded,
+    },
+    request: params.request
+      ? {
+          id: params.request.id,
+          status: params.request.status,
+          providerId: params.request.providerId ?? null,
+          provider: providerName
+            ? {
+                id: params.provider?.id ?? null,
+                name: providerName,
+                company: params.provider?.company ?? null,
+              }
+            : null,
+        }
+      : null,
+  };
+}
+
+async function getResidentScheduleRows(params: { userId: string; scheduleId?: string }) {
+  const query = db
+    .select({
+      schedule: maintenanceSchedules,
+      subscription: assetSubscriptions,
+      asset: residentAssets,
+      plan: maintenancePlans,
+      itemType: maintenanceItemTypes,
+      category: maintenanceCategories,
+      request: serviceRequests,
+      provider: users,
+    })
+    .from(maintenanceSchedules)
+    .innerJoin(
+      assetSubscriptions,
+      eq(maintenanceSchedules.subscriptionId, assetSubscriptions.id),
+    )
+    .innerJoin(
+      residentAssets,
+      eq(assetSubscriptions.residentAssetId, residentAssets.id),
+    )
+    .innerJoin(
+      maintenancePlans,
+      eq(assetSubscriptions.maintenancePlanId, maintenancePlans.id),
+    )
+    .innerJoin(
+      maintenanceItemTypes,
+      eq(residentAssets.maintenanceItemId, maintenanceItemTypes.id),
+    )
+    .innerJoin(
+      maintenanceCategories,
+      eq(maintenanceItemTypes.categoryId, maintenanceCategories.id),
+    )
+    .leftJoin(
+      serviceRequests,
+      eq(maintenanceSchedules.sourceRequestId, serviceRequests.id),
+    )
+    .leftJoin(
+      users,
+      eq(serviceRequests.providerId, users.id),
+    );
+
+  if (params.scheduleId) {
+    return await query
+      .where(
+        and(
+          eq(assetSubscriptions.userId, params.userId),
+          eq(maintenanceSchedules.id, params.scheduleId),
+        ),
+      )
+      .limit(1);
+  }
+
+  return await query
+    .where(eq(assetSubscriptions.userId, params.userId))
+    .orderBy(asc(maintenanceSchedules.scheduledDate));
+}
+
+async function getResidentAssetRows(params: { userId: string; assetId?: string }) {
+  const query = db
+    .select({
+      asset: residentAssets,
+      itemType: maintenanceItemTypes,
+      category: maintenanceCategories,
+    })
+    .from(residentAssets)
+    .innerJoin(
+      maintenanceItemTypes,
+      eq(residentAssets.maintenanceItemId, maintenanceItemTypes.id),
+    )
+    .innerJoin(
+      maintenanceCategories,
+      eq(maintenanceItemTypes.categoryId, maintenanceCategories.id),
+    );
+
+  if (params.assetId) {
+    return await query
+      .where(and(eq(residentAssets.userId, params.userId), eq(residentAssets.id, params.assetId)))
+      .limit(1);
+  }
+
+  return await query
+    .where(eq(residentAssets.userId, params.userId))
+    .orderBy(desc(residentAssets.createdAt));
+}
+
+function isValidTimeZone(value: string) {
+  try {
+    Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createProfilePayload(user: any) {
+  return {
+    firstName: user?.firstName ?? "",
+    lastName: user?.lastName ?? "",
+    username: user?.username ?? null,
+    email: user?.email ?? "",
+    phone: user?.phone ?? "",
+    profileImage: user?.profileImage ?? null,
+    bio: user?.bio ?? null,
+    website: user?.website ?? null,
+    countryCode: user?.countryCode ?? null,
+    timezone: user?.timezone ?? null,
+    lastUpdatedAt: user?.updatedAt ?? null,
+  };
+}
+
+function normalizeSettingsEventMap(
+  rows: Array<{
+    eventKey: string;
+    inAppEnabled: boolean;
+    emailEnabled: boolean;
+    smsEnabled: boolean;
+  }>,
+) {
+  const byKey = new Map(
+    rows.map((row) => [
+      row.eventKey,
+      {
+        eventKey: row.eventKey,
+        inApp: Boolean(row.inAppEnabled),
+        email: Boolean(row.emailEnabled),
+        sms: Boolean(row.smsEnabled),
+      },
+    ]),
+  );
+
+  return SETTINGS_NOTIFICATION_EVENT_KEYS.map((eventKey) => {
+    const existing = byKey.get(eventKey);
+    if (existing) return existing;
+    return {
+      eventKey,
+      inApp: true,
+      email: false,
+      sms: false,
+    };
+  });
+}
+
+async function getResidentSettingsData(userId: string, currentSessionId?: string) {
+  const [user, settingsRow, prefsRows, sessionRows] = await Promise.all([
+    db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1)
+      .then((rows: any[]) => rows[0] || null),
+    db
+      .select()
+      .from(residentSettings)
+      .where(eq(residentSettings.userId, userId))
+      .limit(1)
+      .then((rows: any[]) => rows[0] || null),
+    db
+      .select({
+        eventKey: residentNotificationPreferences.eventKey,
+        inAppEnabled: residentNotificationPreferences.inAppEnabled,
+        emailEnabled: residentNotificationPreferences.emailEnabled,
+        smsEnabled: residentNotificationPreferences.smsEnabled,
+      })
+      .from(residentNotificationPreferences)
+      .where(eq(residentNotificationPreferences.userId, userId)),
+    db
+      .select()
+      .from(userDeviceSessions)
+      .where(
+        and(eq(userDeviceSessions.userId, userId), sql`${userDeviceSessions.revokedAt} IS NULL`),
+      )
+      .orderBy(desc(userDeviceSessions.lastSeenAt)),
+  ]);
+
+  if (!user) return null;
+
+  const notificationsPayload = {
+    quietHoursEnabled: Boolean(settingsRow?.quietHoursEnabled ?? false),
+    quietHoursStart: settingsRow?.quietHoursStart ?? null,
+    quietHoursEnd: settingsRow?.quietHoursEnd ?? null,
+    digestFrequency: normalizeDigestFrequency(settingsRow?.digestFrequency),
+    events: normalizeSettingsEventMap(prefsRows),
+  };
+
+  const privacyPayload = {
+    profileVisibility: normalizeProfileVisibility(settingsRow?.profileVisibility),
+    showPhoneToProvider: Boolean(settingsRow?.showPhoneToProvider ?? false),
+    showEmailToProvider: Boolean(settingsRow?.showEmailToProvider ?? false),
+    allowMarketing: Boolean(settingsRow?.allowMarketing ?? false),
+    allowAnalytics: Boolean(settingsRow?.allowAnalytics ?? true),
+    allowPersonalization: Boolean(settingsRow?.allowPersonalization ?? true),
+  };
+
+  const sessionsPayload = sessionRows.map((row: any) => ({
+    id: row.id,
+    isCurrent: row.sessionId === currentSessionId,
+    userAgent: row.userAgent || "Unknown device",
+    ipAddress: row.ipAddress || "",
+    lastSeenAt: row.lastSeenAt ? new Date(row.lastSeenAt).toISOString() : null,
+    createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : null,
+  }));
+
+  return {
+    profile: createProfilePayload(user),
+    notifications: notificationsPayload,
+    privacy: privacyPayload,
+    security: {
+      loginAlertsEnabled: Boolean(settingsRow?.loginAlertsEnabled ?? true),
+      sessions: sessionsPayload,
+    },
+  };
+}
+
+async function updateProfileSettings(userId: string, payload: Record<string, unknown>) {
+  const parsed = SettingsProfilePatchSchema.safeParse(payload);
+  if (!parsed.success) {
+    return {
+      ok: false as const,
+      status: 400,
+      error: parsed.error.flatten(),
+    };
+  }
+
+  const body = parsed.data;
+  const normalizedProfileImage =
+    typeof body.profileImage === "string"
+      ? (body.profileImage.trim() ? body.profileImage.trim() : null)
+      : body.profileImage;
+
+  if (body.timezone && !isValidTimeZone(body.timezone)) {
+    return {
+      ok: false as const,
+      status: 400,
+      error: { fieldErrors: { timezone: ["Invalid IANA timezone"] } },
+    };
+  }
+  if (typeof normalizedProfileImage === "string" && normalizedProfileImage) {
+    const profileImageValue = normalizedProfileImage;
+    if (profileImageValue.startsWith("data:")) {
+      try {
+        validateDataUrl(profileImageValue, { maxBytes: IMAGE_LIMITS.maxImageBytes });
+      } catch (error) {
+        return {
+          ok: false as const,
+          status: 400,
+          error: {
+            fieldErrors: {
+              profileImage: [String((error as Error)?.message || "Invalid profile image")],
+            },
+          },
+        };
+      }
+    }
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (body.firstName !== undefined) updates.firstName = body.firstName;
+  if (body.lastName !== undefined) updates.lastName = body.lastName;
+  if (body.username !== undefined) updates.username = body.username;
+  if (body.email !== undefined) updates.email = body.email;
+  if (body.phone !== undefined) updates.phone = body.phone;
+  if (body.profileImage !== undefined) updates.profileImage = normalizedProfileImage;
+  if (body.bio !== undefined) updates.bio = body.bio;
+  if (body.website !== undefined) updates.website = body.website;
+  if (body.countryCode !== undefined) updates.countryCode = body.countryCode;
+  if (body.timezone !== undefined) updates.timezone = body.timezone;
+
+  if (Object.keys(updates).length === 0) {
+    const existing = await storage.getUser(userId);
+    if (!existing) {
+      return { ok: false as const, status: 404, error: { message: "User not found" } };
+    }
+    return { ok: true as const, user: existing };
+  }
+
+  if (typeof updates.email === "string") {
+    const normalizedEmail = String(updates.email).toLowerCase().trim();
+    const emailCollision = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(sql`lower(${users.email}) = ${normalizedEmail}`, sql`${users.id} <> ${userId}`))
+      .limit(1);
+    if (emailCollision.length > 0) {
+      return {
+        ok: false as const,
+        status: 409,
+        error: { fieldErrors: { email: ["Email is already in use"] } },
+      };
+    }
+    updates.email = normalizedEmail;
+  }
+
+  if (typeof updates.username === "string" && updates.username.trim()) {
+    const normalizedUsername = String(updates.username).toLowerCase().trim();
+    const usernameCollision = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(sql`lower(${users.username}) = ${normalizedUsername}`, sql`${users.id} <> ${userId}`))
+      .limit(1);
+    if (usernameCollision.length > 0) {
+      return {
+        ok: false as const,
+        status: 409,
+        error: { fieldErrors: { username: ["Username is already taken"] } },
+      };
+    }
+    updates.username = normalizedUsername;
+  }
+
+  if (updates.firstName !== undefined || updates.lastName !== undefined) {
+    const existing = await storage.getUser(userId);
+    const combinedFirstName =
+      updates.firstName !== undefined ? String(updates.firstName || "").trim() : String(existing?.firstName || "");
+    const combinedLastName =
+      updates.lastName !== undefined ? String(updates.lastName || "").trim() : String(existing?.lastName || "");
+    const name = `${combinedFirstName} ${combinedLastName}`.trim() || String(existing?.name || "").trim();
+    updates.name = name || "User";
+  }
+
+  try {
+    const updated = await storage.updateUser(userId, updates as any);
+    if (!updated) {
+      return { ok: false as const, status: 404, error: { message: "User not found" } };
+    }
+    return { ok: true as const, user: updated };
+  } catch (error) {
+    const message = String((error as Error)?.message || "");
+    if (message.includes("idx_users_email_lower_unique")) {
+      return {
+        ok: false as const,
+        status: 409,
+        error: { fieldErrors: { email: ["Email is already in use"] } },
+      };
+    }
+    if (message.includes("idx_users_username_lower_unique")) {
+      return {
+        ok: false as const,
+        status: 409,
+        error: { fieldErrors: { username: ["Username is already taken"] } },
+      };
+    }
+    throw error;
+  }
 }
 
 // Legacy dev-login endpoint - DEPRECATED - Use /api/auth/login instead
@@ -174,6 +1133,146 @@ router.get("/request-config", requireAuth, requireResident, async (req: Request,
   }
 });
 
+router.post("/ordinary-flow/sessions", requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const parsed = OrdinaryFlowSessionStartSchema.parse(req.body || {});
+    const residentId = String(req.auth?.userId || "");
+    if (!residentId) {
+      return res.status(401).json({ error: "Authentication required." });
+    }
+
+    const estateId = await getResidentEstateId(residentId);
+    const result = await startOrGetOrdinaryFlowSession({
+      requestId: parsed.requestId,
+      residentId,
+      categoryKey: parsed.categoryKey,
+      estateId,
+    });
+    return res.json(result);
+  } catch (error: any) {
+    console.error("POST /ordinary-flow/sessions error", error);
+    if (error?.issues) {
+      return res.status(400).json({ error: "Validation error", details: error.issues });
+    }
+    return res.status(Number(error?.status || 500)).json({
+      error: error?.message || "Failed to start ordinary flow session.",
+    });
+  }
+});
+
+router.get("/ordinary-flow/sessions/:sessionId", requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const residentId = String(req.auth?.userId || "");
+    const sessionId = String(req.params.sessionId || "");
+    const session = await getOrdinaryFlowSessionById(sessionId, residentId);
+    if (!session) return res.status(404).json({ error: "Session not found." });
+    return res.json({ fallback: false, session });
+  } catch (error: any) {
+    console.error("GET /ordinary-flow/sessions/:sessionId error", error);
+    return res.status(Number(error?.status || 500)).json({
+      error: error?.message || "Failed to load ordinary flow session.",
+    });
+  }
+});
+
+router.post(
+  "/ordinary-flow/sessions/:sessionId/answers",
+  requireAuth,
+  requireResident,
+  async (req: Request, res: Response) => {
+    try {
+      const parsed = OrdinaryFlowAnswerWriteSchema.parse(req.body || {});
+      const result = await writeOrdinaryFlowAnswer({
+        sessionId: String(req.params.sessionId || ""),
+        residentId: String(req.auth?.userId || ""),
+        questionKey: parsed.questionKey,
+        answer: parsed.answer,
+        expectedRevision: parsed.expectedRevision,
+        answeredBy: "resident",
+      });
+      if (result.stale) {
+        return res.status(409).json({
+          error: "stale_revision",
+          stateRevision: result.stateRevision,
+          currentQuestion: result.currentQuestion,
+          session: result.session,
+        });
+      }
+      return res.json({ session: result.session });
+    } catch (error: any) {
+      console.error("POST /ordinary-flow/sessions/:sessionId/answers error", error);
+      if (error?.issues) {
+        return res.status(400).json({ error: "Validation error", details: error.issues });
+      }
+      return res.status(Number(error?.status || 500)).json({
+        error: error?.message || "Failed to save answer.",
+      });
+    }
+  },
+);
+
+router.patch(
+  "/ordinary-flow/sessions/:sessionId/answers/:questionKey",
+  requireAuth,
+  requireResident,
+  async (req: Request, res: Response) => {
+    try {
+      const parsed = z
+        .object({
+          answer: z.any(),
+          expectedRevision: z.coerce.number().int().min(0),
+        })
+        .parse(req.body || {});
+      const result = await writeOrdinaryFlowAnswer({
+        sessionId: String(req.params.sessionId || ""),
+        residentId: String(req.auth?.userId || ""),
+        questionKey: String(req.params.questionKey || ""),
+        answer: parsed.answer,
+        expectedRevision: parsed.expectedRevision,
+        answeredBy: "resident",
+      });
+      if (result.stale) {
+        return res.status(409).json({
+          error: "stale_revision",
+          stateRevision: result.stateRevision,
+          currentQuestion: result.currentQuestion,
+          session: result.session,
+        });
+      }
+      return res.json({ session: result.session });
+    } catch (error: any) {
+      console.error("PATCH /ordinary-flow/sessions/:sessionId/answers/:questionKey error", error);
+      if (error?.issues) {
+        return res.status(400).json({ error: "Validation error", details: error.issues });
+      }
+      return res.status(Number(error?.status || 500)).json({
+        error: error?.message || "Failed to update answer.",
+      });
+    }
+  },
+);
+
+router.post(
+  "/ordinary-flow/sessions/:sessionId/complete",
+  requireAuth,
+  requireResident,
+  async (req: Request, res: Response) => {
+    try {
+      const result = await completeOrdinaryFlowSession({
+        sessionId: String(req.params.sessionId || ""),
+        residentId: String(req.auth?.userId || ""),
+      });
+      if (!result.ok) return res.status(422).json(result);
+      return res.json(result);
+    } catch (error: any) {
+      console.error("POST /ordinary-flow/sessions/:sessionId/complete error", error);
+      return res.status(Number(error?.status || 500)).json({
+        error: error?.message || "Failed to complete ordinary flow session.",
+      });
+    }
+  },
+);
+
 const AiSessionStartSchema = z.object({
   categoryKey: z.string().min(1),
 });
@@ -191,6 +1290,17 @@ const AiSessionSnapshotSchema = z.object({
   title: z.string().optional(),
   snippet: z.string().optional(),
   snapshot: z.record(z.any()),
+});
+
+const OrdinaryFlowSessionStartSchema = z.object({
+  requestId: z.string().trim().min(1),
+  categoryKey: z.string().trim().min(1),
+});
+
+const OrdinaryFlowAnswerWriteSchema = z.object({
+  questionKey: z.string().trim().min(1),
+  answer: z.any(),
+  expectedRevision: z.coerce.number().int().min(0),
 });
 
 function normalizeCategoryKey(value: string): string {
@@ -1598,10 +2708,12 @@ router.get("/service-requests/:id", requireAuth, async (req: Request, res: Respo
         }
       : null;
     const latestCancellationCase = await storage.getLatestCancellationCaseForRequest(row.id);
+    const maintenance = await getMaintenanceSummaryForRequest(row.id);
 
     return res.json({
       ...maskConsultancyReportUntilApproved(row),
       provider,
+      maintenance,
       cancellationCase: latestCancellationCase
         ? {
             id: latestCancellationCase.id,
@@ -1654,6 +2766,660 @@ router.delete("/service-requests/:id", requireAuth, requireResident, async (req:
     res.status(500).json({ error: error.message || "Failed to delete service request" });
   }
 });
+
+router.get("/maintenance/catalog", requireAuth, requireResident, async (_req: Request, res: Response) => {
+  try {
+    const catalog = await getMaintenanceCatalog({ activeOnly: true });
+    return res.json(catalog);
+  } catch (error: any) {
+    console.error("GET /maintenance/catalog error", error);
+    return res.status(500).json({ error: error.message || "Failed to load maintenance catalog" });
+  }
+});
+
+router.get("/maintenance/catalog/categories", requireAuth, requireResident, async (_req: Request, res: Response) => {
+  try {
+    const catalog = await getMaintenanceCatalog({ activeOnly: true });
+    return res.json(
+      catalog.map((category: any) =>
+        serializeMaintenanceCategoryForResident(category, Array.isArray(category.itemTypes) ? category.itemTypes.length : 0),
+      ),
+    );
+  } catch (error: any) {
+    console.error("GET /maintenance/catalog/categories error", error);
+    return res.status(500).json({ error: error.message || "Failed to load maintenance categories" });
+  }
+});
+
+router.get("/maintenance/catalog/items", requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const categoryId =
+      typeof req.query.categoryId === "string" && req.query.categoryId.trim()
+        ? req.query.categoryId.trim()
+        : undefined;
+
+    const rows = await db
+      .select({
+        item: maintenanceItemTypes,
+        category: maintenanceCategories,
+      })
+      .from(maintenanceItemTypes)
+      .innerJoin(
+        maintenanceCategories,
+        eq(maintenanceItemTypes.categoryId, maintenanceCategories.id),
+      )
+      .where(
+        and(
+          eq(maintenanceItemTypes.isActive, true),
+          eq(maintenanceCategories.isActive, true),
+          ...(categoryId ? [eq(maintenanceItemTypes.categoryId, categoryId)] : []),
+        ),
+      )
+      .orderBy(asc(maintenanceItemTypes.name));
+
+    return res.json(
+      rows.map((row: { item: typeof maintenanceItemTypes.$inferSelect; category: typeof maintenanceCategories.$inferSelect }) =>
+        serializeMaintenanceItemForResident(row.item, row.category),
+      ),
+    );
+  } catch (error: any) {
+    console.error("GET /maintenance/catalog/items error", error);
+    return res.status(500).json({ error: error.message || "Failed to load maintenance items" });
+  }
+});
+
+router.get(["/maintenance/assets", "/resident/maintenance/assets"], requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const rows = await getResidentAssetRows({ userId });
+    return res.json(rows.map(serializeResidentAssetRow));
+  } catch (error: any) {
+    console.error("GET /maintenance/assets error", error);
+    return res.status(500).json({ error: error.message || "Failed to load assets" });
+  }
+});
+
+router.get(["/maintenance/assets/:id", "/resident/maintenance/assets/:id"], requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const rows = await getResidentAssetRows({
+      userId,
+      assetId: String(req.params.id || ""),
+    });
+    const row = rows[0];
+    if (!row) return res.status(404).json({ error: "Asset not found" });
+
+    return res.json(serializeResidentAssetRow(row));
+  } catch (error: any) {
+    console.error("GET /maintenance/assets/:id error", error);
+    return res.status(500).json({ error: error.message || "Failed to load asset details" });
+  }
+});
+
+router.post(["/maintenance/assets", "/resident/maintenance/assets"], requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const parsed = MaintenanceAssetUpsertSchema.parse(req.body || {});
+    const maintenanceItemId = parsed.maintenanceItemId ?? parsed.maintenanceItemTypeId;
+    const [itemType] = await db
+      .select()
+      .from(maintenanceItemTypes)
+      .where(eq(maintenanceItemTypes.id, String(maintenanceItemId || "")))
+      .limit(1);
+    if (!itemType) {
+      return res.status(404).json({ error: "Maintenance item type not found" });
+    }
+    if (!itemType.isActive) {
+      return res.status(400).json({ error: "This maintenance item is not available for new assets." });
+    }
+
+    const [category] = await db
+      .select()
+      .from(maintenanceCategories)
+      .where(eq(maintenanceCategories.id, itemType.categoryId))
+      .limit(1);
+    if (!category || !category.isActive) {
+      return res.status(400).json({ error: "This maintenance category is not available for new assets." });
+    }
+    if (parsed.categoryId && parsed.categoryId !== itemType.categoryId) {
+      return res.status(400).json({ error: "Selected item does not belong to the chosen category." });
+    }
+
+    const payload = buildResidentAssetPayload(parsed);
+
+    const asset = await storage.createResidentAsset({
+      userId,
+      ...payload,
+    } as any);
+
+    const rows = await getResidentAssetRows({ userId, assetId: asset.id });
+    return res.status(201).json(rows[0] ? serializeResidentAssetRow(rows[0]) : asset);
+  } catch (error: any) {
+    if (error?.issues) {
+      return res.status(400).json({ error: "Validation error", details: error.issues });
+    }
+    if (error?.status === 400) {
+      return res.status(400).json({ error: error.message || "Invalid asset data" });
+    }
+    console.error("POST /maintenance/assets error", error);
+    return res.status(500).json({ error: error.message || "Failed to create asset" });
+  }
+});
+
+router.patch("/maintenance/assets/:id", requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const parsed = MaintenanceAssetBaseSchema.partial().parse(req.body || {});
+    const maintenanceItemId = parsed.maintenanceItemId ?? parsed.maintenanceItemTypeId;
+    const updates: Record<string, unknown> = {};
+
+    if (maintenanceItemId !== undefined) updates.maintenanceItemId = maintenanceItemId;
+    if (parsed.estateId !== undefined) updates.estateId = parsed.estateId;
+    if (parsed.customName !== undefined || parsed.nickname !== undefined) {
+      updates.customName = parsed.customName ?? parsed.nickname ?? null;
+    }
+    if (parsed.locationLabel !== undefined) updates.locationLabel = parsed.locationLabel;
+    if (parsed.brand !== undefined) updates.brand = parsed.brand;
+    if (parsed.model !== undefined) updates.model = parsed.model;
+    if (parsed.serialNumber !== undefined) updates.serialNumber = parsed.serialNumber;
+    if (parsed.purchaseDate !== undefined) {
+      updates.purchaseDate = normalizeOptionalMaintenanceDate(parsed.purchaseDate);
+    }
+    if (parsed.installedAt !== undefined) {
+      updates.installedAt = normalizeOptionalMaintenanceDate(parsed.installedAt);
+    }
+    if (parsed.lastServiceDate !== undefined) {
+      updates.lastServiceDate = normalizeOptionalMaintenanceDate(parsed.lastServiceDate);
+    }
+    if (parsed.condition !== undefined) updates.condition = parsed.condition;
+    if (parsed.notes !== undefined) updates.notes = parsed.notes;
+    if (parsed.metadata !== undefined) updates.metadata = parsed.metadata;
+    if (parsed.isActive !== undefined) updates.isActive = parsed.isActive;
+
+    if (updates.maintenanceItemId) {
+      const [itemType] = await db
+        .select()
+        .from(maintenanceItemTypes)
+        .where(eq(maintenanceItemTypes.id, String(updates.maintenanceItemId)))
+        .limit(1);
+      if (!itemType) {
+        return res.status(404).json({ error: "Maintenance item type not found" });
+      }
+      if (parsed.categoryId && parsed.categoryId !== itemType.categoryId) {
+        return res.status(400).json({ error: "Selected item does not belong to the chosen category." });
+      }
+    }
+
+    const updated = await storage.updateResidentAsset(req.params.id, userId, updates as any);
+    if (!updated) return res.status(404).json({ error: "Asset not found" });
+
+    const rows = await getResidentAssetRows({ userId, assetId: updated.id });
+    return res.json(rows[0] ? serializeResidentAssetRow(rows[0]) : updated);
+  } catch (error: any) {
+    if (error?.issues) {
+      return res.status(400).json({ error: "Validation error", details: error.issues });
+    }
+    if (error?.status === 400) {
+      return res.status(400).json({ error: error.message || "Invalid asset data" });
+    }
+    console.error("PATCH /maintenance/assets/:id error", error);
+    return res.status(500).json({ error: error.message || "Failed to update asset" });
+  }
+});
+
+router.get(
+  ["/maintenance/assets/:id/plans", "/resident/maintenance/assets/:id/plans"],
+  requireAuth,
+  requireResident,
+  async (req: Request, res: Response) => {
+    try {
+      const userId = req.auth?.userId;
+      if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+      const rows = await getResidentAssetRows({
+        userId,
+        assetId: String(req.params.id || ""),
+      });
+      const assetRow = rows[0];
+      if (!assetRow) {
+        return res.status(404).json({ error: "Asset not found" });
+      }
+
+      const plans = await db
+        .select({
+          plan: maintenancePlans,
+          itemType: maintenanceItemTypes,
+          category: maintenanceCategories,
+        })
+        .from(maintenancePlans)
+        .innerJoin(
+          maintenanceItemTypes,
+          eq(maintenancePlans.maintenanceItemId, maintenanceItemTypes.id),
+        )
+        .innerJoin(
+          maintenanceCategories,
+          eq(maintenanceItemTypes.categoryId, maintenanceCategories.id),
+        )
+        .where(
+          and(
+            eq(maintenancePlans.maintenanceItemId, assetRow.itemType.id),
+            eq(maintenancePlans.isActive, true),
+            eq(maintenanceItemTypes.isActive, true),
+            eq(maintenanceCategories.isActive, true),
+          ),
+        )
+        .orderBy(asc(maintenancePlans.price), asc(maintenancePlans.durationType));
+
+      const subscriptions = await db
+        .select()
+        .from(assetSubscriptions)
+        .where(eq(assetSubscriptions.residentAssetId, assetRow.asset.id));
+
+      const planRows = await Promise.all(
+        plans.map(async (row: any) => {
+          const currentSubscription =
+            subscriptions.find(
+              (subscription: any) =>
+                subscription.maintenancePlanId === row.plan.id &&
+                ["draft", "pending_payment", "active", "paused"].includes(
+                  String(subscription.status || "").toLowerCase(),
+                ),
+            ) || null;
+          const nextSchedule = currentSubscription
+            ? await getNextScheduleForSubscription(currentSubscription.id)
+            : null;
+
+          return serializeResidentPlanRow({
+            plan: row.plan,
+            itemType: row.itemType,
+            category: row.category,
+            currentSubscription,
+            nextScheduledDate: nextSchedule?.scheduledDate ?? null,
+          });
+        }),
+      );
+
+      return res.json({
+        asset: serializeResidentAssetRow(assetRow),
+        plans: planRows,
+      });
+    } catch (error: any) {
+      console.error("GET /maintenance/assets/:id/plans error", error);
+      return res.status(500).json({ error: error.message || "Failed to load plans" });
+    }
+  },
+);
+
+router.get(["/maintenance/subscriptions", "/resident/maintenance/subscriptions"], requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const rows = await db
+      .select({
+        subscription: assetSubscriptions,
+        asset: residentAssets,
+        plan: maintenancePlans,
+        itemType: maintenanceItemTypes,
+        category: maintenanceCategories,
+      })
+      .from(assetSubscriptions)
+      .innerJoin(
+        residentAssets,
+        eq(assetSubscriptions.residentAssetId, residentAssets.id),
+      )
+      .innerJoin(
+        maintenancePlans,
+        eq(assetSubscriptions.maintenancePlanId, maintenancePlans.id),
+      )
+      .innerJoin(
+        maintenanceItemTypes,
+        eq(residentAssets.maintenanceItemId, maintenanceItemTypes.id),
+      )
+      .innerJoin(
+        maintenanceCategories,
+        eq(maintenanceItemTypes.categoryId, maintenanceCategories.id),
+      )
+      .where(eq(assetSubscriptions.userId, userId))
+      .orderBy(desc(assetSubscriptions.createdAt));
+
+    return res.json(
+      await Promise.all(
+        rows.map((row: any) =>
+          serializeResidentSubscriptionRow({
+            subscription: row.subscription,
+            asset: row.asset,
+            plan: row.plan,
+            itemType: row.itemType,
+            category: row.category,
+          }),
+        ),
+      ),
+    );
+  } catch (error: any) {
+    console.error("GET /maintenance/subscriptions error", error);
+    return res.status(500).json({ error: error.message || "Failed to load subscriptions" });
+  }
+});
+
+router.get(
+  ["/maintenance/subscriptions/:id", "/resident/maintenance/subscriptions/:id"],
+  requireAuth,
+  requireResident,
+  async (req: Request, res: Response) => {
+    try {
+      const userId = req.auth?.userId;
+      if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+      const row = await getResidentSubscriptionRow({
+        userId,
+        subscriptionId: String(req.params.id || ""),
+      });
+      if (!row) return res.status(404).json({ error: "Subscription not found" });
+
+      return res.json(
+        await serializeResidentSubscriptionRow({
+          subscription: row.subscription,
+          asset: row.asset,
+          plan: row.plan,
+          itemType: row.itemType,
+          category: row.category,
+        }),
+      );
+    } catch (error: any) {
+      console.error("GET /maintenance/subscriptions/:id error", error);
+      return res.status(500).json({ error: error.message || "Failed to load subscription" });
+    }
+  },
+);
+
+router.post("/maintenance/subscriptions", requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const parsed = MaintenanceSubscriptionCreateSchema.parse(req.body || {});
+    const result = await createMaintenanceSubscriptionCheckout({
+      residentId: userId,
+      residentAssetId: parsed.residentAssetId,
+      maintenancePlanId: parsed.maintenancePlanId,
+      startDate: parsed.startDate ?? null,
+    });
+
+    return res.status(201).json(result);
+  } catch (error: any) {
+    if (error?.issues) {
+      return res.status(400).json({ error: "Validation error", details: error.issues });
+    }
+    console.error("POST /maintenance/subscriptions error", error);
+    return res.status(400).json({ error: error.message || "Failed to create subscription" });
+  }
+});
+
+router.post(
+  ["/maintenance/subscriptions/initiate", "/resident/maintenance/subscriptions/initiate"],
+  requireAuth,
+  requireResident,
+  async (req: Request, res: Response) => {
+    try {
+      const userId = req.auth?.userId;
+      if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+      const parsed = MaintenanceSubscriptionCreateSchema.parse(req.body || {});
+      const assetRows = await getResidentAssetRows({
+        userId,
+        assetId: parsed.residentAssetId,
+      });
+      const assetRow = assetRows[0];
+      if (!assetRow) {
+        return res.status(404).json({ error: "Asset not found" });
+      }
+
+      const [plan] = await db
+        .select()
+        .from(maintenancePlans)
+        .where(eq(maintenancePlans.id, parsed.maintenancePlanId))
+        .limit(1);
+      if (!plan || !plan.isActive) {
+        return res.status(404).json({ error: "Maintenance plan not found" });
+      }
+      if (plan.maintenanceItemId !== assetRow.itemType.id) {
+        return res.status(400).json({ error: "Selected plan does not belong to this asset type." });
+      }
+
+      const checkout = await createMaintenanceSubscriptionCheckout({
+        residentId: userId,
+        residentAssetId: parsed.residentAssetId,
+        maintenancePlanId: parsed.maintenancePlanId,
+        startDate: parsed.startDate ?? null,
+      });
+
+      const refreshed = checkout.subscription
+        ? await getResidentSubscriptionRow({
+            userId,
+            subscriptionId: checkout.subscription.id,
+          })
+        : null;
+
+      if (checkout.payment) {
+        const host = req.get("host");
+        const callbackOrigin = host ? `${req.protocol}://${host}` : "";
+        return res.status(201).json({
+          status: "pending_payment",
+          reference: checkout.payment.reference,
+          amountKobo: checkout.payment.amountKobo,
+          amountFormatted: checkout.payment.amountFormatted,
+          subscriptionId: checkout.subscription?.id ?? null,
+          paystack: {
+            reference: checkout.payment.reference,
+            amountInNaira: Number(checkout.payment.amountFormatted),
+            callbackUrl: callbackOrigin
+              ? `${callbackOrigin}/payment-confirmation?source=maintenance_subscription`
+              : null,
+          },
+          subscription: refreshed
+            ? await serializeResidentSubscriptionRow({
+                subscription: refreshed.subscription,
+                asset: refreshed.asset,
+                plan: refreshed.plan,
+                itemType: refreshed.itemType,
+                category: refreshed.category,
+              })
+            : checkout.subscription,
+        });
+      }
+
+      return res.status(201).json({
+        status: "active",
+        subscriptionId: checkout.subscription?.id ?? null,
+        subscription: refreshed
+          ? await serializeResidentSubscriptionRow({
+              subscription: refreshed.subscription,
+              asset: refreshed.asset,
+              plan: refreshed.plan,
+              itemType: refreshed.itemType,
+              category: refreshed.category,
+            })
+          : checkout.subscription,
+      });
+    } catch (error: any) {
+      if (error?.issues) {
+        return res.status(400).json({ error: "Validation error", details: error.issues });
+      }
+      console.error("POST /maintenance/subscriptions/initiate error", error);
+      return res.status(400).json({ error: error.message || "Failed to initiate subscription" });
+    }
+  },
+);
+
+router.post(
+  ["/maintenance/subscriptions/verify", "/resident/maintenance/subscriptions/verify"],
+  requireAuth,
+  requireResident,
+  async (req: Request, res: Response) => {
+    try {
+      const userId = req.auth?.userId;
+      if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+      const { reference } = MaintenanceSubscriptionVerifySchema.parse(req.body || {});
+      const tx = await storage.getTransactionByReference(reference);
+      if (!tx) return res.status(404).json({ error: "Transaction not found" });
+
+      const wallet = await storage.getWalletByUserId(userId);
+      if (!wallet || wallet.id !== tx.walletId) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      await verifyAndFinalizePaystackCharge(reference);
+      const subscription = await activateMaintenanceSubscriptionFromReference(reference);
+      if (!subscription) {
+        return res.status(404).json({ error: "Subscription not found for payment reference" });
+      }
+
+      const row = await getResidentSubscriptionRow({
+        userId,
+        subscriptionId: subscription.id,
+      });
+      if (!row) {
+        return res.status(404).json({ error: "Subscription not found" });
+      }
+
+      return res.json({
+        status: "success",
+        reference,
+        subscriptionId: subscription.id,
+        subscription: await serializeResidentSubscriptionRow({
+          subscription: row.subscription,
+          asset: row.asset,
+          plan: row.plan,
+          itemType: row.itemType,
+          category: row.category,
+        }),
+      });
+    } catch (error: any) {
+      if (error?.issues) {
+        return res.status(400).json({ error: "Validation error", details: error.issues });
+      }
+      console.error("POST /maintenance/subscriptions/verify error", error);
+      return res.status(400).json({ error: error.message || "Failed to verify subscription payment" });
+    }
+  },
+);
+
+router.post("/maintenance/subscriptions/:id/pause", requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+    const subscription = await storage.getAssetSubscription(req.params.id);
+    if (!subscription) return res.status(404).json({ error: "Subscription not found" });
+    const asset = await storage.getResidentAsset(subscription.residentAssetId);
+    if (!asset || asset.userId !== userId) return res.status(403).json({ error: "Forbidden" });
+    return res.json(await pauseMaintenanceSubscription(subscription.id));
+  } catch (error: any) {
+    console.error("POST /maintenance/subscriptions/:id/pause error", error);
+    return res.status(400).json({ error: error.message || "Failed to pause subscription" });
+  }
+});
+
+router.post("/maintenance/subscriptions/:id/resume", requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+    const subscription = await storage.getAssetSubscription(req.params.id);
+    if (!subscription) return res.status(404).json({ error: "Subscription not found" });
+    const asset = await storage.getResidentAsset(subscription.residentAssetId);
+    if (!asset || asset.userId !== userId) return res.status(403).json({ error: "Forbidden" });
+    return res.json(await resumeMaintenanceSubscription(subscription.id));
+  } catch (error: any) {
+    console.error("POST /maintenance/subscriptions/:id/resume error", error);
+    return res.status(400).json({ error: error.message || "Failed to resume subscription" });
+  }
+});
+
+router.post("/maintenance/subscriptions/:id/cancel", requireAuth, requireResident, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+    const subscription = await storage.getAssetSubscription(req.params.id);
+    if (!subscription) return res.status(404).json({ error: "Subscription not found" });
+    const asset = await storage.getResidentAsset(subscription.residentAssetId);
+    if (!asset || asset.userId !== userId) return res.status(403).json({ error: "Forbidden" });
+    return res.json(await cancelMaintenanceSubscription(subscription.id));
+  } catch (error: any) {
+    console.error("POST /maintenance/subscriptions/:id/cancel error", error);
+    return res.status(400).json({ error: error.message || "Failed to cancel subscription" });
+  }
+});
+
+router.get(
+  ["/maintenance/schedules", "/resident/maintenance/schedules"],
+  requireAuth,
+  requireResident,
+  async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const rows = await getResidentScheduleRows({ userId });
+    return res.json(rows.map((row: any) => serializeResidentScheduleRow(row)));
+  } catch (error: any) {
+    console.error("GET /maintenance/schedules error", error);
+    return res.status(500).json({ error: error.message || "Failed to load schedules" });
+  }
+  },
+);
+
+router.post(
+  ["/maintenance/schedules/:id/reschedule", "/resident/maintenance/schedules/:id/reschedule"],
+  requireAuth,
+  requireResident,
+  async (req: Request, res: Response) => {
+    try {
+      const userId = req.auth?.userId;
+      if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+      const existingRows = await getResidentScheduleRows({
+        userId,
+        scheduleId: String(req.params.id || ""),
+      });
+      const existingRow = existingRows[0];
+      if (!existingRow) {
+        return res.status(404).json({ error: "Maintenance schedule not found" });
+      }
+
+      const parsed = MaintenanceScheduleRescheduleSchema.parse(req.body || {});
+      const replacement = await rescheduleMaintenanceVisit({
+        scheduleId: existingRow.schedule.id,
+        scheduledDate: normalizeOptionalMaintenanceDate(parsed.scheduledDate) ?? new Date(parsed.scheduledDate),
+        notes: parsed.notes ?? null,
+      });
+
+      const replacementRows = await getResidentScheduleRows({
+        userId,
+        scheduleId: replacement.id,
+      });
+      const replacementRow = replacementRows[0];
+
+      return res.json(
+        replacementRow ? serializeResidentScheduleRow(replacementRow as any) : replacement,
+      );
+    } catch (error: any) {
+      if (error?.issues) {
+        return res.status(400).json({ error: "Validation error", details: error.issues });
+      }
+      console.error("POST /maintenance/schedules/:id/reschedule error", error);
+      return res.status(400).json({ error: error.message || "Failed to reschedule maintenance" });
+    }
+  },
+);
 
 // Wallet endpoints
 router.get("/wallet", requireAuth, async (req: Request, res: Response) => {
@@ -1764,27 +3530,41 @@ router.get("/dashboard/stats", requireAuth, async (req: Request, res: Response) 
       ? Math.round(((recentActive.length - previousActive.length) / previousActive.length) * 100)
       : recentActive.length > 0 ? 100 : 0;
 
-    // Find next scheduled maintenance (pending requests with preferredTime in future)
-    const scheduledMaintenance = requests
-      .filter((r: any) => 
-        r.status === "pending" && 
-        r.preferredTime && 
-        new Date(r.preferredTime) > now
+    const maintenanceRows = await db
+      .select({
+        schedule: maintenanceSchedules,
+        plan: maintenancePlans,
+      })
+      .from(maintenanceSchedules)
+      .innerJoin(
+        assetSubscriptions,
+        eq(maintenanceSchedules.subscriptionId, assetSubscriptions.id),
       )
-      .sort((a: any, b: any) => 
-        new Date(a.preferredTime).getTime() - new Date(b.preferredTime).getTime()
-      );
+      .innerJoin(
+        residentAssets,
+        eq(assetSubscriptions.residentAssetId, residentAssets.id),
+      )
+      .innerJoin(
+        maintenancePlans,
+        eq(assetSubscriptions.maintenancePlanId, maintenancePlans.id),
+      )
+      .where(eq(assetSubscriptions.userId, userId))
+      .orderBy(asc(maintenanceSchedules.scheduledDate));
 
-    const nextMaintenance = scheduledMaintenance.length > 0 
-      ? scheduledMaintenance[0].category || "Scheduled maintenance"
-      : null;
-    
-    const nextMaintenanceCost = scheduledMaintenance.length > 0 && scheduledMaintenance[0].budget
-      ? parseFloat(scheduledMaintenance[0].budget) || null
+    const activeMaintenance = maintenanceRows.filter((row: any) =>
+      !["completed", "cancelled"].includes(String(row.schedule.status || "").toLowerCase()),
+    );
+
+    const nextMaintenanceRow = activeMaintenance.find(
+      (row: any) => new Date(row.schedule.scheduledDate) >= now,
+    );
+    const nextMaintenance = nextMaintenanceRow?.plan.name ?? null;
+    const nextMaintenanceCost = nextMaintenanceRow?.plan.price
+      ? parseFloat(String(nextMaintenanceRow.plan.price)) || null
       : null;
 
     res.json({
-      maintenanceScheduleCount: scheduledMaintenance.length,
+      maintenanceScheduleCount: activeMaintenance.length,
       nextMaintenance,
       nextMaintenanceCost,
       activeContractsCount: activeContracts.length,
@@ -1800,68 +3580,378 @@ router.get("/dashboard/stats", requireAuth, async (req: Request, res: Response) 
   }
 });
 
-// Update resident profile
-router.patch("/profile", requireAuth, async (req: Request, res: Response) => {
+router.get("/settings", requireAuth, async (req: Request, res: Response) => {
   try {
     const userId = req.auth?.userId;
-    if (!userId) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    const { firstName, lastName, email, phone, profileImage, bio, website, username } = req.body;
-    
-    const updates: any = {};
-    if (firstName !== undefined) updates.firstName = firstName;
-    if (lastName !== undefined) updates.lastName = lastName;
-    if (email !== undefined) updates.email = email;
-    if (phone !== undefined) updates.phone = phone;
-    if (profileImage !== undefined) updates.profileImage = profileImage;
-    if (bio !== undefined) updates.bio = bio;
-    if (website !== undefined) updates.website = website;
-    if (username !== undefined) updates.username = username;
-    
-    // Also update name as combined first + last
-    if (firstName !== undefined || lastName !== undefined) {
-      const user = await storage.getUser(userId);
-      const newFirst = firstName ?? user?.firstName ?? "";
-      const newLast = lastName ?? user?.lastName ?? "";
-      updates.name = `${newFirst} ${newLast}`.trim();
-    }
-
-    const updated = await storage.updateUser(userId, updates);
-    if (!updated) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    res.json({
-      id: updated.id,
-      firstName: updated.firstName,
-      lastName: updated.lastName,
-      name: updated.name,
-      email: updated.email,
-      phone: updated.phone,
-      profileImage: (updated as any).profileImage ?? null,
-    });
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+    const data = await getResidentSettingsData(userId, (req as any).sessionID);
+    if (!data) return res.status(404).json({ error: "User not found" });
+    return res.json(data);
   } catch (error: any) {
-    console.error("PATCH /profile error", error);
-    res.status(500).json({ error: error.message || "Failed to update profile" });
+    console.error("GET /settings error", error);
+    return res.status(500).json({ error: error.message || "Failed to load settings" });
   }
 });
 
-// Get resident profile
-router.get("/profile", requireAuth, async (req: Request, res: Response) => {
+router.patch("/settings/profile", requireAuth, async (req: Request, res: Response) => {
   try {
     const userId = req.auth?.userId;
-    if (!userId) {
-      return res.status(401).json({ error: "Authentication required" });
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const result = await updateProfileSettings(userId, req.body || {});
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+
+    return res.json({
+      profile: createProfilePayload(result.user),
+    });
+  } catch (error: any) {
+    console.error("PATCH /settings/profile error", error);
+    return res.status(500).json({ error: error.message || "Failed to update profile settings" });
+  }
+});
+
+router.patch("/settings/notifications", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const parsed = SettingsNotificationsPatchSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+
+    const payload = parsed.data;
+    if (payload.quietHoursEnabled && (!payload.quietHoursStart || !payload.quietHoursEnd)) {
+      return res.status(400).json({
+        error: {
+          fieldErrors: {
+            quietHoursStart: ["Quiet hours start and end are required when quiet hours are enabled."],
+          },
+        },
+      });
+    }
+
+    const settingsPatch: Record<string, unknown> = {};
+    if (payload.quietHoursEnabled !== undefined) settingsPatch.quietHoursEnabled = payload.quietHoursEnabled;
+    if (payload.quietHoursStart !== undefined) settingsPatch.quietHoursStart = payload.quietHoursStart;
+    if (payload.quietHoursEnd !== undefined) settingsPatch.quietHoursEnd = payload.quietHoursEnd;
+    if (payload.digestFrequency !== undefined) settingsPatch.digestFrequency = payload.digestFrequency;
+
+    if (Object.keys(settingsPatch).length > 0) {
+      await db
+        .insert(residentSettings)
+        .values({
+          userId,
+          ...(settingsPatch as any),
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: residentSettings.userId,
+          set: {
+            ...(settingsPatch as any),
+            updatedAt: new Date(),
+          },
+        });
+    }
+
+    if (payload.events && payload.events.length > 0) {
+      const seen = new Set<string>();
+      for (const event of payload.events) {
+        if (seen.has(event.eventKey)) {
+          return res.status(400).json({
+            error: { fieldErrors: { events: [`Duplicate eventKey '${event.eventKey}'`] } },
+          });
+        }
+        seen.add(event.eventKey);
+      }
+
+      for (const event of payload.events) {
+        await db
+          .insert(residentNotificationPreferences)
+          .values({
+            userId,
+            eventKey: event.eventKey,
+            inAppEnabled: event.inApp,
+            emailEnabled: event.email,
+            smsEnabled: event.sms,
+            updatedAt: new Date(),
+          })
+          .onConflictDoUpdate({
+            target: [
+              residentNotificationPreferences.userId,
+              residentNotificationPreferences.eventKey,
+            ],
+            set: {
+              inAppEnabled: event.inApp,
+              emailEnabled: event.email,
+              smsEnabled: event.sms,
+              updatedAt: new Date(),
+            },
+          });
+      }
+    }
+
+    const next = await getResidentSettingsData(userId, (req as any).sessionID);
+    return res.json({ notifications: next?.notifications ?? null });
+  } catch (error: any) {
+    console.error("PATCH /settings/notifications error", error);
+    return res.status(500).json({ error: error.message || "Failed to update notification settings" });
+  }
+});
+
+router.patch("/settings/privacy", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const parsed = SettingsPrivacyPatchSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+
+    const payload = parsed.data;
+    const patch: Record<string, unknown> = {};
+    if (payload.profileVisibility !== undefined) patch.profileVisibility = payload.profileVisibility;
+    if (payload.showPhoneToProvider !== undefined) patch.showPhoneToProvider = payload.showPhoneToProvider;
+    if (payload.showEmailToProvider !== undefined) patch.showEmailToProvider = payload.showEmailToProvider;
+    if (payload.allowMarketing !== undefined) patch.allowMarketing = payload.allowMarketing;
+    if (payload.allowAnalytics !== undefined) patch.allowAnalytics = payload.allowAnalytics;
+    if (payload.allowPersonalization !== undefined) patch.allowPersonalization = payload.allowPersonalization;
+
+    await db
+      .insert(residentSettings)
+      .values({
+        userId,
+        ...(patch as any),
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: residentSettings.userId,
+        set: {
+          ...(patch as any),
+          updatedAt: new Date(),
+        },
+      });
+
+    const next = await getResidentSettingsData(userId, (req as any).sessionID);
+    return res.json({ privacy: next?.privacy ?? null });
+  } catch (error: any) {
+    console.error("PATCH /settings/privacy error", error);
+    return res.status(500).json({ error: error.message || "Failed to update privacy settings" });
+  }
+});
+
+router.post("/settings/privacy/request-data-export", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+    await storage.createAuditLog({
+      actorId: userId,
+      action: "resident_data_export_requested",
+      target: "resident_settings",
+      targetId: userId,
+      meta: {},
+      ipAddress: req.ip || "",
+      userAgent: req.get("user-agent") || "",
+    } as any);
+    return res.status(202).json({ ok: true });
+  } catch (error: any) {
+    console.error("POST /settings/privacy/request-data-export error", error);
+    return res.status(500).json({ error: error.message || "Failed to request data export" });
+  }
+});
+
+router.post("/settings/privacy/request-account-deletion", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+    const reason = String(req.body?.reason || "").trim().slice(0, 1000);
+    await storage.createAuditLog({
+      actorId: userId,
+      action: "resident_account_deletion_requested",
+      target: "resident_settings",
+      targetId: userId,
+      meta: reason ? { reason } : {},
+      ipAddress: req.ip || "",
+      userAgent: req.get("user-agent") || "",
+    } as any);
+    return res.status(202).json({ ok: true });
+  } catch (error: any) {
+    console.error("POST /settings/privacy/request-account-deletion error", error);
+    return res.status(500).json({ error: error.message || "Failed to request account deletion" });
+  }
+});
+
+router.patch("/settings/security", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const parsed = SettingsSecurityPatchSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+
+    await db
+      .insert(residentSettings)
+      .values({
+        userId,
+        loginAlertsEnabled: parsed.data.loginAlertsEnabled,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: residentSettings.userId,
+        set: {
+          loginAlertsEnabled: parsed.data.loginAlertsEnabled,
+          updatedAt: new Date(),
+        },
+      });
+
+    const next = await getResidentSettingsData(userId, (req as any).sessionID);
+    return res.json({ security: next?.security ?? null });
+  } catch (error: any) {
+    console.error("PATCH /settings/security error", error);
+    return res.status(500).json({ error: error.message || "Failed to update security settings" });
+  }
+});
+
+router.post("/settings/security/change-password", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const parsed = ChangePasswordSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
     }
 
     const user = await storage.getUser(userId);
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const passwordMatches = await comparePasswords(parsed.data.currentPassword, String(user.password || ""));
+    if (!passwordMatches) {
+      return res.status(422).json({
+        error: {
+          fieldErrors: {
+            currentPassword: ["Current password is incorrect."],
+          },
+        },
+      });
     }
 
-    res.json({
+    const newHashedPassword = await hashPassword(parsed.data.newPassword);
+    await storage.updateUser(userId, { password: newHashedPassword } as any);
+    return res.status(204).send();
+  } catch (error: any) {
+    console.error("POST /settings/security/change-password error", error);
+    return res.status(500).json({ error: error.message || "Failed to change password" });
+  }
+});
+
+router.get("/settings/security/sessions", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+    const data = await getResidentSettingsData(userId, (req as any).sessionID);
+    if (!data) return res.status(404).json({ error: "User not found" });
+    return res.json({ sessions: data.security.sessions, loginAlertsEnabled: data.security.loginAlertsEnabled });
+  } catch (error: any) {
+    console.error("GET /settings/security/sessions error", error);
+    return res.status(500).json({ error: error.message || "Failed to load active sessions" });
+  }
+});
+
+router.delete("/settings/security/sessions/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+    const currentSessionId = String((req as any).sessionID || "");
+    const targetId = String(req.params.id || "");
+    if (!targetId) return res.status(400).json({ error: "Session id is required" });
+
+    const [target] = await db
+      .select()
+      .from(userDeviceSessions)
+      .where(and(eq(userDeviceSessions.id, targetId), eq(userDeviceSessions.userId, userId)))
+      .limit(1);
+
+    if (!target) return res.status(404).json({ error: "Session not found" });
+    if (target.sessionId === currentSessionId) {
+      return res.status(400).json({ error: "Current session cannot be revoked from this endpoint." });
+    }
+
+    await db
+      .update(userDeviceSessions)
+      .set({ revokedAt: new Date(), lastSeenAt: new Date() })
+      .where(eq(userDeviceSessions.id, target.id));
+
+    await new Promise<void>((resolve) => {
+      storage.sessionStore.destroy(target.sessionId, () => resolve());
+    });
+
+    return res.status(204).send();
+  } catch (error: any) {
+    console.error("DELETE /settings/security/sessions/:id error", error);
+    return res.status(500).json({ error: error.message || "Failed to revoke session" });
+  }
+});
+
+router.post("/settings/security/sessions/revoke-others", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+    const currentSessionId = String((req as any).sessionID || "");
+
+    const rows = await db
+      .select()
+      .from(userDeviceSessions)
+      .where(
+        and(
+          eq(userDeviceSessions.userId, userId),
+          sql`${userDeviceSessions.revokedAt} IS NULL`,
+          sql`${userDeviceSessions.sessionId} <> ${currentSessionId}`,
+        ),
+      );
+
+    if (rows.length === 0) {
+      return res.json({ revokedCount: 0 });
+    }
+
+    const sessionIds = rows.map((row: any) => row.sessionId);
+    await db
+      .update(userDeviceSessions)
+      .set({ revokedAt: new Date(), lastSeenAt: new Date() })
+      .where(inArray(userDeviceSessions.sessionId, sessionIds));
+
+    await Promise.all(
+      sessionIds.map(
+        (sessionId: string) =>
+          new Promise<void>((resolve) => {
+            storage.sessionStore.destroy(sessionId, () => resolve());
+          }),
+      ),
+    );
+
+    return res.json({ revokedCount: rows.length });
+  } catch (error: any) {
+    console.error("POST /settings/security/sessions/revoke-others error", error);
+    return res.status(500).json({ error: error.message || "Failed to revoke other sessions" });
+  }
+});
+
+// Backward-compatible profile endpoint mapped to settings profile contract
+router.patch("/profile", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const result = await updateProfileSettings(userId, req.body || {});
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+    const user = result.user;
+    return res.json({
       id: user.id,
       firstName: user.firstName,
       lastName: user.lastName,
@@ -1869,12 +3959,44 @@ router.get("/profile", requireAuth, async (req: Request, res: Response) => {
       email: user.email,
       phone: user.phone,
       location: user.location,
-      profileImage: (user as any).profileImage ?? null,
       role: user.role,
+      profileImage: (user as any).profileImage ?? null,
+      bio: (user as any).bio ?? null,
+      website: (user as any).website ?? null,
+      username: (user as any).username ?? null,
+      countryCode: (user as any).countryCode ?? null,
+      timezone: (user as any).timezone ?? null,
+      lastUpdatedAt: user.updatedAt ?? null,
+    });
+  } catch (error: any) {
+    console.error("PATCH /profile error", error);
+    return res.status(500).json({ error: error.message || "Failed to update profile" });
+  }
+});
+
+router.get("/profile", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required" });
+
+    const data = await getResidentSettingsData(userId, (req as any).sessionID);
+    if (!data) return res.status(404).json({ error: "User not found" });
+
+    const user = await storage.getUser(userId);
+
+    return res.json({
+      id: userId,
+      name:
+        user?.name ||
+        [data.profile.firstName, data.profile.lastName].filter(Boolean).join(" ").trim() ||
+        null,
+      ...data.profile,
+      location: user?.location ?? null,
+      role: user?.role ?? req.auth?.role ?? null,
     });
   } catch (error: any) {
     console.error("GET /profile error", error);
-    res.status(500).json({ error: error.message || "Failed to load profile" });
+    return res.status(500).json({ error: error.message || "Failed to load profile" });
   }
 });
 

@@ -1,4 +1,9 @@
 // client/src/lib/residentApi.ts
+import {
+  createAppRequestErrorFromResponse,
+  createNetworkRequestError,
+} from "@/lib/errorPresentation";
+
 function getResidentApiBase() {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   if (import.meta.env.DEV && origin) {
@@ -44,17 +49,21 @@ export async function residentFetch<T = any>(path: string, init?: FetchInit): Pr
     headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(url, {
-    ...init,
-    headers,
-    body: init?.json ? JSON.stringify(init.json) : init?.body,
-    credentials: "include", // <-- IMPORTANT (send cookies when same-site)
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers,
+      body: init?.json ? JSON.stringify(init.json) : init?.body,
+      credentials: "include", // <-- IMPORTANT (send cookies when same-site)
+    });
+  } catch (error) {
+    throw createNetworkRequestError(url, error);
+  }
 
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
-    const text = ct.includes("application/json") ? JSON.stringify(await res.json()) : await res.text();
-    throw new Error(`${res.status} ${res.statusText} @ ${url}\n${text.slice(0, 300)}`);
+    throw await createAppRequestErrorFromResponse(res, url, 300);
   }
   return ct.includes("application/json") ? (await res.json()) as T : (await res.text() as any);
 }

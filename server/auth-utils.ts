@@ -10,8 +10,33 @@ export async function hashPassword(password: string) {
 }
 
 export async function comparePasswords(supplied: string, stored: string) {
-  const [hash, salt] = stored.split(".");
-  const hashedBuf = Buffer.from(hash, "hex");
-  const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
-  return timingSafeEqual(hashedBuf, suppliedBuf);
+  const normalizedSupplied = String(supplied ?? "");
+  const normalizedStored = String(stored ?? "");
+
+  if (!normalizedStored) {
+    return false;
+  }
+
+  const parts = normalizedStored.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    // Graceful fallback for legacy/plain-text records so login fails closed
+    // without throwing a server error on malformed password data.
+    return normalizedSupplied === normalizedStored;
+  }
+
+  const [hash, salt] = parts;
+
+  try {
+    const hashedBuf = Buffer.from(hash, "hex");
+    if (!hashedBuf.length) {
+      return false;
+    }
+    const suppliedBuf = (await scryptAsync(normalizedSupplied, salt, 64)) as Buffer;
+    if (hashedBuf.length !== suppliedBuf.length) {
+      return false;
+    }
+    return timingSafeEqual(hashedBuf, suppliedBuf);
+  } catch {
+    return false;
+  }
 }

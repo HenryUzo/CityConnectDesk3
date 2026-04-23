@@ -15,6 +15,12 @@ export function useMyEstates() {
     let canceled = false;
     setLoading(true);
     setError(null);
+    const pathname = typeof window !== "undefined" ? window.location.pathname : "";
+    const shouldSkipProtectedMemberFetch =
+      pathname.startsWith("/auth") ||
+      pathname.startsWith("/register") ||
+      pathname.startsWith("/admin") ||
+      pathname.startsWith("/admin-dashboard");
 
     const normalizeEstateRows = (rows: unknown): Estate[] => {
       if (!Array.isArray(rows)) return [];
@@ -35,10 +41,15 @@ export function useMyEstates() {
 
     const load = async () => {
       const [myEstatesResult, publicEstatesResult] = await Promise.allSettled([
-        fetch("/api/my-estates").then(async (res) => {
-          if (!res.ok) throw new Error(`Failed to load member estates (${res.status})`);
-          return (await res.json()) as unknown;
-        }),
+        shouldSkipProtectedMemberFetch
+          ? Promise.resolve([] as unknown)
+          : fetch("/api/my-estates").then(async (res) => {
+              if (res.status === 401 || res.status === 403) {
+                return [] as unknown;
+              }
+              if (!res.ok) throw new Error(`Failed to load member estates (${res.status})`);
+              return (await res.json()) as unknown;
+            }),
         fetch("/api/estates").then(async (res) => {
           if (!res.ok) throw new Error(`Failed to load estates (${res.status})`);
           return (await res.json()) as unknown;
@@ -49,6 +60,7 @@ export function useMyEstates() {
         myEstatesResult.status === "fulfilled" ? normalizeEstateRows(myEstatesResult.value) : [];
       const publicEstates =
         publicEstatesResult.status === "fulfilled" ? normalizeEstateRows(publicEstatesResult.value) : [];
+      const memberEstateIds = new Set(memberEstates.map((estate) => estate.id));
 
       const merged = [...memberEstates, ...publicEstates];
       const deduped = Array.from(
@@ -59,7 +71,12 @@ export function useMyEstates() {
         }, new Map<string, Estate>()),
       )
         .map(([, estate]) => estate)
-        .sort((left, right) => left.name.localeCompare(right.name));
+        .sort((left, right) => {
+          const leftIsMember = memberEstateIds.has(left.id);
+          const rightIsMember = memberEstateIds.has(right.id);
+          if (leftIsMember !== rightIsMember) return leftIsMember ? -1 : 1;
+          return left.name.localeCompare(right.name);
+        });
 
       if (!canceled) {
         setData(deduped);

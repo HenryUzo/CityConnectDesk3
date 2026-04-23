@@ -10,6 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
+import {
+  buildEditableLegacyQuestions,
+  normalizeCategoryKey,
+  type EditableLegacyQuestion,
+} from "@/lib/ordinaryLegacyFlow";
 
 type RequestConversationSettings = {
   id?: string;
@@ -43,6 +48,78 @@ type RequestQuestion = {
   options?: any;
   order: number;
   isEnabled: boolean;
+};
+
+type OrdinaryFlowDefinition = {
+  id: string;
+  categoryKey: string;
+  scope: "global" | "estate";
+  estateId?: string | null;
+  name: string;
+  version: number;
+  status: "draft" | "published" | "archived";
+  isDefault: boolean;
+  publishedAt?: string | null;
+  updatedAt?: string | null;
+  questionCount?: number;
+};
+
+type OrdinaryFlowQuestion = {
+  id: string;
+  flowId: string;
+  questionKey: string;
+  prompt: string;
+  description?: string | null;
+  inputType:
+    | "single_select"
+    | "multi_select"
+    | "text"
+    | "number"
+    | "date"
+    | "time"
+    | "datetime"
+    | "location"
+    | "file"
+    | "yes_no"
+    | "urgency"
+    | "estate";
+  isRequired: boolean;
+  isTerminal: boolean;
+  orderIndex: number;
+  validation?: any;
+  uiMeta?: any;
+  defaultNextQuestionId?: string | null;
+};
+
+type OrdinaryFlowOption = {
+  id: string;
+  questionId: string;
+  optionKey: string;
+  label: string;
+  value: string;
+  icon?: string | null;
+  orderIndex: number;
+  nextQuestionId?: string | null;
+  meta?: any;
+};
+
+type OrdinaryFlowRule = {
+  id: string;
+  flowId: string;
+  fromQuestionId: string;
+  priority: number;
+  conditionJson?: any;
+  action: "goto_question" | "terminate" | "set_value" | "skip";
+  nextQuestionId?: string | null;
+  actionPayload?: any;
+  isActive: boolean;
+};
+
+type OrdinaryFlowDetail = {
+  definition: OrdinaryFlowDefinition;
+  questions: OrdinaryFlowQuestion[];
+  options: OrdinaryFlowOption[];
+  rules: OrdinaryFlowRule[];
 };
 
 type ResidentUser = {
@@ -97,10 +174,56 @@ export default function AdminRequestQuestions({ user }: AdminRequestQuestionsPro
     queryFn: async () => await adminApiRequest("GET", "/api/admin/request-config/questions?mode=ai"),
   });
 
-  const { data: categories = [] } = useQuery<any[]>({
-    queryKey: ["/api/admin/categories"],
-    queryFn: async () => await adminApiRequest("GET", "/api/admin/categories"),
+  const { data: residentCategorySettings = [] } = useQuery<any[]>({
+    queryKey: ["/api/admin/ai-conversation-flow", "resident-categories"],
+    queryFn: async () => await adminApiRequest("GET", "/api/admin/ai-conversation-flow"),
   });
+
+  const flowCategoryOptions = useMemo(
+    () =>
+      (Array.isArray(residentCategorySettings) ? residentCategorySettings : [])
+        .filter((category: any) => category?.isEnabled !== false)
+        .map((category: any) => {
+          const key = normalizeCategoryKey(String(category?.categoryKey ?? category?.key ?? ""));
+          const name = String(category?.categoryName ?? category?.name ?? category?.categoryKey ?? "").trim();
+          if (!key || !name) return null;
+          return { key, name };
+        })
+        .filter((category): category is { key: string; name: string } => Boolean(category))
+        .filter((category, index, all) => all.findIndex((item) => item.key === category.key) === index)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [residentCategorySettings],
+  );
+
+  const [flowCategoryFilter, setFlowCategoryFilter] = useState("all");
+  const [flowStatusFilter, setFlowStatusFilter] = useState("published");
+  const [selectedFlowId, setSelectedFlowId] = useState("");
+  const [questionsJson, setQuestionsJson] = useState("[]");
+  const [optionsJson, setOptionsJson] = useState("[]");
+  const [rulesJson, setRulesJson] = useState("[]");
+  const [flowQuestionsDraft, setFlowQuestionsDraft] = useState<OrdinaryFlowQuestion[]>([]);
+  const [flowOptionsDraft, setFlowOptionsDraft] = useState<OrdinaryFlowOption[]>([]);
+  const [flowRulesDraft, setFlowRulesDraft] = useState<OrdinaryFlowRule[]>([]);
+  const [legacyFallbackDraft, setLegacyFallbackDraft] = useState<EditableLegacyQuestion[]>([]);
+  const [expandedLegacyQuestionKey, setExpandedLegacyQuestionKey] = useState("");
+  const [expandedFlowQuestionId, setExpandedFlowQuestionId] = useState("");
+
+  const { data: ordinaryFlows = [], refetch: refetchOrdinaryFlows } = useQuery<OrdinaryFlowDefinition[]>({
+    queryKey: ["/api/admin/ordinary-flows", flowCategoryFilter, flowStatusFilter],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (flowCategoryFilter !== "all") params.set("categoryKey", flowCategoryFilter);
+      if (flowStatusFilter !== "all") params.set("status", flowStatusFilter);
+      return await adminApiRequest("GET", `/api/admin/ordinary-flows?${params.toString()}`);
+    },
+  });
+
+  const { data: selectedFlowDetail, refetch: refetchSelectedFlowDetail, isLoading: selectedFlowLoading } =
+    useQuery<OrdinaryFlowDetail | null>({
+      queryKey: ["/api/admin/ordinary-flows/:id", selectedFlowId],
+      enabled: Boolean(selectedFlowId),
+      queryFn: async () => await adminApiRequest("GET", `/api/admin/ordinary-flows/${selectedFlowId}`),
+    });
 
   const [settingsForm, setSettingsForm] = useState<RequestConversationSettings>({
     mode: "ai",
@@ -124,6 +247,26 @@ export default function AdminRequestQuestions({ user }: AdminRequestQuestionsPro
       adminWaitThresholdMs: settings.adminWaitThresholdMs ?? 300000,
     });
   }, [settings]);
+
+  useEffect(() => {
+    if (!selectedFlowDetail) return;
+    setQuestionsJson(JSON.stringify(selectedFlowDetail.questions ?? [], null, 2));
+    setOptionsJson(JSON.stringify(selectedFlowDetail.options ?? [], null, 2));
+    setRulesJson(JSON.stringify(selectedFlowDetail.rules ?? [], null, 2));
+    setFlowQuestionsDraft(selectedFlowDetail.questions ?? []);
+    setFlowOptionsDraft(selectedFlowDetail.options ?? []);
+    setFlowRulesDraft(selectedFlowDetail.rules ?? []);
+  }, [selectedFlowDetail]);
+
+  useEffect(() => {
+    if (!ordinaryFlows.length) {
+      if (selectedFlowId) setSelectedFlowId("");
+      return;
+    }
+    if (!selectedFlowId || !ordinaryFlows.some((flow) => String(flow.id) === String(selectedFlowId))) {
+      setSelectedFlowId(String(ordinaryFlows[0].id));
+    }
+  }, [ordinaryFlows, selectedFlowId]);
 
   const updateSettingsMutation = useMutation({
     mutationFn: (payload: RequestConversationSettings) =>
@@ -192,6 +335,126 @@ export default function AdminRequestQuestions({ user }: AdminRequestQuestionsPro
     },
   });
 
+  const createFlowMutation = useMutation({
+    mutationFn: (payload: { categoryKey: string; name: string; scope?: "global" | "estate" }) =>
+      adminApiRequest("POST", "/api/admin/ordinary-flows", payload),
+    onSuccess: async (created: OrdinaryFlowDefinition) => {
+      await refetchOrdinaryFlows();
+      setSelectedFlowId(String(created.id));
+      toast({ title: "Draft flow created" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Could not create flow",
+        description: error?.message || "Try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const saveFlowQuestionsMutation = useMutation({
+    mutationFn: (payload: { flowId: string; questions: any[] }) =>
+      adminApiRequest("PUT", `/api/admin/ordinary-flows/${payload.flowId}/questions`, {
+        questions: payload.questions,
+      }),
+    onSuccess: async () => {
+      await Promise.all([refetchSelectedFlowDetail(), refetchOrdinaryFlows()]);
+      toast({ title: "Questions saved" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Could not save questions",
+        description: error?.message || "Check your JSON payload.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const saveFlowOptionsMutation = useMutation({
+    mutationFn: (payload: { flowId: string; options: any[] }) =>
+      adminApiRequest("PUT", `/api/admin/ordinary-flows/${payload.flowId}/options`, {
+        options: payload.options,
+      }),
+    onSuccess: async () => {
+      await refetchSelectedFlowDetail();
+      toast({ title: "Options saved" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Could not save options",
+        description: error?.message || "Check question ids and option payload.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const saveFlowRulesMutation = useMutation({
+    mutationFn: (payload: { flowId: string; rules: any[] }) =>
+      adminApiRequest("PUT", `/api/admin/ordinary-flows/${payload.flowId}/rules`, {
+        rules: payload.rules,
+      }),
+    onSuccess: async () => {
+      await refetchSelectedFlowDetail();
+      toast({ title: "Rules saved" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Could not save rules",
+        description: error?.message || "Check rule payload.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const validateFlowMutation = useMutation({
+    mutationFn: (flowId: string) => adminApiRequest("POST", `/api/admin/ordinary-flows/${flowId}/validate`),
+    onSuccess: (result: any) => {
+      const warningCount = Array.isArray(result?.warnings) ? result.warnings.length : 0;
+      toast({
+        title: "Flow validated",
+        description: warningCount ? `${warningCount} warnings found.` : "No validation issues.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Validation failed",
+        description: error?.message || "Please fix flow graph errors.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const publishFlowMutation = useMutation({
+    mutationFn: (flowId: string) => adminApiRequest("POST", `/api/admin/ordinary-flows/${flowId}/publish`),
+    onSuccess: async () => {
+      await Promise.all([refetchOrdinaryFlows(), refetchSelectedFlowDetail()]);
+      toast({ title: "Flow published" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Could not publish flow",
+        description: error?.message || "Fix validation issues first.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const cloneFlowMutation = useMutation({
+    mutationFn: (flowId: string) => adminApiRequest("POST", `/api/admin/ordinary-flows/${flowId}/clone`),
+    onSuccess: async (flow: OrdinaryFlowDefinition) => {
+      await refetchOrdinaryFlows();
+      setSelectedFlowId(String(flow.id));
+      toast({ title: "Flow cloned as draft" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Could not clone flow",
+        description: error?.message || "Try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const [newQuestion, setNewQuestion] = useState<Partial<RequestQuestion>>({
     mode: "ordinary",
     scope: "global",
@@ -201,6 +464,65 @@ export default function AdminRequestQuestions({ user }: AdminRequestQuestionsPro
     required: false,
     isEnabled: true,
   });
+  const [newFlowCategoryKey, setNewFlowCategoryKey] = useState("");
+  const [newFlowName, setNewFlowName] = useState("Ordinary Flow Draft");
+  const currentResidentCategoryKey = flowCategoryFilter !== "all" ? flowCategoryFilter : newFlowCategoryKey;
+  const currentResidentCategoryLabel =
+    flowCategoryOptions.find((category) => category.key === currentResidentCategoryKey)?.name ||
+    currentResidentCategoryKey ||
+    "selected category";
+
+  useEffect(() => {
+    if (!flowCategoryOptions.length) {
+      if (newFlowCategoryKey) setNewFlowCategoryKey("");
+      return;
+    }
+    if (!newFlowCategoryKey || !flowCategoryOptions.some((option) => option.key === newFlowCategoryKey)) {
+      setNewFlowCategoryKey(flowCategoryOptions[0].key);
+    }
+  }, [flowCategoryOptions, newFlowCategoryKey]);
+
+  useEffect(() => {
+    if (!currentResidentCategoryKey) {
+      setLegacyFallbackDraft([]);
+      return;
+    }
+    setLegacyFallbackDraft(
+      buildEditableLegacyQuestions({
+        categoryKey: currentResidentCategoryKey,
+        categoryName: currentResidentCategoryLabel,
+        ordinaryQuestions,
+      }),
+    );
+  }, [currentResidentCategoryKey, currentResidentCategoryLabel, ordinaryQuestions]);
+
+  useEffect(() => {
+    const firstQuestionKey =
+      legacyFallbackDraft
+        .slice()
+        .sort((a, b) => Number(a.order || 0) - Number(b.order || 0))[0]?.key ?? "";
+    if (!firstQuestionKey) {
+      setExpandedLegacyQuestionKey("");
+      return;
+    }
+    if (!expandedLegacyQuestionKey || !legacyFallbackDraft.some((question) => question.key === expandedLegacyQuestionKey)) {
+      setExpandedLegacyQuestionKey(firstQuestionKey);
+    }
+  }, [expandedLegacyQuestionKey, legacyFallbackDraft]);
+
+  useEffect(() => {
+    const firstQuestionId =
+      flowQuestionsDraft
+        .slice()
+        .sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))[0]?.id ?? "";
+    if (!firstQuestionId) {
+      setExpandedFlowQuestionId("");
+      return;
+    }
+    if (!expandedFlowQuestionId || !flowQuestionsDraft.some((question) => question.id === expandedFlowQuestionId)) {
+      setExpandedFlowQuestionId(firstQuestionId);
+    }
+  }, [expandedFlowQuestionId, flowQuestionsDraft]);
 
   const [residentSearch, setResidentSearch] = useState("");
   const [previewResidentId, setPreviewResidentId] = useState("");
@@ -289,6 +611,12 @@ export default function AdminRequestQuestions({ user }: AdminRequestQuestionsPro
         <CardTitle>{mode === "ordinary" ? "Ordinary Questions" : "AI Questions"}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {mode === "ordinary" ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            These are legacy fallback questions. If a category has a published dynamic flow, residents will see the
+            questions in the <span className="font-semibold">Ordinary Dynamic Flows</span> tab instead.
+          </div>
+        ) : null}
         <div className="space-y-3">
           {questionsByMode[mode].map((question, index) => (
             <div
@@ -400,9 +728,8 @@ export default function AdminRequestQuestions({ user }: AdminRequestQuestionsPro
                         <SelectValue placeholder="Select a category" />
                       </SelectTrigger>
                       <SelectContent>
-                        {categories.map((cat) => (
-                          <SelectItem key={cat.id} value={cat.key}>
-                            {cat.emoji && <span>{cat.emoji} </span>}
+                        {flowCategoryOptions.map((cat) => (
+                          <SelectItem key={cat.key} value={cat.key}>
                             {cat.name}
                           </SelectItem>
                         ))}
@@ -569,9 +896,8 @@ export default function AdminRequestQuestions({ user }: AdminRequestQuestionsPro
                     <SelectValue placeholder="Select a category" />
                   </SelectTrigger>
                   <SelectContent>
-                    {categories.map((cat) => (
-                      <SelectItem key={cat.id} value={cat.key}>
-                        {cat.emoji && <span>{cat.emoji} </span>}
+                    {flowCategoryOptions.map((cat) => (
+                      <SelectItem key={cat.key} value={cat.key}>
                         {cat.name}
                       </SelectItem>
                     ))}
@@ -657,12 +983,267 @@ export default function AdminRequestQuestions({ user }: AdminRequestQuestionsPro
     </Card>
   );
 
+  const parseJsonArray = (raw: string, label: string) => {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) throw new Error("Payload must be an array.");
+      return parsed;
+    } catch (error: any) {
+      toast({
+        title: `${label} JSON is invalid`,
+        description: error?.message || "Check syntax and try again.",
+        variant: "destructive",
+      });
+      return null;
+    }
+  };
+
+  const handleSaveFlowQuestions = () => {
+    if (!selectedFlowId) return;
+    const parsed = parseJsonArray(questionsJson, "Questions");
+    if (!parsed) return;
+    saveFlowQuestionsMutation.mutate({ flowId: selectedFlowId, questions: parsed });
+  };
+
+  const handleSaveFlowOptions = () => {
+    if (!selectedFlowId) return;
+    const parsed = parseJsonArray(optionsJson, "Options");
+    if (!parsed) return;
+    saveFlowOptionsMutation.mutate({ flowId: selectedFlowId, options: parsed });
+  };
+
+  const handleSaveFlowRules = () => {
+    if (!selectedFlowId) return;
+    const parsed = parseJsonArray(rulesJson, "Rules");
+    if (!parsed) return;
+    saveFlowRulesMutation.mutate({ flowId: selectedFlowId, rules: parsed });
+  };
+
+  const selectedFlowCategoryLabel =
+    flowCategoryOptions.find((category) => category.key === selectedFlowDetail?.definition.categoryKey)?.name ||
+    selectedFlowDetail?.definition.categoryKey ||
+    "Unknown category";
+
+  const flowOptionsByQuestionId = useMemo(() => {
+    const grouped = new Map<string, OrdinaryFlowOption[]>();
+    flowOptionsDraft.forEach((option) => {
+      const key = String(option.questionId || "");
+      const existing = grouped.get(key) ?? [];
+      existing.push(option);
+      grouped.set(key, existing);
+    });
+    for (const [key, options] of grouped.entries()) {
+      grouped.set(
+        key,
+        [...options].sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0)),
+      );
+    }
+    return grouped;
+  }, [flowOptionsDraft]);
+
+  const sortedLegacyFallbackQuestions = useMemo(
+    () =>
+      legacyFallbackDraft
+        .slice()
+        .sort((a, b) => Number(a.order || 0) - Number(b.order || 0)),
+    [legacyFallbackDraft],
+  );
+
+  const sortedFlowQuestions = useMemo(
+    () =>
+      flowQuestionsDraft
+        .slice()
+        .sort((a, b) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0)),
+    [flowQuestionsDraft],
+  );
+
+  const updateFlowQuestionDraft = (questionId: string, patch: Partial<OrdinaryFlowQuestion>) => {
+    setFlowQuestionsDraft((current) =>
+      current.map((question) =>
+        question.id === questionId
+          ? {
+              ...question,
+              ...patch,
+            }
+          : question,
+      ),
+    );
+  };
+
+  const updateFlowOptionDraft = (optionId: string, patch: Partial<OrdinaryFlowOption>) => {
+    setFlowOptionsDraft((current) =>
+      current.map((option) =>
+        option.id === optionId
+          ? {
+              ...option,
+              ...patch,
+            }
+          : option,
+      ),
+    );
+  };
+
+  const addLegacyFallbackQuestion = () => {
+    const existingKeys = new Set(legacyFallbackDraft.map((question) => question.key));
+    let suffix = legacyFallbackDraft.length + 1;
+    let key = `custom_question_${suffix}`;
+    while (existingKeys.has(key)) {
+      suffix += 1;
+      key = `custom_question_${suffix}`;
+    }
+    const order =
+      legacyFallbackDraft.reduce((max, question) => Math.max(max, Number(question.order || 0)), 0) + 1;
+    setLegacyFallbackDraft((current) => [
+      ...current,
+      {
+        key,
+        label: "New question",
+        type: "textarea",
+        required: false,
+        options: undefined,
+        order,
+        kind: "text",
+        helperText: undefined,
+        placeholder: "Type the resident response.",
+        conditionalValue: undefined,
+        persistedId: null,
+        inheritedId: null,
+        isEnabled: true,
+        source: "category",
+      },
+    ]);
+    setExpandedLegacyQuestionKey(key);
+  };
+
+  const addFlowQuestionDraft = () => {
+    const id = `new-question-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const order =
+      flowQuestionsDraft.reduce((max, question) => Math.max(max, Number(question.orderIndex || 0)), 0) + 1;
+    const nextIndex = flowQuestionsDraft.length + 1;
+    setFlowQuestionsDraft((current) => [
+      ...current,
+      {
+        id,
+        flowId: selectedFlowId,
+        questionKey: `question_${nextIndex}`,
+        prompt: "New question",
+        description: "",
+        inputType: "text",
+        isRequired: false,
+        isTerminal: false,
+        orderIndex: order,
+        validation: {},
+        uiMeta: {},
+        defaultNextQuestionId: null,
+      },
+    ]);
+    setExpandedFlowQuestionId(id);
+  };
+
+  const addFlowOptionDraft = (questionId: string) => {
+    const currentOptions = flowOptionsByQuestionId.get(questionId) ?? [];
+    const order =
+      currentOptions.reduce((max, option) => Math.max(max, Number(option.orderIndex || 0)), 0) + 1;
+    const id = `new-option-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setFlowOptionsDraft((current) => [
+      ...current,
+      {
+        id,
+        questionId,
+        optionKey: `option_${order}`,
+        label: `Option ${order}`,
+        value: `option_${order}`,
+        icon: null,
+        orderIndex: order,
+        nextQuestionId: null,
+        meta: {},
+      },
+    ]);
+  };
+
+  const handleSaveVisualFlowQuestions = () => {
+    if (!selectedFlowId) return;
+    saveFlowQuestionsMutation.mutate({
+      flowId: selectedFlowId,
+      questions: flowQuestionsDraft.map((question) => ({
+        id: question.id,
+        questionKey: question.questionKey,
+        prompt: question.prompt,
+        description: question.description ?? null,
+        inputType: question.inputType,
+        isRequired: question.isRequired,
+        isTerminal: question.isTerminal,
+        orderIndex: Number(question.orderIndex || 0),
+        validation: question.validation ?? {},
+        uiMeta: question.uiMeta ?? {},
+        defaultNextQuestionId: question.defaultNextQuestionId ?? null,
+      })),
+    });
+  };
+
+  const handleSaveVisualFlowOptions = () => {
+    if (!selectedFlowId) return;
+    saveFlowOptionsMutation.mutate({
+      flowId: selectedFlowId,
+      options: flowOptionsDraft.map((option) => ({
+        id: option.id,
+        questionId: option.questionId,
+        optionKey: option.optionKey,
+        label: option.label,
+        value: option.value,
+        icon: option.icon ?? null,
+        orderIndex: Number(option.orderIndex || 0),
+        nextQuestionId: option.nextQuestionId ?? null,
+        meta: option.meta ?? {},
+      })),
+    });
+  };
+
+  const updateLegacyFallbackDraft = (questionKey: string, patch: Partial<EditableLegacyQuestion>) => {
+    setLegacyFallbackDraft((current) =>
+      current.map((question) =>
+        question.key === questionKey
+          ? {
+              ...question,
+              ...patch,
+            }
+          : question,
+      ),
+    );
+  };
+
+  const saveLegacyFallbackQuestion = (question: EditableLegacyQuestion) => {
+    const payload: Partial<RequestQuestion> = {
+      mode: "ordinary",
+      scope: "category",
+      categoryKey: normalizeCategoryKey(currentResidentCategoryKey),
+      key: question.key,
+      label: question.label,
+      type: question.type as RequestQuestion["type"],
+      required: question.required,
+      options: question.options ?? null,
+      order: question.order,
+      isEnabled: question.isEnabled,
+    };
+
+    if (question.persistedId) {
+      updateQuestionMutation.mutate({
+        id: question.persistedId,
+        ...payload,
+      });
+      return;
+    }
+
+    createQuestionMutation.mutate(payload);
+  };
+
   return (
     <div className="space-y-6">
-      <Tabs defaultValue="ai-questions" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 h-11">
+      <Tabs defaultValue="ordinary-dynamic" className="space-y-6">
+        <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 h-11">
           <TabsTrigger value="ai-questions">AI Questions</TabsTrigger>
-          <TabsTrigger value="ordinary-questions">Ordinary Questions</TabsTrigger>
+          <TabsTrigger value="ordinary-questions">Legacy Fallback Questions</TabsTrigger>
+          <TabsTrigger value="ordinary-dynamic">Live Resident Questions</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
           <TabsTrigger value="preview">Resident Preview</TabsTrigger>
         </TabsList>
@@ -672,6 +1253,651 @@ export default function AdminRequestQuestions({ user }: AdminRequestQuestionsPro
         </TabsContent>
         <TabsContent value="ordinary-questions" className="space-y-6">
           {renderQuestionsCard("ordinary")}
+        </TabsContent>
+        <TabsContent value="ordinary-dynamic" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Live Resident Questions</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 lg:grid-cols-[1.2fr,0.75fr,0.75fr]">
+                <div className="rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50 to-cyan-50 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">
+                    Live editor
+                  </div>
+                  <div className="mt-1.5 text-base font-semibold text-slate-900">
+                    Edit the exact questions residents currently see.
+                  </div>
+                  <p className="mt-1.5 text-xs leading-5 text-slate-600">
+                    Use this screen to review the active flow for a category, update wording, and manage answer options
+                    without guessing which question powers the resident experience.
+                  </p>
+                </div>
+                <div className="rounded-xl border bg-white p-4 shadow-sm">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Current category
+                  </div>
+                  <div className="mt-1.5 text-lg font-semibold text-slate-900">{currentResidentCategoryLabel}</div>
+                  <div className="mt-2 text-xs text-slate-600">
+                    Source: {selectedFlowId ? "Dynamic flow" : "Legacy fallback"}
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-white p-4 shadow-sm">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Resident-visible questions
+                  </div>
+                  <div className="mt-1.5 text-lg font-semibold text-slate-900">
+                    {selectedFlowId ? sortedFlowQuestions.length : sortedLegacyFallbackQuestions.length}
+                  </div>
+                  <div className="mt-2 text-xs text-slate-600">
+                    {selectedFlowId
+                      ? `${flowOptionsDraft.length} selectable options configured`
+                      : `${sortedLegacyFallbackQuestions.filter((question) => question.type === "select").length} selection steps in fallback flow`}
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-2xl border bg-slate-50/80 p-4">
+                <div className="mb-3 text-sm font-semibold text-slate-900">Choose what you want to work on</div>
+                <div className="grid gap-3 md:grid-cols-4">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Category filter</label>
+                  <Select value={flowCategoryFilter} onValueChange={setFlowCategoryFilter}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      {flowCategoryOptions.map((category) => (
+                        <SelectItem key={category.key} value={category.key}>
+                          {category.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Status filter</label>
+                  <Select value={flowStatusFilter} onValueChange={setFlowStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="draft">Draft</SelectItem>
+                      <SelectItem value="published">Published</SelectItem>
+                      <SelectItem value="archived">Archived</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">New flow category</label>
+                  <Select value={newFlowCategoryKey} onValueChange={setNewFlowCategoryKey}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {flowCategoryOptions.length ? (
+                        flowCategoryOptions.map((category) => (
+                          <SelectItem key={category.key} value={category.key}>
+                            {category.name}
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <SelectItem value="__none" disabled>
+                          No categories available
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">New flow name</label>
+                  <Input
+                    value={newFlowName}
+                    onChange={(event) => setNewFlowName(event.target.value)}
+                    placeholder="Ordinary Flow Draft"
+                  />
+                </div>
+              </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={() =>
+                    createFlowMutation.mutate({
+                      categoryKey: newFlowCategoryKey,
+                      name: newFlowName.trim() || `Ordinary Flow Draft (${newFlowCategoryKey})`,
+                      scope: "global",
+                    })
+                  }
+                  disabled={createFlowMutation.isPending || !newFlowCategoryKey}
+                >
+                  Create draft
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => selectedFlowId && validateFlowMutation.mutate(selectedFlowId)}
+                  disabled={!selectedFlowId || validateFlowMutation.isPending}
+                >
+                  Validate
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => selectedFlowId && cloneFlowMutation.mutate(selectedFlowId)}
+                  disabled={!selectedFlowId || cloneFlowMutation.isPending}
+                >
+                  Clone
+                </Button>
+                <Button
+                  onClick={() => selectedFlowId && publishFlowMutation.mutate(selectedFlowId)}
+                  disabled={!selectedFlowId || publishFlowMutation.isPending}
+                >
+                  Publish
+                </Button>
+              </div>
+              <div className="grid gap-4 xl:grid-cols-[300px,1fr]">
+                <div className="space-y-4">
+                  <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                    <div className="text-sm font-semibold text-slate-900">Available flows</div>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Choose a dynamic flow to edit, or leave this unselected to work on the current fallback questions.
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border bg-white p-3 space-y-2 max-h-[420px] overflow-auto shadow-sm">
+                  {ordinaryFlows.length ? (
+                    ordinaryFlows.map((flow) => (
+                      <button
+                        key={flow.id}
+                        type="button"
+                        className={`w-full text-left rounded-xl border px-3 py-3 transition ${
+                          selectedFlowId === flow.id
+                            ? "border-blue-500 bg-blue-50"
+                            : "border-slate-200 bg-white hover:bg-slate-50"
+                        }`}
+                        onClick={() => setSelectedFlowId(flow.id)}
+                      >
+                        <div className="text-sm font-semibold text-slate-900">{flow.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {flow.categoryKey} • v{flow.version} • {flow.status}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Questions: {flow.questionCount ?? 0}
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="text-sm text-muted-foreground">
+                      No dynamic flow is published for {currentResidentCategoryLabel} yet.
+                    </div>
+                  )}
+                  </div>
+                  <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                    <div className="text-sm font-semibold text-slate-900">Question map</div>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Review the resident sequence here before editing the detailed cards on the right.
+                    </p>
+                    <div className="mt-3 space-y-2 max-h-[420px] overflow-auto">
+                      {(selectedFlowId ? sortedFlowQuestions : sortedLegacyFallbackQuestions).map((question: any, index) => {
+                        const title = selectedFlowId ? question.prompt : question.label;
+                        const subtitle = selectedFlowId
+                          ? `${question.questionKey} • ${question.inputType}`
+                          : `${question.key} • ${question.type}`;
+                        return (
+                          <div
+                            key={selectedFlowId ? question.id : question.key}
+                            className="rounded-xl border px-3 py-3"
+                          >
+                            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                              Question {index + 1}
+                            </div>
+                            <div className="mt-1 line-clamp-2 text-sm font-medium text-slate-900">{title}</div>
+                            <div className="mt-1 text-xs text-slate-500">{subtitle}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  {!selectedFlowId ? (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base">Current resident questions</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                          {currentResidentCategoryLabel} is currently using the legacy fallback question set. Edit these
+                          questions here, or create and publish a dynamic flow to replace them.
+                        </div>
+                        <div className="flex justify-end">
+                          <Button variant="outline" onClick={addLegacyFallbackQuestion}>
+                            Add question
+                          </Button>
+                        </div>
+                        {sortedLegacyFallbackQuestions.length ? (
+                          <div className="space-y-3">
+                            {sortedLegacyFallbackQuestions.map((question, index) => (
+                              <div key={question.key} className="rounded-2xl border bg-white p-4 space-y-4 shadow-sm">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div>
+                                    <div className="text-sm font-semibold text-slate-900">Question {index + 1}</div>
+                                    <div className="text-xs text-muted-foreground">
+                                      {question.key} • {question.type} • {question.source}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-4">
+                                    <label className="flex items-center gap-2 text-sm">
+                                      <Switch
+                                        checked={question.isEnabled}
+                                        onCheckedChange={(checked) =>
+                                          updateLegacyFallbackDraft(question.key, { isEnabled: checked })
+                                        }
+                                      />
+                                      Enabled
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm">
+                                      <Switch
+                                        checked={question.required}
+                                        onCheckedChange={(checked) =>
+                                          updateLegacyFallbackDraft(question.key, { required: checked })
+                                        }
+                                      />
+                                      Required
+                                    </label>
+                                  </div>
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs text-muted-foreground">Prompt shown to resident</label>
+                                  <Textarea
+                                    value={question.label}
+                                    onChange={(event) =>
+                                      updateLegacyFallbackDraft(question.key, { label: event.target.value })
+                                    }
+                                    rows={2}
+                                  />
+                                </div>
+                                <div className="grid gap-4 md:grid-cols-3">
+                                  <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground">Question key</label>
+                                    <Input
+                                      value={question.key}
+                                      onChange={(event) =>
+                                        updateLegacyFallbackDraft(question.key, { key: event.target.value })
+                                      }
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground">Answer type</label>
+                                    <Select
+                                      value={question.type}
+                                      onValueChange={(value) =>
+                                        updateLegacyFallbackDraft(question.key, {
+                                          type: value as EditableLegacyQuestion["type"],
+                                        })
+                                      }
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {QUESTION_TYPES.map((type) => (
+                                          <SelectItem key={type} value={type}>
+                                            {type}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground">Order</label>
+                                    <Input
+                                      type="number"
+                                      value={String(question.order ?? 0)}
+                                      onChange={(event) =>
+                                        updateLegacyFallbackDraft(question.key, {
+                                          order: Number(event.target.value || 0),
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                                {question.type === "select" ? (
+                                  <div className="space-y-2 rounded-xl border bg-slate-50 p-3">
+                                    <div className="text-sm font-medium text-slate-900">Options</div>
+                                    {Array.isArray(question.options) && question.options.length ? (
+                                      question.options.map((option: string, optionIndex: number) => (
+                                        <div key={`${question.key}-${optionIndex}`} className="flex items-center gap-2">
+                                          <Input
+                                            value={option}
+                                            onChange={(event) => {
+                                              const nextOptions = Array.isArray(question.options)
+                                                ? [...question.options]
+                                                : [];
+                                              nextOptions[optionIndex] = event.target.value;
+                                              updateLegacyFallbackDraft(question.key, {
+                                                options: nextOptions,
+                                              });
+                                            }}
+                                          />
+                                          <Button
+                                            variant="outline"
+                                            onClick={() => {
+                                              const nextOptions = Array.isArray(question.options)
+                                                ? question.options.filter((_: string, idx: number) => idx !== optionIndex)
+                                                : [];
+                                              updateLegacyFallbackDraft(question.key, {
+                                                options: nextOptions,
+                                              });
+                                            }}
+                                          >
+                                            Remove
+                                          </Button>
+                                        </div>
+                                      ))
+                                    ) : (
+                                      <div className="text-sm text-muted-foreground">No options configured.</div>
+                                    )}
+                                    <Button
+                                      variant="outline"
+                                      onClick={() =>
+                                        updateLegacyFallbackDraft(question.key, {
+                                          options: [...(Array.isArray(question.options) ? question.options : []), ""],
+                                        })
+                                      }
+                                    >
+                                      Add option
+                                    </Button>
+                                  </div>
+                                ) : null}
+                                <div className="flex justify-end">
+                                  <Button variant="outline" onClick={() => saveLegacyFallbackQuestion(question)}>
+                                    Save question
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border px-4 py-6 text-sm text-muted-foreground">
+                            No current fallback questions were found for {currentResidentCategoryLabel}.
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ) : selectedFlowLoading ? (
+                    <Card>
+                      <CardContent className="p-4 text-sm text-muted-foreground">Loading flow…</CardContent>
+                    </Card>
+                  ) : (
+                    <>
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Current resident questions</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="rounded-2xl border bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                            <span className="font-semibold text-slate-900">{selectedFlowCategoryLabel}</span>
+                            {" "}
+                            is currently using
+                            {" "}
+                            <span className="font-semibold text-slate-900">
+                              {selectedFlowDetail?.definition.status}
+                            </span>
+                            {" "}
+                            flow
+                            {" "}
+                            <span className="font-semibold text-slate-900">
+                              v{selectedFlowDetail?.definition.version}
+                            </span>
+                            .
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button onClick={handleSaveVisualFlowQuestions} disabled={saveFlowQuestionsMutation.isPending}>
+                              Save visible questions
+                            </Button>
+                            <Button variant="outline" onClick={addFlowQuestionDraft}>
+                              Add question
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={handleSaveVisualFlowOptions}
+                              disabled={saveFlowOptionsMutation.isPending}
+                            >
+                              Save visible options
+                            </Button>
+                          </div>
+                          <div className="space-y-3">
+                            {sortedFlowQuestions.length ? (
+                              sortedFlowQuestions.map((question, index) => {
+                                  const options = flowOptionsByQuestionId.get(question.id) ?? [];
+                                  return (
+                                    <div key={question.id} className="rounded-2xl border bg-white p-4 space-y-4 shadow-sm">
+                                      <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <div>
+                                          <div className="text-sm font-semibold text-slate-900">
+                                            Question {index + 1}
+                                          </div>
+                                          <div className="text-xs text-muted-foreground">
+                                            {question.questionKey} • {question.inputType}
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-4">
+                                          <label className="flex items-center gap-2 text-sm">
+                                            <Switch
+                                              checked={question.isRequired}
+                                              onCheckedChange={(checked) =>
+                                                updateFlowQuestionDraft(question.id, { isRequired: checked })
+                                              }
+                                            />
+                                            Required
+                                          </label>
+                                          <label className="flex items-center gap-2 text-sm">
+                                            <Switch
+                                              checked={question.isTerminal}
+                                              onCheckedChange={(checked) =>
+                                                updateFlowQuestionDraft(question.id, { isTerminal: checked })
+                                              }
+                                            />
+                                            Terminal
+                                          </label>
+                                        </div>
+                                      </div>
+                                      <div className="grid gap-4 md:grid-cols-3">
+                                        <div className="space-y-1 md:col-span-2">
+                                          <label className="text-xs text-muted-foreground">Prompt shown to resident</label>
+                                          <Textarea
+                                            value={question.prompt}
+                                            onChange={(event) =>
+                                              updateFlowQuestionDraft(question.id, { prompt: event.target.value })
+                                            }
+                                            rows={2}
+                                          />
+                                        </div>
+                                        <div className="space-y-1 md:col-span-3">
+                                          <label className="text-xs text-muted-foreground">Helper description</label>
+                                          <Input
+                                            value={question.description ?? ""}
+                                            onChange={(event) =>
+                                              updateFlowQuestionDraft(question.id, { description: event.target.value })
+                                            }
+                                            placeholder="Optional guidance shown under the question"
+                                          />
+                                        </div>
+                                        <div className="space-y-1">
+                                          <label className="text-xs text-muted-foreground">Question key</label>
+                                          <Input
+                                            value={question.questionKey}
+                                            onChange={(event) =>
+                                              updateFlowQuestionDraft(question.id, { questionKey: event.target.value })
+                                            }
+                                          />
+                                        </div>
+                                        <div className="space-y-1">
+                                          <label className="text-xs text-muted-foreground">Input type</label>
+                                          <Select
+                                            value={question.inputType}
+                                            onValueChange={(value) =>
+                                              updateFlowQuestionDraft(question.id, {
+                                                inputType: value as OrdinaryFlowQuestion["inputType"],
+                                              })
+                                            }
+                                          >
+                                            <SelectTrigger>
+                                              <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              <SelectItem value="single_select">single_select</SelectItem>
+                                              <SelectItem value="multi_select">multi_select</SelectItem>
+                                              <SelectItem value="text">text</SelectItem>
+                                              <SelectItem value="number">number</SelectItem>
+                                              <SelectItem value="date">date</SelectItem>
+                                              <SelectItem value="time">time</SelectItem>
+                                              <SelectItem value="datetime">datetime</SelectItem>
+                                              <SelectItem value="location">location</SelectItem>
+                                              <SelectItem value="file">file</SelectItem>
+                                              <SelectItem value="yes_no">yes_no</SelectItem>
+                                              <SelectItem value="urgency">urgency</SelectItem>
+                                              <SelectItem value="estate">estate</SelectItem>
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                        <div className="space-y-1">
+                                          <label className="text-xs text-muted-foreground">Order</label>
+                                          <Input
+                                            type="number"
+                                            value={String(question.orderIndex ?? 0)}
+                                            onChange={(event) =>
+                                              updateFlowQuestionDraft(question.id, {
+                                                orderIndex: Number(event.target.value || 0),
+                                              })
+                                            }
+                                          />
+                                        </div>
+                                      </div>
+                                      {["single_select", "multi_select", "yes_no"].includes(question.inputType) ? (
+                                        <div className="space-y-3">
+                                          <div className="flex items-center justify-between gap-3">
+                                            <div className="text-sm font-medium text-slate-900">Selectable options</div>
+                                            <Button variant="outline" onClick={() => addFlowOptionDraft(question.id)}>
+                                              Add option
+                                            </Button>
+                                          </div>
+                                          {options.length ? (
+                                            options.map((option) => (
+                                              <div key={option.id} className="grid gap-3 md:grid-cols-4 rounded-xl border p-3">
+                                                <div className="space-y-1">
+                                                  <label className="text-xs text-muted-foreground">Option label</label>
+                                                  <Input
+                                                    value={option.label}
+                                                    onChange={(event) =>
+                                                      updateFlowOptionDraft(option.id, { label: event.target.value })
+                                                    }
+                                                  />
+                                                </div>
+                                                <div className="space-y-1">
+                                                  <label className="text-xs text-muted-foreground">Stored value</label>
+                                                  <Input
+                                                    value={option.value}
+                                                    onChange={(event) =>
+                                                      updateFlowOptionDraft(option.id, { value: event.target.value })
+                                                    }
+                                                  />
+                                                </div>
+                                                <div className="space-y-1">
+                                                  <label className="text-xs text-muted-foreground">Option key</label>
+                                                  <Input
+                                                    value={option.optionKey}
+                                                    onChange={(event) =>
+                                                      updateFlowOptionDraft(option.id, { optionKey: event.target.value })
+                                                    }
+                                                  />
+                                                </div>
+                                                <div className="space-y-1">
+                                                  <label className="text-xs text-muted-foreground">Order</label>
+                                                  <Input
+                                                    type="number"
+                                                    value={String(option.orderIndex ?? 0)}
+                                                    onChange={(event) =>
+                                                      updateFlowOptionDraft(option.id, {
+                                                        orderIndex: Number(event.target.value || 0),
+                                                      })
+                                                    }
+                                                  />
+                                                </div>
+                                              </div>
+                                            ))
+                                          ) : (
+                                            <div className="rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">
+                                              No options yet. Add the first option for this question.
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })
+                            ) : (
+                              <div className="rounded-lg border px-4 py-6 text-sm text-muted-foreground">
+                                No questions found in this flow yet.
+                              </div>
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Advanced JSON editor</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <div className="text-sm text-muted-foreground">
+                            Use this only for advanced graph edits. The visual editor above is now the primary way to
+                            edit the live resident questions.
+                          </div>
+                          <Textarea
+                            value={questionsJson}
+                            onChange={(event) => setQuestionsJson(event.target.value)}
+                            className="min-h-[220px] font-mono text-xs"
+                          />
+                          <Button onClick={handleSaveFlowQuestions} disabled={saveFlowQuestionsMutation.isPending}>
+                            Save questions
+                          </Button>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Options JSON</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <Textarea
+                            value={optionsJson}
+                            onChange={(event) => setOptionsJson(event.target.value)}
+                            className="min-h-[220px] font-mono text-xs"
+                          />
+                          <Button onClick={handleSaveFlowOptions} disabled={saveFlowOptionsMutation.isPending}>
+                            Save options
+                          </Button>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Rules JSON</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <Textarea
+                            value={rulesJson}
+                            onChange={(event) => setRulesJson(event.target.value)}
+                            className="min-h-[220px] font-mono text-xs"
+                          />
+                          <Button onClick={handleSaveFlowRules} disabled={saveFlowRulesMutation.isPending}>
+                            Save rules
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    </>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
         <TabsContent value="settings" className="space-y-6">
           <Card>

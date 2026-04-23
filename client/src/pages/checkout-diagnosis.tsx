@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { residentFetch } from "@/lib/residentApi";
+import PaystackRedirectDialog from "@/components/resident/PaystackRedirectDialog";
 import Nav from "@/components/layout/Nav";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 
@@ -26,6 +27,8 @@ export default function CheckoutDiagnosis() {
   const [isPaying, setIsPaying] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [password, setPassword] = useState("");
+  const [paystackRedirectUrl, setPaystackRedirectUrl] = useState<string | null>(null);
+  const [showPaystackRedirectModal, setShowPaystackRedirectModal] = useState(false);
 
   const consultancyFee = 4500;
   const tax = 2000;
@@ -86,7 +89,8 @@ export default function CheckoutDiagnosis() {
       // 3) redirect the browser to Paystack's hosted payment page
       const authUrl = init?.authorization_url || init?.authorizationUrl;
       if (authUrl) {
-        window.location.href = authUrl;
+        setPaystackRedirectUrl(authUrl);
+        setShowPaystackRedirectModal(true);
       } else {
         throw new Error("Missing authorization URL from Paystack initialization");
       }
@@ -103,6 +107,17 @@ export default function CheckoutDiagnosis() {
 
   return (
     <>
+    <PaystackRedirectDialog
+      open={showPaystackRedirectModal}
+      redirectUrl={paystackRedirectUrl}
+      onOpenChange={(open) => {
+        setShowPaystackRedirectModal(open);
+        if (!open) {
+          setPaystackRedirectUrl(null);
+          setIsPaying(false);
+        }
+      }}
+    />
     <div className="flex h-screen overflow-hidden bg-[#054f31]" data-name="Payment summary">
       <MobileNavDrawer
         onNavigateToHomepage={() => navigate("/resident")}

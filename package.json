@@ -23,9 +23,15 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init-or-update-schema",
     "db:seed": "tsx prisma/seed.ts",
+    "db:migrate:ordinary-flow-v1": "tsx scripts/migrateOrdinaryFlowPhase1.ts",
+    "db:seed:ordinary-flow-v1": "tsx scripts/seedOrdinaryFlowPhase1.ts",
     "dev:create-request": "tsx scripts/createSampleRequest.ts",
     "db:ensure-session": "tsx scripts/ensureSessionTable.ts",
-    "db:clear-requests": "tsx scripts/clearServiceRequests.ts"
+    "db:clear-requests": "tsx scripts/clearServiceRequests.ts",
+    "db:clear-non-admin-users": "tsx scripts/clearNonAdminUsers.ts",
+    "db:migrate-data-to-neon": "tsx scripts/migrateDataToNeon.ts",
+    "db:reset-neon-schema": "tsx scripts/resetNeonSchema.ts",
+    "db:repair-local-for-neon": "tsx scripts/repairLocalSourceForNeonMigration.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

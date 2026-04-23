@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LogOut, Building, Users, UserCheck, ClipboardList, LayoutDashboard, BarChart3, Settings, Bot, SlidersHorizontal } from "lucide-react";
+import { LogOut, Building, Users, UserCheck, ClipboardList, LayoutDashboard, BarChart3, Settings, Bot, SlidersHorizontal, Wrench } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -23,6 +23,7 @@ export function AdminLayout({ children, title }: AdminLayoutProps) {
     { href: "/admin/providers", icon: UserCheck, label: "Provider Management" },
     { href: "/admin/requests", icon: ClipboardList, label: "Service Requests" },
     { href: "/admin/reports", icon: BarChart3, label: "Reports & Analytics" },
+    { href: "/admin/maintenance-setup", icon: Wrench, label: "Maintenance Setup" },
     { href: "/admin/settings", icon: Settings, label: "Settings" },
   ];
 
@@ -31,7 +32,7 @@ export function AdminLayout({ children, title }: AdminLayoutProps) {
     navLinks.push({ href: "/admin/ai/prepared-requests", icon: Bot, label: "AI Prepared Requests" });
     navLinks.push({ href: "/admin/pricing-rules", icon: SlidersHorizontal, label: "Pricing Rules" });
     navLinks.push({ href: "/admin/providers/matching", icon: UserCheck, label: "Provider Matching" });
-    navLinks.push({ href: "/admin/request-questions", icon: SlidersHorizontal, label: "Request Questions" });
+    navLinks.push({ href: "/admin/request-questions", icon: SlidersHorizontal, label: "Resident Questions" });
     navLinks.push({ href: "/admin-super", icon: Building, label: "Super Admin" });
   }
 

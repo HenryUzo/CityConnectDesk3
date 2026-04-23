@@ -1,9 +1,13 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import {
+  createAppRequestErrorFromResponse,
+  createNetworkRequestError,
+  createUnexpectedResponseError,
+} from "@/lib/errorPresentation";
 
 async function throwIfResNotOk(res: Response, url: string) {
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText} @ ${url}\n${text.slice(0, 200)}`);
+    throw await createAppRequestErrorFromResponse(res, url, 300);
   }
 }
 
@@ -97,13 +101,13 @@ export function getQueryFn<TReturn>(opts: { on401: UnauthorizedBehavior }): Quer
       res = await fetch(url, { credentials: "include", headers });
     } catch (err: any) {
       console.error("Fetch network error:", url, err?.message || err);
-      throw new Error(`Network error fetching ${url}: ${err?.message || err}`);
+      throw createNetworkRequestError(url, err);
     }
 
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("text/html")) {
       const html = await res.text();
-      throw new Error(`Expected JSON but got HTML @ ${url}\n${html.slice(0, 160)}`);
+      throw createUnexpectedResponseError(url, ct, html);
     }
 
     if (opts.on401 === "returnNull" && res.status === 401) return null as any;

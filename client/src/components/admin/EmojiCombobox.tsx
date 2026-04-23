@@ -41,6 +41,7 @@ export const EMOJI_OPTIONS = [
   { value: "\u{1F4FA}", label: "TVs" },
   { value: "\u{1F3AE}", label: "Game Consoles" },
   { value: "\u{1F4F7}", label: "Cameras" },
+  { value: "\u{1F697}", label: "Cars" },
   { value: "\u{1F527}", label: "Repair / Accessory Kiosks" },
   { value: "\u{1F37F}", label: "Snacks & Drinks" },
   { value: "\u{1F950}", label: "Bakery / Fresh Food" },
