@@ -75,6 +75,25 @@ export function resolveNotificationTargetPath({
   }
 
   const kind = readString(meta.kind) || readString(type);
+  if (
+    kind === "maintenance_subscription_active" ||
+    kind === "maintenance_schedule_due" ||
+    kind === "maintenance_visit_rescheduled" ||
+    kind === "maintenance_subscription_expiring_soon"
+  ) {
+    return "/resident/maintenance";
+  }
+  if (
+    kind === "maintenance_provider_assigned" ||
+    kind === "maintenance_visit_completed"
+  ) {
+    if (roleKey === "resident" && requestId) {
+      return `/resident/requests/ordinary?conversationId=${encodeURIComponent(
+        conversationId || requestId,
+      )}&requestId=${encodeURIComponent(requestId)}`;
+    }
+    return "/resident/maintenance";
+  }
   if (kind === "provider_approved") return "/provider/dashboard";
   if (kind === "company_approved") return "/company-dashboard";
 

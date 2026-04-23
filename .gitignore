@@ -6,6 +6,7 @@ vite.config.ts.*
 *.tar.gz
 *.env
 .env
+.env.local
 
 # Build output
 dist/
@@ -38,3 +39,10 @@ replit.md
 
 # Local uploaded assets
 uploads/
+
+.vercel
+.vercel-cli-temp/
+.npm-vercel-cache/
+.npm-vercel-cache-2/
+.npm-vercel-install-cache/
+.npm10-cache/

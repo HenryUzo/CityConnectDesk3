@@ -1,8 +1,26 @@
 // client/src/lib/adminApi.ts
 import type { QueryFunction } from "@tanstack/react-query";
+import {
+  createAppRequestErrorFromResponse,
+  createNetworkRequestError,
+  createUnexpectedResponseError,
+} from "@/lib/errorPresentation";
+
+function normalizeApiPath(path: string) {
+  return String(path || "")
+    .trim()
+    .replace(/^\$\{import\.meta\.env\.VITE_API_URL\}/, "")
+    .replace(/^(undefined|null)(?=\/api\/)/, "");
+}
+
+const configuredApiBase = ((import.meta as any).env?.VITE_API_URL || "")
+  .replace(/\/$/, "")
+  .trim();
 
 const API_BASE =
-  (import.meta as any).env?.VITE_API_URL?.replace(/\/$/, "") ||
+  (configuredApiBase && configuredApiBase !== "undefined" && configuredApiBase !== "null"
+    ? configuredApiBase
+    : "") ||
   (typeof window !== "undefined" ? window.location.origin : "") ||
   "";
 
@@ -54,9 +72,10 @@ export async function adminFetch<T = any>(
   path: string,
   init?: (RequestInit & { json?: any; query?: Record<string, any> }) | undefined
 ): Promise<T> {
-  let url = path.startsWith("http")
-    ? path
-    : `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  const normalizedPath = normalizeApiPath(path);
+  let url = normalizedPath.startsWith("http")
+    ? normalizedPath
+    : `${API_BASE}${normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`}`;
 
   if (init?.query && Object.keys(init.query).length > 0) {
     const qs = new URLSearchParams();
@@ -83,30 +102,27 @@ export async function adminFetch<T = any>(
     (!url.startsWith("http") ||
       new URL(url, window.location.origin).origin === window.location.origin);
 
-  const res = await fetch(url, {
-    ...init,
-    method,
-    headers,
-    body,
-    credentials: shouldIncludeCredentials ? "include" : "omit",
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      method,
+      headers,
+      body,
+      credentials: shouldIncludeCredentials ? "include" : "omit",
+    });
+  } catch (error) {
+    throw createNetworkRequestError(url, error);
+  }
 
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
-    let bodyText = "";
-    try {
-      bodyText = ct.includes("application/json")
-        ? JSON.stringify(await res.json())
-        : await res.text();
-    } catch {
-      // ignore parse errors on failure path
-    }
-    throw new Error(`${res.status} ${res.statusText} @ ${url}\n${bodyText.slice(0, 300)}`);
+    throw await createAppRequestErrorFromResponse(res, url, 300);
   }
 
   if (!ct.includes("application/json")) {
     const text = await res.text();
-    throw new Error(`Expected JSON but got ${ct} @ ${url}\n${text.slice(0, 300)}`);
+    throw createUnexpectedResponseError(url, ct, text);
   }
 
   return (await res.json()) as T;
@@ -184,6 +200,59 @@ export const AdminAPI = {
       adminFetch("/api/admin/categories", { method: "POST", json: data }),
     update: (id: string, data: any) =>
       adminFetch(`/api/admin/categories/${id}`, { method: "PATCH", json: data }),
+  },
+  maintenance: {
+    categories: {
+      getAll: (params?: any) =>
+        adminFetch("/api/admin/maintenance/categories", { query: params }),
+      create: (data: any) =>
+        adminFetch("/api/admin/maintenance/categories", { method: "POST", json: data }),
+      update: (id: string, data: any) =>
+        adminFetch(`/api/admin/maintenance/categories/${id}`, {
+          method: "PATCH",
+          json: data,
+        }),
+    },
+    items: {
+      getAll: (params?: any) =>
+        adminFetch("/api/admin/maintenance/items", { query: params }),
+      create: (data: any) =>
+        adminFetch("/api/admin/maintenance/items", { method: "POST", json: data }),
+      update: (id: string, data: any) =>
+        adminFetch(`/api/admin/maintenance/items/${id}`, {
+          method: "PATCH",
+          json: data,
+        }),
+    },
+    plans: {
+      getAll: (params?: any) =>
+        adminFetch("/api/admin/maintenance/plans", { query: params }),
+      create: (data: any) =>
+        adminFetch("/api/admin/maintenance/plans", { method: "POST", json: data }),
+      update: (id: string, data: any) =>
+        adminFetch(`/api/admin/maintenance/plans/${id}`, {
+          method: "PATCH",
+          json: data,
+        }),
+    },
+    schedules: {
+      getAll: (params?: any) =>
+        adminFetch("/api/admin/maintenance/schedules", { query: params }),
+      createRequest: (id: string) =>
+        adminFetch(`/api/admin/maintenance/schedules/${id}/create-request`, {
+          method: "POST",
+        }),
+      assignProvider: (id: string, data: { providerId: string }) =>
+        adminFetch(`/api/admin/maintenance/schedules/${id}/assign-provider`, {
+          method: "POST",
+          json: data,
+        }),
+      reschedule: (id: string, data: { scheduledDate: string; notes?: string | null }) =>
+        adminFetch(`/api/admin/maintenance/schedules/${id}/reschedule`, {
+          method: "POST",
+          json: data,
+        }),
+    },
   },
   marketplace: {
     getAll: (params?: any) =>

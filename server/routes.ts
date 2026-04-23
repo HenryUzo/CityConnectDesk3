@@ -21,6 +21,8 @@ import {
   itemCategories,
   marketplaceItems,
   cityMartBanners,
+  marketTrendPoints,
+  marketTrendSeries,
   transactions,
   companies,
   companyTasks,
@@ -37,11 +39,26 @@ import {
   aiConversationFlowSettings,
   requestConversationSettings,
   requestQuestions,
+  ordinaryFlowDefinitions,
+  ordinaryFlowQuestions,
+  ordinaryFlowOptions,
+  ordinaryFlowRules,
   parentOrders,
+  assetSubscriptions,
+  insertAssetSubscriptionSchema,
+  insertMaintenanceCategorySchema,
+  insertMaintenanceItemTypeSchema,
+  insertMaintenancePlanSchema,
+  maintenanceCategories,
+  maintenanceItemTypes,
+  maintenancePlans,
+  maintenanceSchedules,
+  residentAssets,
 } from "@shared/schema";
 import appRoutes from "./app-routes";
 import providerRoutes from "./provider-routes";
 import marketplaceRoutes from "./marketplace-routes";
+import mobileAuthRoutes from "./mobile-auth-routes";
 import { createHash, randomBytes, scrypt } from "crypto";
 import { promisify } from "util";
 import { and, count, desc, eq, ilike, inArray, or, sum, sql, gte, lte, isNotNull, isNull, asc } from "drizzle-orm";
@@ -56,6 +73,7 @@ import type { Transaction as PrismaTransaction } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import {
   createPendingPaystackTransaction,
+  createConsultancyServiceRequest,
   verifyAndFinalizePaystackCharge,
 } from "./payments";
 import { validatePaystackSignature, verifyPaystackTransaction } from "./paystack";
@@ -78,6 +96,7 @@ import {
 import { resolveNotificationTargetPath } from "./notificationTargetPath";
 import {
   requireAuth,
+  requireProvider,
   requireResident,
   requireSuperAdmin,
   ensureDevAuth,
@@ -92,6 +111,35 @@ import {
 } from "./utils/inventory-image-storage";
 import { generateGeminiContent } from "./ai/geminiClient";
 import { ollamaChat } from "./ai/ollama";
+import { publishOrdinaryFlow, validateOrdinaryFlow } from "./services/ordinaryFlowEngine";
+import {
+  createMaintenanceCategoryAdmin,
+  createMaintenanceItemAdmin,
+  createMaintenancePlanAdmin,
+  getMaintenanceAdminCategoryById,
+  getMaintenanceAdminCategoryRows,
+  getMaintenanceAdminItemById,
+  getMaintenanceAdminItemRows,
+  getMaintenanceAdminPlanById,
+  getMaintenanceAdminPlanRows,
+  getMaintenanceAdminScheduleRows,
+  updateMaintenanceCategoryAdmin,
+  updateMaintenanceItemAdmin,
+  updateMaintenancePlanAdmin,
+} from "./services/maintenanceCatalogService";
+import {
+  activateMaintenanceSubscriptionFromReference,
+} from "./services/maintenanceSubscriptionService";
+import {
+  createMaintenanceRequestFromSchedule,
+  getMaintenanceSummaryForRequest,
+  syncMaintenanceScheduleFromRequest,
+} from "./services/maintenanceRequestIntegrationService";
+import {
+  rescheduleMaintenanceVisit,
+  runMaintenanceScheduleSweep,
+} from "./services/maintenanceScheduleService";
+import { notifyMaintenanceProviderJobAssigned } from "./services/maintenanceNotificationService";
 
 function membershipIsActive(membership: { isActive?: boolean | null; status?: string | null } | undefined) {
   if (!membership) return false;
@@ -108,10 +156,75 @@ const isAdminOrSuper = (req: Express["request"]) => {
 
   return (
     auth.role === "admin" ||
+    auth.role === "estate_admin" ||
     auth.role === "super_admin" ||
+    auth.globalRole === "admin" ||
+    auth.globalRole === "estate_admin" ||
     auth.globalRole === "super_admin"
   );
 };
+
+const MARKET_TREND_MONTHS = [
+  { monthIndex: 1, monthLabel: "Jan" },
+  { monthIndex: 2, monthLabel: "Feb" },
+  { monthIndex: 3, monthLabel: "Mar" },
+  { monthIndex: 4, monthLabel: "Apr" },
+  { monthIndex: 5, monthLabel: "May" },
+  { monthIndex: 6, monthLabel: "Jun" },
+  { monthIndex: 7, monthLabel: "Jul" },
+  { monthIndex: 8, monthLabel: "Aug" },
+  { monthIndex: 9, monthLabel: "Sep" },
+  { monthIndex: 10, monthLabel: "Oct" },
+  { monthIndex: 11, monthLabel: "Nov" },
+  { monthIndex: 12, monthLabel: "Dec" },
+] as const;
+
+function slugifyMarketTrendName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
+function parseOptionalBooleanQuery(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  return undefined;
+}
+
+function handleMaintenanceAdminError(res: any, error: unknown, next: (error?: unknown) => void) {
+  if (error instanceof z.ZodError) {
+    return res.status(400).json({ message: "Validation error", details: error.issues });
+  }
+  if ((error as any)?.status === 400) {
+    return res.status(400).json({ message: (error as any)?.message || "Validation error" });
+  }
+  return next(error);
+}
+
+function parseRequiredNumericInput(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : Number.NaN;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return Number.NaN;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function parseOptionalNumericInput(value: unknown) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string" && !value.trim()) return undefined;
+  return parseRequiredNumericInput(value);
+}
 
 const resolveCompanyForUser = async (userId?: string | null) => {
   if (!userId) return null;
@@ -143,6 +256,65 @@ const resolveCompanyForUser = async (userId?: string | null) => {
 
   return null;
 };
+
+async function loadMarketTrends() {
+  const seriesRows = await db
+    .select()
+    .from(marketTrendSeries)
+    .orderBy(asc(marketTrendSeries.position), asc(marketTrendSeries.name));
+
+  if (!seriesRows.length) {
+    return [];
+  }
+
+  const pointRows = await db
+    .select()
+    .from(marketTrendPoints)
+    .where(inArray(marketTrendPoints.seriesId, seriesRows.map((row: any) => row.id)))
+    .orderBy(asc(marketTrendPoints.seriesId), asc(marketTrendPoints.monthIndex));
+
+  return seriesRows.map((series: any) => {
+    const pointsByMonth = new Map(
+      pointRows
+        .filter((point: any) => point.seriesId === series.id)
+        .map((point: any) => [Number(point.monthIndex), Number(point.value || 0)]),
+    );
+
+    return {
+      id: series.id,
+      name: series.name,
+      slug: series.slug,
+      color: series.color,
+      unit: series.unit,
+      position: series.position,
+      isActive: series.isActive,
+      points: MARKET_TREND_MONTHS.map((month) => ({
+        monthIndex: month.monthIndex,
+        monthLabel: month.monthLabel,
+        value: pointsByMonth.get(month.monthIndex) ?? 0,
+      })),
+    };
+  });
+}
+
+const marketTrendSeriesUpsertSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  color: z.string().trim().min(4).max(20).default("#039855"),
+  unit: z.string().trim().max(24).optional().nullable(),
+  position: z.coerce.number().int().min(1).max(999).optional(),
+  isActive: z.boolean().optional(),
+});
+
+const marketTrendPointsUpsertSchema = z.object({
+  points: z
+    .array(
+      z.object({
+        monthIndex: z.coerce.number().int().min(1).max(12),
+        value: z.coerce.number().min(0).max(1000000000),
+      }),
+    )
+    .length(12),
+});
 
 const resolveCompanyAccess = async (req: Express["request"]) => {
   const userId = req.auth?.userId ?? req.user?.id;
@@ -353,6 +525,52 @@ const CreateServiceRequest = insertServiceRequestSchema.extend({
     .transform((v) => (typeof v === "number" ? String(v) : v)),
 });
 
+const MaintenanceCategoryInputSchema = insertMaintenanceCategorySchema.extend({
+  name: z.string().trim().min(1).max(120),
+  slug: z.string().trim().min(1).max(120).optional().nullable(),
+  description: z.string().trim().max(1000).optional().nullable(),
+  icon: z.string().trim().max(64).optional().nullable(),
+  isActive: z.boolean().optional(),
+});
+
+const MaintenanceItemTypeInputSchema = insertMaintenanceItemTypeSchema.extend({
+  categoryId: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(120),
+  slug: z.string().trim().min(1).max(120).optional().nullable(),
+  description: z.string().trim().max(1000).optional().nullable(),
+  defaultFrequency: z.enum(["monthly", "quarterly_3m", "halfyearly_6m", "yearly"]).optional().nullable(),
+  recommendedTasks: z.array(z.string().trim().min(1)).optional().nullable(),
+  imageUrl: z.string().trim().max(10_000_000).optional().nullable(),
+  isActive: z.boolean().optional(),
+});
+
+const MaintenancePlanInputSchema = insertMaintenancePlanSchema.extend({
+  maintenanceItemId: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(1000).optional().nullable(),
+  durationType: z.enum(["monthly", "quarterly_3m", "halfyearly_6m", "yearly"]),
+  price: z.preprocess(
+    (value) => parseRequiredNumericInput(value),
+    z.number().min(0),
+  ).transform((value) => String(value)),
+  currency: z.string().trim().max(8).optional(),
+  visitsIncluded: z.preprocess(
+    (value) => parseOptionalNumericInput(value),
+    z.number().int().min(1).max(365).optional(),
+  ),
+  includedTasks: z.array(z.string().trim().min(1)).optional().nullable(),
+  requestLeadDays: z.preprocess(
+    (value) => parseOptionalNumericInput(value),
+    z.number().int().min(0).max(90).optional(),
+  ),
+  isActive: z.boolean().optional(),
+});
+
+const MaintenanceScheduleRescheduleSchema = z.object({
+  scheduledDate: z.string().datetime(),
+  notes: z.string().trim().max(2000).optional(),
+});
+
 const AIDiagnosisRequestSchema = z.object({
   category: z.string().min(1, "Category is required"),
   description: z.string().min(10, "Description must be at least 10 characters"),
@@ -459,6 +677,87 @@ const RequestQuestionSchema = z.object({
   isEnabled: z.boolean().optional(),
 });
 
+const OrdinaryFlowDefinitionCreateSchema = z.object({
+  categoryKey: z.string().trim().min(1),
+  scope: z.enum(["global", "estate"]).default("global"),
+  estateId: z.string().trim().min(1).nullable().optional(),
+  name: z.string().trim().min(1).max(200),
+  version: z.number().int().positive().optional(),
+  isDefault: z.boolean().optional().default(false),
+});
+
+const OrdinaryFlowDefinitionPatchSchema = z.object({
+  categoryKey: z.string().trim().min(1).optional(),
+  scope: z.enum(["global", "estate"]).optional(),
+  estateId: z.string().trim().min(1).nullable().optional(),
+  name: z.string().trim().min(1).max(200).optional(),
+  version: z.number().int().positive().optional(),
+  status: z.enum(["draft", "published", "archived"]).optional(),
+  isDefault: z.boolean().optional(),
+});
+
+const OrdinaryFlowQuestionsBulkSchema = z.object({
+  questions: z.array(
+    z.object({
+      id: z.string().optional(),
+      questionKey: z.string().trim().min(1),
+      prompt: z.string().trim().min(1),
+      description: z.string().optional().nullable(),
+      inputType: z.enum([
+        "single_select",
+        "multi_select",
+        "text",
+        "number",
+        "date",
+        "time",
+        "datetime",
+        "location",
+        "file",
+        "yes_no",
+        "urgency",
+        "estate",
+      ]),
+      isRequired: z.boolean().optional().default(true),
+      isTerminal: z.boolean().optional().default(false),
+      orderIndex: z.number().int().min(0).default(0),
+      validation: z.any().optional(),
+      uiMeta: z.any().optional(),
+      defaultNextQuestionId: z.string().nullable().optional(),
+    }),
+  ),
+});
+
+const OrdinaryFlowOptionsBulkSchema = z.object({
+  options: z.array(
+    z.object({
+      id: z.string().optional(),
+      questionId: z.string().min(1),
+      optionKey: z.string().trim().min(1),
+      label: z.string().trim().min(1),
+      value: z.string().trim().min(1),
+      icon: z.string().optional().nullable(),
+      orderIndex: z.number().int().min(0).default(0),
+      nextQuestionId: z.string().nullable().optional(),
+      meta: z.any().optional(),
+    }),
+  ),
+});
+
+const OrdinaryFlowRulesBulkSchema = z.object({
+  rules: z.array(
+    z.object({
+      id: z.string().optional(),
+      fromQuestionId: z.string().min(1),
+      priority: z.number().int().default(100),
+      conditionJson: z.any().optional(),
+      action: z.enum(["goto_question", "terminate", "set_value", "skip"]),
+      nextQuestionId: z.string().nullable().optional(),
+      actionPayload: z.any().optional(),
+      isActive: z.boolean().optional().default(true),
+    }),
+  ),
+});
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Debug endpoint (DEV ONLY): check Paystack secret key loading
   app.get("/api/debug/paystack-key", (req, res) => {
@@ -485,13 +784,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use("/api/app", appRoutes);
   app.use("/api/provider", providerRoutes);
   app.use("/api/marketplace", marketplaceRoutes);
+  app.use("/api/mobile/auth", mobileAuthRoutes);
 
   const emitServiceRequestUpdate = (
     expressApp: { get: (name: string) => unknown },
-    serviceRequest: { id?: string; residentId?: string | null; providerId?: string | null } | null | undefined,
+    serviceRequest: {
+      id?: string;
+      residentId?: string | null;
+      providerId?: string | null;
+      status?: string | null;
+    } | null | undefined,
     updateType: "updated" | "assigned" | "advice" | "status" = "updated",
   ) => {
     if (!serviceRequest?.id) return;
+    if (serviceRequest.status) {
+      void syncMaintenanceScheduleFromRequest({
+        requestId: serviceRequest.id,
+        status: serviceRequest.status,
+      }).catch((error) => {
+        console.error("Maintenance schedule sync failed", error);
+      });
+    }
     const io = expressApp.get("io") as SocketIOServer | undefined;
     if (!io) return;
 
@@ -507,6 +820,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         at: new Date().toISOString(),
       });
     }
+  };
+
+  const syncLinkedServiceRequestFromTaskStatus = async (params: {
+    serviceRequestId?: string | null;
+    taskStatus: string;
+  }) => {
+    const serviceRequestId = String(params.serviceRequestId || "").trim();
+    if (!serviceRequestId) return null;
+
+    const currentRequest = await storage.getServiceRequest(serviceRequestId);
+    if (!currentRequest) return null;
+
+    const currentStatus = normalizeServiceRequestStatusKey(currentRequest.status);
+    const taskStatus = normalizeServiceRequestStatusKey(params.taskStatus);
+
+    let nextStatus: "in_progress" | "work_completed_pending_resident" | null = null;
+    if (taskStatus === "in_progress") {
+      if (["assigned_for_job", "rework_required", "in_progress"].includes(currentStatus)) {
+        nextStatus = "in_progress";
+      }
+    } else if (taskStatus === "completed") {
+      if (["in_progress", "work_completed_pending_resident"].includes(currentStatus)) {
+        nextStatus = "work_completed_pending_resident";
+      }
+    }
+
+    if (!nextStatus || nextStatus === currentStatus) {
+      return currentRequest;
+    }
+
+    const updatedRequest = await storage.updateServiceRequest(serviceRequestId, {
+      status: nextStatus as any,
+      closedAt: null,
+    } as any);
+
+    return updatedRequest ?? currentRequest;
   };
 
   const parseTaskDateCandidate = (value: unknown): Date | null => {
@@ -944,6 +1293,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   setInterval(() => {
     void runWorkCompletionSlaSweep();
   }, WORK_COMPLETION_SLA_SWEEP_MS);
+
+  void runMaintenanceScheduleSweep();
+  setInterval(() => {
+    void runMaintenanceScheduleSweep().catch((error) => {
+      console.error("Maintenance schedule sweep crashed", error);
+    });
+  }, 60 * 60 * 1000);
 
 
   const finalizeServiceRequestAfterPayment = async (
@@ -1498,6 +1854,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const toLegacyRequestsPageRow = (request: any) => {
+    const statusKey = normalizeServiceRequestStatusKey(request?.status);
+    const legacyStatus =
+      statusKey === "pending"
+        ? "PENDING"
+        : statusKey === "pending_inspection" || statusKey === "assigned"
+          ? "UNDER_REVIEW"
+          : statusKey === "completed"
+            ? "COMPLETED"
+            : statusKey === "cancelled"
+              ? "CANCELLED"
+              : statusKey === "in_progress" ||
+                  statusKey === "assigned_for_job" ||
+                  statusKey === "work_completed_pending_resident"
+                ? "IN_PROGRESS"
+                : String(request?.status || "UNSET").toUpperCase();
+
+    return {
+      ...request,
+      title:
+        String(request?.categoryLabel || "").trim() ||
+        String(request?.issueType || "").trim() ||
+        null,
+      status: legacyStatus,
+    };
+  };
+
+  app.get("/api/estates/:estateId/requests", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      const role = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const estateId = String(req.params.estateId || "").trim();
+      const requests =
+        role === "admin" || role === "super_admin" || role === "estate_admin"
+          ? (await storage.getAllServiceRequests()).filter((request: any) => request.estateId === estateId)
+          : await storage.getServiceRequestsByResident(userId, { estateId });
+
+      res.json((requests || []).map((request: any) => toLegacyRequestsPageRow(enrichServiceRequestPresentation(request))));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/requests/:id/status", requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.auth?.userId ?? req.user?.id;
+      const role = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const currentRequest = await storage.getServiceRequest(req.params.id);
+      if (!currentRequest) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      const isAdminActor = role === "admin" || role === "super_admin" || role === "estate_admin";
+      if (!isAdminActor && currentRequest.residentId !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const requestedStatus = normalizeServiceRequestStatusKey((req.body || {}).status);
+      const mappedStatus =
+        requestedStatus === "under_review"
+          ? "pending_inspection"
+          : requestedStatus === "pending"
+            ? "pending"
+            : requestedStatus === "in_progress"
+              ? "in_progress"
+              : requestedStatus === "completed"
+                ? "completed"
+                : requestedStatus === "cancelled"
+                  ? "cancelled"
+                  : requestedStatus;
+
+      if (!SERVICE_REQUEST_STATUS_KEYS.has(mappedStatus)) {
+        return res.status(400).json({ message: "Invalid service request status" });
+      }
+
+      const updated = await storage.updateServiceRequest(req.params.id, {
+        status: mappedStatus as any,
+        updatedAt: new Date(),
+        closedAt: mappedStatus === "completed" || mappedStatus === "cancelled" ? new Date() : null,
+      } as any);
+      if (!updated) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      emitServiceRequestUpdate(req.app, updated, "status");
+      res.json(toLegacyRequestsPageRow(enrichServiceRequestPresentation(updated)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.patch("/api/service-requests/:id", requireAuth, async (req, res, next) => {
     try {
       const { id } = req.params;
@@ -1539,6 +1990,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const currentStatus = normalizeServiceRequestStatusKey(currentRequest.status);
+      const hasExplicitStatusUpdate = Object.prototype.hasOwnProperty.call(updates, "status");
       const nextStatus = updates.status
         ? normalizeServiceRequestStatusKey(updates.status)
         : currentStatus;
@@ -1672,6 +2124,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         if (
           normalizedPaymentStatus === "paid" &&
+          !hasExplicitStatusUpdate &&
           ["pending", "request_created"].includes(currentStatus)
         ) {
           updates.status = "pending_inspection";
@@ -2125,7 +2578,197 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ ok: true, status: cancelled.status });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.get("/api/app/market-trends", requireAuth, async (_req, res, next) => {
+    try {
+      const series = await loadMarketTrends();
+      res.json({
+        series: series.filter((item: any) => item.isActive !== false),
+      });
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.get("/api/admin/market-trends", requireSuperAdmin, async (_req, res, next) => {
+    try {
+      const series = await loadMarketTrends();
+      res.json({ series });
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.post("/api/admin/market-trends/series", requireSuperAdmin, async (req, res, next) => {
+    try {
+      const payload = marketTrendSeriesUpsertSchema.parse(req.body ?? {});
+      const slugBase = slugifyMarketTrendName(payload.name);
+
+      if (!slugBase) {
+        return res.status(400).json({ message: "Series name is required" });
+      }
+
+      const existingSlugs = await db
+        .select({ slug: marketTrendSeries.slug })
+        .from(marketTrendSeries)
+        .where(ilike(marketTrendSeries.slug, `${slugBase}%`));
+
+      const usedSlugs = new Set(existingSlugs.map((item: any) => item.slug));
+      let slug = slugBase;
+      let suffix = 2;
+      while (usedSlugs.has(slug)) {
+        slug = `${slugBase}-${suffix++}`;
+      }
+
+      const countResult = await db.select({ count: count() }).from(marketTrendSeries);
+      const nextPosition = payload.position ?? Number(countResult[0]?.count ?? 0) + 1;
+
+      const [created] = await db
+        .insert(marketTrendSeries)
+        .values({
+          name: payload.name,
+          slug,
+          color: payload.color || "#039855",
+          unit: payload.unit ?? "NGN",
+          position: nextPosition,
+          isActive: payload.isActive ?? true,
+        })
+        .returning();
+
+      await db.insert(marketTrendPoints).values(
+        MARKET_TREND_MONTHS.map((month) => ({
+          seriesId: created.id,
+          monthIndex: month.monthIndex,
+          value: 0,
+        })),
+      );
+
+      const series = await loadMarketTrends();
+      res.status(201).json(series.find((item: any) => item.id === created.id) ?? created);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.patch("/api/admin/market-trends/series/:id", requireSuperAdmin, async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const payload = marketTrendSeriesUpsertSchema.partial().parse(req.body ?? {});
+
+      const [existing] = await db
+        .select()
+        .from(marketTrendSeries)
+        .where(eq(marketTrendSeries.id, id))
+        .limit(1 as any);
+
+      if (!existing) {
+        return res.status(404).json({ message: "Series not found" });
+      }
+
+      const updates: any = { updatedAt: new Date() };
+      if (payload.name !== undefined) updates.name = payload.name;
+      if (payload.color !== undefined) updates.color = payload.color || "#039855";
+      if (payload.unit !== undefined) updates.unit = payload.unit ?? "NGN";
+      if (payload.position !== undefined) updates.position = payload.position;
+      if (payload.isActive !== undefined) updates.isActive = payload.isActive;
+
+      if (payload.name && payload.name.trim() !== existing.name) {
+        const slugBase = slugifyMarketTrendName(payload.name);
+        const siblings = await db
+          .select({ id: marketTrendSeries.id, slug: marketTrendSeries.slug })
+          .from(marketTrendSeries)
+          .where(ilike(marketTrendSeries.slug, `${slugBase}%`));
+
+        const usedSlugs = new Set(
+          siblings.filter((item: any) => item.id !== id).map((item: any) => item.slug),
+        );
+        let slug = slugBase;
+        let suffix = 2;
+        while (usedSlugs.has(slug)) {
+          slug = `${slugBase}-${suffix++}`;
+        }
+        updates.slug = slug;
+      }
+
+      const [updated] = await db
+        .update(marketTrendSeries)
+        .set(updates)
+        .where(eq(marketTrendSeries.id, id))
+        .returning();
+
+      const series = await loadMarketTrends();
+      res.json(series.find((item: any) => item.id === updated.id) ?? updated);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.put("/api/admin/market-trends/series/:id/points", requireSuperAdmin, async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const payload = marketTrendPointsUpsertSchema.parse(req.body ?? {});
+
+      const [existing] = await db
+        .select({ id: marketTrendSeries.id })
+        .from(marketTrendSeries)
+        .where(eq(marketTrendSeries.id, id))
+        .limit(1 as any);
+
+      if (!existing) {
+        return res.status(404).json({ message: "Series not found" });
+      }
+
+      for (const point of payload.points) {
+        const [present] = await db
+          .select({ id: marketTrendPoints.id })
+          .from(marketTrendPoints)
+          .where(
+            and(
+              eq(marketTrendPoints.seriesId, id),
+              eq(marketTrendPoints.monthIndex, point.monthIndex),
+            ),
+          )
+          .limit(1 as any);
+
+        if (present) {
+          await db
+            .update(marketTrendPoints)
+            .set({ value: point.value, updatedAt: new Date() })
+            .where(eq(marketTrendPoints.id, present.id));
+        } else {
+          await db.insert(marketTrendPoints).values({
+            seriesId: id,
+            monthIndex: point.monthIndex,
+            value: point.value,
+          });
+        }
+      }
+
+      const series = await loadMarketTrends();
+      res.json(series.find((item: any) => item.id === id) ?? { id });
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.delete("/api/admin/market-trends/series/:id", requireSuperAdmin, async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const [deleted] = await db
+        .delete(marketTrendSeries)
+        .where(eq(marketTrendSeries.id, id))
+        .returning();
+
+      if (!deleted) {
+        return res.status(404).json({ message: "Series not found" });
+      }
+
+      res.json({ message: "Series deleted", id });
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -2322,7 +2965,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(rows);
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -2663,7 +3306,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...readRequestTypingState(req.params.id),
       });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -2726,7 +3369,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isTyping: parsed.isTyping,
       });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -2829,14 +3472,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/service-requests/:id/accept", async (req, res, next) => {
+  app.post("/api/service-requests/:id/accept", requireAuth, requireProvider, async (req, res, next) => {
     try {
-      if (!req.isAuthenticated() || req.user?.role !== "provider") {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+      const providerId = req.auth?.userId ?? req.user?.id;
+      if (!providerId) return res.status(401).json({ message: "Unauthorized" });
 
       const { id } = req.params;
-      const serviceRequest = await storage.assignServiceRequest(id, req.user.id);
+      const serviceRequest = await storage.assignServiceRequest(id, providerId);
 
       if (!serviceRequest) {
         return res.status(404).json({ message: "Service request not found" });
@@ -2985,7 +3627,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       res.json({ ok: true, ...sweep });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -3030,7 +3672,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         hoursAgo,
       });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -3874,6 +4516,504 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ========== Request Conversation Settings & Questions ==========
+  app.get("/api/admin/ordinary-flows", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const categoryKey = String(req.query.categoryKey || "")
+        .trim()
+        .toLowerCase();
+      const status = String(req.query.status || "").trim().toLowerCase();
+      const scope = String(req.query.scope || "").trim().toLowerCase();
+
+      const conditions: any[] = [];
+      if (categoryKey) conditions.push(eq(ordinaryFlowDefinitions.categoryKey, categoryKey));
+      if (status === "draft" || status === "published" || status === "archived") {
+        conditions.push(eq(ordinaryFlowDefinitions.status, status as any));
+      }
+      if (scope === "global" || scope === "estate") {
+        conditions.push(eq(ordinaryFlowDefinitions.scope, scope as any));
+      }
+
+      const rows =
+        conditions.length > 0
+          ? await db
+              .select()
+              .from(ordinaryFlowDefinitions)
+              .where(and(...conditions))
+              .orderBy(desc(ordinaryFlowDefinitions.updatedAt), desc(ordinaryFlowDefinitions.createdAt))
+          : await db
+              .select()
+              .from(ordinaryFlowDefinitions)
+              .orderBy(desc(ordinaryFlowDefinitions.updatedAt), desc(ordinaryFlowDefinitions.createdAt));
+
+      const flowIds = rows.map((row: any) => String(row.id));
+      const questionCounts = flowIds.length
+        ? await db
+            .select({
+              flowId: ordinaryFlowQuestions.flowId,
+              count: sql<number>`COUNT(*)::int`,
+            })
+            .from(ordinaryFlowQuestions)
+            .where(inArray(ordinaryFlowQuestions.flowId, flowIds as any))
+            .groupBy(ordinaryFlowQuestions.flowId)
+        : [];
+      const questionCountByFlow = new Map<string, number>();
+      for (const row of questionCounts) {
+        questionCountByFlow.set(String(row.flowId), Number(row.count || 0));
+      }
+
+      return res.json(
+        rows.map((row: any) => ({
+          ...row,
+          questionCount: questionCountByFlow.get(String(row.id)) || 0,
+        })),
+      );
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.get("/api/admin/ordinary-flows/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const id = String(req.params.id || "");
+      const [definition] = await db
+        .select()
+        .from(ordinaryFlowDefinitions)
+        .where(eq(ordinaryFlowDefinitions.id, id))
+        .limit(1);
+      if (!definition) return res.status(404).json({ message: "Not found" });
+
+      const questions = await db
+        .select()
+        .from(ordinaryFlowQuestions)
+        .where(eq(ordinaryFlowQuestions.flowId, id))
+        .orderBy(asc(ordinaryFlowQuestions.orderIndex), asc(ordinaryFlowQuestions.questionKey));
+      const questionIds = questions.map((q: any) => String(q.id));
+      const options = questionIds.length
+        ? await db
+            .select()
+            .from(ordinaryFlowOptions)
+            .where(inArray(ordinaryFlowOptions.questionId, questionIds as any))
+            .orderBy(asc(ordinaryFlowOptions.orderIndex), asc(ordinaryFlowOptions.optionKey))
+        : [];
+      const rules = await db
+        .select()
+        .from(ordinaryFlowRules)
+        .where(eq(ordinaryFlowRules.flowId, id))
+        .orderBy(asc(ordinaryFlowRules.priority), asc(ordinaryFlowRules.createdAt));
+
+      return res.json({ definition, questions, options, rules });
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.post("/api/admin/ordinary-flows", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const parsed = OrdinaryFlowDefinitionCreateSchema.parse(req.body || {});
+      const categoryKey = parsed.categoryKey.toLowerCase();
+      const scope = parsed.scope ?? "global";
+      const estateId = parsed.estateId ?? null;
+
+      const maxVersionRows = await db.execute(sql`
+        SELECT COALESCE(MAX(version), 0)::int AS max_version
+        FROM ordinary_flow_definitions
+        WHERE category_key = ${categoryKey}
+          AND scope = ${scope}
+          AND COALESCE(estate_id, '') = COALESCE(${estateId}, '')
+      `);
+      const maxVersion = Number((maxVersionRows as any)?.rows?.[0]?.max_version ?? 0);
+      const version = parsed.version ?? maxVersion + 1;
+
+      const [created] = await db
+        .insert(ordinaryFlowDefinitions)
+        .values({
+          categoryKey,
+          scope: scope as any,
+          estateId,
+          name: parsed.name,
+          version,
+          status: "draft",
+          isDefault: parsed.isDefault ?? false,
+          createdBy: req.auth?.userId ?? null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      return res.status(201).json(created);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.patch("/api/admin/ordinary-flows/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const id = String(req.params.id || "");
+      const parsed = OrdinaryFlowDefinitionPatchSchema.parse(req.body || {});
+      const patch: any = { updatedAt: new Date() };
+      if (parsed.categoryKey !== undefined) patch.categoryKey = parsed.categoryKey.toLowerCase();
+      if (parsed.scope !== undefined) patch.scope = parsed.scope;
+      if (parsed.estateId !== undefined) patch.estateId = parsed.estateId ?? null;
+      if (parsed.name !== undefined) patch.name = parsed.name;
+      if (parsed.version !== undefined) patch.version = parsed.version;
+      if (parsed.status !== undefined) patch.status = parsed.status;
+      if (parsed.isDefault !== undefined) patch.isDefault = parsed.isDefault;
+
+      const [updated] = await db
+        .update(ordinaryFlowDefinitions)
+        .set(patch)
+        .where(eq(ordinaryFlowDefinitions.id, id))
+        .returning();
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      return res.json(updated);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.put("/api/admin/ordinary-flows/:id/questions", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const flowId = String(req.params.id || "");
+      const parsed = OrdinaryFlowQuestionsBulkSchema.parse(req.body || {});
+      const [flow] = await db
+        .select()
+        .from(ordinaryFlowDefinitions)
+        .where(eq(ordinaryFlowDefinitions.id, flowId))
+        .limit(1);
+      if (!flow) return res.status(404).json({ message: "Flow not found" });
+
+      const existingRows = await db
+        .select({ id: ordinaryFlowQuestions.id })
+        .from(ordinaryFlowQuestions)
+        .where(eq(ordinaryFlowQuestions.flowId, flowId));
+      const existingIds = new Set(existingRows.map((row: any) => String(row.id)));
+
+      const keepIds: string[] = [];
+      for (const question of parsed.questions) {
+        if (question.id && existingIds.has(String(question.id))) {
+          const [updated] = await db
+            .update(ordinaryFlowQuestions)
+            .set({
+              questionKey: question.questionKey,
+              prompt: question.prompt,
+              description: question.description ?? null,
+              inputType: question.inputType as any,
+              isRequired: question.isRequired ?? true,
+              isTerminal: question.isTerminal ?? false,
+              orderIndex: question.orderIndex ?? 0,
+              validation: question.validation ?? {},
+              uiMeta: question.uiMeta ?? {},
+              defaultNextQuestionId: question.defaultNextQuestionId ?? null,
+              updatedAt: new Date(),
+            })
+            .where(eq(ordinaryFlowQuestions.id, String(question.id)))
+            .returning();
+          keepIds.push(String(updated.id));
+        } else {
+          const [created] = await db
+            .insert(ordinaryFlowQuestions)
+            .values({
+              id: question.id || undefined,
+              flowId,
+              questionKey: question.questionKey,
+              prompt: question.prompt,
+              description: question.description ?? null,
+              inputType: question.inputType as any,
+              isRequired: question.isRequired ?? true,
+              isTerminal: question.isTerminal ?? false,
+              orderIndex: question.orderIndex ?? 0,
+              validation: question.validation ?? {},
+              uiMeta: question.uiMeta ?? {},
+              defaultNextQuestionId: question.defaultNextQuestionId ?? null,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            } as any)
+            .returning();
+          keepIds.push(String(created.id));
+        }
+      }
+
+      if (keepIds.length) {
+        await db.execute(sql`
+          DELETE FROM ordinary_flow_questions
+          WHERE flow_id = ${flowId}
+            AND id NOT IN (${sql.join(
+              keepIds.map((item) => sql`${item}`),
+              sql`, `,
+            )})
+        `);
+      } else {
+        await db.delete(ordinaryFlowQuestions).where(eq(ordinaryFlowQuestions.flowId, flowId));
+      }
+
+      const rows = await db
+        .select()
+        .from(ordinaryFlowQuestions)
+        .where(eq(ordinaryFlowQuestions.flowId, flowId))
+        .orderBy(asc(ordinaryFlowQuestions.orderIndex), asc(ordinaryFlowQuestions.questionKey));
+      return res.json(rows);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.put("/api/admin/ordinary-flows/:id/options", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const flowId = String(req.params.id || "");
+      const parsed = OrdinaryFlowOptionsBulkSchema.parse(req.body || {});
+      const questions = await db
+        .select({ id: ordinaryFlowQuestions.id })
+        .from(ordinaryFlowQuestions)
+        .where(eq(ordinaryFlowQuestions.flowId, flowId));
+      const questionIds = new Set(questions.map((row: any) => String(row.id)));
+
+      for (const option of parsed.options) {
+        if (!questionIds.has(String(option.questionId))) {
+          return res.status(400).json({
+            message: `Question ${option.questionId} does not belong to this flow.`,
+          });
+        }
+      }
+
+      if (questionIds.size) {
+        await db.execute(sql`
+          DELETE FROM ordinary_flow_options
+          WHERE question_id IN (${sql.join(
+            Array.from(questionIds).map((item) => sql`${item}`),
+            sql`, `,
+          )})
+        `);
+      }
+
+      if (parsed.options.length) {
+        await db.insert(ordinaryFlowOptions).values(
+          parsed.options.map((option) => ({
+            id: option.id || undefined,
+            questionId: option.questionId,
+            optionKey: option.optionKey,
+            label: option.label,
+            value: option.value,
+            icon: option.icon ?? null,
+            orderIndex: option.orderIndex ?? 0,
+            nextQuestionId: option.nextQuestionId ?? null,
+            meta: option.meta ?? {},
+          })) as any,
+        );
+      }
+
+      const rows = questionIds.size
+        ? await db
+            .select()
+            .from(ordinaryFlowOptions)
+            .where(inArray(ordinaryFlowOptions.questionId, Array.from(questionIds) as any))
+            .orderBy(asc(ordinaryFlowOptions.orderIndex), asc(ordinaryFlowOptions.optionKey))
+        : [];
+      return res.json(rows);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.put("/api/admin/ordinary-flows/:id/rules", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const flowId = String(req.params.id || "");
+      const parsed = OrdinaryFlowRulesBulkSchema.parse(req.body || {});
+
+      const questionRows = await db
+        .select({ id: ordinaryFlowQuestions.id })
+        .from(ordinaryFlowQuestions)
+        .where(eq(ordinaryFlowQuestions.flowId, flowId));
+      const questionIds = new Set(questionRows.map((row: any) => String(row.id)));
+
+      for (const rule of parsed.rules) {
+        if (!questionIds.has(String(rule.fromQuestionId))) {
+          return res.status(400).json({ message: `fromQuestionId ${rule.fromQuestionId} not in flow.` });
+        }
+        if (rule.nextQuestionId && !questionIds.has(String(rule.nextQuestionId))) {
+          return res.status(400).json({ message: `nextQuestionId ${rule.nextQuestionId} not in flow.` });
+        }
+      }
+
+      await db.delete(ordinaryFlowRules).where(eq(ordinaryFlowRules.flowId, flowId));
+      if (parsed.rules.length) {
+        await db.insert(ordinaryFlowRules).values(
+          parsed.rules.map((rule) => ({
+            id: rule.id || undefined,
+            flowId,
+            fromQuestionId: rule.fromQuestionId,
+            priority: rule.priority ?? 100,
+            conditionJson: rule.conditionJson ?? {},
+            action: rule.action as any,
+            nextQuestionId: rule.nextQuestionId ?? null,
+            actionPayload: rule.actionPayload ?? {},
+            isActive: rule.isActive ?? true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })) as any,
+        );
+      }
+
+      const rows = await db
+        .select()
+        .from(ordinaryFlowRules)
+        .where(eq(ordinaryFlowRules.flowId, flowId))
+        .orderBy(asc(ordinaryFlowRules.priority), asc(ordinaryFlowRules.createdAt));
+      return res.json(rows);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.post("/api/admin/ordinary-flows/:id/validate", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const flowId = String(req.params.id || "");
+      const result = await validateOrdinaryFlow(flowId);
+      if (!result.ok) return res.status(422).json(result);
+      return res.json(result);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.post("/api/admin/ordinary-flows/:id/publish", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const flowId = String(req.params.id || "");
+      const result = await publishOrdinaryFlow(flowId, req.auth?.userId ?? null);
+      return res.json(result);
+    } catch (error: any) {
+      if (error?.status === 422) {
+        return res.status(422).json(error.details || { message: error.message || "Validation failed" });
+      }
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/ordinary-flows/:id/clone", requireAuth, requireSuperAdmin, async (req, res, next) => {
+    try {
+      const sourceId = String(req.params.id || "");
+      const [source] = await db
+        .select()
+        .from(ordinaryFlowDefinitions)
+        .where(eq(ordinaryFlowDefinitions.id, sourceId))
+        .limit(1);
+      if (!source) return res.status(404).json({ message: "Flow not found" });
+
+      const maxVersionRows = await db.execute(sql`
+        SELECT COALESCE(MAX(version), 0)::int AS max_version
+        FROM ordinary_flow_definitions
+        WHERE category_key = ${source.categoryKey}
+          AND scope = ${source.scope}
+          AND COALESCE(estate_id, '') = COALESCE(${source.estateId}, '')
+      `);
+      const version = Number((maxVersionRows as any)?.rows?.[0]?.max_version ?? 0) + 1;
+
+      const [clonedDefinition] = await db
+        .insert(ordinaryFlowDefinitions)
+        .values({
+          categoryKey: source.categoryKey,
+          scope: source.scope as any,
+          estateId: source.estateId ?? null,
+          name: `${source.name} (Clone ${version})`,
+          version,
+          status: "draft",
+          isDefault: false,
+          createdBy: req.auth?.userId ?? null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      const sourceQuestions = await db
+        .select()
+        .from(ordinaryFlowQuestions)
+        .where(eq(ordinaryFlowQuestions.flowId, sourceId))
+        .orderBy(asc(ordinaryFlowQuestions.orderIndex), asc(ordinaryFlowQuestions.questionKey));
+
+      const questionIdMap = new Map<string, string>();
+      for (const question of sourceQuestions) {
+        const [created] = await db
+          .insert(ordinaryFlowQuestions)
+          .values({
+            flowId: clonedDefinition.id,
+            questionKey: question.questionKey,
+            prompt: question.prompt,
+            description: question.description ?? null,
+            inputType: question.inputType as any,
+            isRequired: question.isRequired,
+            isTerminal: question.isTerminal,
+            orderIndex: question.orderIndex,
+            validation: question.validation ?? {},
+            uiMeta: question.uiMeta ?? {},
+            defaultNextQuestionId: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .returning();
+        questionIdMap.set(String(question.id), String(created.id));
+      }
+
+      for (const question of sourceQuestions) {
+        if (!question.defaultNextQuestionId) continue;
+        const newQuestionId = questionIdMap.get(String(question.id));
+        const newDefaultId = questionIdMap.get(String(question.defaultNextQuestionId));
+        if (!newQuestionId) continue;
+        await db
+          .update(ordinaryFlowQuestions)
+          .set({ defaultNextQuestionId: newDefaultId || null, updatedAt: new Date() })
+          .where(eq(ordinaryFlowQuestions.id, newQuestionId));
+      }
+
+      const sourceQuestionIds = sourceQuestions.map((question: any) => String(question.id));
+      const sourceOptions = sourceQuestionIds.length
+        ? await db
+            .select()
+            .from(ordinaryFlowOptions)
+            .where(inArray(ordinaryFlowOptions.questionId, sourceQuestionIds as any))
+            .orderBy(asc(ordinaryFlowOptions.orderIndex), asc(ordinaryFlowOptions.optionKey))
+        : [];
+      if (sourceOptions.length) {
+        await db.insert(ordinaryFlowOptions).values(
+          sourceOptions.map((option: any) => ({
+            questionId: questionIdMap.get(String(option.questionId)),
+            optionKey: option.optionKey,
+            label: option.label,
+            value: option.value,
+            icon: option.icon ?? null,
+            orderIndex: option.orderIndex,
+            nextQuestionId: option.nextQuestionId ? questionIdMap.get(String(option.nextQuestionId)) || null : null,
+            meta: option.meta ?? {},
+          })) as any,
+        );
+      }
+
+      const sourceRules = await db
+        .select()
+        .from(ordinaryFlowRules)
+        .where(eq(ordinaryFlowRules.flowId, sourceId))
+        .orderBy(asc(ordinaryFlowRules.priority), asc(ordinaryFlowRules.createdAt));
+      if (sourceRules.length) {
+        await db.insert(ordinaryFlowRules).values(
+          sourceRules.map((rule: any) => ({
+            flowId: clonedDefinition.id,
+            fromQuestionId: questionIdMap.get(String(rule.fromQuestionId)),
+            priority: rule.priority,
+            conditionJson: rule.conditionJson ?? {},
+            action: rule.action as any,
+            nextQuestionId: rule.nextQuestionId ? questionIdMap.get(String(rule.nextQuestionId)) || null : null,
+            actionPayload: rule.actionPayload ?? {},
+            isActive: rule.isActive,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })) as any,
+        );
+      }
+
+      return res.status(201).json(clonedDefinition);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
   app.get("/api/admin/request-config/settings", requireAuth, requireSuperAdmin, async (req, res, next) => {
     try {
       const [settings] = await db
@@ -4635,7 +5775,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       emitServiceRequestUpdate(req.app, updated, "status");
       return res.json({ success: true, message: "Payment request declined", request: updated });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -4723,7 +5863,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       emitServiceRequestUpdate(req.app, updated, "status");
       return res.json({ success: true, message: "Work marked as completed", request: updated });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -4793,7 +5933,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       emitServiceRequestUpdate(req.app, updated, "status");
       return res.json({ success: true, message: "Delivery confirmed", request: updated });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -4898,7 +6038,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       emitServiceRequestUpdate(req.app, updated, "status");
       return res.json({ success: true, message: "Delivery dispute submitted", request: updated });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -5003,7 +6143,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       emitServiceRequestUpdate(req.app, updated, "status");
       return res.json({ success: true, message: "Dispute resolved", request: updated });
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -5105,11 +6245,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Wallet Routes
   app.get("/api/wallet", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
+      const actorId = req.auth?.userId ?? req.user?.id;
+      if (!actorId) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const wallet = await storage.getWalletByUserId(req.user.id);
+      const wallet = await storage.getWalletByUserId(actorId);
       res.json(wallet);
     } catch (error) {
       next(error);
@@ -5119,9 +6260,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Paystack Payments
   app.post("/api/payments/paystack/session", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!actorId) return res.status(401).json({ message: "Unauthorized" });
 
       const payload = z
         .object({
@@ -5158,13 +6299,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Service request not found" });
         }
         const isOwner =
-          req.user?.role === "admin" || request.residentId === req.user?.id;
+          actorRole === "admin" || actorRole === "super_admin" || request.residentId === actorId;
         if (!isOwner) {
           return res.status(403).json({ message: "Forbidden" });
         }
       }
 
-      let createdServiceRequestId: string | undefined;
       if (payload.consultancyRequest) {
         const category = tryResolveServiceRequestCategory(
           payload.consultancyRequest.categoryKey || "",
@@ -5175,51 +6315,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .status(400)
             .json({ message: "Invalid consultancy category. Please re-select a category and try again." });
         }
-        const urgencyInput = normalizeCategoryKey(payload.consultancyRequest.urgency || "");
-        const urgency =
-          urgencyInput === "emergency" || urgencyInput === "high" || urgencyInput === "medium" || urgencyInput === "low"
-            ? urgencyInput
-            : "medium";
-        const location = String(payload.consultancyRequest.location || "Not specified");
-        const description =
-          String(payload.consultancyRequest.description || "Consultancy request").trim() ||
-          "Consultancy request";
-
-        const created = await storage.createServiceRequest({
-          category: category as any,
-          categoryLabel:
-            String(payload.consultancyRequest.categoryLabel || "").trim() ||
-            category.replace(/_/g, " "),
-          description,
-          residentId: req.user.id,
-          budget: "Consultancy",
-          urgency: urgency as any,
-          issueType: String(payload.consultancyRequest.issueType || "").trim() || null,
-          areaAffected: String(payload.consultancyRequest.areaAffected || "").trim() || null,
-          quantityLabel: String(payload.consultancyRequest.quantityLabel || "").trim() || null,
-          timeWindowLabel: String(payload.consultancyRequest.timeWindowLabel || "").trim() || null,
-          location,
-          addressLine: String(payload.consultancyRequest.addressLine || location).trim() || location,
-          estateName: String(payload.consultancyRequest.estateName || "").trim() || null,
-          stateName: String(payload.consultancyRequest.stateName || "").trim() || null,
-          lgaName: String(payload.consultancyRequest.lgaName || "").trim() || null,
-          specialInstructions: String(payload.consultancyRequest.notes || "").trim() || null,
-          photosCount: Number(payload.consultancyRequest.attachmentsCount || 0) || 0,
-          paymentPurpose: "Consultancy / inspection",
-          status: "pending" as any,
-          paymentStatus: "pending",
-        } as any);
-        createdServiceRequestId = created.id;
       }
 
       const session = await createPendingPaystackTransaction({
-        userId: req.user.id,
+        userId: actorId,
         amount: payload.amount,
-        serviceRequestId: payload.serviceRequestId ?? createdServiceRequestId,
+        serviceRequestId: payload.serviceRequestId,
         description: payload.description,
         meta: {
-          initiatorId: req.user.id,
-          serviceRequestId: payload.serviceRequestId ?? createdServiceRequestId,
+          initiatorId: actorId,
+          serviceRequestId: payload.serviceRequestId ?? null,
           consultancyRequest: payload.consultancyRequest ?? null,
         },
       });
@@ -5484,6 +6589,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       billedAmount: tx.amount as any,
       paymentReference: reference,
     });
+    await activateMaintenanceSubscriptionFromReference(reference);
 
     const finalTx = updatedTx ?? tx;
     res.json(formatPaystackVerifySuccess(finalTx));
@@ -5495,9 +6601,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/payments/paystack/verify", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+      const actorId = req.auth?.userId ?? req.user?.id;
+      const actorRole = String(req.auth?.role ?? req.user?.role ?? "").toLowerCase();
+      if (!actorId) return res.status(401).json({ message: "Unauthorized" });
 
       const { reference } = z
         .object({
@@ -5510,8 +6616,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Transaction not found" });
       }
 
-      if (req.user?.role !== "admin") {
-        const wallet = await storage.getWalletByUserId(req.user.id);
+      if (actorRole !== "admin" && actorRole !== "super_admin") {
+        const wallet = await storage.getWalletByUserId(actorId);
         if (!wallet || wallet.id !== tx.walletId) {
           return res.status(403).json({ message: "Forbidden" });
         }
@@ -5528,55 +6634,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!responseTx?.serviceRequestId) {
         const meta: any = responseTx?.meta as any;
-        if (meta?.consultancyRequest && req.user?.id) {
+        if (meta?.consultancyRequest && actorId) {
           try {
-            const category = tryResolveServiceRequestCategory(
-              meta.consultancyRequest.categoryKey || "",
-              meta.consultancyRequest.categoryLabel || "",
-            );
-            if (!category) {
+            const createdServiceRequestId = await createConsultancyServiceRequest({
+              storage,
+              residentId: actorId,
+              consultancy: meta.consultancyRequest,
+            });
+            if (!createdServiceRequestId) {
               throw new Error("Invalid consultancy category metadata");
             }
-            const urgencyInput = normalizeCategoryKey(meta.consultancyRequest.urgency || "");
-            const urgency =
-              urgencyInput === "emergency" ||
-              urgencyInput === "high" ||
-              urgencyInput === "medium" ||
-              urgencyInput === "low"
-                ? urgencyInput
-                : "medium";
-            const location = String(meta.consultancyRequest.location || "Not specified");
-            const description =
-              String(meta.consultancyRequest.description || "Consultancy request").trim() ||
-              "Consultancy request";
-
-            const created = await storage.createServiceRequest({
-              category: category as any,
-              categoryLabel:
-                String(meta.consultancyRequest.categoryLabel || "").trim() ||
-                category.replace(/_/g, " "),
-              description,
-              residentId: req.user.id,
-              budget: "Consultancy",
-              urgency: urgency as any,
-              issueType: String(meta.consultancyRequest.issueType || "").trim() || null,
-              areaAffected: String(meta.consultancyRequest.areaAffected || "").trim() || null,
-              quantityLabel: String(meta.consultancyRequest.quantityLabel || "").trim() || null,
-              timeWindowLabel: String(meta.consultancyRequest.timeWindowLabel || "").trim() || null,
-              location,
-              addressLine: String(meta.consultancyRequest.addressLine || location).trim() || location,
-              estateName: String(meta.consultancyRequest.estateName || "").trim() || null,
-              stateName: String(meta.consultancyRequest.stateName || "").trim() || null,
-              lgaName: String(meta.consultancyRequest.lgaName || "").trim() || null,
-              specialInstructions: String(meta.consultancyRequest.notes || "").trim() || null,
-              photosCount: Number(meta.consultancyRequest.attachmentsCount || 0) || 0,
-              paymentPurpose: "Consultancy / inspection",
-              status: "pending" as any,
-              paymentStatus: "pending",
-            } as any);
-
             await storage.updateTransactionByReference(reference, {
-              serviceRequestId: created.id,
+              serviceRequestId: createdServiceRequestId,
             } as any);
 
             refreshed = await storage.getTransactionByReference(reference);
@@ -5593,6 +6662,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           billedAmount: responseTx.amount as any,
           paymentReference: reference,
         });
+      }
+      if (result.status === "success") {
+        await activateMaintenanceSubscriptionFromReference(reference);
       }
 
       res.json({
@@ -5631,6 +6703,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           billedAmount: finalized?.transaction?.amount as any,
           paymentReference: reference,
         });
+        await activateMaintenanceSubscriptionFromReference(reference);
       }
 
       res.json({ received: true });
@@ -5712,7 +6785,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }),
       );
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -6506,7 +7579,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }),
       );
     } catch (error) {
-      next(error);
+      handleMaintenanceAdminError(res, error, next);
     }
   });
 
@@ -7017,6 +8090,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .set(updates)
           .where(eq(companyTasks.id, taskId))
           .returning();
+
+        const syncedRequest = await syncLinkedServiceRequestFromTaskStatus({
+          serviceRequestId: updated?.serviceRequestId ?? existing.serviceRequestId ?? null,
+          taskStatus: String(payload.status ?? existing.status ?? ""),
+        });
+        if (syncedRequest) {
+          emitServiceRequestUpdate(req.app, syncedRequest, "status");
+        }
 
         const [hydrated] = await hydrateCompanyTasks(String(company.id), [eq(companyTasks.id, updated.id)]);
         res.json(hydrated || updated);
@@ -8079,10 +9160,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin: estates management
   app.get("/api/admin/estates", async (req, res, next) => {
     try {
-      const isAdmin =
-        req.isAuthenticated() &&
-        (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
-      if (!isAdmin) {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -8095,10 +9173,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/estates", async (req, res, next) => {
     try {
-      const isAdmin =
-        req.isAuthenticated() &&
-        (req.user?.role === "admin" || req.user?.globalRole === "super_admin");
-      if (!isAdmin) {
+      if (!isAdminOrSuper(req)) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -8246,6 +9321,446 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!updated) return res.status(404).json({ message: "Membership not found" });
 
       res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  const maintenanceItemAdminPaths = [
+    "/api/admin/maintenance/items",
+    "/api/admin/maintenance/item-types",
+  ];
+  const maintenanceItemAdminDetailPaths = [
+    "/api/admin/maintenance/items/:id",
+    "/api/admin/maintenance/item-types/:id",
+  ];
+
+  app.get("/api/admin/maintenance/categories", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const isActive = parseOptionalBooleanQuery(req.query.isActive);
+      const activeOnly = String(req.query.activeOnly || "").toLowerCase() === "true";
+      const q = typeof req.query.q === "string" ? req.query.q : undefined;
+      res.json(await getMaintenanceAdminCategoryRows({ isActive, activeOnly, q }));
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.get("/api/admin/maintenance/categories/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const row = await getMaintenanceAdminCategoryById(String(req.params.id || ""));
+      if (!row) {
+        return res.status(404).json({ message: "Maintenance category not found" });
+      }
+      res.json(row);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.post("/api/admin/maintenance/categories", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const parsed = MaintenanceCategoryInputSchema.parse(req.body || {});
+      const created = await createMaintenanceCategoryAdmin(parsed as any);
+      await storage.createAuditLog({
+        actorId: req.auth?.userId ?? req.user?.id ?? "system",
+        estateId: null,
+        action: "maintenance_category:create",
+        target: "maintenance_category",
+        targetId: created.id,
+        meta: created as any,
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.patch("/api/admin/maintenance/categories/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const parsed = MaintenanceCategoryInputSchema.partial().parse(req.body || {});
+      const updated = await updateMaintenanceCategoryAdmin(req.params.id, parsed as any);
+      if (!updated) {
+        return res.status(404).json({ message: "Maintenance category not found" });
+      }
+      await storage.createAuditLog({
+        actorId: req.auth?.userId ?? req.user?.id ?? "system",
+        estateId: null,
+        action: "maintenance_category:update",
+        target: "maintenance_category",
+        targetId: updated.id,
+        meta: updated as any,
+      });
+      res.json(updated);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.get(maintenanceItemAdminPaths, async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const activeOnly = String(req.query.activeOnly || "").toLowerCase() === "true";
+      const isActive = parseOptionalBooleanQuery(req.query.isActive);
+      const categoryId = typeof req.query.categoryId === "string"
+        ? req.query.categoryId
+        : undefined;
+      const q = typeof req.query.q === "string" ? req.query.q : undefined;
+      res.json(await getMaintenanceAdminItemRows({ activeOnly, isActive, categoryId, q }));
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.get(maintenanceItemAdminDetailPaths, async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const row = await getMaintenanceAdminItemById(String(req.params.id || ""));
+      if (!row) {
+        return res.status(404).json({ message: "Maintenance item not found" });
+      }
+      res.json(row);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.post(maintenanceItemAdminPaths, async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const parsed = MaintenanceItemTypeInputSchema.parse(req.body || {});
+      const created = await createMaintenanceItemAdmin(
+        parsed as any,
+        req.auth?.userId ?? req.user?.id ?? "admin",
+      );
+      await storage.createAuditLog({
+        actorId: req.auth?.userId ?? req.user?.id ?? "system",
+        estateId: null,
+        action: "maintenance_item_type:create",
+        target: "maintenance_item_type",
+        targetId: created.id,
+        meta: created as any,
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.patch(maintenanceItemAdminDetailPaths, async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const parsed = MaintenanceItemTypeInputSchema.partial().parse(req.body || {});
+      const updated = await updateMaintenanceItemAdmin(
+        req.params.id,
+        parsed as any,
+        req.auth?.userId ?? req.user?.id ?? "admin",
+      );
+      if (!updated) {
+        return res.status(404).json({ message: "Maintenance item not found" });
+      }
+      await storage.createAuditLog({
+        actorId: req.auth?.userId ?? req.user?.id ?? "system",
+        estateId: null,
+        action: "maintenance_item_type:update",
+        target: "maintenance_item_type",
+        targetId: updated.id,
+        meta: updated as any,
+      });
+      res.json(updated);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.get("/api/admin/maintenance/plans", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const activeOnly = String(req.query.activeOnly || "").toLowerCase() === "true";
+      const isActive = parseOptionalBooleanQuery(req.query.isActive);
+      const maintenanceItemId = typeof req.query.maintenanceItemId === "string"
+        ? req.query.maintenanceItemId
+        : undefined;
+      const durationType = typeof req.query.durationType === "string"
+        ? req.query.durationType
+        : undefined;
+      const q = typeof req.query.q === "string" ? req.query.q : undefined;
+      res.json(
+        await getMaintenanceAdminPlanRows({
+          activeOnly,
+          isActive,
+          maintenanceItemId,
+          durationType,
+          q,
+        }),
+      );
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.get("/api/admin/maintenance/plans/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const row = await getMaintenanceAdminPlanById(String(req.params.id || ""));
+      if (!row) {
+        return res.status(404).json({ message: "Maintenance plan not found" });
+      }
+      res.json(row);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.post("/api/admin/maintenance/plans", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const parsed = MaintenancePlanInputSchema.parse(req.body || {});
+      const created = await createMaintenancePlanAdmin(parsed as any);
+      await storage.createAuditLog({
+        actorId: req.auth?.userId ?? req.user?.id ?? "system",
+        estateId: null,
+        action: "maintenance_plan:create",
+        target: "maintenance_plan",
+        targetId: created.id,
+        meta: created as any,
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.patch("/api/admin/maintenance/plans/:id", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const parsed = MaintenancePlanInputSchema.partial().parse(req.body || {});
+      const updated = await updateMaintenancePlanAdmin(req.params.id, parsed as any);
+      if (!updated) {
+        return res.status(404).json({ message: "Maintenance plan not found" });
+      }
+      await storage.createAuditLog({
+        actorId: req.auth?.userId ?? req.user?.id ?? "system",
+        estateId: null,
+        action: "maintenance_plan:update",
+        target: "maintenance_plan",
+        targetId: updated.id,
+        meta: updated as any,
+      });
+      res.json(updated);
+    } catch (error) {
+      handleMaintenanceAdminError(res, error, next);
+    }
+  });
+
+  app.get("/api/admin/maintenance/schedules", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const status = typeof req.query.status === "string" ? req.query.status : undefined;
+      res.json(await getMaintenanceAdminScheduleRows({ status }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/maintenance/schedules/:id/create-request", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const created = await createMaintenanceRequestFromSchedule(
+        req.params.id,
+        req.auth?.userId ?? req.user?.id ?? null,
+      );
+      if (created.residentId) {
+        const notification = await storage.createNotification({
+          userId: created.residentId,
+          title: "Scheduled maintenance request created",
+          message: "Your maintenance schedule has entered the service workflow.",
+          type: "info",
+          metadata: {
+            kind: "maintenance_request_created",
+            requestId: created.id,
+            targetPath: `/resident/requests/ordinary?requestId=${encodeURIComponent(created.id)}`,
+          } as any,
+        });
+        const io = req.app.get("io") as SocketIOServer | undefined;
+        io?.to(`user-${created.residentId}`).emit("notification:new", notification);
+      }
+      emitServiceRequestUpdate(req.app, created, "status");
+      res.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/maintenance/schedules/:id/assign-provider", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const actorId = req.auth?.userId ?? req.user?.id ?? null;
+      const parsed = z
+        .object({
+          providerId: z.string().trim().min(1, "Provider is required"),
+        })
+        .parse(req.body || {});
+
+      const scheduleId = String(req.params.id || "").trim();
+      const providerId = String(parsed.providerId || "").trim();
+
+      const [providerUser] = await db
+        .select({
+          id: users.id,
+          role: users.role,
+          name: users.name,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email,
+          isApproved: users.isApproved,
+        })
+        .from(users)
+        .where(eq(users.id, providerId))
+        .limit(1);
+
+      if (!providerUser || String(providerUser.role || "").toLowerCase() !== "provider") {
+        return res.status(404).json({ message: "Provider not found" });
+      }
+      if (providerUser.isApproved === false) {
+        return res.status(400).json({ message: "Only approved providers can be assigned" });
+      }
+
+      const currentSchedule = await storage.getMaintenanceSchedule(scheduleId);
+      if (!currentSchedule) {
+        return res.status(404).json({ message: "Maintenance schedule not found" });
+      }
+
+      const request = await createMaintenanceRequestFromSchedule(scheduleId, actorId);
+
+      if (!request) {
+        return res.status(404).json({ message: "Unable to prepare service request" });
+      }
+
+      const currentStatus = String(request.status || "").trim().toLowerCase();
+      const currentProviderId = String(request.providerId || "").trim();
+      const alreadyAssignedForJob =
+        currentProviderId === providerId && currentStatus === "assigned_for_job";
+
+      const updatedRequest = alreadyAssignedForJob
+        ? request
+        : await storage.updateServiceRequest(request.id, {
+            providerId,
+            status: "assigned_for_job" as any,
+            assignedAt: request.assignedAt || new Date(),
+            approvedForJobAt: request.approvedForJobAt || new Date(),
+            approvedForJobBy: request.approvedForJobBy || actorId,
+            assignedJobProviderId: providerId,
+          } as any);
+
+      if (!updatedRequest) {
+        return res.status(404).json({ message: "Service request not found" });
+      }
+
+      try {
+        await upsertAssignedForJobTask(updatedRequest, actorId);
+      } catch (taskError) {
+        console.error("Failed to upsert maintenance assigned-for-job task", taskError);
+      }
+
+      await syncMaintenanceScheduleFromRequest({
+        requestId: updatedRequest.id,
+        status: "assigned_for_job",
+      });
+
+      if (!alreadyAssignedForJob) {
+        const summary = await getMaintenanceSummaryForRequest(updatedRequest.id);
+        const assetLabel =
+          String(summary?.asset?.label || summary?.asset?.itemTypeName || "").trim() ||
+          "Scheduled maintenance";
+        const scheduleLabel = summary?.schedule?.scheduledFor
+          ? new Date(summary.schedule.scheduledFor).toLocaleString()
+          : "the scheduled visit";
+
+        const providerNotification = await notifyMaintenanceProviderJobAssigned(scheduleId);
+        if (providerNotification) {
+          const io = req.app.get("io") as SocketIOServer | undefined;
+          io?.to(`user-${providerId}`).emit("notification:new", providerNotification);
+        }
+
+        await storage.createAuditLog({
+          actorId: actorId || "system",
+          estateId: null,
+          action: "maintenance_schedule:assign_provider",
+          target: "maintenance_schedule",
+          targetId: scheduleId,
+          meta: {
+            requestId: updatedRequest.id,
+            providerId,
+            assetLabel,
+            scheduledFor: summary?.schedule?.scheduledFor ?? null,
+          } as any,
+        });
+
+        if (updatedRequest.providerId) {
+          const io = req.app.get("io") as SocketIOServer | undefined;
+          io?.to(`user-${updatedRequest.providerId}`).emit("service-request:update", {
+            type: "status",
+            request: updatedRequest,
+          });
+        }
+
+      }
+
+      emitServiceRequestUpdate(req.app, updatedRequest, "assigned");
+      res.json(updatedRequest);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/maintenance/schedules/:id/reschedule", async (req, res, next) => {
+    try {
+      if (!isAdminOrSuper(req)) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const parsed = MaintenanceScheduleRescheduleSchema.parse(req.body || {});
+      const replacement = await rescheduleMaintenanceVisit({
+        scheduleId: req.params.id,
+        scheduledDate: new Date(parsed.scheduledDate),
+        notes: parsed.notes ?? null,
+      });
+      res.json(replacement);
     } catch (error) {
       next(error);
     }
@@ -9456,9 +10971,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const latestCancellationCase = await storage.getLatestCancellationCaseForRequest(id);
+      const maintenance = await getMaintenanceSummaryForRequest(id);
       res.json({
         ...request,
         cancellationCase: latestCancellationCase || null,
+        maintenance,
       });
     } catch (error) {
       console.error("Error fetching service request for admin:", error);
@@ -9538,7 +11055,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? request.providerId
           : null);
 
-      const [resident, provider, inspector, jobProvider, estate, latestCancellationCase] = await Promise.all([
+      const [resident, provider, inspector, jobProvider, estate, latestCancellationCase, maintenance] = await Promise.all([
         request.residentId ? storage.getUser(request.residentId) : Promise.resolve(undefined),
         request.providerId ? storage.getUser(request.providerId) : Promise.resolve(undefined),
         inspectorId ? storage.getUser(inspectorId) : Promise.resolve(undefined),
@@ -9552,6 +11069,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               .then((rows: Array<{ id: string; name: string | null }>) => rows[0])
           : Promise.resolve(undefined),
         storage.getLatestCancellationCaseForRequest(id),
+        getMaintenanceSummaryForRequest(id),
       ]);
 
       const detail = buildServiceRequestDetailViewModel(request as any, {
@@ -9602,6 +11120,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         ...detail,
+        maintenance,
         cancellationCase: latestCancellationCase
           ? {
               id: latestCancellationCase.id,

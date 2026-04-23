@@ -1,11 +1,19 @@
 // client/src/lib/residentApi.ts
+import {
+  createAppRequestErrorFromResponse,
+  createNetworkRequestError,
+} from "@/lib/errorPresentation";
+
 function getResidentApiBase() {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   if (import.meta.env.DEV && origin) {
     return origin;
   }
+  const configuredApiBase = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "").trim();
   return (
-    import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
+    (configuredApiBase && configuredApiBase !== "undefined" && configuredApiBase !== "null"
+      ? configuredApiBase
+      : "") ||
     origin ||
     "http://localhost:5000"
   );
@@ -13,12 +21,20 @@ function getResidentApiBase() {
 
 const API_BASE = getResidentApiBase();
 
+function normalizeApiPath(path: string) {
+  return String(path || "")
+    .trim()
+    .replace(/^\$\{import\.meta\.env\.VITE_API_URL\}/, "")
+    .replace(/^(undefined|null)(?=\/api\/)/, "");
+}
+
 type FetchInit = RequestInit & { json?: any; headers?: Record<string, string> };
 
 export async function residentFetch<T = any>(path: string, init?: FetchInit): Promise<T> {
-  const url = path.startsWith("http")
-    ? path
-    : `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  const normalizedPath = normalizeApiPath(path);
+  const url = normalizedPath.startsWith("http")
+    ? normalizedPath
+    : `${API_BASE}${normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`}`;
 
   const headers: Record<string, string> = { ...(init?.headers || {}) };
 
@@ -33,17 +49,21 @@ export async function residentFetch<T = any>(path: string, init?: FetchInit): Pr
     headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(url, {
-    ...init,
-    headers,
-    body: init?.json ? JSON.stringify(init.json) : init?.body,
-    credentials: "include", // <-- IMPORTANT (send cookies when same-site)
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers,
+      body: init?.json ? JSON.stringify(init.json) : init?.body,
+      credentials: "include", // <-- IMPORTANT (send cookies when same-site)
+    });
+  } catch (error) {
+    throw createNetworkRequestError(url, error);
+  }
 
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
-    const text = ct.includes("application/json") ? JSON.stringify(await res.json()) : await res.text();
-    throw new Error(`${res.status} ${res.statusText} @ ${url}\n${text.slice(0, 300)}`);
+    throw await createAppRequestErrorFromResponse(res, url, 300);
   }
   return ct.includes("application/json") ? (await res.json()) as T : (await res.text() as any);
 }

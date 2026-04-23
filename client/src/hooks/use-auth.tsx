@@ -93,6 +93,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       toast({
         title: "Login failed",
         description: error.message,
+        error,
+        source: "legacy-auth.login",
         variant: "destructive",
       });
     },
@@ -114,6 +116,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       toast({
         title: "Registration failed",
         description: error.message,
+        error,
+        source: "legacy-auth.register",
         variant: "destructive",
       });
     },
@@ -131,6 +135,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       toast({
         title: "Logout failed",
         description: error.message,
+        error,
+        source: "legacy-auth.logout",
         variant: "destructive",
       });
     },

@@ -1,12 +1,13 @@
 import "./env";
 import express, { type Request, type Response, type NextFunction } from "express";
 import cookieParser from "cookie-parser";
-import cors from "cors";
+import cors, { type CorsOptions } from "cors";
 import { sql } from "drizzle-orm";
 import { db, dbReady } from "./db";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { setupAuth } from "./auth";
+import { authenticateJWT } from "./auth-middleware";
 import { ensureInventoryUploadsDir, uploadsRootDir } from "./utils/inventory-image-storage";
 
 // Intercept process.exit to see if anything is trying to exit
@@ -80,8 +81,19 @@ app.use(async (req, _res, next) => {
   next();
 });
 
+const configuredFrontendOrigins = new Set(
+  [
+    process.env.FRONTEND_ORIGIN,
+    process.env.FRONTEND_URL,
+    process.env.CLIENT_URL,
+  ]
+    .flatMap((value) => String(value || "").split(","))
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
+
 // CORS (safe defaults for dev; keep credentials if you use cookies)
-app.use(cors({
+const corsOptions: CorsOptions = {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     try {
@@ -91,6 +103,8 @@ app.use(cors({
         u.hostname === 'localhost' ||
         u.hostname === '127.0.0.1' ||
         u.hostname.endsWith('.replit.dev') ||
+        u.hostname.endsWith('.vercel.app') ||
+        configuredFrontendOrigins.has(origin) ||
         origin === 'https://cityconnect.replit.app'
       ) {
         return cb(null, true);
@@ -101,11 +115,13 @@ app.use(cors({
   credentials: true, // <-- cookies allowed
   methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "x-estate-id", "x-user-id", "x-user-email", "x-file-name"],
-}));
-app.options("*", cors());
+};
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // Setup Passport.js and express-session for authentication
 setupAuth(app);
+app.use(authenticateJWT);
 
 app.use((req, res, next) => {
   if (req.path === "/api/service-requests" && req.method === "POST") {
@@ -249,6 +265,397 @@ async function ensureServiceStatusValues() {
   `);
 }
 
+async function ensureMaintenanceEnums() {
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'maintenance_plan_duration'
+      ) THEN
+        CREATE TYPE maintenance_plan_duration AS ENUM (
+          'monthly',
+          'quarterly_3m',
+          'halfyearly_6m',
+          'yearly'
+        );
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'asset_condition'
+      ) THEN
+        CREATE TYPE asset_condition AS ENUM (
+          'new',
+          'good',
+          'fair',
+          'poor'
+        );
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'asset_subscription_status'
+      ) THEN
+        CREATE TYPE asset_subscription_status AS ENUM (
+          'draft',
+          'pending_payment',
+          'active',
+          'paused',
+          'expired',
+          'cancelled'
+        );
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'maintenance_schedule_status'
+      ) THEN
+        CREATE TYPE maintenance_schedule_status AS ENUM (
+          'upcoming',
+          'due',
+          'assigned',
+          'in_progress',
+          'completed',
+          'missed',
+          'rescheduled',
+          'cancelled'
+        );
+      END IF;
+    END$$;
+  `);
+}
+
+async function ensureMaintenanceTables() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS maintenance_categories (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      slug text NOT NULL UNIQUE,
+      icon text,
+      description text,
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS maintenance_items (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      category_id varchar NOT NULL REFERENCES maintenance_categories(id),
+      name text NOT NULL,
+      slug text NOT NULL UNIQUE,
+      description text,
+      default_frequency maintenance_plan_duration,
+      recommended_tasks jsonb,
+      image_url text,
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS resident_assets (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id varchar NOT NULL REFERENCES users(id),
+      maintenance_item_id varchar NOT NULL REFERENCES maintenance_items(id),
+      estate_id varchar REFERENCES estates(id),
+      custom_name text,
+      location_label text,
+      brand text,
+      model text,
+      serial_number text,
+      purchase_date timestamp,
+      installed_at timestamp,
+      last_service_date timestamp,
+      condition asset_condition NOT NULL DEFAULT 'good',
+      notes text,
+      metadata jsonb,
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS maintenance_plans (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      maintenance_item_id varchar NOT NULL REFERENCES maintenance_items(id),
+      name text NOT NULL,
+      description text,
+      duration_type maintenance_plan_duration NOT NULL,
+      price numeric(10,2) NOT NULL DEFAULT '0',
+      currency varchar(8) NOT NULL DEFAULT 'NGN',
+      visits_included integer NOT NULL DEFAULT 1,
+      included_tasks jsonb,
+      request_lead_days integer NOT NULL DEFAULT 3,
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS asset_subscriptions (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id varchar NOT NULL REFERENCES users(id),
+      resident_asset_id varchar NOT NULL REFERENCES resident_assets(id),
+      maintenance_plan_id varchar NOT NULL REFERENCES maintenance_plans(id),
+      start_date timestamp NOT NULL,
+      end_date timestamp,
+      status asset_subscription_status NOT NULL DEFAULT 'draft',
+      auto_renew boolean NOT NULL DEFAULT false,
+      activated_at timestamp,
+      paused_at timestamp,
+      expired_at timestamp,
+      cancelled_at timestamp,
+      billing_amount numeric(10,2) NOT NULL DEFAULT '0',
+      currency varchar(8) NOT NULL DEFAULT 'NGN',
+      next_schedule_at timestamp,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS maintenance_schedules (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscription_id varchar NOT NULL REFERENCES asset_subscriptions(id),
+      scheduled_date timestamp NOT NULL,
+      status maintenance_schedule_status NOT NULL DEFAULT 'upcoming',
+      completed_at timestamp,
+      skipped_at timestamp,
+      rescheduled_from varchar REFERENCES maintenance_schedules(id),
+      notes text,
+      source_request_id varchar REFERENCES service_requests(id) ON DELETE SET NULL,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE maintenance_categories
+      ADD COLUMN IF NOT EXISTS icon text,
+      ADD COLUMN IF NOT EXISTS description text,
+      ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS created_at timestamp DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT now();
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE maintenance_items
+      ADD COLUMN IF NOT EXISTS description text,
+      ADD COLUMN IF NOT EXISTS default_frequency maintenance_plan_duration,
+      ADD COLUMN IF NOT EXISTS recommended_tasks jsonb,
+      ADD COLUMN IF NOT EXISTS image_url text,
+      ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS created_at timestamp DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT now();
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE resident_assets
+      ADD COLUMN IF NOT EXISTS estate_id varchar REFERENCES estates(id),
+      ADD COLUMN IF NOT EXISTS custom_name text,
+      ADD COLUMN IF NOT EXISTS location_label text,
+      ADD COLUMN IF NOT EXISTS brand text,
+      ADD COLUMN IF NOT EXISTS model text,
+      ADD COLUMN IF NOT EXISTS serial_number text,
+      ADD COLUMN IF NOT EXISTS purchase_date timestamp,
+      ADD COLUMN IF NOT EXISTS installed_at timestamp,
+      ADD COLUMN IF NOT EXISTS last_service_date timestamp,
+      ADD COLUMN IF NOT EXISTS condition asset_condition NOT NULL DEFAULT 'good',
+      ADD COLUMN IF NOT EXISTS notes text,
+      ADD COLUMN IF NOT EXISTS metadata jsonb,
+      ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS created_at timestamp DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT now();
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE maintenance_plans
+      ADD COLUMN IF NOT EXISTS name text,
+      ADD COLUMN IF NOT EXISTS description text,
+      ADD COLUMN IF NOT EXISTS duration_type maintenance_plan_duration,
+      ADD COLUMN IF NOT EXISTS price numeric(10,2) NOT NULL DEFAULT '0',
+      ADD COLUMN IF NOT EXISTS currency varchar(8) NOT NULL DEFAULT 'NGN',
+      ADD COLUMN IF NOT EXISTS visits_included integer NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS included_tasks jsonb,
+      ADD COLUMN IF NOT EXISTS request_lead_days integer NOT NULL DEFAULT 3,
+      ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS created_at timestamp DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT now();
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE asset_subscriptions
+      ADD COLUMN IF NOT EXISTS user_id varchar REFERENCES users(id),
+      ADD COLUMN IF NOT EXISTS resident_asset_id varchar REFERENCES resident_assets(id),
+      ADD COLUMN IF NOT EXISTS maintenance_plan_id varchar REFERENCES maintenance_plans(id),
+      ADD COLUMN IF NOT EXISTS start_date timestamp,
+      ADD COLUMN IF NOT EXISTS end_date timestamp,
+      ADD COLUMN IF NOT EXISTS status asset_subscription_status NOT NULL DEFAULT 'draft',
+      ADD COLUMN IF NOT EXISTS auto_renew boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS activated_at timestamp,
+      ADD COLUMN IF NOT EXISTS paused_at timestamp,
+      ADD COLUMN IF NOT EXISTS expired_at timestamp,
+      ADD COLUMN IF NOT EXISTS cancelled_at timestamp,
+      ADD COLUMN IF NOT EXISTS billing_amount numeric(10,2) NOT NULL DEFAULT '0',
+      ADD COLUMN IF NOT EXISTS currency varchar(8) NOT NULL DEFAULT 'NGN',
+      ADD COLUMN IF NOT EXISTS next_schedule_at timestamp,
+      ADD COLUMN IF NOT EXISTS created_at timestamp DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT now();
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE maintenance_schedules
+      ADD COLUMN IF NOT EXISTS completed_at timestamp,
+      ADD COLUMN IF NOT EXISTS skipped_at timestamp,
+      ADD COLUMN IF NOT EXISTS rescheduled_from varchar REFERENCES maintenance_schedules(id),
+      ADD COLUMN IF NOT EXISTS notes text,
+      ADD COLUMN IF NOT EXISTS source_request_id varchar REFERENCES service_requests(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS created_at timestamp DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT now();
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS maintenance_items_category_idx
+      ON maintenance_items(category_id);
+    CREATE INDEX IF NOT EXISTS resident_assets_user_idx
+      ON resident_assets(user_id);
+    CREATE INDEX IF NOT EXISTS resident_assets_maintenance_item_idx
+      ON resident_assets(maintenance_item_id);
+    CREATE INDEX IF NOT EXISTS maintenance_plans_maintenance_item_idx
+      ON maintenance_plans(maintenance_item_id);
+    CREATE INDEX IF NOT EXISTS asset_subscriptions_user_idx
+      ON asset_subscriptions(user_id);
+    CREATE INDEX IF NOT EXISTS asset_subscriptions_resident_asset_idx
+      ON asset_subscriptions(resident_asset_id);
+    CREATE INDEX IF NOT EXISTS asset_subscriptions_maintenance_plan_idx
+      ON asset_subscriptions(maintenance_plan_id);
+    CREATE INDEX IF NOT EXISTS asset_subscriptions_status_idx
+      ON asset_subscriptions(status);
+    CREATE INDEX IF NOT EXISTS maintenance_schedules_subscription_idx
+      ON maintenance_schedules(subscription_id);
+    CREATE INDEX IF NOT EXISTS maintenance_schedules_status_idx
+      ON maintenance_schedules(status);
+    CREATE INDEX IF NOT EXISTS maintenance_schedules_scheduled_date_idx
+      ON maintenance_schedules(scheduled_date);
+    CREATE INDEX IF NOT EXISTS maintenance_schedules_source_request_idx
+      ON maintenance_schedules(source_request_id);
+  `);
+}
+
+async function ensureOtpTables() {
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'otp_purpose'
+      ) THEN
+        CREATE TYPE otp_purpose AS ENUM ('signup_verify', 'login_verify');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'otp_channel'
+      ) THEN
+        CREATE TYPE otp_channel AS ENUM ('sms', 'email');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'otp_status'
+      ) THEN
+        CREATE TYPE otp_status AS ENUM ('pending', 'verified', 'expired', 'cancelled', 'locked');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'pending_registration_status'
+      ) THEN
+        CREATE TYPE pending_registration_status AS ENUM ('pending', 'verified', 'expired', 'cancelled');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pending_registrations (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      role user_role NOT NULL,
+      payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      contact_channel otp_channel NOT NULL,
+      contact_value text NOT NULL,
+      status pending_registration_status NOT NULL DEFAULT 'pending',
+      expires_at timestamp NOT NULL,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS otp_challenges (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id varchar REFERENCES users(id) ON DELETE CASCADE,
+      pending_registration_id varchar REFERENCES pending_registrations(id) ON DELETE CASCADE,
+      purpose otp_purpose NOT NULL,
+      channel otp_channel NOT NULL,
+      destination text NOT NULL,
+      code_hash text NOT NULL,
+      status otp_status NOT NULL DEFAULT 'pending',
+      attempt_count integer NOT NULL DEFAULT 0,
+      max_attempts integer NOT NULL DEFAULT 5,
+      expires_at timestamp NOT NULL,
+      last_sent_at timestamp DEFAULT now(),
+      verified_at timestamp,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS pending_registrations_contact_value_idx
+      ON pending_registrations (contact_value);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS pending_registrations_status_expires_idx
+      ON pending_registrations (status, expires_at);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS otp_challenges_destination_purpose_status_idx
+      ON otp_challenges (destination, purpose, status);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS otp_challenges_expires_idx
+      ON otp_challenges (expires_at);
+  `);
+}
+
 // Ensure admin-related columns exist on users table
 async function ensureUsersColumns() {
   await db.execute(sql`
@@ -288,6 +695,50 @@ async function ensureUsersColumns() {
   await db.execute(sql`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS metadata jsonb;
+  `);
+  await db.execute(sql`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS username text,
+      ADD COLUMN IF NOT EXISTS profile_image text,
+      ADD COLUMN IF NOT EXISTS bio text,
+      ADD COLUMN IF NOT EXISTS website text,
+      ADD COLUMN IF NOT EXISTS country_code varchar(2),
+      ADD COLUMN IF NOT EXISTS timezone text;
+  `);
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower_unique
+        ON users (lower(email));
+    EXCEPTION
+      WHEN unique_violation THEN
+        RAISE NOTICE 'Skipping idx_users_email_lower_unique due to existing duplicate emails';
+    END$$;
+  `);
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique
+        ON users (lower(username))
+        WHERE username IS NOT NULL;
+    EXCEPTION
+      WHEN unique_violation THEN
+        RAISE NOTICE 'Skipping idx_users_username_lower_unique due to existing duplicate usernames';
+    END$$;
+  `);
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'users_username_length_check'
+      ) THEN
+        ALTER TABLE users
+          ADD CONSTRAINT users_username_length_check
+          CHECK (username IS NULL OR char_length(username) BETWEEN 3 AND 30);
+      END IF;
+    END$$;
   `);
 }
 
@@ -376,6 +827,59 @@ async function ensureNotificationsTable() {
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
+  `);
+}
+
+async function ensureResidentSettingsTables() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS resident_notification_preferences (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_key varchar(64) NOT NULL,
+      in_app_enabled boolean NOT NULL DEFAULT true,
+      email_enabled boolean NOT NULL DEFAULT false,
+      sms_enabled boolean NOT NULL DEFAULT false,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now(),
+      UNIQUE (user_id, event_key)
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS resident_settings (
+      user_id varchar PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      quiet_hours_enabled boolean NOT NULL DEFAULT false,
+      quiet_hours_start varchar(5),
+      quiet_hours_end varchar(5),
+      digest_frequency varchar(16) NOT NULL DEFAULT 'off',
+      login_alerts_enabled boolean NOT NULL DEFAULT true,
+      profile_visibility varchar(16) NOT NULL DEFAULT 'private',
+      show_phone_to_provider boolean NOT NULL DEFAULT false,
+      show_email_to_provider boolean NOT NULL DEFAULT false,
+      allow_marketing boolean NOT NULL DEFAULT false,
+      allow_analytics boolean NOT NULL DEFAULT true,
+      allow_personalization boolean NOT NULL DEFAULT true,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS user_device_sessions (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      session_id text NOT NULL UNIQUE,
+      user_agent text,
+      ip_address text,
+      last_seen_at timestamp NOT NULL DEFAULT now(),
+      revoked_at timestamp,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_user_device_sessions_user_active_last_seen
+      ON user_device_sessions(user_id, revoked_at, last_seen_at DESC);
   `);
 }
 
@@ -648,6 +1152,85 @@ async function ensureExtensionsAndEnums() {
       END IF;
     END$$;
   `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'ordinary_flow_scope'
+      ) THEN
+        CREATE TYPE ordinary_flow_scope AS ENUM ('global', 'estate');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'ordinary_flow_definition_status'
+      ) THEN
+        CREATE TYPE ordinary_flow_definition_status AS ENUM ('draft', 'published', 'archived');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'ordinary_flow_input_type'
+      ) THEN
+        CREATE TYPE ordinary_flow_input_type AS ENUM (
+          'single_select',
+          'multi_select',
+          'text',
+          'number',
+          'date',
+          'time',
+          'datetime',
+          'location',
+          'file',
+          'yes_no',
+          'urgency',
+          'estate'
+        );
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'ordinary_flow_rule_action'
+      ) THEN
+        CREATE TYPE ordinary_flow_rule_action AS ENUM ('goto_question', 'terminate', 'set_value', 'skip');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'ordinary_flow_session_status'
+      ) THEN
+        CREATE TYPE ordinary_flow_session_status AS ENUM ('active', 'completed', 'cancelled');
+      END IF;
+    END$$;
+  `);
+
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'ordinary_flow_answered_by'
+      ) THEN
+        CREATE TYPE ordinary_flow_answered_by AS ENUM ('resident', 'admin', 'system');
+      END IF;
+    END$$;
+  `);
 }
 
 async function ensureTransactionsColumns() {
@@ -874,6 +1457,122 @@ async function ensureRequestQuestionsTable() {
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS request_questions_mode_order
       ON request_questions(mode, "order");
+  `);
+}
+
+async function ensureOrdinaryFlowTables() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ordinary_flow_definitions (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      category_key text NOT NULL,
+      scope ordinary_flow_scope NOT NULL DEFAULT 'global',
+      estate_id varchar,
+      name text NOT NULL,
+      version integer NOT NULL DEFAULT 1,
+      status ordinary_flow_definition_status NOT NULL DEFAULT 'draft',
+      published_at timestamp,
+      published_by varchar,
+      created_by varchar,
+      is_default boolean NOT NULL DEFAULT false,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ordinary_flow_questions (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      flow_id varchar NOT NULL REFERENCES ordinary_flow_definitions(id) ON DELETE CASCADE,
+      question_key text NOT NULL,
+      prompt text NOT NULL,
+      description text,
+      input_type ordinary_flow_input_type NOT NULL DEFAULT 'text',
+      is_required boolean NOT NULL DEFAULT true,
+      is_terminal boolean NOT NULL DEFAULT false,
+      order_index integer NOT NULL DEFAULT 0,
+      validation jsonb NOT NULL DEFAULT '{}',
+      ui_meta jsonb NOT NULL DEFAULT '{}',
+      default_next_question_id varchar REFERENCES ordinary_flow_questions(id) ON DELETE SET NULL,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ordinary_flow_options (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      question_id varchar NOT NULL REFERENCES ordinary_flow_questions(id) ON DELETE CASCADE,
+      option_key text NOT NULL,
+      label text NOT NULL,
+      value text NOT NULL,
+      icon text,
+      order_index integer NOT NULL DEFAULT 0,
+      next_question_id varchar REFERENCES ordinary_flow_questions(id) ON DELETE SET NULL,
+      meta jsonb NOT NULL DEFAULT '{}'
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ordinary_flow_rules (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      flow_id varchar NOT NULL REFERENCES ordinary_flow_definitions(id) ON DELETE CASCADE,
+      from_question_id varchar NOT NULL REFERENCES ordinary_flow_questions(id) ON DELETE CASCADE,
+      priority integer NOT NULL DEFAULT 100,
+      condition_json jsonb NOT NULL DEFAULT '{}',
+      action ordinary_flow_rule_action NOT NULL DEFAULT 'goto_question',
+      next_question_id varchar REFERENCES ordinary_flow_questions(id) ON DELETE SET NULL,
+      action_payload jsonb NOT NULL DEFAULT '{}',
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ordinary_flow_sessions (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_id varchar NOT NULL UNIQUE,
+      resident_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      category_key text NOT NULL,
+      flow_id varchar NOT NULL REFERENCES ordinary_flow_definitions(id) ON DELETE CASCADE,
+      flow_version integer NOT NULL,
+      status ordinary_flow_session_status NOT NULL DEFAULT 'active',
+      current_question_id varchar REFERENCES ordinary_flow_questions(id) ON DELETE SET NULL,
+      answers_snapshot jsonb NOT NULL DEFAULT '{}',
+      active_path jsonb NOT NULL DEFAULT '[]',
+      state_revision integer NOT NULL DEFAULT 0,
+      started_at timestamp DEFAULT now(),
+      completed_at timestamp,
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ordinary_flow_answers (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id varchar NOT NULL REFERENCES ordinary_flow_sessions(id) ON DELETE CASCADE,
+      question_id varchar NOT NULL REFERENCES ordinary_flow_questions(id) ON DELETE CASCADE,
+      question_key text NOT NULL,
+      answer_json jsonb NOT NULL DEFAULT '{}',
+      answered_by ordinary_flow_answered_by NOT NULL DEFAULT 'resident',
+      revision integer NOT NULL DEFAULT 1,
+      answered_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS ordinary_flow_definitions_unique_version
+      ON ordinary_flow_definitions(category_key, scope, COALESCE(estate_id, ''), version);
+    CREATE UNIQUE INDEX IF NOT EXISTS ordinary_flow_questions_unique_key
+      ON ordinary_flow_questions(flow_id, question_key);
+    CREATE UNIQUE INDEX IF NOT EXISTS ordinary_flow_options_unique_key
+      ON ordinary_flow_options(question_id, option_key);
+    CREATE UNIQUE INDEX IF NOT EXISTS ordinary_flow_answers_unique_question
+      ON ordinary_flow_answers(session_id, question_id);
+    CREATE INDEX IF NOT EXISTS ordinary_flow_rules_from_priority_idx
+      ON ordinary_flow_rules(flow_id, from_question_id, priority);
+    CREATE INDEX IF NOT EXISTS ordinary_flow_sessions_resident_status_updated_idx
+      ON ordinary_flow_sessions(resident_id, status, updated_at DESC);
   `);
 }
 
@@ -1251,6 +1950,81 @@ async function ensureMarketplaceV2Tables() {
   `);
 }
 
+async function ensureMarketTrendTables() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS market_trend_series (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      slug varchar(120) NOT NULL,
+      color varchar(20) NOT NULL DEFAULT '#039855',
+      unit varchar(20) NOT NULL DEFAULT 'NGN',
+      position integer NOT NULL DEFAULT 0,
+      is_active boolean NOT NULL DEFAULT true,
+      created_by varchar REFERENCES users(id),
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS market_trend_points (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      series_id varchar NOT NULL REFERENCES market_trend_series(id) ON DELETE CASCADE,
+      month_index integer NOT NULL,
+      value numeric(12, 2) NOT NULL DEFAULT 0,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS market_trend_series_slug_unique
+    ON market_trend_series (slug);
+  `);
+
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS market_trend_points_series_month_unique
+    ON market_trend_points (series_id, month_index);
+  `);
+}
+
+async function seedMarketTrends() {
+  const seeded = await db.execute(sql`
+    SELECT COUNT(*)::int AS count FROM market_trend_series;
+  `);
+  const currentCount = Number((seeded as any)?.rows?.[0]?.count || 0);
+  if (currentCount > 0) return;
+
+  await db.execute(sql`
+    INSERT INTO market_trend_series (name, slug, color, unit, position, is_active)
+    VALUES
+      ('Bag of Rice', 'bag-of-rice', '#05603A', 'NGN', 1, true),
+      ('Crate of Eggs', 'crate-of-eggs', '#32D583', 'NGN', 2, true),
+      ('Tuber of Yam', 'tuber-of-yam', '#039855', 'NGN', 3, true);
+  `);
+
+  await db.execute(sql`
+    INSERT INTO market_trend_points (series_id, month_index, value)
+    SELECT mts.id, values_table.month_index, values_table.value
+    FROM market_trend_series mts
+    JOIN (
+      VALUES
+        ('bag-of-rice', 1, 50), ('bag-of-rice', 2, 80), ('bag-of-rice', 3, 120), ('bag-of-rice', 4, 150),
+        ('bag-of-rice', 5, 180), ('bag-of-rice', 6, 210), ('bag-of-rice', 7, 240), ('bag-of-rice', 8, 200),
+        ('bag-of-rice', 9, 280), ('bag-of-rice', 10, 320), ('bag-of-rice', 11, 380), ('bag-of-rice', 12, 420),
+        ('crate-of-eggs', 1, 320), ('crate-of-eggs', 2, 340), ('crate-of-eggs', 3, 360), ('crate-of-eggs', 4, 370),
+        ('crate-of-eggs', 5, 380), ('crate-of-eggs', 6, 390), ('crate-of-eggs', 7, 400), ('crate-of-eggs', 8, 420),
+        ('crate-of-eggs', 9, 440), ('crate-of-eggs', 10, 450), ('crate-of-eggs', 11, 460), ('crate-of-eggs', 12, 470),
+        ('tuber-of-yam', 1, 600), ('tuber-of-yam', 2, 620), ('tuber-of-yam', 3, 640), ('tuber-of-yam', 4, 660),
+        ('tuber-of-yam', 5, 680), ('tuber-of-yam', 6, 700), ('tuber-of-yam', 7, 650), ('tuber-of-yam', 8, 600),
+        ('tuber-of-yam', 9, 720), ('tuber-of-yam', 10, 760), ('tuber-of-yam', 11, 780), ('tuber-of-yam', 12, 800)
+    ) AS values_table (slug, month_index, value)
+      ON values_table.slug = mts.slug;
+  `);
+
+  log("[SEED] Market trends seeded successfully");
+}
+
 // Boot sequence - start immediately without IIFE
 let bootPromise = (async () => {
   console.log("[BOOT] Starting boot sequence...");
@@ -1264,10 +2038,14 @@ let bootPromise = (async () => {
     await ensureUsersTable();
     await ensureUsersColumns();
     await ensureServiceRequestsColumns();
+    await ensureMaintenanceEnums();
+    await ensureMaintenanceTables();
+    await ensureOtpTables();
     await ensureEstatesColumns();
     await ensureStoresColumns();
     await ensureCompaniesTable();
     await ensureNotificationsTable();
+    await ensureResidentSettingsTables();
     await ensureProviderRequestsTable();
     await ensureTransactionsColumns();
     await ensureMongoIdMappingTable();
@@ -1276,10 +2054,13 @@ let bootPromise = (async () => {
     await ensureCompanyTasksTables();
     await ensureRequestConversationSettingsTable();
     await ensureRequestQuestionsTable();
+    await ensureOrdinaryFlowTables();
     await ensureAiSessionsTables();
     await ensureMarketplaceV2Tables();
+    await ensureMarketTrendTables();
     await seedRequestConfigDefaults();
     await seedCityMartBanners();
+    await seedMarketTrends();
     log("[DB] Schema guard OK");
   } catch (e) {
     console.error("[DB] Schema guard failed:", e);

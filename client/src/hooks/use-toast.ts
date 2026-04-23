@@ -4,6 +4,7 @@ import type {
   ToastActionElement,
   ToastProps,
 } from "@/components/ui/toast"
+import { dismissAppError, showAppError } from "@/lib/appErrorDialogBus"
 
 const TOAST_LIMIT = 1
 const TOAST_REMOVE_DELAY = 1000000
@@ -13,6 +14,8 @@ type ToasterToast = ToastProps & {
   title?: React.ReactNode
   description?: React.ReactNode
   action?: ToastActionElement
+  error?: unknown
+  source?: string
 }
 
 const actionTypes = {
@@ -148,6 +151,28 @@ function toast({ ...props }: Toast) {
       toast: { ...props, id },
     })
   const dismiss = () => dispatch({ type: "DISMISS_TOAST", toastId: id })
+
+  if (props.variant === "destructive") {
+    showAppError({
+      title: props.title,
+      description: props.description,
+      error: props.error,
+      source: props.source,
+    })
+
+    return {
+      id: id,
+      dismiss: dismissAppError,
+      update: (nextProps: ToasterToast) => {
+        showAppError({
+          title: nextProps.title,
+          description: nextProps.description,
+          error: nextProps.error,
+          source: nextProps.source,
+        })
+      },
+    }
+  }
 
   dispatch({
     type: "ADD_TOAST",

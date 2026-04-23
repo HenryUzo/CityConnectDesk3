@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200" viewBox="0 0 320 200">
+  <rect width="320" height="200" fill="#ECFDF3"/>
+  <rect x="32" y="36" width="256" height="128" rx="18" fill="#039855"/>
+  <circle cx="96" cy="92" r="24" fill="#FFFFFF"/>
+  <path d="M62 142l46-44 32 28 28-22 90 38H62z" fill="#D1FADF"/>
+  <text x="160" y="178" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#065F46">
+    CityConnect E2E evidence
+  </text>
+</svg>

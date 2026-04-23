@@ -11,6 +11,8 @@ import {
   doublePrecision,
   jsonb,
   uuid,
+  index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
@@ -191,6 +193,57 @@ export const paymentStatusEnum = pgEnum("payment_status_enum", [
   "refunded",
   "partial_refund",
 ]);
+export const otpPurposeEnum = pgEnum("otp_purpose", [
+  "signup_verify",
+  "login_verify",
+]);
+export const otpChannelEnum = pgEnum("otp_channel", [
+  "sms",
+  "email",
+]);
+export const otpStatusEnum = pgEnum("otp_status", [
+  "pending",
+  "verified",
+  "expired",
+  "cancelled",
+  "locked",
+]);
+export const pendingRegistrationStatusEnum = pgEnum("pending_registration_status", [
+  "pending",
+  "verified",
+  "expired",
+  "cancelled",
+]);
+export const maintenancePlanDurationEnum = pgEnum("maintenance_plan_duration", [
+  "monthly",
+  "quarterly_3m",
+  "halfyearly_6m",
+  "yearly",
+]);
+export const assetConditionEnum = pgEnum("asset_condition", [
+  "new",
+  "good",
+  "fair",
+  "poor",
+]);
+export const assetSubscriptionStatusEnum = pgEnum("asset_subscription_status", [
+  "draft",
+  "pending_payment",
+  "active",
+  "paused",
+  "expired",
+  "cancelled",
+]);
+export const maintenanceScheduleStatusEnum = pgEnum("maintenance_schedule_status", [
+  "upcoming",
+  "due",
+  "assigned",
+  "in_progress",
+  "completed",
+  "missed",
+  "rescheduled",
+  "cancelled",
+]);
 export const refundStatusEnum = pgEnum("refund_status", [
   "requested",
   "approved",
@@ -262,6 +315,45 @@ export const requestQuestionTypeEnum = pgEnum("request_question_type", [
   "image",
   "multi_image",
 ]);
+export const ordinaryFlowScopeEnum = pgEnum("ordinary_flow_scope", [
+  "global",
+  "estate",
+]);
+export const ordinaryFlowDefinitionStatusEnum = pgEnum("ordinary_flow_definition_status", [
+  "draft",
+  "published",
+  "archived",
+]);
+export const ordinaryFlowInputTypeEnum = pgEnum("ordinary_flow_input_type", [
+  "single_select",
+  "multi_select",
+  "text",
+  "number",
+  "date",
+  "time",
+  "datetime",
+  "location",
+  "file",
+  "yes_no",
+  "urgency",
+  "estate",
+]);
+export const ordinaryFlowRuleActionEnum = pgEnum("ordinary_flow_rule_action", [
+  "goto_question",
+  "terminate",
+  "set_value",
+  "skip",
+]);
+export const ordinaryFlowSessionStatusEnum = pgEnum("ordinary_flow_session_status", [
+  "active",
+  "completed",
+  "cancelled",
+]);
+export const ordinaryFlowAnsweredByEnum = pgEnum("ordinary_flow_answered_by", [
+  "resident",
+  "admin",
+  "system",
+]);
 
 // Simple app settings (key/value) table for global configs
 export const appSettings = pgTable("app_settings", {
@@ -316,6 +408,12 @@ export const users = pgTable("users", {
   longitude: doublePrecision("longitude"), // optional longitude for location
   lastLoginAt: timestamp("last_login_at"), // for admin users
   metadata: jsonb("metadata"), // flexible field for extra profile data from MongoDB
+  username: text("username"),
+  profileImage: text("profile_image"),
+  bio: text("bio"),
+  website: text("website"),
+  countryCode: varchar("country_code", { length: 2 }),
+  timezone: text("timezone"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -484,6 +582,61 @@ export const notifications = pgTable("notifications", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+export const residentNotificationPreferences = pgTable(
+  "resident_notification_preferences",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    eventKey: varchar("event_key", { length: 64 }).notNull(),
+    inAppEnabled: boolean("in_app_enabled").notNull().default(true),
+    emailEnabled: boolean("email_enabled").notNull().default(false),
+    smsEnabled: boolean("sms_enabled").notNull().default(false),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    uniqueUserEvent: sql`UNIQUE (${table.userId}, ${table.eventKey})`,
+  }),
+);
+
+export const residentSettings = pgTable("resident_settings", {
+  userId: varchar("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  quietHoursEnabled: boolean("quiet_hours_enabled").notNull().default(false),
+  quietHoursStart: varchar("quiet_hours_start", { length: 5 }),
+  quietHoursEnd: varchar("quiet_hours_end", { length: 5 }),
+  digestFrequency: varchar("digest_frequency", { length: 16 }).notNull().default("off"),
+  loginAlertsEnabled: boolean("login_alerts_enabled").notNull().default(true),
+  profileVisibility: varchar("profile_visibility", { length: 16 }).notNull().default("private"),
+  showPhoneToProvider: boolean("show_phone_to_provider").notNull().default(false),
+  showEmailToProvider: boolean("show_email_to_provider").notNull().default(false),
+  allowMarketing: boolean("allow_marketing").notNull().default(false),
+  allowAnalytics: boolean("allow_analytics").notNull().default(true),
+  allowPersonalization: boolean("allow_personalization").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const userDeviceSessions = pgTable("user_device_sessions", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  sessionId: text("session_id").notNull().unique(),
+  userAgent: text("user_agent"),
+  ipAddress: text("ip_address"),
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Marketplace Items table (from MongoDB)
 export const marketplaceItems = pgTable("marketplace_items", {
   id: varchar("id")
@@ -568,6 +721,180 @@ export const mongoIdMappings = pgTable("mongo_id_mappings", {
   entityType: text("entity_type").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const maintenanceCategories = pgTable(
+  "maintenance_categories",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    icon: text("icon"),
+    description: text("description"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    slugUniqueIdx: uniqueIndex("maintenance_categories_slug_unique").on(table.slug),
+  }),
+);
+
+export const maintenanceItems = pgTable(
+  "maintenance_items",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    categoryId: varchar("category_id")
+      .notNull()
+      .references(() => maintenanceCategories.id),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    description: text("description"),
+    defaultFrequency: maintenancePlanDurationEnum("default_frequency"),
+    recommendedTasks: jsonb("recommended_tasks"),
+    imageUrl: text("image_url"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    categoryIdx: index("maintenance_items_category_idx").on(table.categoryId),
+    slugUniqueIdx: uniqueIndex("maintenance_items_slug_unique").on(table.slug),
+  }),
+);
+
+export const maintenanceItemTypes = maintenanceItems;
+
+export const residentAssets = pgTable(
+  "resident_assets",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id),
+    maintenanceItemId: varchar("maintenance_item_id")
+      .notNull()
+      .references(() => maintenanceItems.id),
+    estateId: varchar("estate_id").references(() => estates.id),
+    customName: text("custom_name"),
+    locationLabel: text("location_label"),
+    brand: text("brand"),
+    model: text("model"),
+    serialNumber: text("serial_number"),
+    purchaseDate: timestamp("purchase_date"),
+    installedAt: timestamp("installed_at"),
+    lastServiceDate: timestamp("last_service_date"),
+    condition: assetConditionEnum("condition").notNull().default("good"),
+    notes: text("notes"),
+    metadata: jsonb("metadata"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    userIdx: index("resident_assets_user_idx").on(table.userId),
+    maintenanceItemIdx: index("resident_assets_maintenance_item_idx").on(table.maintenanceItemId),
+  }),
+);
+
+export const maintenancePlans = pgTable(
+  "maintenance_plans",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    maintenanceItemId: varchar("maintenance_item_id")
+      .notNull()
+      .references(() => maintenanceItems.id),
+    name: text("name").notNull(),
+    description: text("description"),
+    durationType: maintenancePlanDurationEnum("duration_type").notNull(),
+    price: decimal("price", { precision: 10, scale: 2 }).notNull().default("0"),
+    currency: varchar("currency", { length: 8 }).notNull().default("NGN"),
+    visitsIncluded: integer("visits_included").notNull().default(1),
+    includedTasks: jsonb("included_tasks"),
+    requestLeadDays: integer("request_lead_days").notNull().default(3),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    maintenanceItemIdx: index("maintenance_plans_maintenance_item_idx").on(table.maintenanceItemId),
+  }),
+);
+
+export const assetSubscriptions = pgTable(
+  "asset_subscriptions",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id),
+    residentAssetId: varchar("resident_asset_id")
+      .notNull()
+      .references(() => residentAssets.id),
+    maintenancePlanId: varchar("maintenance_plan_id")
+      .notNull()
+      .references(() => maintenancePlans.id),
+    startDate: timestamp("start_date").notNull(),
+    endDate: timestamp("end_date"),
+    status: assetSubscriptionStatusEnum("status").notNull().default("draft"),
+    autoRenew: boolean("auto_renew").notNull().default(false),
+    activatedAt: timestamp("activated_at"),
+    pausedAt: timestamp("paused_at"),
+    expiredAt: timestamp("expired_at"),
+    cancelledAt: timestamp("cancelled_at"),
+    billingAmount: decimal("billing_amount", { precision: 10, scale: 2 }).notNull().default("0"),
+    currency: varchar("currency", { length: 8 }).notNull().default("NGN"),
+    nextScheduleAt: timestamp("next_schedule_at"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    userIdx: index("asset_subscriptions_user_idx").on(table.userId),
+    residentAssetIdx: index("asset_subscriptions_resident_asset_idx").on(table.residentAssetId),
+    maintenancePlanIdx: index("asset_subscriptions_maintenance_plan_idx").on(
+      table.maintenancePlanId,
+    ),
+    statusIdx: index("asset_subscriptions_status_idx").on(table.status),
+  }),
+);
+
+export const maintenanceSchedules = pgTable(
+  "maintenance_schedules",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    subscriptionId: varchar("subscription_id")
+      .notNull()
+      .references(() => assetSubscriptions.id),
+    scheduledDate: timestamp("scheduled_date").notNull(),
+    status: maintenanceScheduleStatusEnum("status").notNull().default("upcoming"),
+    completedAt: timestamp("completed_at"),
+    skippedAt: timestamp("skipped_at"),
+    rescheduledFrom: varchar("rescheduled_from").references((): any => maintenanceSchedules.id),
+    notes: text("notes"),
+    sourceRequestId: varchar("source_request_id").references((): any => serviceRequests.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    subscriptionIdx: index("maintenance_schedules_subscription_idx").on(table.subscriptionId),
+    statusIdx: index("maintenance_schedules_status_idx").on(table.status),
+    scheduledDateIdx: index("maintenance_schedules_scheduled_date_idx").on(table.scheduledDate),
+    sourceRequestIdx: index("maintenance_schedules_source_request_idx").on(table.sourceRequestId),
+  }),
+);
 
 export const insertCompanySchema = createInsertSchema(companies);
 export type Company = typeof companies.$inferSelect;
@@ -775,6 +1102,34 @@ export const cityMartBanners = pgTable("citymart_banners", {
   showCarouselDots: boolean("show_carousel_dots").default(false),
   activeCarouselDot: integer("active_carousel_dot").default(0),
   createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const marketTrendSeries = pgTable("market_trend_series", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  slug: varchar("slug", { length: 120 }).notNull(),
+  color: varchar("color", { length: 20 }).notNull().default("#039855"),
+  unit: varchar("unit", { length: 20 }).notNull().default("NGN"),
+  position: integer("position").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const marketTrendPoints = pgTable("market_trend_points", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  seriesId: varchar("series_id")
+    .notNull()
+    .references(() => marketTrendSeries.id, { onDelete: "cascade" }),
+  monthIndex: integer("month_index").notNull(),
+  value: decimal("value", { precision: 12, scale: 2 }).notNull().default("0"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1171,6 +1526,151 @@ export const requestQuestions = pgTable("request_questions", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const ordinaryFlowDefinitions = pgTable(
+  "ordinary_flow_definitions",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    categoryKey: text("category_key").notNull(),
+    scope: ordinaryFlowScopeEnum("scope").notNull().default("global"),
+    estateId: varchar("estate_id"),
+    name: text("name").notNull(),
+    version: integer("version").notNull().default(1),
+    status: ordinaryFlowDefinitionStatusEnum("status").notNull().default("draft"),
+    publishedAt: timestamp("published_at"),
+    publishedBy: varchar("published_by"),
+    createdBy: varchar("created_by"),
+    isDefault: boolean("is_default").notNull().default(false),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    uniqueVersion: sql`UNIQUE (${table.categoryKey}, ${table.scope}, COALESCE(${table.estateId}, ''), ${table.version})`,
+  }),
+);
+
+export const ordinaryFlowQuestions = pgTable(
+  "ordinary_flow_questions",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    flowId: varchar("flow_id")
+      .notNull()
+      .references(() => ordinaryFlowDefinitions.id, { onDelete: "cascade" }),
+    questionKey: text("question_key").notNull(),
+    prompt: text("prompt").notNull(),
+    description: text("description"),
+    inputType: ordinaryFlowInputTypeEnum("input_type").notNull().default("text"),
+    isRequired: boolean("is_required").notNull().default(true),
+    isTerminal: boolean("is_terminal").notNull().default(false),
+    orderIndex: integer("order_index").notNull().default(0),
+    validation: jsonb("validation").notNull().default("{}"),
+    uiMeta: jsonb("ui_meta").notNull().default("{}"),
+    defaultNextQuestionId: varchar("default_next_question_id"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    uniqueQuestionKey: sql`UNIQUE (${table.flowId}, ${table.questionKey})`,
+  }),
+);
+
+export const ordinaryFlowOptions = pgTable(
+  "ordinary_flow_options",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    questionId: varchar("question_id")
+      .notNull()
+      .references(() => ordinaryFlowQuestions.id, { onDelete: "cascade" }),
+    optionKey: text("option_key").notNull(),
+    label: text("label").notNull(),
+    value: text("value").notNull(),
+    icon: text("icon"),
+    orderIndex: integer("order_index").notNull().default(0),
+    nextQuestionId: varchar("next_question_id"),
+    meta: jsonb("meta").notNull().default("{}"),
+  },
+  (table) => ({
+    uniqueOptionKey: sql`UNIQUE (${table.questionId}, ${table.optionKey})`,
+  }),
+);
+
+export const ordinaryFlowRules = pgTable("ordinary_flow_rules", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  flowId: varchar("flow_id")
+    .notNull()
+    .references(() => ordinaryFlowDefinitions.id, { onDelete: "cascade" }),
+  fromQuestionId: varchar("from_question_id")
+    .notNull()
+    .references(() => ordinaryFlowQuestions.id, { onDelete: "cascade" }),
+  priority: integer("priority").notNull().default(100),
+  conditionJson: jsonb("condition_json").notNull().default("{}"),
+  action: ordinaryFlowRuleActionEnum("action").notNull().default("goto_question"),
+  nextQuestionId: varchar("next_question_id"),
+  actionPayload: jsonb("action_payload").notNull().default("{}"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const ordinaryFlowSessions = pgTable(
+  "ordinary_flow_sessions",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    requestId: varchar("request_id").notNull(),
+    residentId: varchar("resident_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    categoryKey: text("category_key").notNull(),
+    flowId: varchar("flow_id")
+      .notNull()
+      .references(() => ordinaryFlowDefinitions.id, { onDelete: "cascade" }),
+    flowVersion: integer("flow_version").notNull(),
+    status: ordinaryFlowSessionStatusEnum("status").notNull().default("active"),
+    currentQuestionId: varchar("current_question_id"),
+    answersSnapshot: jsonb("answers_snapshot").notNull().default("{}"),
+    activePath: jsonb("active_path").notNull().default("[]"),
+    stateRevision: integer("state_revision").notNull().default(0),
+    startedAt: timestamp("started_at").defaultNow(),
+    completedAt: timestamp("completed_at"),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    uniqueRequest: sql`UNIQUE (${table.requestId})`,
+  }),
+);
+
+export const ordinaryFlowAnswers = pgTable(
+  "ordinary_flow_answers",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    sessionId: varchar("session_id")
+      .notNull()
+      .references(() => ordinaryFlowSessions.id, { onDelete: "cascade" }),
+    questionId: varchar("question_id")
+      .notNull()
+      .references(() => ordinaryFlowQuestions.id, { onDelete: "cascade" }),
+    questionKey: text("question_key").notNull(),
+    answerJson: jsonb("answer_json").notNull().default("{}"),
+    answeredBy: ordinaryFlowAnsweredByEnum("answered_by").notNull().default("resident"),
+    revision: integer("revision").notNull().default(1),
+    answeredAt: timestamp("answered_at").defaultNow(),
+  },
+  (table) => ({
+    uniqueSessionQuestion: sql`UNIQUE (${table.sessionId}, ${table.questionId})`,
+  }),
+);
+
 //Telematics pointer Table
 export const deviceAssignments = pgTable("device_assignments", {
   id: varchar("id")
@@ -1266,6 +1766,33 @@ export const insertAiConversationFlowSettingsSchema = createInsertSchema(aiConve
 
 export const insertRequestConversationSettingsSchema = createInsertSchema(requestConversationSettings);
 export const insertRequestQuestionsSchema = createInsertSchema(requestQuestions);
+export const insertOrdinaryFlowDefinitionSchema = createInsertSchema(ordinaryFlowDefinitions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertOrdinaryFlowQuestionSchema = createInsertSchema(ordinaryFlowQuestions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertOrdinaryFlowOptionSchema = createInsertSchema(ordinaryFlowOptions).omit({
+  id: true,
+});
+export const insertOrdinaryFlowRuleSchema = createInsertSchema(ordinaryFlowRules).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertOrdinaryFlowSessionSchema = createInsertSchema(ordinaryFlowSessions).omit({
+  id: true,
+  startedAt: true,
+  updatedAt: true,
+});
+export const insertOrdinaryFlowAnswerSchema = createInsertSchema(ordinaryFlowAnswers).omit({
+  id: true,
+  answeredAt: true,
+});
 
 // Relations
 export const estatesRelations = relations(estates, ({ many }) => ({
@@ -1315,6 +1842,89 @@ export const categoriesRelations = relations(categories, ({ one }) => ({
     references: [estates.id],
   }),
 }));
+
+export const maintenanceCategoriesRelations = relations(
+  maintenanceCategories,
+  ({ many }) => ({
+    itemTypes: many(maintenanceItems),
+  }),
+);
+
+export const maintenanceItemsRelations = relations(
+  maintenanceItems,
+  ({ one, many }) => ({
+    category: one(maintenanceCategories, {
+      fields: [maintenanceItems.categoryId],
+      references: [maintenanceCategories.id],
+    }),
+    assets: many(residentAssets),
+    plans: many(maintenancePlans),
+  }),
+);
+
+export const maintenanceItemTypesRelations = maintenanceItemsRelations;
+
+export const residentAssetsRelations = relations(residentAssets, ({ one, many }) => ({
+  resident: one(users, {
+    fields: [residentAssets.userId],
+    references: [users.id],
+  }),
+  estate: one(estates, {
+    fields: [residentAssets.estateId],
+    references: [estates.id],
+  }),
+  itemType: one(maintenanceItems, {
+    fields: [residentAssets.maintenanceItemId],
+    references: [maintenanceItems.id],
+  }),
+  subscriptions: many(assetSubscriptions),
+}));
+
+export const maintenancePlansRelations = relations(maintenancePlans, ({ one, many }) => ({
+  itemType: one(maintenanceItems, {
+    fields: [maintenancePlans.maintenanceItemId],
+    references: [maintenanceItems.id],
+  }),
+  subscriptions: many(assetSubscriptions),
+}));
+
+export const assetSubscriptionsRelations = relations(assetSubscriptions, ({ one, many }) => ({
+  user: one(users, {
+    fields: [assetSubscriptions.userId],
+    references: [users.id],
+  }),
+  asset: one(residentAssets, {
+    fields: [assetSubscriptions.residentAssetId],
+    references: [residentAssets.id],
+  }),
+  plan: one(maintenancePlans, {
+    fields: [assetSubscriptions.maintenancePlanId],
+    references: [maintenancePlans.id],
+  }),
+  schedules: many(maintenanceSchedules),
+}));
+
+export const maintenanceSchedulesRelations = relations(
+  maintenanceSchedules,
+  ({ one, many }) => ({
+    subscription: one(assetSubscriptions, {
+      fields: [maintenanceSchedules.subscriptionId],
+      references: [assetSubscriptions.id],
+    }),
+    sourceSchedule: one(maintenanceSchedules, {
+      fields: [maintenanceSchedules.rescheduledFrom],
+      references: [maintenanceSchedules.id],
+      relationName: "maintenance_schedule_reschedule_source",
+    }),
+    rescheduledSchedules: many(maintenanceSchedules, {
+      relationName: "maintenance_schedule_reschedule_source",
+    }),
+    sourceRequest: one(serviceRequests, {
+      fields: [maintenanceSchedules.sourceRequestId],
+      references: [serviceRequests.id],
+    }),
+  }),
+);
 
 export const storesRelations = relations(stores, ({ one, many }) => ({
   estate: one(estates, {
@@ -1406,7 +2016,7 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
 
 export const serviceRequestsRelations = relations(
   serviceRequests,
-  ({ one }) => ({
+  ({ one, many }) => ({
     resident: one(users, {
       fields: [serviceRequests.residentId],
       references: [users.id],
@@ -1417,6 +2027,7 @@ export const serviceRequestsRelations = relations(
       references: [users.id],
       relationName: "providerRequests",
     }),
+    maintenanceSchedules: many(maintenanceSchedules),
     transactions: one(transactions),
   }),
 );
@@ -1564,6 +2175,25 @@ export const insertNotificationSchema = createInsertSchema(notifications).omit({
   createdAt: true,
 });
 
+export const insertResidentNotificationPreferenceSchema = createInsertSchema(
+  residentNotificationPreferences,
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertResidentSettingsSchema = createInsertSchema(residentSettings).omit({
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertUserDeviceSessionSchema = createInsertSchema(userDeviceSessions).omit({
+  id: true,
+  createdAt: true,
+  lastSeenAt: true,
+});
+
 export const insertCategorySchema = createInsertSchema(categories).omit({
   id: true,
   createdAt: true,
@@ -1587,7 +2217,63 @@ export const insertStoreEstateSchema = createInsertSchema(storeEstates).omit({
   createdAt: true,
 });
 
+export const insertMarketTrendSeriesSchema = createInsertSchema(marketTrendSeries).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMarketTrendPointSchema = createInsertSchema(marketTrendPoints).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertMarketplaceItemSchema = createInsertSchema(marketplaceItems).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMaintenanceCategorySchema = createInsertSchema(
+  maintenanceCategories,
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMaintenanceItemSchema = createInsertSchema(
+  maintenanceItems,
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMaintenanceItemTypeSchema = insertMaintenanceItemSchema;
+
+export const insertResidentAssetSchema = createInsertSchema(residentAssets).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMaintenancePlanSchema = createInsertSchema(maintenancePlans).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertAssetSubscriptionSchema = createInsertSchema(assetSubscriptions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMaintenanceScheduleSchema = createInsertSchema(
+  maintenanceSchedules,
+).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
@@ -1663,12 +2349,38 @@ export type Membership = typeof memberships.$inferSelect;
 export type InsertMembership = z.infer<typeof insertMembershipSchema>;
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type ResidentNotificationPreference = typeof residentNotificationPreferences.$inferSelect;
+export type InsertResidentNotificationPreference = z.infer<
+  typeof insertResidentNotificationPreferenceSchema
+>;
+export type ResidentSettings = typeof residentSettings.$inferSelect;
+export type InsertResidentSettings = z.infer<typeof insertResidentSettingsSchema>;
+export type UserDeviceSession = typeof userDeviceSessions.$inferSelect;
+export type InsertUserDeviceSession = z.infer<typeof insertUserDeviceSessionSchema>;
 export type Category = typeof categories.$inferSelect;
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
+export type MaintenanceCategory = typeof maintenanceCategories.$inferSelect;
+export type InsertMaintenanceCategory = z.infer<typeof insertMaintenanceCategorySchema>;
+export type MaintenanceItem = typeof maintenanceItems.$inferSelect;
+export type InsertMaintenanceItem = z.infer<typeof insertMaintenanceItemSchema>;
+export type MaintenanceItemType = typeof maintenanceItemTypes.$inferSelect;
+export type InsertMaintenanceItemType = z.infer<typeof insertMaintenanceItemTypeSchema>;
+export type ResidentAsset = typeof residentAssets.$inferSelect;
+export type InsertResidentAsset = z.infer<typeof insertResidentAssetSchema>;
+export type MaintenancePlan = typeof maintenancePlans.$inferSelect;
+export type InsertMaintenancePlan = z.infer<typeof insertMaintenancePlanSchema>;
+export type AssetSubscription = typeof assetSubscriptions.$inferSelect;
+export type InsertAssetSubscription = z.infer<typeof insertAssetSubscriptionSchema>;
+export type MaintenanceSchedule = typeof maintenanceSchedules.$inferSelect;
+export type InsertMaintenanceSchedule = z.infer<typeof insertMaintenanceScheduleSchema>;
 export type Store = typeof stores.$inferSelect;
 export type InsertStore = z.infer<typeof insertStoreSchema>;
 export type StoreMember = typeof storeMembers.$inferSelect;
 export type InsertStoreMember = z.infer<typeof insertStoreMemberSchema>;
+export type MarketTrendSeries = typeof marketTrendSeries.$inferSelect;
+export type InsertMarketTrendSeries = z.infer<typeof insertMarketTrendSeriesSchema>;
+export type MarketTrendPoint = typeof marketTrendPoints.$inferSelect;
+export type InsertMarketTrendPoint = z.infer<typeof insertMarketTrendPointSchema>;
 export type MarketplaceItem = typeof marketplaceItems.$inferSelect;
 export type InsertMarketplaceItem = z.infer<typeof insertMarketplaceItemSchema>;
 export type Order = typeof orders.$inferSelect;
@@ -1702,6 +2414,22 @@ export type BroadcastMessage = typeof broadcastMessages.$inferSelect;
 export type InsertBroadcastMessage = z.infer<typeof insertBroadcastMessageSchema>;
 export type ImpersonationSession = typeof impersonationSessions.$inferSelect;
 export type InsertImpersonationSession = z.infer<typeof insertImpersonationSessionSchema>;
+export type PendingRegistration = typeof pendingRegistrations.$inferSelect;
+export type InsertPendingRegistration = z.infer<typeof insertPendingRegistrationSchema>;
+export type OtpChallenge = typeof otpChallenges.$inferSelect;
+export type InsertOtpChallenge = z.infer<typeof insertOtpChallengeSchema>;
+export type OrdinaryFlowDefinition = typeof ordinaryFlowDefinitions.$inferSelect;
+export type InsertOrdinaryFlowDefinition = z.infer<typeof insertOrdinaryFlowDefinitionSchema>;
+export type OrdinaryFlowQuestion = typeof ordinaryFlowQuestions.$inferSelect;
+export type InsertOrdinaryFlowQuestion = z.infer<typeof insertOrdinaryFlowQuestionSchema>;
+export type OrdinaryFlowOption = typeof ordinaryFlowOptions.$inferSelect;
+export type InsertOrdinaryFlowOption = z.infer<typeof insertOrdinaryFlowOptionSchema>;
+export type OrdinaryFlowRule = typeof ordinaryFlowRules.$inferSelect;
+export type InsertOrdinaryFlowRule = z.infer<typeof insertOrdinaryFlowRuleSchema>;
+export type OrdinaryFlowSession = typeof ordinaryFlowSessions.$inferSelect;
+export type InsertOrdinaryFlowSession = z.infer<typeof insertOrdinaryFlowSessionSchema>;
+export type OrdinaryFlowAnswer = typeof ordinaryFlowAnswers.$inferSelect;
+export type InsertOrdinaryFlowAnswer = z.infer<typeof insertOrdinaryFlowAnswerSchema>;
 
 // â”€â”€ Marketplace V2 types â”€â”€
 export type Cart = typeof carts.$inferSelect;
@@ -1752,6 +2480,77 @@ export const refreshTokens = pgTable("refresh_tokens", {
   isRevoked: boolean("is_revoked").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
   revokedAt: timestamp("revoked_at"),
+});
+
+export const pendingRegistrations = pgTable(
+  "pending_registrations",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    role: userRoleEnum("role").notNull(),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    contactChannel: otpChannelEnum("contact_channel").notNull(),
+    contactValue: text("contact_value").notNull(),
+    status: pendingRegistrationStatusEnum("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    contactValueIdx: index("pending_registrations_contact_value_idx").on(table.contactValue),
+    statusExpiresIdx: index("pending_registrations_status_expires_idx").on(
+      table.status,
+      table.expiresAt,
+    ),
+  }),
+);
+
+export const otpChallenges = pgTable(
+  "otp_challenges",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }),
+    pendingRegistrationId: varchar("pending_registration_id").references(
+      () => pendingRegistrations.id,
+      { onDelete: "cascade" },
+    ),
+    purpose: otpPurposeEnum("purpose").notNull(),
+    channel: otpChannelEnum("channel").notNull(),
+    destination: text("destination").notNull(),
+    codeHash: text("code_hash").notNull(),
+    status: otpStatusEnum("status").notNull().default("pending"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    expiresAt: timestamp("expires_at").notNull(),
+    lastSentAt: timestamp("last_sent_at").defaultNow(),
+    verifiedAt: timestamp("verified_at"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    destinationPurposeStatusIdx: index("otp_challenges_destination_purpose_status_idx").on(
+      table.destination,
+      table.purpose,
+      table.status,
+    ),
+    expiresIdx: index("otp_challenges_expires_idx").on(table.expiresAt),
+  }),
+);
+
+export const insertPendingRegistrationSchema = createInsertSchema(pendingRegistrations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertOtpChallengeSchema = createInsertSchema(otpChallenges).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  verifiedAt: true,
 });
 
 export type ResidentLoginData = z.infer<typeof residentLoginSchema>;

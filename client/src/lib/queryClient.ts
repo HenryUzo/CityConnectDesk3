@@ -1,9 +1,13 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import {
+  createAppRequestErrorFromResponse,
+  createNetworkRequestError,
+  createUnexpectedResponseError,
+} from "@/lib/errorPresentation";
 
 async function throwIfResNotOk(res: Response, url: string) {
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText} @ ${url}\n${text.slice(0, 200)}`);
+    throw await createAppRequestErrorFromResponse(res, url, 300);
   }
 }
 
@@ -16,9 +20,16 @@ function getBaseUrl(): string {
   return import.meta.env.VITE_API_URL || origin || "https://cityconnect.replit.app";
 }
 
+function normalizeApiPath(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed
+    .replace(/^\$\{import\.meta\.env\.VITE_API_URL\}/, "")
+    .replace(/^(undefined|null)(?=\/api\/)/, "");
+}
+
 /** Build an absolute URL from a queryKey (expects key[0] to be the path or URL) */
 function resolveUrlFromQueryKey(queryKey: readonly unknown[]): string {
-  const raw = String(queryKey[0] ?? "");
+  const raw = normalizeApiPath(String(queryKey[0] ?? ""));
   if (/^https?:\/\//i.test(raw)) return raw;
   const base = getBaseUrl();
   const path = raw.startsWith("/") ? raw : `/${raw}`;
@@ -58,9 +69,10 @@ export async function apiRequest(
   data?: unknown | undefined,
   options?: { signal?: AbortSignal },
 ): Promise<Response> {
-  const finalUrl = /^https?:\/\//i.test(url)
-    ? url
-    : resolveUrlFromQueryKey([url]);
+  const normalizedUrl = normalizeApiPath(url);
+  const finalUrl = /^https?:\/\//i.test(normalizedUrl)
+    ? normalizedUrl
+    : resolveUrlFromQueryKey([normalizedUrl]);
 
   const headers: Record<string, string> = { ...getRequestHeaders() };
   if (data) headers["Content-Type"] = "application/json";
@@ -89,13 +101,13 @@ export function getQueryFn<TReturn>(opts: { on401: UnauthorizedBehavior }): Quer
       res = await fetch(url, { credentials: "include", headers });
     } catch (err: any) {
       console.error("Fetch network error:", url, err?.message || err);
-      throw new Error(`Network error fetching ${url}: ${err?.message || err}`);
+      throw createNetworkRequestError(url, err);
     }
 
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("text/html")) {
       const html = await res.text();
-      throw new Error(`Expected JSON but got HTML @ ${url}\n${html.slice(0, 160)}`);
+      throw createUnexpectedResponseError(url, ct, html);
     }
 
     if (opts.on401 === "returnNull" && res.status === 401) return null as any;

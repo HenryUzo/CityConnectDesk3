@@ -17,6 +17,14 @@ import {
   estates,
   notifications,
   serviceRequestCancellationCases,
+  maintenanceCategories,
+  maintenanceItemTypes,
+  residentAssets,
+  maintenancePlans,
+  assetSubscriptions,
+  maintenanceSchedules,
+  pendingRegistrations,
+  otpChallenges,
   type User,
   type InsertUser,
   type ServiceRequest,
@@ -43,9 +51,25 @@ import {
   type InsertAuditLog,
   type Wallet,
   type Membership,
+  type MaintenanceCategory,
+  type InsertMaintenanceCategory,
+  type MaintenanceItemType,
+  type InsertMaintenanceItemType,
+  type ResidentAsset,
+  type InsertResidentAsset,
+  type MaintenancePlan,
+  type InsertMaintenancePlan,
+  type AssetSubscription,
+  type InsertAssetSubscription,
+  type MaintenanceSchedule,
+  type InsertMaintenanceSchedule,
+  type PendingRegistration,
+  type InsertPendingRegistration,
+  type OtpChallenge,
+  type InsertOtpChallenge,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, count, sql, asc, or, inArray, sum, isNull } from "drizzle-orm";
+import { eq, and, desc, count, sql, asc, or, inArray, sum, isNull, ilike } from "drizzle-orm";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
 const PostgresSessionStore = connectPg(session);
@@ -111,6 +135,12 @@ function mapPrismaUser(user: PrismaUser & { providerCompany?: { name?: string | 
     longitude: null,
     lastLoginAt: null,
     metadata: null,
+    username: null,
+    profileImage: null,
+    bio: null,
+    website: null,
+    countryCode: null,
+    timezone: null,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -197,6 +227,15 @@ export interface IStorage {
   getUserByAccessCode(accessCode: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
+  createPendingRegistration(input: InsertPendingRegistration): Promise<PendingRegistration>;
+  getPendingRegistration(id: string): Promise<PendingRegistration | undefined>;
+  updatePendingRegistration(
+    id: string,
+    updates: Partial<PendingRegistration>,
+  ): Promise<PendingRegistration | undefined>;
+  createOtpChallenge(input: InsertOtpChallenge): Promise<OtpChallenge>;
+  getOtpChallenge(id: string): Promise<OtpChallenge | undefined>;
+  updateOtpChallenge(id: string, updates: Partial<OtpChallenge>): Promise<OtpChallenge | undefined>;
   getMembershipsForUser(userId: string): Promise<Membership[]>;
   getMembershipByUserAndEstate(userId: string, estateId: string): Promise<Membership | undefined>;
   // Service Requests
@@ -226,6 +265,85 @@ export interface IStorage {
     reference: string,
     updates: Prisma.TransactionUpdateInput,
   ): Promise<PrismaTransaction | undefined>;
+
+  // Maintenance catalog
+  getMaintenanceCategory(id: string): Promise<MaintenanceCategory | undefined>;
+  listMaintenanceCategories(options?: {
+    activeOnly?: boolean;
+    isActive?: boolean;
+    q?: string;
+  }): Promise<MaintenanceCategory[]>;
+  createMaintenanceCategory(
+    input: InsertMaintenanceCategory,
+  ): Promise<MaintenanceCategory>;
+  updateMaintenanceCategory(
+    id: string,
+    updates: Partial<MaintenanceCategory>,
+  ): Promise<MaintenanceCategory | undefined>;
+  getMaintenanceItemType(id: string): Promise<MaintenanceItemType | undefined>;
+  listMaintenanceItemTypes(options?: {
+    activeOnly?: boolean;
+    isActive?: boolean;
+    categoryId?: string;
+    q?: string;
+  }): Promise<MaintenanceItemType[]>;
+  createMaintenanceItemType(
+    input: InsertMaintenanceItemType,
+  ): Promise<MaintenanceItemType>;
+  updateMaintenanceItemType(
+    id: string,
+    updates: Partial<MaintenanceItemType>,
+  ): Promise<MaintenanceItemType | undefined>;
+  getMaintenancePlan(id: string): Promise<MaintenancePlan | undefined>;
+  listMaintenancePlans(options?: {
+    activeOnly?: boolean;
+    isActive?: boolean;
+    maintenanceItemId?: string;
+    durationType?: string;
+    q?: string;
+  }): Promise<MaintenancePlan[]>;
+  createMaintenancePlan(input: InsertMaintenancePlan): Promise<MaintenancePlan>;
+  updateMaintenancePlan(
+    id: string,
+    updates: Partial<MaintenancePlan>,
+  ): Promise<MaintenancePlan | undefined>;
+
+  // Maintenance resident records
+  getResidentAsset(id: string): Promise<ResidentAsset | undefined>;
+  listResidentAssets(residentId: string): Promise<ResidentAsset[]>;
+  createResidentAsset(input: InsertResidentAsset): Promise<ResidentAsset>;
+  updateResidentAsset(
+    id: string,
+    residentId: string,
+    updates: Partial<ResidentAsset>,
+  ): Promise<ResidentAsset | undefined>;
+  getAssetSubscription(id: string): Promise<AssetSubscription | undefined>;
+  listAssetSubscriptionsByResident(residentId: string): Promise<AssetSubscription[]>;
+  createAssetSubscription(
+    input: InsertAssetSubscription,
+  ): Promise<AssetSubscription>;
+  updateAssetSubscription(
+    id: string,
+    updates: Partial<AssetSubscription>,
+  ): Promise<AssetSubscription | undefined>;
+  getMaintenanceSchedule(id: string): Promise<MaintenanceSchedule | undefined>;
+  listMaintenanceSchedulesByResident(
+    residentId: string,
+  ): Promise<MaintenanceSchedule[]>;
+  listMaintenanceSchedules(options?: {
+    status?: string;
+  }): Promise<MaintenanceSchedule[]>;
+  createMaintenanceSchedule(
+    input: InsertMaintenanceSchedule,
+  ): Promise<MaintenanceSchedule>;
+  updateMaintenanceSchedule(
+    id: string,
+    updates: Partial<MaintenanceSchedule>,
+  ): Promise<MaintenanceSchedule | undefined>;
+  createServiceRequestFromMaintenanceSchedule(
+    scheduleId: string,
+    actorId?: string | null,
+  ): Promise<ServiceRequest>;
   
   // Admin functions
   getUsers(role?: string): Promise<User[]>;
@@ -303,6 +421,25 @@ export class DatabaseStorage implements IStorage {
     return mapped;
   }
 
+  private buildMaintenanceRequestDescription(params: {
+    asset: ResidentAsset;
+    itemType: MaintenanceItemType;
+    plan: MaintenancePlan;
+    schedule: MaintenanceSchedule;
+  }) {
+    const parts = [
+      "Scheduled preventive maintenance.",
+      params.asset.customName ? `Asset: ${params.asset.customName}.` : null,
+      params.asset.locationLabel ? `Location: ${params.asset.locationLabel}.` : null,
+      params.asset.brand ? `Brand: ${params.asset.brand}.` : null,
+      params.asset.model ? `Model: ${params.asset.model}.` : null,
+      `Item type: ${params.itemType.name}.`,
+      `Plan: ${params.plan.name}.`,
+      "Next step: confirm preferred time and access instructions.",
+    ].filter(Boolean);
+    return parts.join(" ");
+  }
+
   async getUser(id: string): Promise<User | undefined> {
     // Fetch from Drizzle (source of truth), not Prisma
     // This ensures we always get the correct role data
@@ -325,13 +462,19 @@ export class DatabaseStorage implements IStorage {
       .limit(1);
     if (user) return user as User;
     
-    // If not found by email, try by name
-    const byName = await db
+    // If not found by email, try by username, phone, then name
+    const [byIdentity] = await db
       .select()
       .from(users)
-      .where(eq(users.name, normalized))
+      .where(
+        or(
+          eq(users.username, normalized),
+          eq(users.phone, normalized),
+          eq(users.name, normalized),
+        ),
+      )
       .limit(1);
-    return byName[0] as User | undefined;
+    return byIdentity as User | undefined;
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
@@ -460,6 +603,60 @@ export class DatabaseStorage implements IStorage {
     }
     
     return user || undefined;
+  }
+
+  async createPendingRegistration(
+    input: InsertPendingRegistration,
+  ): Promise<PendingRegistration> {
+    const [row] = await db.insert(pendingRegistrations).values(input).returning();
+    return row as PendingRegistration;
+  }
+
+  async getPendingRegistration(id: string): Promise<PendingRegistration | undefined> {
+    const [row] = await db
+      .select()
+      .from(pendingRegistrations)
+      .where(eq(pendingRegistrations.id, id))
+      .limit(1);
+    return row as PendingRegistration | undefined;
+  }
+
+  async updatePendingRegistration(
+    id: string,
+    updates: Partial<PendingRegistration>,
+  ): Promise<PendingRegistration | undefined> {
+    const [row] = await db
+      .update(pendingRegistrations)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(pendingRegistrations.id, id))
+      .returning();
+    return row as PendingRegistration | undefined;
+  }
+
+  async createOtpChallenge(input: InsertOtpChallenge): Promise<OtpChallenge> {
+    const [row] = await db.insert(otpChallenges).values(input).returning();
+    return row as OtpChallenge;
+  }
+
+  async getOtpChallenge(id: string): Promise<OtpChallenge | undefined> {
+    const [row] = await db
+      .select()
+      .from(otpChallenges)
+      .where(eq(otpChallenges.id, id))
+      .limit(1);
+    return row as OtpChallenge | undefined;
+  }
+
+  async updateOtpChallenge(
+    id: string,
+    updates: Partial<OtpChallenge>,
+  ): Promise<OtpChallenge | undefined> {
+    const [row] = await db
+      .update(otpChallenges)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(otpChallenges.id, id))
+      .returning();
+    return row as OtpChallenge | undefined;
   }
 
   async getMembershipsForUser(userId: string): Promise<Membership[]> {
@@ -1087,6 +1284,469 @@ export class DatabaseStorage implements IStorage {
       updatedAt: row.createdAt,
       currency: (row.currency ?? "NGN"),
     };
+  }
+
+  async getMaintenanceCategory(id: string): Promise<MaintenanceCategory | undefined> {
+    const [row] = await db
+      .select()
+      .from(maintenanceCategories)
+      .where(eq(maintenanceCategories.id, id))
+      .limit(1);
+    return row || undefined;
+  }
+
+  async listMaintenanceCategories(options?: {
+    activeOnly?: boolean;
+    isActive?: boolean;
+    q?: string;
+  }): Promise<MaintenanceCategory[]> {
+    const whereParts: any[] = [];
+    if (options?.isActive !== undefined) {
+      whereParts.push(eq(maintenanceCategories.isActive, options.isActive));
+    } else if (options?.activeOnly) {
+      whereParts.push(eq(maintenanceCategories.isActive, true));
+    }
+    if (options?.q) {
+      const query = `%${String(options.q).trim()}%`;
+      whereParts.push(
+        or(
+          ilike(maintenanceCategories.name, query),
+          ilike(maintenanceCategories.description, query),
+          ilike(maintenanceCategories.slug, query),
+        ),
+      );
+    }
+    const where = whereParts.length > 1 ? and(...whereParts) : whereParts[0];
+    const query = db.select().from(maintenanceCategories);
+    const rows = where
+      ? await query.where(where as any).orderBy(asc(maintenanceCategories.name))
+      : await query.orderBy(asc(maintenanceCategories.name));
+    return rows;
+  }
+
+  async createMaintenanceCategory(
+    input: InsertMaintenanceCategory,
+  ): Promise<MaintenanceCategory> {
+    const [row] = await db
+      .insert(maintenanceCategories)
+      .values({ ...(input as any), updatedAt: new Date() })
+      .returning();
+    return row;
+  }
+
+  async updateMaintenanceCategory(
+    id: string,
+    updates: Partial<MaintenanceCategory>,
+  ): Promise<MaintenanceCategory | undefined> {
+    const [row] = await db
+      .update(maintenanceCategories)
+      .set({ ...(updates as any), updatedAt: new Date() })
+      .where(eq(maintenanceCategories.id, id))
+      .returning();
+    return row || undefined;
+  }
+
+  async getMaintenanceItemType(id: string): Promise<MaintenanceItemType | undefined> {
+    const [row] = await db
+      .select()
+      .from(maintenanceItemTypes)
+      .where(eq(maintenanceItemTypes.id, id))
+      .limit(1);
+    return row || undefined;
+  }
+
+  async listMaintenanceItemTypes(options?: {
+    activeOnly?: boolean;
+    isActive?: boolean;
+    categoryId?: string;
+    q?: string;
+  }): Promise<MaintenanceItemType[]> {
+    const whereParts: any[] = [];
+    if (options?.isActive !== undefined) {
+      whereParts.push(eq(maintenanceItemTypes.isActive, options.isActive));
+    } else if (options?.activeOnly) {
+      whereParts.push(eq(maintenanceItemTypes.isActive, true));
+    }
+    if (options?.categoryId) {
+      whereParts.push(eq(maintenanceItemTypes.categoryId, options.categoryId));
+    }
+    if (options?.q) {
+      const query = `%${String(options.q).trim()}%`;
+      whereParts.push(
+        or(
+          ilike(maintenanceItemTypes.name, query),
+          ilike(maintenanceItemTypes.description, query),
+          ilike(maintenanceItemTypes.slug, query),
+        ),
+      );
+    }
+    const where = whereParts.length > 1 ? and(...whereParts) : whereParts[0];
+    const query = db.select().from(maintenanceItemTypes);
+    const rows = where
+      ? await query.where(where as any).orderBy(asc(maintenanceItemTypes.name))
+      : await query.orderBy(asc(maintenanceItemTypes.name));
+    return rows;
+  }
+
+  async createMaintenanceItemType(
+    input: InsertMaintenanceItemType,
+  ): Promise<MaintenanceItemType> {
+    const [row] = await db
+      .insert(maintenanceItemTypes)
+      .values({ ...(input as any), updatedAt: new Date() })
+      .returning();
+    return row;
+  }
+
+  async updateMaintenanceItemType(
+    id: string,
+    updates: Partial<MaintenanceItemType>,
+  ): Promise<MaintenanceItemType | undefined> {
+    const [row] = await db
+      .update(maintenanceItemTypes)
+      .set({ ...(updates as any), updatedAt: new Date() })
+      .where(eq(maintenanceItemTypes.id, id))
+      .returning();
+    return row || undefined;
+  }
+
+  async getMaintenancePlan(id: string): Promise<MaintenancePlan | undefined> {
+    const [row] = await db
+      .select()
+      .from(maintenancePlans)
+      .where(eq(maintenancePlans.id, id))
+      .limit(1);
+    return row || undefined;
+  }
+
+  async listMaintenancePlans(options?: {
+    activeOnly?: boolean;
+    isActive?: boolean;
+    maintenanceItemId?: string;
+    durationType?: string;
+    q?: string;
+  }): Promise<MaintenancePlan[]> {
+    const whereParts: any[] = [];
+    if (options?.isActive !== undefined) {
+      whereParts.push(eq(maintenancePlans.isActive, options.isActive));
+    } else if (options?.activeOnly) {
+      whereParts.push(eq(maintenancePlans.isActive, true));
+    }
+    if (options?.maintenanceItemId) {
+      whereParts.push(eq(maintenancePlans.maintenanceItemId, options.maintenanceItemId));
+    }
+    if (options?.durationType) {
+      whereParts.push(eq(maintenancePlans.durationType, options.durationType as any));
+    }
+    if (options?.q) {
+      const query = `%${String(options.q).trim()}%`;
+      whereParts.push(
+        or(
+          ilike(maintenancePlans.name, query),
+          ilike(maintenancePlans.description, query),
+        ),
+      );
+    }
+    const where = whereParts.length > 1 ? and(...whereParts) : whereParts[0];
+    const query = db.select().from(maintenancePlans);
+    const rows = where
+      ? await query.where(where as any).orderBy(asc(maintenancePlans.name))
+      : await query.orderBy(asc(maintenancePlans.name));
+    return rows;
+  }
+
+  async createMaintenancePlan(input: InsertMaintenancePlan): Promise<MaintenancePlan> {
+    const [row] = await db
+      .insert(maintenancePlans)
+      .values({ ...(input as any), updatedAt: new Date() })
+      .returning();
+    return row;
+  }
+
+  async updateMaintenancePlan(
+    id: string,
+    updates: Partial<MaintenancePlan>,
+  ): Promise<MaintenancePlan | undefined> {
+    const [row] = await db
+      .update(maintenancePlans)
+      .set({ ...(updates as any), updatedAt: new Date() })
+      .where(eq(maintenancePlans.id, id))
+      .returning();
+    return row || undefined;
+  }
+
+  async getResidentAsset(id: string): Promise<ResidentAsset | undefined> {
+    const [row] = await db
+      .select()
+      .from(residentAssets)
+      .where(eq(residentAssets.id, id))
+      .limit(1);
+    return row || undefined;
+  }
+
+  async listResidentAssets(residentId: string): Promise<ResidentAsset[]> {
+    return await db
+      .select()
+      .from(residentAssets)
+      .where(eq(residentAssets.userId, residentId))
+      .orderBy(desc(residentAssets.createdAt));
+  }
+
+  async createResidentAsset(input: InsertResidentAsset): Promise<ResidentAsset> {
+    const [row] = await db
+      .insert(residentAssets)
+      .values({ ...(input as any), updatedAt: new Date() })
+      .returning();
+    return row;
+  }
+
+  async updateResidentAsset(
+    id: string,
+    residentId: string,
+    updates: Partial<ResidentAsset>,
+  ): Promise<ResidentAsset | undefined> {
+    const [row] = await db
+      .update(residentAssets)
+      .set({ ...(updates as any), updatedAt: new Date() })
+      .where(and(eq(residentAssets.id, id), eq(residentAssets.userId, residentId)))
+      .returning();
+    return row || undefined;
+  }
+
+  async getAssetSubscription(id: string): Promise<AssetSubscription | undefined> {
+    const [row] = await db
+      .select()
+      .from(assetSubscriptions)
+      .where(eq(assetSubscriptions.id, id))
+      .limit(1);
+    return row || undefined;
+  }
+
+  async listAssetSubscriptionsByResident(
+    residentId: string,
+  ): Promise<AssetSubscription[]> {
+    return await db
+      .select({ subscription: assetSubscriptions })
+      .from(assetSubscriptions)
+      .innerJoin(
+        residentAssets,
+        eq(assetSubscriptions.residentAssetId, residentAssets.id),
+      )
+      .where(eq(assetSubscriptions.userId, residentId))
+      .orderBy(desc(assetSubscriptions.createdAt))
+      .then((rows: Array<{ subscription: AssetSubscription }>) =>
+        rows.map((row) => row.subscription),
+      );
+  }
+
+  async createAssetSubscription(
+    input: InsertAssetSubscription,
+  ): Promise<AssetSubscription> {
+    const [row] = await db
+      .insert(assetSubscriptions)
+      .values({ ...(input as any), updatedAt: new Date() })
+      .returning();
+    return row;
+  }
+
+  async updateAssetSubscription(
+    id: string,
+    updates: Partial<AssetSubscription>,
+  ): Promise<AssetSubscription | undefined> {
+    const [row] = await db
+      .update(assetSubscriptions)
+      .set({ ...(updates as any), updatedAt: new Date() })
+      .where(eq(assetSubscriptions.id, id))
+      .returning();
+    return row || undefined;
+  }
+
+  async getMaintenanceSchedule(id: string): Promise<MaintenanceSchedule | undefined> {
+    const [row] = await db
+      .select()
+      .from(maintenanceSchedules)
+      .where(eq(maintenanceSchedules.id, id))
+      .limit(1);
+    return row || undefined;
+  }
+
+  async listMaintenanceSchedulesByResident(
+    residentId: string,
+  ): Promise<MaintenanceSchedule[]> {
+    return await db
+      .select({ schedule: maintenanceSchedules })
+      .from(maintenanceSchedules)
+      .innerJoin(
+        assetSubscriptions,
+        eq(maintenanceSchedules.subscriptionId, assetSubscriptions.id),
+      )
+      .innerJoin(
+        residentAssets,
+        eq(assetSubscriptions.residentAssetId, residentAssets.id),
+      )
+      .where(eq(assetSubscriptions.userId, residentId))
+      .orderBy(asc(maintenanceSchedules.scheduledDate))
+      .then((rows: Array<{ schedule: MaintenanceSchedule }>) =>
+        rows.map((row) => row.schedule),
+      );
+  }
+
+  async listMaintenanceSchedules(options?: {
+    status?: string;
+  }): Promise<MaintenanceSchedule[]> {
+    const where = options?.status
+      ? eq(maintenanceSchedules.status, options.status as any)
+      : undefined;
+    const query = db.select().from(maintenanceSchedules);
+    const rows = where
+      ? await query.where(where).orderBy(asc(maintenanceSchedules.scheduledDate))
+      : await query.orderBy(asc(maintenanceSchedules.scheduledDate));
+    return rows;
+  }
+
+  async createMaintenanceSchedule(
+    input: InsertMaintenanceSchedule,
+  ): Promise<MaintenanceSchedule> {
+    const [row] = await db
+      .insert(maintenanceSchedules)
+      .values({ ...(input as any), updatedAt: new Date() })
+      .returning();
+    return row;
+  }
+
+  async updateMaintenanceSchedule(
+    id: string,
+    updates: Partial<MaintenanceSchedule>,
+  ): Promise<MaintenanceSchedule | undefined> {
+    const [row] = await db
+      .update(maintenanceSchedules)
+      .set({ ...(updates as any), updatedAt: new Date() })
+      .where(eq(maintenanceSchedules.id, id))
+      .returning();
+    return row || undefined;
+  }
+
+  async createServiceRequestFromMaintenanceSchedule(
+    scheduleId: string,
+    actorId?: string | null,
+  ): Promise<ServiceRequest> {
+    const [row] = await db
+      .select({
+        schedule: maintenanceSchedules,
+        subscription: assetSubscriptions,
+        asset: residentAssets,
+        itemType: maintenanceItemTypes,
+        plan: maintenancePlans,
+      })
+      .from(maintenanceSchedules)
+      .innerJoin(
+        assetSubscriptions,
+        eq(maintenanceSchedules.subscriptionId, assetSubscriptions.id),
+      )
+      .innerJoin(
+        residentAssets,
+        eq(assetSubscriptions.residentAssetId, residentAssets.id),
+      )
+      .innerJoin(
+        maintenanceItemTypes,
+        eq(residentAssets.maintenanceItemId, maintenanceItemTypes.id),
+      )
+      .innerJoin(
+        maintenancePlans,
+        eq(assetSubscriptions.maintenancePlanId, maintenancePlans.id),
+      )
+      .where(eq(maintenanceSchedules.id, scheduleId))
+      .limit(1);
+
+    if (!row) {
+      throw new Error("Maintenance schedule not found");
+    }
+
+    const scheduleStatus = String(row.schedule.status || "").trim().toLowerCase();
+    const subscriptionStatus = String(row.subscription.status || "").trim().toLowerCase();
+    if (["completed", "cancelled"].includes(scheduleStatus)) {
+      throw new Error("This maintenance schedule is no longer eligible for request creation");
+    }
+    if (["paused", "cancelled", "expired"].includes(subscriptionStatus)) {
+      throw new Error("This subscription is no longer active for scheduled maintenance");
+    }
+
+    if (row.schedule.sourceRequestId) {
+      const [linkedRequest] = await db
+        .select()
+        .from(serviceRequests)
+        .where(eq(serviceRequests.id, row.schedule.sourceRequestId))
+        .limit(1);
+      const status = String(linkedRequest?.status || "").toLowerCase();
+      if (linkedRequest && status !== "cancelled" && status !== "completed") {
+        return linkedRequest;
+      }
+      if (linkedRequest && status === "completed" && scheduleStatus === "completed") {
+        return linkedRequest;
+      }
+    }
+
+    const created = await this.createServiceRequest({
+      category: (tryResolveServiceRequestCategory(row.itemType.slug, row.itemType.name) ??
+        "maintenance_repair") as any,
+      categoryLabel: row.itemType.name,
+      description: this.buildMaintenanceRequestDescription(row),
+      residentId: row.asset.userId,
+      estateId: row.asset.estateId ?? null,
+      budget: Number(row.plan.price || 0) > 0 ? String(row.plan.price) : "Planned maintenance",
+      urgency: "low" as any,
+      location:
+        row.asset.locationLabel ||
+        row.asset.customName ||
+        row.asset.brand ||
+        row.asset.model ||
+        row.itemType.name,
+      preferredTime: row.schedule.scheduledDate,
+      paymentPurpose: "Scheduled maintenance",
+      issueType: `${row.plan.name} maintenance`,
+      areaAffected: row.asset.customName || row.itemType.name,
+      status: "pending" as any,
+    } as any);
+
+    const [updatedSchedule] = await db
+      .update(maintenanceSchedules)
+      .set({
+        sourceRequestId: created.id,
+        status: "assigned",
+        updatedAt: new Date(),
+      } as any)
+      .where(
+        and(
+          eq(maintenanceSchedules.id, row.schedule.id),
+          or(
+            isNull(maintenanceSchedules.sourceRequestId),
+            eq(maintenanceSchedules.sourceRequestId, created.id),
+          ),
+        ),
+      )
+      .returning();
+
+    if (!updatedSchedule) {
+      const latestSchedule = await this.getMaintenanceSchedule(row.schedule.id);
+      const linkedRequestId = String(latestSchedule?.sourceRequestId || "").trim();
+      if (linkedRequestId) {
+        await db
+          .update(serviceRequests)
+          .set({
+            status: "cancelled",
+            closeReason: "Duplicate maintenance request suppressed",
+            closedAt: new Date(),
+            updatedAt: new Date(),
+          } as any)
+          .where(eq(serviceRequests.id, created.id));
+        const existingRequest = await this.getServiceRequest(linkedRequestId);
+        if (existingRequest) {
+          return existingRequest;
+        }
+      }
+    }
+
+    return created;
   }
 
   // Admin functions

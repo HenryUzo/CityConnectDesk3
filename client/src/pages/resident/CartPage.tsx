@@ -11,6 +11,7 @@ import {
 } from "@/hooks/useCityMart";
 import { useToast } from "@/hooks/use-toast";
 import { residentFetch } from "@/lib/residentApi";
+import PaystackRedirectDialog from "@/components/resident/PaystackRedirectDialog";
 import {
   ArrowLeft,
   ShoppingCart,
@@ -46,6 +47,8 @@ export default function CartPage() {
   const [paymentInitializing, setPaymentInitializing] = useState(false);
   const [paymentReference, setPaymentReference] = useState<string | null>(null);
   const [deliveryDetails, setDeliveryDetails] = useState<any>(null);
+  const [paystackRedirectUrl, setPaystackRedirectUrl] = useState<string | null>(null);
+  const [showPaystackRedirectModal, setShowPaystackRedirectModal] = useState(false);
 
   const handleInitiatePayment = async () => {
     console.log("Payment button clicked", { cartData, addressLine, phone, estates });
@@ -84,14 +87,16 @@ export default function CartPage() {
     try {
       const amountInNaira = Math.ceil(cartData.totalAmount / 100);
       console.log("Initiating payment with amount:", amountInNaira);
-      
-      const response = await fetch("/api/paystack/init", {
+
+      const res = await residentFetch<{
+        reference?: string;
+        authorizationUrl?: string;
+        authorization_url?: string;
+        error?: string;
+        message?: string;
+      }>("/api/paystack/init", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include",
-        body: JSON.stringify({
+        json: {
           amountInNaira,
           metadata: {
             cartTotal: cartData.totalAmount,
@@ -99,27 +104,19 @@ export default function CartPage() {
             phone: phone.trim(),
           },
           callbackUrl: `${window.location.origin}/payment-confirmation?orderType=marketplace`,
-        }),
+        },
       });
 
-      console.log("Response status:", response.status);
-      const res = await response.json();
       console.log("Payment response:", res);
-
-      if (!response.ok) {
-        console.error("Payment API error:", res);
-        const errorMsg = res?.error || res?.message || "Could not initiate payment";
-        toast({ title: "Payment error", description: errorMsg, variant: "destructive" });
-        setPaymentInitializing(false);
-        return;
-      }
 
       if (res?.reference) {
         setPaymentReference(res.reference);
         // Redirect to Paystack payment page if authorizationUrl is provided
-        if (res.authorizationUrl) {
-          console.log("Redirecting to Paystack:", res.authorizationUrl);
-          window.location.href = res.authorizationUrl;
+        const authorizationUrl = res.authorizationUrl || res.authorization_url;
+        if (authorizationUrl) {
+          console.log("Redirecting to Paystack:", authorizationUrl);
+          setPaystackRedirectUrl(authorizationUrl);
+          setShowPaystackRedirectModal(true);
         } else {
           toast({ title: "Payment initiated", description: "Preparing payment page. Please wait...", variant: "default" });
         }
@@ -231,7 +228,19 @@ export default function CartPage() {
   };
 
   return (
-    <ResidentShell currentPage="marketplace">
+    <>
+      <PaystackRedirectDialog
+        open={showPaystackRedirectModal}
+        redirectUrl={paystackRedirectUrl}
+        onOpenChange={(open) => {
+          setShowPaystackRedirectModal(open);
+          if (!open) {
+            setPaystackRedirectUrl(null);
+            setPaymentInitializing(false);
+          }
+        }}
+      />
+      <ResidentShell currentPage="marketplace">
       <div className="max-w-3xl mx-auto px-4 md:px-8 py-8">
         {/* Header */}
         <div className="flex items-center gap-3 mb-8">
@@ -481,6 +490,7 @@ export default function CartPage() {
           </div>
         )}
       </div>
-    </ResidentShell>
+      </ResidentShell>
+    </>
   );
 }

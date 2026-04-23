@@ -20,6 +20,7 @@ import { eq, and, or, like, ilike, desc, asc, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { storage } from "./storage";
 import { requireAuth, requireProvider } from "./auth-middleware";
+import { syncMaintenanceScheduleFromRequest } from "./services/maintenanceRequestIntegrationService";
 import {
   normalizeAndPersistInventoryImages,
   persistInventoryImage,
@@ -55,6 +56,78 @@ const normalizeStatusKey = (value: unknown) =>
     .toLowerCase()
     .replace(/[\s-]+/g, "_")
     .trim();
+
+const emitServiceRequestUpdate = (
+  expressApp: { get: (name: string) => unknown },
+  serviceRequest: {
+    id?: string;
+    residentId?: string | null;
+    providerId?: string | null;
+    status?: string | null;
+  } | null | undefined,
+  updateType: "updated" | "assigned" | "advice" | "status" = "status",
+) => {
+  if (!serviceRequest?.id) return;
+  if (serviceRequest.status) {
+    void syncMaintenanceScheduleFromRequest({
+      requestId: serviceRequest.id,
+      status: serviceRequest.status,
+    }).catch((error) => {
+      console.error("Maintenance schedule sync failed", error);
+    });
+  }
+  const io = expressApp.get("io") as SocketIOServer | undefined;
+  if (!io) return;
+
+  const participantIds = new Set<string>();
+  if (serviceRequest.residentId) participantIds.add(serviceRequest.residentId);
+  if (serviceRequest.providerId) participantIds.add(serviceRequest.providerId);
+
+  for (const participantUserId of participantIds) {
+    io.to(`user-${participantUserId}`).emit("service-request:updated", {
+      type: updateType,
+      requestId: serviceRequest.id,
+      request: serviceRequest,
+      at: new Date().toISOString(),
+    });
+  }
+};
+
+async function syncLinkedServiceRequestFromTaskStatus(params: {
+  serviceRequestId?: string | null;
+  taskStatus: string;
+}) {
+  const serviceRequestId = String(params.serviceRequestId || "").trim();
+  if (!serviceRequestId) return null;
+
+  const currentRequest = await storage.getServiceRequest(serviceRequestId);
+  if (!currentRequest) return null;
+
+  const currentStatus = normalizeStatusKey(currentRequest.status);
+  const taskStatus = normalizeStatusKey(params.taskStatus);
+
+  let nextStatus: "in_progress" | "work_completed_pending_resident" | null = null;
+  if (taskStatus === "in_progress") {
+    if (["assigned_for_job", "rework_required", "in_progress"].includes(currentStatus)) {
+      nextStatus = "in_progress";
+    }
+  } else if (taskStatus === "completed") {
+    if (["in_progress", "work_completed_pending_resident"].includes(currentStatus)) {
+      nextStatus = "work_completed_pending_resident";
+    }
+  }
+
+  if (!nextStatus || nextStatus === currentStatus) {
+    return currentRequest;
+  }
+
+  const updatedRequest = await storage.updateServiceRequest(serviceRequestId, {
+    status: nextStatus as any,
+    closedAt: null,
+  } as any);
+
+  return updatedRequest ?? currentRequest;
+}
 
 router.post("/service-requests/:id/consultancy-report", async (req: any, res) => {
   try {
@@ -383,6 +456,14 @@ router.patch("/tasks/:taskId", async (req: any, res) => {
       .set(updates)
       .where(eq(companyTasks.id, taskId))
       .returning();
+
+    const syncedRequest = await syncLinkedServiceRequestFromTaskStatus({
+      serviceRequestId: updated?.serviceRequestId ?? task.serviceRequestId ?? null,
+      taskStatus: payload.status,
+    });
+    if (syncedRequest) {
+      emitServiceRequestUpdate(req.app, syncedRequest, "status");
+    }
 
     res.json(updated);
   } catch (error: any) {

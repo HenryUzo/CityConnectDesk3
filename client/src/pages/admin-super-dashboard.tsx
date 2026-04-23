@@ -50,6 +50,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ArtisanRequestsPanel from "@/components/admin/ArtisanRequestsPanel";
 import ServiceRequestDetailPage from "@/components/admin/ServiceRequestDetailPage";
+import MaintenanceSetupPanel from "@/components/admin/MaintenanceSetupPanel";
 import AdminRequestQuestions from "@/pages/admin-request-questions";
 
 import {
@@ -486,8 +487,10 @@ const AdminSidebar = ({
     { id: "companies", label: "Companies", icon: Briefcase },
     { id: "stores", label: "Stores", icon: Store },
     { id: "item-categories", label: "Item Categories", icon: Tags },
-    { id: "categories", label: "Categories", icon: Tags },
+    { id: "maintenance-setup", label: "Maintenance Setup", icon: Wrench },
+    { id: "categories", label: "Service Categories", icon: Tags },
     { id: "marketplace", label: "Marketplace", icon: ShoppingBag },
+    { id: "market-trends", label: "Market Trends", icon: TrendingUp },
     { id: "citymart-banners", label: "CityMart Banners", icon: ShoppingBag },
      { id: "artisanRequests", label: "Book an Artisan", icon: Wrench },
     { id: "requests", label: "Service Requests", icon: ClipboardList },
@@ -506,7 +509,7 @@ const AdminSidebar = ({
       { id: "ai-conversations", label: "AI Conversations", icon: MessageSquare },
       { id: "ai-conversation-flow", label: "Approved Categories", icon: Settings },
       { id: "ai-prepared-requests", label: "AI Prepared Requests", icon: MessageSquare },
-      { id: "request-questions", label: "Request Questions", icon: Settings },
+      { id: "request-questions", label: "Resident Questions", icon: Settings },
       { id: "pricing-rules", label: "Pricing Rules", icon: Tags },
       { id: "provider-matching", label: "Provider Matching", icon: UserCheck },
     );
@@ -6278,7 +6281,7 @@ const RecentActivity = () => {
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(10);
 
-  const { data: activities, isLoading } = useQuery({
+  const { data: activities, isLoading, error } = useQuery({
     queryKey: ["/api/admin/audit-logs", { limit, search, dateFrom, dateTo }],
     queryFn: () => {
       const params = new URLSearchParams();
@@ -6394,6 +6397,11 @@ const RecentActivity = () => {
         </div>
       </CardHeader>
       <CardContent>
+        {error ? (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Recent activity could not load from <code>/api/admin/audit-logs</code>.
+          </div>
+        ) : null}
         {/* Filters */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
           <div>
@@ -6536,10 +6544,18 @@ const RecentActivity = () => {
 
 // PostgreSQL Bridge Stats Component - Shows data from resident/provider system
 const PostgreSQLBridgeStats = () => {
-  const { data: bridgeStats, isLoading, refetch } = useQuery({
+  const { data: bridgeStats, isLoading, error, refetch } = useQuery({
     queryKey: ["${import.meta.env.VITE_API_URL}/api/admin/bridge/stats"],
     queryFn: () => adminApiRequest("GET", "/api/admin/bridge/stats"),
     refetchInterval: 30_000, // Refresh every 30 seconds to ensure fresh data
+  });
+  const { data: fallbackUsers = [] } = useQuery({
+    queryKey: ["/api/admin/users/all", "dashboard-fallback"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/users/all"),
+  });
+  const { data: fallbackRequests = [] } = useQuery({
+    queryKey: ["/api/admin/bridge/service-requests", "dashboard-fallback"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/bridge/service-requests"),
   });
   const { data: dbHealth } = useQuery({
     queryKey: ["/api/admin/health/database"],
@@ -6573,76 +6589,124 @@ const PostgreSQLBridgeStats = () => {
     );
   }
 
+  const fallbackResidents = Array.isArray(fallbackUsers)
+    ? fallbackUsers.filter((user: any) => String(user?.role || "").toLowerCase() === "resident").length
+    : 0;
+  const fallbackProviders = Array.isArray(fallbackUsers)
+    ? fallbackUsers.filter((user: any) => String(user?.role || "").toLowerCase() === "provider").length
+    : 0;
+  const fallbackPendingProviders = Array.isArray(fallbackUsers)
+    ? fallbackUsers.filter(
+        (user: any) =>
+          String(user?.role || "").toLowerCase() === "provider" && user?.isApproved === false,
+      ).length
+    : 0;
+  const fallbackServiceRequests = Array.isArray(fallbackRequests) ? fallbackRequests : [];
+
+  const requestStatusCounts = bridgeStats?.serviceRequests
+    ? {
+        total: Number(bridgeStats.serviceRequests.total ?? 0),
+        pending: Number(bridgeStats.serviceRequests.pending ?? 0),
+        pendingInspection: Number(bridgeStats.serviceRequests.pendingInspection ?? 0),
+        assigned: Number(bridgeStats.serviceRequests.assigned ?? 0),
+        assignedForJob: Number(bridgeStats.serviceRequests.assignedForJob ?? 0),
+        inProgress: Number(bridgeStats.serviceRequests.inProgress ?? 0),
+        completed: Number(bridgeStats.serviceRequests.completed ?? 0),
+        cancelled: Number(bridgeStats.serviceRequests.cancelled ?? 0),
+      }
+    : fallbackServiceRequests.reduce(
+        (acc: any, request: any) => {
+          const status = String(request?.status || "").trim().toLowerCase();
+          acc.total += 1;
+          if (status === "pending") acc.pending += 1;
+          else if (status === "pending_inspection") acc.pendingInspection += 1;
+          else if (status === "assigned") acc.assigned += 1;
+          else if (status === "assigned_for_job") acc.assignedForJob += 1;
+          else if (status === "in_progress") acc.inProgress += 1;
+          else if (status === "completed") acc.completed += 1;
+          else if (status === "cancelled") acc.cancelled += 1;
+          return acc;
+        },
+        {
+          total: 0,
+          pending: 0,
+          pendingInspection: 0,
+          assigned: 0,
+          assignedForJob: 0,
+          inProgress: 0,
+          completed: 0,
+          cancelled: 0,
+        },
+      );
+
   const bridgeStatCards = [
     {
       title: "Total Residents",
-      value: bridgeStats?.users?.totalResidents || 0,
+      value: Number(bridgeStats?.users?.totalResidents ?? fallbackResidents),
       icon: Users,
       description: "Active residents in the system",
       color: "text-blue-600",
     },
     {
       title: "Service Providers",
-      value: bridgeStats?.users?.totalProviders || 0,
+      value: Number(bridgeStats?.users?.totalProviders ?? fallbackProviders),
       icon: UserCheck,
       description: "Registered service providers",
       color: "text-green-600",
     },
     {
       title: "Service Requests",
-      value: bridgeStats?.serviceRequests?.total || 0,
+      value: Number(requestStatusCounts.total ?? 0),
       icon: ClipboardList,
       description: "Total service requests",
       color: "text-purple-600",
     },
     {
       title: "Pending Approvals",
-      value: bridgeStats?.users?.pendingProviders || 0,
+      value: Number(bridgeStats?.users?.pendingProviders ?? fallbackPendingProviders),
       icon: AlertTriangle,
       description: "Providers awaiting approval",
       color: "text-orange-600",
     },
   ];
 
-  const requestStatusData = bridgeStats?.serviceRequests
-    ? [
-        {
-          label: "Pending",
-          value: bridgeStats.serviceRequests.pending,
-          color: "bg-yellow-500",
-        },
-        {
-          label: "Pending Inspection",
-          value: bridgeStats.serviceRequests.pendingInspection - 0,
-          color: "bg-orange-500",
-        },
-        {
-          label: "Assigned for inspection",
-          value: bridgeStats.serviceRequests.assigned - 0,
-          color: "bg-purple-500",
-        },
-        {
-          label: "Assigned for job",
-          value: bridgeStats.serviceRequests.assignedForJob - 0,
-          color: "bg-indigo-500",
-        },
-        {
-          label: "In Progress",
-          value: bridgeStats.serviceRequests.inProgress,
-          color: "bg-blue-500",
-        },
-        {
-          label: "Completed",
-          value: bridgeStats.serviceRequests.completed,
-          color: "bg-green-500",
-        },
-        {
-          label: "Cancelled",
-          value: bridgeStats.serviceRequests.cancelled,
-          color: "bg-red-500",
-        },
-      ]
-    : [];
+  const requestStatusData = [
+    {
+      label: "Pending",
+      value: requestStatusCounts.pending,
+      color: "bg-yellow-500",
+    },
+    {
+      label: "Pending Inspection",
+      value: requestStatusCounts.pendingInspection,
+      color: "bg-orange-500",
+    },
+    {
+      label: "Assigned for inspection",
+      value: requestStatusCounts.assigned,
+      color: "bg-purple-500",
+    },
+    {
+      label: "Assigned for job",
+      value: requestStatusCounts.assignedForJob,
+      color: "bg-indigo-500",
+    },
+    {
+      label: "In Progress",
+      value: requestStatusCounts.inProgress,
+      color: "bg-blue-500",
+    },
+    {
+      label: "Completed",
+      value: requestStatusCounts.completed,
+      color: "bg-green-500",
+    },
+    {
+      label: "Cancelled",
+      value: requestStatusCounts.cancelled,
+      color: "bg-red-500",
+    },
+  ];
 
   return (
     <div className="mb-8">
@@ -6668,6 +6732,12 @@ const PostgreSQLBridgeStats = () => {
           </Button>
         </div>
       </div>
+
+      {error ? (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Live bridge stats failed to load. Showing fallback data from admin list endpoints.
+        </div>
+      ) : null}
 
       {/* Bridge Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
@@ -6729,7 +6799,7 @@ const PostgreSQLBridgeStats = () => {
 };
 
 const EstatePerformanceCard = () => {
-  const { data: rows = [], isLoading } = useQuery<any[]>({
+  const { data: rows = [], isLoading, error } = useQuery<any[]>({
     queryKey: ["/api/admin/dashboard/estate-performance"],
     queryFn: () => adminApiRequest("GET", "/api/admin/dashboard/estate-performance"),
   });
@@ -6740,6 +6810,11 @@ const EstatePerformanceCard = () => {
         <CardTitle>Estate Performance</CardTitle>
       </CardHeader>
       <CardContent>
+        {error ? (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Estate performance could not load from <code>/api/admin/dashboard/estate-performance</code>.
+          </div>
+        ) : null}
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : !rows || rows.length === 0 ? (
@@ -6769,36 +6844,42 @@ const EstatePerformanceCard = () => {
 
 // Dashboard Stats Component
 const DashboardStats = () => {
-  const { data: stats, isLoading } = useQuery({
+  const { data: stats, isLoading, error: statsError } = useQuery({
     queryKey: ["/api/admin/dashboard/stats"],
     queryFn: () => adminApiRequest("GET", "/api/admin/dashboard/stats"),
   });
-  const { data: bridgeStats } = useQuery({
-    queryKey: ["/api/admin/bridge/stats"],
-    queryFn: () => adminApiRequest("GET", "/api/admin/bridge/stats"),
-    staleTime: 30_000,
-  });
-  const { data: allUsers = [] } = useQuery({
+  const { data: allUsers = [], error: usersError } = useQuery({
     queryKey: ["/api/admin/users/all"],
     queryFn: () => adminApiRequest("GET", "/api/admin/users/all"),
   });
-  const { data: allEstates = [] } = useQuery({
+  const { data: allEstates = [], error: estatesError } = useQuery({
     queryKey: ["/api/admin/estates"],
     queryFn: () => adminApiRequest("GET", "/api/admin/estates"),
   });
+  const { data: serviceRequests = [], error: serviceRequestsError } = useQuery({
+    queryKey: ["/api/admin/bridge/service-requests", "overview"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/bridge/service-requests"),
+  });
+  const { data: orderStats, error: orderStatsError } = useQuery({
+    queryKey: ["admin-orders-analytics", "overview"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/orders/analytics/stats"),
+  });
 
-  const totalProviders =
-    (stats?.totalProviders ?? 0) - (bridgeStats?.users?.totalProviders ?? 0);
-  const totalResidents =
-    (stats?.totalResidents ?? 0) - (bridgeStats?.users?.totalResidents ?? 0);
-  const pendingApprovals =
-    (stats?.pendingApprovals ?? 0) - (bridgeStats?.users?.pendingProviders ?? 0);
+  const allUsersList = Array.isArray(allUsers) ? allUsers : [];
+  const allServiceRequests = Array.isArray(serviceRequests) ? serviceRequests : [];
+  const totalUsers =
+    typeof stats?.totalUsers === "number" ? stats.totalUsers : allUsersList.length;
   const totalRequests =
-    (stats?.totalRequests ?? 0) - (bridgeStats?.serviceRequests?.total ?? 0);
+    typeof stats?.totalRequests === "number" ? stats.totalRequests : allServiceRequests.length;
   const activeRequests =
-    (stats?.activeRequests ?? 0) -
-    (bridgeStats?.serviceRequests?.pending ?? 0);
-  const totalUsers = stats?.totalUsers ?? 0;
+    typeof stats?.activeRequests === "number"
+      ? stats.activeRequests
+      : allServiceRequests.filter((request: any) => {
+          const status = String(request?.status || "").trim().toLowerCase();
+          return status && status !== "completed" && status !== "cancelled";
+        }).length;
+  const totalRevenue =
+    Number(orderStats?.totalRevenue ?? stats?.totalRevenue ?? 0) || 0;
   const activeEstatesCount = Array.isArray(allEstates) ? allEstates.length : (stats?.totalEstates ?? 0);
 
   if (isLoading) {
@@ -6834,7 +6915,7 @@ const DashboardStats = () => {
     },
     {
       title: "Total Revenue",
-      value: `NGN ${(stats?.totalRevenue - 0).toLocaleString()}`,
+      value: `NGN ${totalRevenue.toLocaleString()}`,
       icon: DollarSign,
       change: "+0%",
     },
@@ -6847,37 +6928,57 @@ const DashboardStats = () => {
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-      {statCards.map((stat, index) => {
-        const Icon = stat.icon;
-        return (
-          <Card key={index}>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">
-                    {stat.title}
-                  </p>
-                  <p
-                    className="text-2xl font-bold text-foreground"
-                    data-testid={`stat-${stat.title.toLowerCase().replace(" ", "-")}`}
-                  >
-                    {stat.value}
-                  </p>
+    <div className="mb-8 space-y-4">
+      {statsError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Dashboard stats endpoint failed to load. Showing fallback counts from live admin data.
+        </div>
+      ) : null}
+      {usersError || estatesError || serviceRequestsError || orderStatsError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Some overview endpoints failed:{" "}
+          {[
+            usersError ? "/api/admin/users/all" : null,
+            estatesError ? "/api/admin/estates" : null,
+            serviceRequestsError ? "/api/admin/bridge/service-requests" : null,
+            orderStatsError ? "/api/admin/orders/analytics/stats" : null,
+          ]
+            .filter(Boolean)
+            .join(", ")}
+        </div>
+      ) : null}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {statCards.map((stat, index) => {
+          const Icon = stat.icon;
+          return (
+            <Card key={index}>
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">
+                      {stat.title}
+                    </p>
+                    <p
+                      className="text-2xl font-bold text-foreground"
+                      data-testid={`stat-${stat.title.toLowerCase().replace(" ", "-")}`}
+                    >
+                      {stat.value}
+                    </p>
+                  </div>
+                  <div className="bg-primary/10 p-3 rounded-lg">
+                    <Icon className="w-6 h-6 text-primary" />
+                  </div>
                 </div>
-                <div className="bg-primary/10 p-3 rounded-lg">
-                  <Icon className="w-6 h-6 text-primary" />
+                <div className="flex items-center mt-2 text-sm text-muted-foreground">
+                  <TrendingUp className="w-4 h-4 text-green-500 mr-1" />
+                  <span>{stat.change}</span>
+                  <span className="ml-1">vs last month</span>
                 </div>
-              </div>
-              <div className="flex items-center mt-2 text-sm text-muted-foreground">
-                <TrendingUp className="w-4 h-4 text-green-500 mr-1" />
-                <span>{stat.change}</span>
-                <span className="ml-1">vs last month</span>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 };
@@ -6887,12 +6988,25 @@ export default function AdminSuperDashboard() {
   const { user, sessionChecked, selectedEstateId, setSelectedEstateId } = useAdminAuth();
   const [location, setLocation] = useLocation();
   const [requestActionTarget, setRequestActionTarget] = useState<{ id: string; action: string } | null>(null);
+  const isAdminLike =
+    user?.role === "admin" ||
+    user?.role === "super_admin" ||
+    user?.role === "estate_admin" ||
+    user?.globalRole === "admin" ||
+    user?.globalRole === "super_admin" ||
+    user?.globalRole === "estate_admin";
   const activeTab = (() => {
     if (
       location.startsWith("/admin-dashboard/request-questions") ||
       location.startsWith("/admin/request-questions")
     ) {
       return "request-questions";
+    }
+    if (
+      location.startsWith("/admin-dashboard/maintenance-setup") ||
+      location.startsWith("/admin/maintenance-setup")
+    ) {
+      return "maintenance-setup";
     }
     if (!location.startsWith("/admin-dashboard")) return "dashboard";
     const pathPart = location.split("/")[2] || "dashboard";
@@ -6907,6 +7021,10 @@ export default function AdminSuperDashboard() {
   const setActiveTab = (tab: string) => {
     if (tab === "request-questions") {
       setLocation("/admin-dashboard/request-questions");
+      return;
+    }
+    if (tab === "maintenance-setup") {
+      setLocation("/admin-dashboard/maintenance-setup");
       return;
     }
     setLocation(`/admin-dashboard/${tab}`);
@@ -7115,10 +7233,25 @@ export default function AdminSuperDashboard() {
     return <AdminLogin />;
   }
 
+  if (!isAdminLike) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-6">
+        <Card className="max-w-lg w-full">
+          <CardHeader>
+            <CardTitle>Admin access required</CardTitle>
+            <CardDescription>
+              This shell is loaded, but the current account does not have an admin-capable role. Admin API requests will be rejected until you sign in with an admin, estate admin, or super admin account.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     
-    <div className="min-h-screen overflow-x-hidden bg-gray-50 dark:bg-gray-900">
-      <div className="flex h-full">
+    <div className="h-screen overflow-hidden bg-gray-50 dark:bg-gray-900">
+      <div className="flex h-screen">
         {/* Sidebar */}
         <AdminSidebar
           activeTab={activeTab}
@@ -7128,7 +7261,7 @@ export default function AdminSuperDashboard() {
         />
 
         {/* Main Content */}
-        <div className="flex-1 lg:ml-0 min-w-0 overflow-y-auto overflow-x-hidden">
+        <div className="flex-1 lg:ml-0 min-w-0 h-screen overflow-y-auto overflow-x-hidden">
           {/* Mobile Header */}
           <div className="lg:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
             <div className="flex items-center justify-between">
@@ -7142,7 +7275,13 @@ export default function AdminSuperDashboard() {
               <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
                 {activeTab === "ai-conversation-flow"
                   ? "Approved Categories"
-                  : activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
+                  : activeTab === "request-questions"
+                    ? "Resident Questions"
+                    : activeTab === "maintenance-setup"
+                      ? "Maintenance Setup"
+                    : activeTab === "categories"
+                      ? "Service Categories"
+                      : activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
               </h1>
               <div className="flex items-center space-x-2">
                 {isSuperAdmin && (
@@ -7409,9 +7548,11 @@ export default function AdminSuperDashboard() {
             {activeTab === "providers" && <ProvidersManagement />}
             {activeTab === "companies" && <CompaniesManagement categoriesList={categoriesList} />}
             {activeTab === "item-categories" && <ItemCategoriesPage />}
+            {activeTab === "maintenance-setup" && <MaintenanceSetupPanel />}
             {activeTab === "stores" && <StoresManagement />}
             {activeTab === "categories" && <CategoriesManagement />}
             {activeTab === "marketplace" && <MarketplaceManagement />}
+            {activeTab === "market-trends" && <MarketTrendsManagement />}
             {activeTab === "citymart-banners" && <CityMartBannersManagement />}
             {activeTab === "orders" && <OrdersManagement />}
             {activeTab === "ai-conversations" && <AiConversationsPanel />}
@@ -7466,6 +7607,344 @@ export default function AdminSuperDashboard() {
       </div>
     </div>
     
+  );
+}
+
+type AdminMarketTrendPoint = {
+  monthIndex: number;
+  monthLabel: string;
+  value: number;
+};
+
+type AdminMarketTrendSeries = {
+  id: string;
+  name: string;
+  slug: string;
+  color: string;
+  unit?: string | null;
+  position: number;
+  isActive: boolean;
+  points: AdminMarketTrendPoint[];
+};
+
+function MarketTrendsManagement() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [selectedSeriesId, setSelectedSeriesId] = useState<string | null>(null);
+  const [newSeriesName, setNewSeriesName] = useState("");
+  const [newSeriesColor, setNewSeriesColor] = useState("#039855");
+  const [newSeriesUnit, setNewSeriesUnit] = useState("NGN");
+  const [seriesForm, setSeriesForm] = useState({
+    name: "",
+    color: "#039855",
+    unit: "NGN",
+    position: "1",
+    isActive: true,
+  });
+  const [pointsForm, setPointsForm] = useState<Record<number, string>>({});
+
+  const trendsQuery = useQuery<{ series: AdminMarketTrendSeries[] }>({
+    queryKey: ["/api/admin/market-trends"],
+    queryFn: () => adminApiRequest("GET", "/api/admin/market-trends"),
+  });
+
+  const series = trendsQuery.data?.series ?? [];
+  const selectedSeries = series.find((entry) => entry.id === selectedSeriesId) ?? null;
+
+  useEffect(() => {
+    if (!series.length) {
+      setSelectedSeriesId(null);
+      return;
+    }
+    setSelectedSeriesId((current) =>
+      current && series.some((entry) => entry.id === current) ? current : series[0].id,
+    );
+  }, [series]);
+
+  useEffect(() => {
+    if (!selectedSeries) return;
+    setSeriesForm({
+      name: selectedSeries.name,
+      color: selectedSeries.color || "#039855",
+      unit: selectedSeries.unit || "NGN",
+      position: String(selectedSeries.position || 1),
+      isActive: selectedSeries.isActive !== false,
+    });
+    const nextPoints: Record<number, string> = {};
+    for (const point of selectedSeries.points) {
+      nextPoints[point.monthIndex] = String(point.value ?? 0);
+    }
+    setPointsForm(nextPoints);
+  }, [selectedSeries]);
+
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["/api/admin/market-trends"] });
+  };
+
+  const createSeriesMutation = useMutation({
+    mutationFn: async () =>
+      adminApiRequest("POST", "/api/admin/market-trends/series", {
+        name: newSeriesName,
+        color: newSeriesColor,
+        unit: newSeriesUnit,
+        position: series.length + 1,
+        isActive: true,
+      }),
+    onSuccess: async () => {
+      setNewSeriesName("");
+      await invalidate();
+      toast({ title: "Trend series created" });
+    },
+    onError: (error: any) => {
+      toast({ title: "Unable to create trend series", description: error?.message, variant: "destructive" });
+    },
+  });
+
+  const updateSeriesMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedSeries) return null;
+      return adminApiRequest("PATCH", `/api/admin/market-trends/series/${selectedSeries.id}`, {
+        name: seriesForm.name,
+        color: seriesForm.color,
+        unit: seriesForm.unit,
+        position: Number(seriesForm.position || 1),
+        isActive: seriesForm.isActive,
+      });
+    },
+    onSuccess: async () => {
+      await invalidate();
+      toast({ title: "Series details updated" });
+    },
+    onError: (error: any) => {
+      toast({ title: "Unable to update series", description: error?.message, variant: "destructive" });
+    },
+  });
+
+  const savePointsMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedSeries) return null;
+      return adminApiRequest("PUT", `/api/admin/market-trends/series/${selectedSeries.id}/points`, {
+        points: (selectedSeries.points ?? []).map((point) => ({
+          monthIndex: point.monthIndex,
+          value: Number(pointsForm[point.monthIndex] ?? 0),
+        })),
+      });
+    },
+    onSuccess: async () => {
+      await invalidate();
+      toast({ title: "Monthly trend values saved" });
+    },
+    onError: (error: any) => {
+      toast({ title: "Unable to save monthly values", description: error?.message, variant: "destructive" });
+    },
+  });
+
+  const deleteSeriesMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedSeries) return null;
+      return adminApiRequest("DELETE", `/api/admin/market-trends/series/${selectedSeries.id}`);
+    },
+    onSuccess: async () => {
+      await invalidate();
+      toast({ title: "Series deleted" });
+    },
+    onError: (error: any) => {
+      toast({ title: "Unable to delete series", description: error?.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Market Trends</h1>
+        <p className="max-w-3xl text-sm text-gray-600 dark:text-gray-400">
+          Control the trend chart shown on the resident dashboard. Any series you create here becomes the exact data source
+          used by residents.
+        </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase tracking-wide text-gray-500">Active series</p>
+            <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">
+              {series.filter((item) => item.isActive !== false).length}
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase tracking-wide text-gray-500">Total tracked products</p>
+            <p className="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{series.length}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase tracking-wide text-gray-500">Resident surface</p>
+            <p className="mt-2 text-sm font-medium text-gray-900 dark:text-white">Resident dashboard → Market Trends card</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Tracked Series</CardTitle>
+            <CardDescription>Select an existing line or create a new one.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              {series.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setSelectedSeriesId(item.id)}
+                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-3 text-left transition ${
+                    selectedSeriesId === item.id
+                      ? "border-[#039855] bg-[#ECFDF3]"
+                      : "border-gray-200 bg-white hover:border-[#A6F4C5]"
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span
+                      className="h-3 w-3 shrink-0 rounded-full"
+                      style={{ backgroundColor: item.color || "#039855" }}
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-gray-900 dark:text-white">{item.name}</p>
+                      <p className="truncate text-xs text-gray-500">{item.slug}</p>
+                    </div>
+                  </div>
+                  <Badge variant={item.isActive !== false ? "default" : "secondary"}>
+                    {item.isActive !== false ? "Live" : "Hidden"}
+                  </Badge>
+                </button>
+              ))}
+            </div>
+
+            <div className="rounded-xl border border-dashed border-gray-300 p-4">
+              <p className="text-sm font-semibold text-gray-900 dark:text-white">Add new series</p>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <Label>Name</Label>
+                  <Input value={newSeriesName} onChange={(e) => setNewSeriesName(e.target.value)} placeholder="Bag of Beans" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Color</Label>
+                    <Input type="color" value={newSeriesColor} onChange={(e) => setNewSeriesColor(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Unit</Label>
+                    <Input value={newSeriesUnit} onChange={(e) => setNewSeriesUnit(e.target.value)} placeholder="NGN" />
+                  </div>
+                </div>
+                <Button
+                  className="w-full"
+                  onClick={() => createSeriesMutation.mutate()}
+                  disabled={!newSeriesName.trim() || createSeriesMutation.isPending}
+                >
+                  {createSeriesMutation.isPending ? "Creating..." : "Create series"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Series Editor</CardTitle>
+            <CardDescription>Edit the line details and monthly values residents will see.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {trendsQuery.isLoading ? (
+              <div className="flex min-h-[320px] items-center justify-center text-sm text-gray-500">Loading market trends...</div>
+            ) : !selectedSeries ? (
+              <div className="flex min-h-[320px] items-center justify-center rounded-xl border border-dashed border-gray-300 text-sm text-gray-500">
+                No series selected.
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  <div className="xl:col-span-2">
+                    <Label>Series name</Label>
+                    <Input value={seriesForm.name} onChange={(e) => setSeriesForm((prev) => ({ ...prev, name: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label>Color</Label>
+                    <Input type="color" value={seriesForm.color} onChange={(e) => setSeriesForm((prev) => ({ ...prev, color: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label>Unit</Label>
+                    <Input value={seriesForm.unit} onChange={(e) => setSeriesForm((prev) => ({ ...prev, unit: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label>Position</Label>
+                    <Input type="number" min="1" value={seriesForm.position} onChange={(e) => setSeriesForm((prev) => ({ ...prev, position: e.target.value }))} />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#F9FAFB] p-4">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">Visibility</p>
+                    <p className="text-xs text-gray-500">Inactive series are hidden from residents but preserved for reuse.</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Label htmlFor="market-trend-active">Live on resident dashboard</Label>
+                    <Switch
+                      id="market-trend-active"
+                      checked={seriesForm.isActive}
+                      onCheckedChange={(checked) => setSeriesForm((prev) => ({ ...prev, isActive: checked }))}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-3">
+                  <Button onClick={() => updateSeriesMutation.mutate()} disabled={updateSeriesMutation.isPending}>
+                    {updateSeriesMutation.isPending ? "Saving..." : "Save series details"}
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => deleteSeriesMutation.mutate()}
+                    disabled={deleteSeriesMutation.isPending}
+                  >
+                    {deleteSeriesMutation.isPending ? "Deleting..." : "Delete series"}
+                  </Button>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Monthly values</h3>
+                    <p className="text-sm text-gray-500">Set the 12 points that will be plotted for this series.</p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {selectedSeries.points.map((point) => (
+                      <div key={point.monthIndex} className="rounded-xl border border-gray-200 p-3">
+                        <Label>{point.monthLabel}</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          value={pointsForm[point.monthIndex] ?? "0"}
+                          onChange={(e) =>
+                            setPointsForm((prev) => ({
+                              ...prev,
+                              [point.monthIndex]: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <Button onClick={() => savePointsMutation.mutate()} disabled={savePointsMutation.isPending}>
+                    {savePointsMutation.isPending ? "Saving..." : "Save monthly values"}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
   );
 }
 

@@ -4,6 +4,10 @@ import {
   handlePaystackWebhook,
   PaystackVerifyResult,
 } from "../server/paystackHandlers";
+import {
+  buildConsultancyServiceRequestInput,
+  createConsultancyServiceRequest,
+} from "../server/payments";
 import { TransactionStatus } from "@prisma/client";
 
 const createStorageMocks = () => ({
@@ -197,5 +201,77 @@ describe("handlePaystackWebhook", () => {
     expect(result.statusCode).toBe(200);
     expect(storage.updateTransactionByReference).toHaveBeenCalled();
     expect(storage.updateServiceRequest).toHaveBeenCalled();
+  });
+});
+
+describe("consultancy request creation", () => {
+  it("builds a normalized service request payload for a valid consultancy draft", () => {
+    const input = buildConsultancyServiceRequestInput({
+      residentId: "resident-1",
+      consultancy: {
+        categoryKey: "plumber",
+        categoryLabel: "Plumber",
+        urgency: "Emergency",
+        location: "Ibafo, No 2 Toyin Street",
+        description: "Blocked drain in bathroom",
+        issueType: "Blocked drain",
+        quantityLabel: "1",
+        timeWindowLabel: "Today",
+        addressLine: "No 2 Toyin Street",
+        estateName: "Ibafo",
+        notes: "Come through the side gate",
+        attachmentsCount: 2,
+      },
+    });
+
+    expect(input).toMatchObject({
+      residentId: "resident-1",
+      categoryLabel: "Plumber",
+      budget: "Consultancy",
+      urgency: "emergency",
+      location: "Ibafo, No 2 Toyin Street",
+      description: "Blocked drain in bathroom",
+      issueType: "Blocked drain",
+      quantityLabel: "1",
+      timeWindowLabel: "Today",
+      addressLine: "No 2 Toyin Street",
+      estateName: "Ibafo",
+      specialInstructions: "Come through the side gate",
+      photosCount: 2,
+      paymentPurpose: "Consultancy / inspection",
+      status: "pending",
+      paymentStatus: "pending",
+    });
+  });
+
+  it("returns null for an invalid consultancy category", () => {
+    const input = buildConsultancyServiceRequestInput({
+      residentId: "resident-1",
+      consultancy: {
+        categoryKey: "not-a-real-category",
+        categoryLabel: "Not Real",
+      },
+    });
+
+    expect(input).toBeNull();
+  });
+
+  it("creates a service request only when the draft is valid", async () => {
+    const storage = {
+      createServiceRequest: vi.fn().mockResolvedValue({ id: "req-1" }),
+    };
+
+    const created = await createConsultancyServiceRequest({
+      storage: storage as any,
+      residentId: "resident-1",
+      consultancy: {
+        categoryKey: "plumber",
+        categoryLabel: "Plumber",
+        description: "Need an inspection",
+      },
+    });
+
+    expect(created).toBe("req-1");
+    expect(storage.createServiceRequest).toHaveBeenCalledTimes(1);
   });
 });

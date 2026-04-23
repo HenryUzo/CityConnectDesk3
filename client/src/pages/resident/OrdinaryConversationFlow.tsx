@@ -27,9 +27,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { MainWrapSelectCategory } from "@/components/resident/CityBuddyChat";
+import PaystackRedirectDialog from "@/components/resident/PaystackRedirectDialog";
 import { RequestsSidebar } from "@/components/resident/RequestsSidebar";
 import { ProviderHeader } from "@/components/resident/ordinary-flow/ProviderHeader";
 import { RequestProgressTracker } from "@/components/resident/ordinary-flow/RequestProgressTracker";
+import { MaintenanceContextCard } from "@/components/resident/ordinary-flow/MaintenanceContextCard";
 import { ChatThread, type ThreadItem } from "@/components/resident/ordinary-flow/ChatThread";
 import { TypingPresenceIndicator } from "@/components/resident/ordinary-flow/TypingPresenceIndicator";
 import { SystemMessage } from "@/components/resident/ordinary-flow/SystemMessage";
@@ -41,52 +43,42 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { residentFetch } from "@/lib/residentApi";
 import { formatServiceRequestStatusLabel } from "@/lib/serviceRequestStatus";
+import {
+  buildCategoryProfile,
+  buildEditableLegacyQuestions,
+  DEFAULT_QUANTITY_OPTIONS,
+  DEFAULT_TIME_WINDOWS,
+  normalizeCategoryKey,
+  type CategoryProfile,
+} from "@/lib/ordinaryLegacyFlow";
 
 type FlowStage = "intake" | "wizard" | "summary";
 
 type WizardStep =
   | {
-      id: "location";
+      id: string;
       kind: "location";
       prompt: string;
-    }
-  | {
-      id: "issue_type" | "quantity" | "time_window";
-      kind: "chips";
-      prompt: string;
-      options: string[];
-    }
-  | {
-      id: "photos";
-      kind: "photos";
-      prompt: string;
-      required: boolean;
-      helperText?: string;
-    }
-  | {
-      id: "notes";
-      kind: "text";
-      prompt: string;
-      placeholder: string;
     }
   | {
       id: string;
       kind: "chips";
       prompt: string;
       options: string[];
+    }
+  | {
+      id: string;
+      kind: "photos";
+      prompt: string;
+      required: boolean;
+      helperText?: string;
+    }
+  | {
+      id: string;
+      kind: "text";
+      prompt: string;
+      placeholder: string;
     };
-
-type CategoryProfile = {
-  issueChips: string[];
-  followUps: Array<{ id: string; prompt: string; options: string[] }>;
-  quantityPrompt: string;
-  quantityOptions: string[];
-  timeWindowPrompt: string;
-  timeWindowOptions: string[];
-  photoRequired: boolean;
-  photoRecommended: boolean;
-  photoHelper?: string;
-};
 
 type RequestMessage = {
   id: string;
@@ -151,15 +143,48 @@ type ActiveServiceRequest = {
   assignedAt?: string | Date | null;
   updatedAt?: string | Date | null;
   provider?: RequestProvider | null;
+  maintenance?: {
+    source?: string;
+    scheduleId?: string;
+    subscriptionId?: string;
+    title?: string;
+    introTitle?: string;
+    introMessage?: string;
+    nextStep?: string;
+    asset?: {
+      id: string;
+      label: string;
+      customName?: string | null;
+      itemTypeName?: string | null;
+      locationLabel?: string | null;
+      condition?: string | null;
+      notes?: string | null;
+    } | null;
+    plan?: {
+      id: string;
+      name: string;
+      description?: string | null;
+      durationType?: "monthly" | "quarterly_3m" | "halfyearly_6m" | "yearly" | null;
+      visitsIncluded?: number | null;
+      includedTasks?: string[];
+    } | null;
+    schedule?: {
+      id: string;
+      scheduledFor?: string | Date | null;
+      status?: string | null;
+    } | null;
+  } | null;
   cancellationCase?: CancellationCaseSummary | null;
 };
 
 type ParsedRequestDetails = {
   issueType?: string;
+  otherIssueDetails?: string;
   quantity?: string;
   timeWindow?: string;
   photosCount?: number;
   notes?: string;
+  additionalInformation?: string;
   urgency?: string;
   location?: string;
 };
@@ -187,6 +212,7 @@ type RequestTypingSocketPayload = {
 type OrdinaryConversationDraftSnapshot = {
   version: 1;
   updatedAt: string;
+  draftRequestSeed: string;
   stage: FlowStage;
   selectedCategoryValue: string;
   categorySelectSearch: string;
@@ -204,7 +230,57 @@ type OrdinaryConversationDraftSnapshot = {
   notes: string;
 };
 
+type DynamicFlowOption = {
+  id: string;
+  optionKey: string;
+  label: string;
+  value: string;
+  icon?: string | null;
+  orderIndex?: number;
+};
+
+type DynamicFlowQuestion = {
+  id: string;
+  questionKey: string;
+  prompt: string;
+  description?: string | null;
+  inputType:
+    | "single_select"
+    | "multi_select"
+    | "text"
+    | "number"
+    | "date"
+    | "time"
+    | "datetime"
+    | "location"
+    | "file"
+    | "yes_no"
+    | "urgency"
+    | "estate";
+  isRequired: boolean;
+  isTerminal: boolean;
+  options: DynamicFlowOption[];
+  answer?: any;
+};
+
+type DynamicFlowSessionView = {
+  sessionId: string;
+  stateRevision: number;
+  history: DynamicFlowQuestion[];
+  currentQuestion: DynamicFlowQuestion | null;
+  activePath: DynamicFlowQuestion[];
+  answers: Record<string, any>;
+  isComplete: boolean;
+};
+
 const ORDINARY_FLOW_DRAFT_STORAGE_PREFIX = "ordinary_flow_draft_v1";
+
+function createOrdinaryDraftRequestSeed() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function parseOrdinaryConversationDraftSnapshot(
   raw: string | null,
@@ -236,6 +312,7 @@ function parseOrdinaryConversationDraftSnapshot(
     return {
       version: 1,
       updatedAt: String(parsed.updatedAt || new Date().toISOString()),
+      draftRequestSeed: String(parsed.draftRequestSeed || createOrdinaryDraftRequestSeed()),
       stage: stageValue,
       selectedCategoryValue: String(parsed.selectedCategoryValue || ""),
       categorySelectSearch: String(parsed.categorySelectSearch || ""),
@@ -307,45 +384,8 @@ const CANCELLATION_REVIEW_REQUIRED_STATUSES = new Set([
   "completed",
 ]);
 
-const DEFAULT_QUANTITY_OPTIONS = ["1", "2-3", "4-6", "7+"];
-const DEFAULT_TIME_WINDOWS = ["Today", "Within 3 days", "This week", "Flexible"];
-
-const REQUIRED_PHOTO_KEYWORDS = [
-  "glass",
-  "window",
-  "roof",
-  "roofing",
-  "masonry",
-  "tile",
-  "tiling",
-  "carpentry",
-];
-
-const RECOMMENDED_PHOTO_KEYWORDS = [
-  "painting",
-  "paint",
-  "plumbing",
-  "electrical",
-  "hvac",
-  "maintenance",
-  "repair",
-  ...REQUIRED_PHOTO_KEYWORDS,
-];
-
 const CHIP_STYLES =
   "rounded-full border px-4 py-2 text-sm font-medium transition shadow-sm hover:shadow";
-
-function normalizeKey(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-function normalizeCategoryKey(value: string) {
-  return String(value || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
 
 function normalizeStatusKey(value: unknown) {
   return String(value || "")
@@ -354,202 +394,117 @@ function normalizeStatusKey(value: unknown) {
     .trim();
 }
 
-function buildCategoryProfile(categoryName: string): CategoryProfile {
-  const key = normalizeKey(categoryName);
-  const matches = (token: string) => key.includes(token);
+function formatMaintenanceDurationLabel(value?: string | null) {
+  switch (String(value || "").toLowerCase()) {
+    case "monthly":
+      return "Monthly";
+    case "quarterly_3m":
+      return "Every 3 months";
+    case "halfyearly_6m":
+      return "Every 6 months";
+    case "yearly":
+      return "Yearly";
+    default:
+      return "";
+  }
+}
 
-  const photoRequired = REQUIRED_PHOTO_KEYWORDS.some(matches);
-  const photoRecommended = photoRequired || RECOMMENDED_PHOTO_KEYWORDS.some(matches);
+function formatMaintenanceConditionLabel(value?: string | null) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  return normalized.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
+}
 
-  if (matches("electrical") || matches("electric")) {
+function normalizeUrgencyLabel(value: string): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "emergency") return "Emergency";
+  if (normalized === "high") return "High";
+  if (normalized === "medium") return "Medium";
+  if (normalized === "low") return "Low";
+  return value;
+}
+
+function mapDynamicQuestionToStep(question: DynamicFlowQuestion): WizardStep {
+  const key = String(question.questionKey || "").trim();
+  const prompt = String(question.prompt || "Continue");
+  if (question.inputType === "location") {
     return {
-      issueChips: [
-        "No power",
-        "Flickering",
-        "Breaker trips",
-        "Burning smell",
-        "Sparks",
-      ],
-      followUps: [
-        {
-          id: "electrical_scope",
-          prompt: "Is it one socket or the whole house?",
-          options: ["One socket", "A few rooms", "Whole house"],
-        },
-        {
-          id: "electrical_safety",
-          prompt: "Any smell, heat, or sparks right now?",
-          options: ["Yes", "No", "Not sure"],
-        },
-      ],
-      quantityPrompt: "How many sockets or points are affected?",
-      quantityOptions: DEFAULT_QUANTITY_OPTIONS,
-      timeWindowPrompt: "When should we come?",
-      timeWindowOptions: DEFAULT_TIME_WINDOWS,
-      photoRequired: false,
-      photoRecommended: true,
-      photoHelper: "A photo helps us estimate faster and send the right tools.",
+      id: key || "location",
+      kind: "location",
+      prompt: "Do you live in an estate registered with CityConnect?",
+    };
+  }
+  if (question.inputType === "file") {
+    return {
+      id: key || "photos",
+      kind: "photos",
+      prompt,
+      required: Boolean(question.isRequired),
+      helperText: question.description || "Upload image evidence if available.",
+    };
+  }
+  if (
+    question.inputType === "text" ||
+    question.inputType === "number" ||
+    question.inputType === "date" ||
+    question.inputType === "time" ||
+    question.inputType === "datetime"
+  ) {
+    return {
+      id: key || "notes",
+      kind: "text",
+      prompt,
+      placeholder: question.description || "Type your answer.",
     };
   }
 
-  if (matches("plumb")) {
-    return {
-      issueChips: ["Leak", "Blocked drain", "Low pressure", "Burst pipe", "No water"],
-      followUps: [
-        {
-          id: "plumbing_location",
-          prompt: "Where is the issue located?",
-          options: ["Kitchen", "Bathroom", "Outdoor", "Multiple areas"],
-        },
-      ],
-      quantityPrompt: "How many fixtures are affected?",
-      quantityOptions: DEFAULT_QUANTITY_OPTIONS,
-      timeWindowPrompt: "When should we come?",
-      timeWindowOptions: DEFAULT_TIME_WINDOWS,
-      photoRequired: false,
-      photoRecommended: true,
-      photoHelper: "A photo helps us estimate faster and send the right tools.",
-    };
-  }
-
-  if (matches("painting") || matches("paint")) {
-    return {
-      issueChips: ["Interior refresh", "Exterior repaint", "Touch-ups", "Water stains", "Peeling paint"],
-      followUps: [
-        {
-          id: "painting_scope",
-          prompt: "Do you want paint supplied or just labor?",
-          options: ["Supply + labor", "Labor only", "Not sure"],
-        },
-      ],
-      quantityPrompt: "How many rooms or areas?",
-      quantityOptions: DEFAULT_QUANTITY_OPTIONS,
-      timeWindowPrompt: "When should we come?",
-      timeWindowOptions: DEFAULT_TIME_WINDOWS,
-      photoRequired: false,
-      photoRecommended: true,
-      photoHelper: "A photo helps us estimate faster and send the right tools.",
-    };
-  }
-  if (matches("carpentry") || matches("furniture") || matches("wood")) {
-    return {
-      issueChips: ["Door repair", "Furniture build", "Cabinet fix", "Shelving", "Window frame"],
-      followUps: [
-        {
-          id: "carpentry_material",
-          prompt: "Any preferred material or finish?",
-          options: ["Hardwood", "MDF", "Metal + wood", "Not sure"],
-        },
-      ],
-      quantityPrompt: "How many items are needed?",
-      quantityOptions: DEFAULT_QUANTITY_OPTIONS,
-      timeWindowPrompt: "When should we come?",
-      timeWindowOptions: DEFAULT_TIME_WINDOWS,
-      photoRequired,
-      photoRecommended,
-      photoHelper: "A photo helps us estimate faster and send the right tools.",
-    };
-  }
-
-  if (matches("tile") || matches("tiling")) {
-    return {
-      issueChips: ["Replace broken tiles", "Regrout", "New tiling", "Water damage"],
-      followUps: [
-        {
-          id: "tiling_area",
-          prompt: "Which area is affected?",
-          options: ["Bathroom", "Kitchen", "Outdoor", "Multiple areas"],
-        },
-      ],
-      quantityPrompt: "Approximate area?",
-      quantityOptions: ["1-2 sqm", "3-5 sqm", "6-10 sqm", "10+ sqm"],
-      timeWindowPrompt: "When should we come?",
-      timeWindowOptions: DEFAULT_TIME_WINDOWS,
-      photoRequired,
-      photoRecommended,
-      photoHelper: "A photo helps us estimate faster and send the right tools.",
-    };
-  }
-
-  if (matches("roof")) {
-    return {
-      issueChips: ["Leak", "Missing tiles", "Sagging", "Gutter issue", "Waterproofing"],
-      followUps: [
-        {
-          id: "roofing_scope",
-          prompt: "How long has the issue been present?",
-          options: ["Today", "This week", "More than a week", "Not sure"],
-        },
-      ],
-      quantityPrompt: "How many areas are affected?",
-      quantityOptions: DEFAULT_QUANTITY_OPTIONS,
-      timeWindowPrompt: "When should we come?",
-      timeWindowOptions: DEFAULT_TIME_WINDOWS,
-      photoRequired,
-      photoRecommended,
-      photoHelper: "A photo helps us estimate faster and send the right tools.",
-    };
-  }
-
-  if (matches("glass") || matches("window")) {
-    return {
-      issueChips: ["Broken glass", "Window stuck", "Seal issue", "Frame damage"],
-      followUps: [
-        {
-          id: "glass_safety",
-          prompt: "Is the glass area safe right now?",
-          options: ["Safe", "Needs urgent cover", "Not sure"],
-        },
-      ],
-      quantityPrompt: "How many windows or panels?",
-      quantityOptions: DEFAULT_QUANTITY_OPTIONS,
-      timeWindowPrompt: "When should we come?",
-      timeWindowOptions: DEFAULT_TIME_WINDOWS,
-      photoRequired,
-      photoRecommended,
-      photoHelper: "A photo helps us estimate faster and send the right tools.",
-    };
-  }
-
-  if (matches("masonry") || matches("crack")) {
-    return {
-      issueChips: ["Cracks", "Loose blocks", "Plaster repair", "Foundation check"],
-      followUps: [
-        {
-          id: "masonry_area",
-          prompt: "Where is the damage?",
-          options: ["Exterior wall", "Interior wall", "Fence", "Multiple areas"],
-        },
-      ],
-      quantityPrompt: "How many sections are affected?",
-      quantityOptions: DEFAULT_QUANTITY_OPTIONS,
-      timeWindowPrompt: "When should we come?",
-      timeWindowOptions: DEFAULT_TIME_WINDOWS,
-      photoRequired,
-      photoRecommended,
-      photoHelper: "A photo helps us estimate faster and send the right tools.",
-    };
-  }
+  const optionLabels =
+    Array.isArray(question.options) && question.options.length
+      ? question.options.map((option) => String(option.label || option.value || option.optionKey))
+      : question.inputType === "urgency"
+        ? URGENCY_OPTIONS.map((opt) => opt.label)
+        : ["Yes", "No"];
 
   return {
-    issueChips: ["Install", "Repair", "Inspection", "Replace", "Other"],
-    followUps: [
-      {
-        id: "general_scope",
-        prompt: "Which area is affected?",
-        options: ["One room", "Multiple rooms", "Outdoor", "Not sure"],
-      },
-    ],
-    quantityPrompt: "How many items or areas?",
-    quantityOptions: DEFAULT_QUANTITY_OPTIONS,
-    timeWindowPrompt: "When should we come?",
-    timeWindowOptions: DEFAULT_TIME_WINDOWS,
-    photoRequired,
-    photoRecommended,
-    photoHelper: photoRecommended
-      ? "A photo helps us estimate faster and send the right tools."
-      : undefined,
+    id: key || "dynamic_option",
+    kind: "chips",
+    prompt,
+    options: optionLabels,
   };
+}
+
+function toDisplayDynamicAnswer(question: DynamicFlowQuestion, answer: any): string {
+  if (!answer) return "";
+  if (typeof answer === "string") return answer;
+  if (question.questionKey === "urgency" && typeof answer === "object") {
+    return normalizeUrgencyLabel(String(answer.value || ""));
+  }
+  if (question.inputType === "location" && typeof answer === "object") {
+    const estateMode = String(answer.estateMode || "estate");
+    const unitValue = String(answer.unit || "").trim();
+    if (estateMode === "outside") {
+      const base = [answer.address, answer.lga, answer.state].filter(Boolean).join(", ");
+      return unitValue ? `${base} - Unit ${unitValue}` : base;
+    }
+    const base = [answer.estateName, answer.address].filter(Boolean).join(", ");
+    return unitValue ? `${base} - Unit ${unitValue}` : base;
+  }
+  if (question.inputType === "file" && typeof answer === "object") {
+    const files = Array.isArray(answer.files) ? answer.files : [];
+    return files.length ? `${files.length} photo(s) added` : "Skipped";
+  }
+  if (typeof answer === "object") {
+    const optionKey = String(answer.optionKey || "");
+    if (optionKey) {
+      const option = (question.options || []).find(
+        (entry) => String(entry.optionKey || "").trim() === optionKey,
+      );
+      if (option) return String(option.label || option.value || option.optionKey);
+    }
+    const text = String(answer.text || "").trim();
+    if (text) return text;
+  }
+  return String(answer ?? "");
 }
 
 function ChipButton({
@@ -733,7 +688,7 @@ function parseRequestDescription(description: string | null | undefined): Parsed
   if (!source) return {};
 
   const boundaryLabels =
-    "Issue|Quantity|Preferred time|Time window|Urgency|Location|Notes|Photos attached|Attachments|Photos";
+    "Issue|Other issue details|Additional information|Quantity|Preferred time|Time window|Urgency|Location|Notes|Photos attached|Attachments|Photos";
 
   const pick = (labelPattern: string) => {
     const regex = new RegExp(
@@ -745,8 +700,10 @@ function parseRequestDescription(description: string | null | undefined): Parsed
   };
 
   const issueType = pick("Issue");
+  const otherIssueDetails = pick("Other issue details");
   const quantity = pick("Quantity");
   const timeWindow = pick("(?:Preferred time|Time window)");
+  const additionalInformation = pick("Additional information");
   const notes = pick("Notes");
   const urgency = pick("Urgency");
   const location = pick("Location");
@@ -754,15 +711,27 @@ function parseRequestDescription(description: string | null | undefined): Parsed
   const photosMatch = photoChunk?.match(/(\d+)/);
   const photosCount = photosMatch ? Number(photosMatch[1]) : undefined;
 
-  if (!issueType && !quantity && !timeWindow && !notes && !urgency && !location && photosCount === undefined) {
+  if (
+    !issueType &&
+    !otherIssueDetails &&
+    !quantity &&
+    !timeWindow &&
+    !additionalInformation &&
+    !notes &&
+    !urgency &&
+    !location &&
+    photosCount === undefined
+  ) {
     return { notes: source };
   }
 
   return {
     issueType,
+    otherIssueDetails,
     quantity,
     timeWindow,
     photosCount,
+    additionalInformation,
     notes,
     urgency,
     location,
@@ -834,6 +803,12 @@ export default function OrdinaryConversationFlow() {
   }, [approvedCategorySettings, fallbackCategories]);
 
   const categoriesLoading = approvedCategoriesLoading || fallbackCategoriesLoading;
+  const { data: requestConfig } = useQuery<{ ordinaryQuestions?: Array<any> }>({
+    queryKey: ["/api/app/request-config", "ordinary-flow"],
+    queryFn: async () => residentFetch("/api/app/request-config"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const ordinaryQuestions = requestConfig?.ordinaryQuestions ?? [];
 
   const queryParams = useMemo(() => {
     const search = typeof window !== "undefined" ? window.location.search : "";
@@ -847,6 +822,15 @@ export default function OrdinaryConversationFlow() {
     queryParams.get("requestId") || queryParams.get("serviceRequestId") || conversationIdFromSearch;
 
   const [stage, setStage] = useState<FlowStage>("intake");
+  const [isSummaryManuallyDismissed, setIsSummaryManuallyDismissed] = useState(false);
+  const openJobSummary = useCallback(() => {
+    setIsSummaryManuallyDismissed(false);
+    setStage("summary");
+  }, []);
+  const returnToWizardFromSummary = useCallback(() => {
+    setIsSummaryManuallyDismissed(true);
+    setStage("wizard");
+  }, []);
 
   const [estateName, setEstateName] = useState("");
   const [estateResidenceMode, setEstateResidenceMode] = useState<"estate" | "outside">("estate");
@@ -866,7 +850,9 @@ export default function OrdinaryConversationFlow() {
   const [notes, setNotes] = useState("");
   const [attachments, setAttachments] = useState<Array<{ id: string; name: string; dataUrl: string }>>([]);
   const [persistedAttachmentCount, setPersistedAttachmentCount] = useState<number | null>(null);
+  const [localWrapUpCompleted, setLocalWrapUpCompleted] = useState<Record<string, boolean>>({});
   const wizardPromptTimerRef = useRef<number | null>(null);
+  const legacyAdvanceRetryTimerRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const openedRequestFromQueryRef = useRef<string | null>(null);
   const skipCategoryResetRef = useRef(false);
@@ -888,6 +874,8 @@ export default function OrdinaryConversationFlow() {
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
   const [isPeerTyping, setIsPeerTyping] = useState(false);
   const [isStartingJobPayment, setIsStartingJobPayment] = useState(false);
+  const [paystackRedirectUrl, setPaystackRedirectUrl] = useState<string | null>(null);
+  const [showPaystackRedirectModal, setShowPaystackRedirectModal] = useState(false);
   const [isCategoryRequiredDialogOpen, setIsCategoryRequiredDialogOpen] = useState(false);
   const [isCancelRequestDialogOpen, setIsCancelRequestDialogOpen] = useState(false);
   const [cancelReasonCode, setCancelReasonCode] = useState("");
@@ -900,7 +888,11 @@ export default function OrdinaryConversationFlow() {
   const [raiseIssueReason, setRaiseIssueReason] = useState("");
   const [previewAttachment, setPreviewAttachment] = useState<{ name: string; url: string } | null>(null);
   const [draftSavedAt, setDraftSavedAt] = useState<string>(() => new Date().toISOString());
+  const [draftRequestSeed, setDraftRequestSeed] = useState<string>(() => createOrdinaryDraftRequestSeed());
   const [storedDraftSnapshot, setStoredDraftSnapshot] = useState<OrdinaryConversationDraftSnapshot | null>(null);
+  const [dynamicFlowSession, setDynamicFlowSession] = useState<DynamicFlowSessionView | null>(null);
+  const [dynamicFlowFallback, setDynamicFlowFallback] = useState(false);
+  const [isDynamicFlowLoading, setIsDynamicFlowLoading] = useState(false);
   const restoreStageAfterCategorySelectionRef = useRef<FlowStage | null>(null);
   const restoreWizardIndexAfterCategorySelectionRef = useRef<number | null>(null);
   const draftHydratedRef = useRef(false);
@@ -916,9 +908,28 @@ export default function OrdinaryConversationFlow() {
     }
   }, []);
 
+  const clearLegacyAdvanceRetryTimer = useCallback(() => {
+    if (legacyAdvanceRetryTimerRef.current !== null) {
+      window.clearTimeout(legacyAdvanceRetryTimerRef.current);
+      legacyAdvanceRetryTimerRef.current = null;
+    }
+  }, []);
+
+  const commitLegacyStepAdvance = useCallback((nextIndex: number) => {
+    clearLegacyAdvanceRetryTimer();
+    clearWizardPromptTimer();
+    setIsWizardBotThinking(false);
+    setWizardIndex(nextIndex);
+    legacyAdvanceRetryTimerRef.current = window.setTimeout(() => {
+      setWizardIndex((prev) => (prev < nextIndex ? nextIndex : prev));
+      legacyAdvanceRetryTimerRef.current = null;
+    }, 250);
+  }, [clearLegacyAdvanceRetryTimer, clearWizardPromptTimer]);
+
   const queueWizardStepAdvance = useCallback(
     (nextIndex: number) => {
       if (nextIndex === wizardIndex) return;
+      clearLegacyAdvanceRetryTimer();
       clearWizardPromptTimer();
       setIsWizardBotThinking(true);
       wizardPromptTimerRef.current = window.setTimeout(() => {
@@ -927,7 +938,7 @@ export default function OrdinaryConversationFlow() {
         wizardPromptTimerRef.current = null;
       }, BOT_PROMPT_DELAY_MS);
     },
-    [clearWizardPromptTimer, wizardIndex],
+    [clearLegacyAdvanceRetryTimer, clearWizardPromptTimer, wizardIndex],
   );
 
   const clearSelfTypingStopTimer = useCallback(() => {
@@ -1027,6 +1038,7 @@ export default function OrdinaryConversationFlow() {
     setIsWizardBotThinking(false);
     skipCategoryResetRef.current = true;
     setActiveRequestId(null);
+    setDraftRequestSeed(String(snapshot.draftRequestSeed || createOrdinaryDraftRequestSeed()));
     setStage(snapshot.selectedCategoryValue ? snapshot.stage : "intake");
     setSelectedCategoryValue(snapshot.selectedCategoryValue || "");
     setCategorySelectSearch(snapshot.categorySelectSearch || "");
@@ -1057,8 +1069,9 @@ export default function OrdinaryConversationFlow() {
   useEffect(() => {
     return () => {
       clearWizardPromptTimer();
+      clearLegacyAdvanceRetryTimer();
     };
-  }, [clearWizardPromptTimer]);
+  }, [clearLegacyAdvanceRetryTimer, clearWizardPromptTimer]);
 
   useEffect(() => {
     return () => {
@@ -1115,6 +1128,7 @@ export default function OrdinaryConversationFlow() {
     setAttachments([]);
     setPersistedAttachmentCount(null);
     setHasConfirmedEstateResidence(false);
+    setDynamicFlowSession(null);
   }, [clearWizardPromptTimer, selectedCategoryValue]);
 
   useEffect(() => {
@@ -1148,6 +1162,179 @@ export default function OrdinaryConversationFlow() {
     );
   }, [selectedCategory, selectedCategoryValue, selectedCategoryLabel]);
 
+  const legacyEditableQuestions = useMemo(
+    () =>
+      buildEditableLegacyQuestions({
+        categoryKey: selectedCategoryKey,
+        categoryName: selectedCategoryLabel || "General",
+        ordinaryQuestions,
+      }),
+    [ordinaryQuestions, selectedCategoryKey, selectedCategoryLabel],
+  );
+  const legacyQuestionByKey = useMemo(
+    () => new Map(legacyEditableQuestions.map((question) => [question.key, question])),
+    [legacyEditableQuestions],
+  );
+  const sortedLegacyFallbackQuestions = useMemo(
+    () =>
+      legacyEditableQuestions
+        .slice()
+        .filter((question) => question.isEnabled)
+        .sort((a, b) => Number(a.order || 0) - Number(b.order || 0)),
+    [legacyEditableQuestions],
+  );
+
+  const isDynamicFlowCategory = useMemo(() => Boolean(selectedCategoryKey), [selectedCategoryKey]);
+
+  const dynamicFlowRequestId = useMemo(() => {
+    if (activeRequestId) return activeRequestId;
+    return `draft:${String(user?.id || "resident")}:${draftRequestSeed}:${selectedCategoryKey || "ordinary"}`;
+  }, [activeRequestId, draftRequestSeed, selectedCategoryKey, user?.id]);
+
+  const applyDynamicFlowSession = useCallback((session: DynamicFlowSessionView | null) => {
+    setDynamicFlowSession(session);
+    if (!session) return;
+
+    const displayAnswers: Record<string, string> = {};
+    const questionMap = new Map<string, DynamicFlowQuestion>();
+    [...(session.activePath || []), ...(session.history || [])].forEach((question) => {
+      questionMap.set(String(question.questionKey || ""), question);
+    });
+
+    for (const [questionKey, answer] of Object.entries(session.answers || {})) {
+      const question = questionMap.get(String(questionKey)) || (session.currentQuestion as any);
+      if (!question) continue;
+      const displayValue = toDisplayDynamicAnswer(question, answer);
+      if (displayValue) {
+        displayAnswers[String(questionKey)] = displayValue;
+      }
+
+      if (String(questionKey) === "urgency" && answer && typeof answer === "object") {
+        const urgencyValue = String((answer as any).value || "").trim().toLowerCase();
+        if (urgencyValue) setUrgency(normalizeUrgencyLabel(urgencyValue));
+      }
+
+      if (String(questionKey) === "location" && answer && typeof answer === "object") {
+        const estateMode = String((answer as any).estateMode || "estate");
+        const isOutside = estateMode === "outside";
+        setHasConfirmedEstateResidence(true);
+        setEstateResidenceMode(isOutside ? "outside" : "estate");
+        setEstateName(String((answer as any).estateName || ""));
+        setResidentState(String((answer as any).state || ""));
+        setResidentLga(String((answer as any).lga || ""));
+        setAddress(String((answer as any).address || ""));
+        setUnit(String((answer as any).unit || ""));
+      }
+
+      if (String(questionKey) === "photos" && answer && typeof answer === "object") {
+        const files = Array.isArray((answer as any).files) ? (answer as any).files : [];
+        setPersistedAttachmentCount(files.length);
+      }
+
+      if (String(questionKey) === "notes" && answer && typeof answer === "object") {
+        setNotes(String((answer as any).text || ""));
+      }
+    }
+
+    setWizardAnswers((prev) => ({ ...prev, ...displayAnswers }));
+    const currentIndex = Array.isArray(session.activePath)
+      ? session.activePath.findIndex(
+          (question) => String(question.questionKey || "") === String(session.currentQuestion?.questionKey || ""),
+        )
+      : -1;
+    if (currentIndex >= 0) {
+      setWizardIndex(currentIndex);
+    }
+    if (session.isComplete && stage !== "summary") {
+      const questionKeys = new Set(
+        [...(session.activePath || []), ...(session.history || [])].map((question) =>
+          String(question.questionKey || ""),
+        ),
+      );
+      const activePathLength = Array.isArray(session.activePath) ? session.activePath.length : 0;
+      const shouldAskLocalPhotos =
+        !questionKeys.has("photos") &&
+        !localWrapUpCompleted.photos &&
+        !persistedAttachmentCount &&
+        attachments.length === 0;
+      const shouldAskLocalNotes = !questionKeys.has("notes") && !localWrapUpCompleted.notes && !notes.trim();
+
+      if (shouldAskLocalPhotos || shouldAskLocalNotes) {
+        setWizardIndex(activePathLength + (shouldAskLocalPhotos ? 0 : 1));
+        setStage("wizard");
+        return;
+      }
+      if (!isSummaryManuallyDismissed) {
+        openJobSummary();
+      }
+    }
+  }, [
+    attachments.length,
+    isSummaryManuallyDismissed,
+    localWrapUpCompleted,
+    notes,
+    openJobSummary,
+    persistedAttachmentCount,
+    stage,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedCategoryValue || !selectedCategoryKey) {
+      setDynamicFlowSession(null);
+      setDynamicFlowFallback(false);
+      return;
+    }
+    if (!isDynamicFlowCategory) {
+      setDynamicFlowSession(null);
+      setDynamicFlowFallback(true);
+      return;
+    }
+    if (stage !== "wizard") return;
+
+    const run = async () => {
+      setIsDynamicFlowLoading(true);
+      try {
+        const response = await residentFetch<{
+          fallback: boolean;
+          session?: DynamicFlowSessionView;
+        }>("/api/app/ordinary-flow/sessions", {
+          method: "POST",
+          json: {
+            requestId: dynamicFlowRequestId,
+            categoryKey: selectedCategoryKey,
+          },
+        });
+        if (cancelled) return;
+        if (response?.fallback || !response?.session) {
+          setDynamicFlowFallback(true);
+          setDynamicFlowSession(null);
+          return;
+        }
+        setDynamicFlowFallback(false);
+        applyDynamicFlowSession(response.session);
+      } catch {
+        if (cancelled) return;
+        setDynamicFlowFallback(true);
+        setDynamicFlowSession(null);
+      } finally {
+        if (!cancelled) setIsDynamicFlowLoading(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    applyDynamicFlowSession,
+    dynamicFlowRequestId,
+    isDynamicFlowCategory,
+    selectedCategoryKey,
+    selectedCategoryValue,
+    stage,
+  ]);
+
   const handleSelectCategoryFromGrid = (categoryName: string) => {
     const match = categories.find((cat: any) => {
       const name = String(cat?.name ?? "");
@@ -1169,7 +1356,7 @@ export default function OrdinaryConversationFlow() {
     setSelectedCategoryValue(value);
     setWizardAnswers((prev) => ({ ...prev, category_select: label }));
     if (restoreStage === "summary") {
-      setStage("summary");
+      openJobSummary();
       return;
     }
     if (typeof restoreWizardIndex === "number" && Number.isFinite(restoreWizardIndex)) {
@@ -1181,10 +1368,28 @@ export default function OrdinaryConversationFlow() {
     setStage("wizard");
   };
 
-  const categoryProfile = useMemo(
-    () => buildCategoryProfile(selectedCategoryLabel || "General"),
-    [selectedCategoryLabel],
-  );
+  const categoryProfile = useMemo(() => {
+    if (isDynamicFlowCategory && dynamicFlowSession && !dynamicFlowFallback) {
+      const allQuestions = [...(dynamicFlowSession.activePath || []), ...(dynamicFlowSession.history || [])];
+      const issueQuestion = allQuestions.find(
+        (question) => String(question.questionKey || "") === "issue_type",
+      );
+      return {
+        issueChips:
+          issueQuestion?.options?.map((option) => String(option.label || option.value || option.optionKey)) ||
+          ["Install", "Repair", "Inspection", "Replace", "Other"],
+        followUps: [],
+        quantityPrompt: "How many items or areas?",
+        quantityOptions: DEFAULT_QUANTITY_OPTIONS,
+        timeWindowPrompt: "When should we come?",
+        timeWindowOptions: DEFAULT_TIME_WINDOWS,
+        photoRequired: false,
+        photoRecommended: true,
+        photoHelper: "Upload photos if available.",
+      } satisfies CategoryProfile;
+    }
+    return buildCategoryProfile(selectedCategoryLabel || "General");
+  }, [dynamicFlowFallback, dynamicFlowSession, isDynamicFlowCategory, selectedCategoryLabel]);
 
   const filteredEstates = useMemo(() => {
     const query = estateSearch.trim().toLowerCase();
@@ -1234,60 +1439,137 @@ export default function OrdinaryConversationFlow() {
   ]);
 
   const wizardSteps = useMemo<WizardStep[]>(() => {
-    const followUps: WizardStep[] = categoryProfile.followUps.map((f) => ({
-      id: f.id,
-      kind: "chips",
-      prompt: f.prompt,
-      options: f.options,
-    }));
-    return [
-      {
-        id: "location",
-        kind: "location",
-        prompt: "Do you live in a CityConnect estate?",
-      },
-      {
-        id: "urgency",
-        kind: "chips",
-        prompt: "How urgent is this?",
-        options: URGENCY_OPTIONS.map((opt) => opt.label),
-      },
-      {
-        id: "issue_type",
-        kind: "chips",
-        prompt: "Pick the closest issue type.",
-        options: categoryProfile.issueChips,
-      },
-      ...followUps,
-      {
-        id: "quantity",
-        kind: "chips",
-        prompt: categoryProfile.quantityPrompt,
-        options: categoryProfile.quantityOptions,
-      },
-      {
-        id: "time_window",
-        kind: "chips",
-        prompt: categoryProfile.timeWindowPrompt,
-        options: categoryProfile.timeWindowOptions,
-      },
-      {
+    if (isDynamicFlowCategory && dynamicFlowSession && !dynamicFlowFallback) {
+      const pathSteps = (dynamicFlowSession.activePath || []).map(mapDynamicQuestionToStep);
+      if (pathSteps.length) {
+        const pathStepIds = new Set(pathSteps.map((step) => step.id));
+        const localWrapUpSteps: WizardStep[] = [];
+        if (!pathStepIds.has("photos")) {
+          localWrapUpSteps.push({
+            id: "photos",
+            kind: "photos",
+            prompt: "Upload photo evidence (optional).",
+            required: false,
+            helperText: "Photos help the provider prepare tools before arrival.",
+          });
+        }
+        if (!pathStepIds.has("notes")) {
+          localWrapUpSteps.push({
+            id: "notes",
+            kind: "text",
+            prompt: "Anything else we should know?",
+            placeholder: "Type your answer.",
+          });
+        }
+        return [...pathSteps, ...localWrapUpSteps];
+      }
+    }
+
+    const question = (key: string) => legacyQuestionByKey.get(key);
+    const isEnabled = (key: string, fallback = true) => question(key)?.isEnabled ?? fallback;
+    const promptFor = (key: string, fallback: string) => String(question(key)?.label || fallback);
+    const optionsFor = (key: string, fallback: string[]) => {
+      const options = question(key)?.options;
+      return Array.isArray(options) && options.length ? options.map((option) => String(option)) : fallback;
+    };
+
+    const isPlumberOtherIssueSelected =
+      selectedCategoryKey === "plumber" &&
+      String(wizardAnswers.issue_type || "").trim().toLowerCase() === "other";
+
+    const knownFallbackOptions: Record<string, string[]> = {
+      urgency: URGENCY_OPTIONS.map((opt) => opt.label),
+      issue_type: categoryProfile.issueChips,
+      quantity: categoryProfile.quantityOptions,
+      time_window: categoryProfile.timeWindowOptions,
+    };
+
+    const steps: WizardStep[] = [];
+
+    sortedLegacyFallbackQuestions.forEach((legacyQuestion) => {
+      if (!legacyQuestion.isEnabled) return;
+      if (legacyQuestion.key === "issue_other_details" && !isPlumberOtherIssueSelected) return;
+
+      if (legacyQuestion.key === "location" || legacyQuestion.type === "estate") {
+        steps.push({
+          id: legacyQuestion.key,
+          kind: "location",
+          prompt: legacyQuestion.label || "Do you live in an estate registered with CityConnect?",
+        });
+        return;
+      }
+
+      if (
+        legacyQuestion.key === "photos" ||
+        legacyQuestion.type === "multi_image" ||
+        legacyQuestion.type === "image"
+      ) {
+        steps.push({
+          id: legacyQuestion.key,
+          kind: "photos",
+          prompt:
+            legacyQuestion.label ||
+            (categoryProfile.photoRequired ? "Please upload at least one photo." : "Upload a photo if available."),
+          required: legacyQuestion.required ?? categoryProfile.photoRequired,
+          helperText: legacyQuestion.helperText ?? categoryProfile.photoHelper,
+        });
+        return;
+      }
+
+      if (legacyQuestion.type === "select" || legacyQuestion.type === "urgency") {
+        const fallbackOptions = knownFallbackOptions[legacyQuestion.key] ?? [];
+        const options = Array.isArray(legacyQuestion.options) && legacyQuestion.options.length
+          ? legacyQuestion.options
+          : fallbackOptions;
+        steps.push({
+          id: legacyQuestion.key,
+          kind: "chips",
+          prompt: legacyQuestion.label || promptFor(legacyQuestion.key, legacyQuestion.key),
+          options,
+        });
+        return;
+      }
+
+      steps.push({
+        id: legacyQuestion.key,
+        kind: "text",
+        prompt: legacyQuestion.label || promptFor(legacyQuestion.key, legacyQuestion.key),
+        placeholder:
+          legacyQuestion.placeholder ||
+          (legacyQuestion.key === "notes" ? "Add any extra details here." : "Type the resident response."),
+      });
+    });
+
+    const stepIds = new Set(steps.map((step) => step.id));
+    if (!stepIds.has("photos")) {
+      steps.push({
         id: "photos",
         kind: "photos",
-        prompt: categoryProfile.photoRequired
-          ? "Please upload at least one photo."
-          : "Upload a photo if available.",
-        required: categoryProfile.photoRequired,
-        helperText: categoryProfile.photoHelper,
-      },
-      {
+        prompt: "Upload photo evidence (optional).",
+        required: false,
+        helperText: "Photos help the provider prepare tools before arrival.",
+      });
+    }
+    if (!stepIds.has("notes")) {
+      steps.push({
         id: "notes",
         kind: "text",
         prompt: "Anything else we should know?",
-        placeholder: "Add any extra details here.",
-      },
-    ];
-  }, [categoryProfile]);
+        placeholder: "Type your answer.",
+      });
+    }
+
+    return steps;
+  }, [
+    categoryProfile,
+    dynamicFlowFallback,
+    dynamicFlowSession,
+    isDynamicFlowCategory,
+    legacyQuestionByKey,
+    sortedLegacyFallbackQuestions,
+    selectedCategoryKey,
+    wizardAnswers.issue_type,
+  ]);
 
   useEffect(() => {
     if (!wizardSteps.length) {
@@ -1331,11 +1613,54 @@ export default function OrdinaryConversationFlow() {
 
   const currentStep = wizardSteps[wizardIndex];
   const effectiveAttachmentCount = persistedAttachmentCount ?? attachments.length;
+  const isDynamicBackendStep = useCallback(
+    (stepId?: string | null) => {
+      if (!stepId || !isDynamicFlowCategory || !dynamicFlowSession || dynamicFlowFallback) return false;
+      return [...(dynamicFlowSession.activePath || []), ...(dynamicFlowSession.history || [])].some(
+        (question) => String(question.questionKey || "") === String(stepId),
+      );
+    },
+    [dynamicFlowFallback, dynamicFlowSession, isDynamicFlowCategory],
+  );
+
+  useEffect(() => {
+    if (stage !== "summary" || activeRequestId) {
+      return;
+    }
+
+    const photosIndex = wizardSteps.findIndex((step) => step.id === "photos");
+    const notesIndex = wizardSteps.findIndex((step) => step.id === "notes");
+    const shouldAskLocalPhotos =
+      photosIndex >= 0 && !localWrapUpCompleted.photos && effectiveAttachmentCount === 0;
+    const shouldAskLocalNotes = notesIndex >= 0 && !localWrapUpCompleted.notes && !notes.trim();
+
+    if (shouldAskLocalPhotos) {
+      setWizardIndex(photosIndex);
+      setStage("wizard");
+      return;
+    }
+
+    if (shouldAskLocalNotes) {
+      setWizardIndex(notesIndex);
+      setStage("wizard");
+    }
+  }, [
+    activeRequestId,
+    effectiveAttachmentCount,
+    localWrapUpCompleted,
+    notes,
+    stage,
+    wizardSteps,
+  ]);
 
   const historyBlocks = wizardSteps
+    .slice(0, Math.max(0, wizardIndex))
     .filter((step) => {
       if (step.kind === "photos") return effectiveAttachmentCount > 0 || wizardAnswers[step.id];
-      if (step.kind === "text") return Boolean(notes.trim());
+      if (step.kind === "text") {
+        if (step.id === "notes") return Boolean(notes.trim());
+        return Boolean(String(wizardAnswers[step.id] || "").trim());
+      }
       return Boolean(wizardAnswers[step.id]);
     })
     .map((step) => {
@@ -1344,7 +1669,7 @@ export default function OrdinaryConversationFlow() {
         answer = effectiveAttachmentCount ? `${effectiveAttachmentCount} photo(s) added` : "Skipped";
       }
       if (step.kind === "text") {
-        answer = notes.trim();
+        answer = step.id === "notes" ? notes.trim() : String(wizardAnswers[step.id] || "").trim();
       }
       return { id: step.id, kind: step.kind, prompt: step.prompt, answer };
     });
@@ -1385,6 +1710,7 @@ export default function OrdinaryConversationFlow() {
     const snapshot: OrdinaryConversationDraftSnapshot = {
       version: 1,
       updatedAt: nowIso,
+      draftRequestSeed,
       stage: selectedCategoryValue ? stage : "intake",
       selectedCategoryValue: String(selectedCategoryValue || ""),
       categorySelectSearch: String(categorySelectSearch || ""),
@@ -1415,6 +1741,7 @@ export default function OrdinaryConversationFlow() {
     address,
     categorySelectSearch,
     clearOrdinaryDraftSnapshot,
+    draftRequestSeed,
     estateName,
     estateResidenceMode,
     estateSearch,
@@ -1480,8 +1807,89 @@ export default function OrdinaryConversationFlow() {
     };
   }, [activeRequestId, persistCurrentDraftSnapshot]);
 
+  const submitDynamicAnswer = useCallback(
+    async (questionKey: string, answerPayload: any) => {
+      if (!dynamicFlowSession?.sessionId) return false;
+      try {
+        setIsWizardBotThinking(true);
+        await new Promise((resolve) => window.setTimeout(resolve, BOT_PROMPT_DELAY_MS));
+        const response = await residentFetch<{
+          session?: DynamicFlowSessionView;
+          error?: string;
+          stateRevision?: number;
+          currentQuestion?: DynamicFlowQuestion | null;
+        }>(`/api/app/ordinary-flow/sessions/${dynamicFlowSession.sessionId}/answers`, {
+          method: "POST",
+          json: {
+            questionKey,
+            answer: answerPayload,
+            expectedRevision: Number(dynamicFlowSession.stateRevision || 0),
+          },
+        });
+        if (response?.session) {
+          applyDynamicFlowSession(response.session);
+          return true;
+        }
+        return false;
+      } catch (error: any) {
+        const message = String(error?.message || "");
+        if (/409/.test(message)) {
+          try {
+            const conflictStart = message.indexOf("{");
+            const conflictPayload =
+              conflictStart >= 0 ? JSON.parse(message.slice(conflictStart)) : null;
+            if (conflictPayload?.session) {
+              applyDynamicFlowSession(conflictPayload.session);
+            }
+          } catch {
+            // ignore parse failure
+          }
+          toast({
+            title: "Conversation updated",
+            description: "Please continue from the latest question.",
+          });
+          return false;
+        }
+        toast({
+          title: "Could not save answer",
+          description: "Please try again.",
+          variant: "destructive",
+        });
+        return false;
+      } finally {
+        setIsWizardBotThinking(false);
+      }
+    },
+    [applyDynamicFlowSession, dynamicFlowSession, toast],
+  );
+
   const handleSelectChip = (stepId: string, value: string) => {
     if (isWizardBotThinking) return;
+    if (isDynamicFlowCategory && dynamicFlowSession && !dynamicFlowFallback) {
+      const question = (dynamicFlowSession.activePath || []).find(
+        (entry) => String(entry.questionKey || "") === String(stepId),
+      );
+      if (question) {
+        const matchedOption = (question.options || []).find(
+          (option) =>
+            String(option.label || "").toLowerCase() === String(value || "").toLowerCase() ||
+            String(option.value || "").toLowerCase() === String(value || "").toLowerCase(),
+        );
+        let payload: any = {};
+        if (question.inputType === "urgency") {
+          const normalized = String(value || "").trim().toLowerCase();
+          payload = { value: normalized };
+          setUrgency(normalizeUrgencyLabel(normalized));
+        } else if (matchedOption) {
+          payload = { optionKey: matchedOption.optionKey };
+        } else {
+          payload = { text: value };
+        }
+        setWizardAnswers((prev) => ({ ...prev, [stepId]: value }));
+        void submitDynamicAnswer(stepId, payload);
+        return;
+      }
+    }
     if (stepId === "urgency") {
       setUrgency(value);
     }
@@ -1517,17 +1925,55 @@ export default function OrdinaryConversationFlow() {
     });
   };
 
-  const handleFinishNotes = () => {
+  const handleFinishNotes = async () => {
+    if (
+      currentStep &&
+      isDynamicFlowCategory &&
+      dynamicFlowSession &&
+      !dynamicFlowFallback &&
+      isDynamicBackendStep(currentStep.id)
+    ) {
+      const answerText =
+        currentStep.id === "notes"
+          ? notes.trim()
+          : String(wizardAnswers[currentStep.id] || "").trim();
+      await submitDynamicAnswer(
+        currentStep.id,
+        currentStep.id === "notes" ? { text: answerText } : answerText,
+      );
+      return;
+    }
+
+    if (currentStep?.kind === "text" && currentStep.id !== "notes") {
+      const value = String(wizardAnswers[currentStep.id] || "").trim();
+      setWizardAnswers((prev) => ({ ...prev, [currentStep.id]: value }));
+    }
+
+    const isLastStep = wizardIndex >= wizardSteps.length - 1;
+    if (!isLastStep) {
+      if (currentStep?.id === "notes") {
+        setLocalWrapUpCompleted((prev) => ({ ...prev, notes: true }));
+      }
+      const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
+      queueWizardStepAdvance(nextIndex);
+      return;
+    }
+
     if (!notes.trim()) {
       setNotes("");
     }
-    setStage("summary");
+    if (currentStep?.id === "notes") {
+      setLocalWrapUpCompleted((prev) => ({ ...prev, notes: true }));
+    }
+    openJobSummary();
   };
 
   const resetFlowForNewRequest = () => {
     clearWizardPromptTimer();
     setIsWizardBotThinking(false);
     clearOrdinaryDraftSnapshot();
+    setIsSummaryManuallyDismissed(false);
+    setDraftRequestSeed(createOrdinaryDraftRequestSeed());
     setStage("intake");
     setSelectedCategoryValue("");
     setCategorySelectSearch("");
@@ -1536,6 +1982,7 @@ export default function OrdinaryConversationFlow() {
     setNotes("");
     setAttachments([]);
     setPersistedAttachmentCount(null);
+    setLocalWrapUpCompleted({});
     setUrgency("");
     setAddress("");
     setUnit("");
@@ -1544,6 +1991,7 @@ export default function OrdinaryConversationFlow() {
     setResidentLga("");
     setEstateResidenceMode("estate");
     setHasConfirmedEstateResidence(false);
+    setDynamicFlowSession(null);
     setActiveRequestId(null);
     setDraftSavedAt(new Date().toISOString());
   };
@@ -1599,6 +2047,7 @@ export default function OrdinaryConversationFlow() {
     clearWizardPromptTimer();
     setIsWizardBotThinking(false);
     clearOrdinaryDraftSnapshot();
+    setIsSummaryManuallyDismissed(false);
     setStage("intake");
     setSelectedCategoryValue("");
     setCategorySelectSearch("");
@@ -1607,7 +2056,9 @@ export default function OrdinaryConversationFlow() {
     setNotes("");
     setAttachments([]);
     setPersistedAttachmentCount(null);
+    setLocalWrapUpCompleted({});
     setUrgency("");
+    setDynamicFlowSession(null);
     setActiveRequestId(null);
     setDraftSavedAt(new Date().toISOString());
   };
@@ -1617,6 +2068,7 @@ export default function OrdinaryConversationFlow() {
     if (idx >= 0) {
       clearWizardPromptTimer();
       setIsWizardBotThinking(false);
+      setIsSummaryManuallyDismissed(true);
       setStage("wizard");
       setWizardIndex(idx);
     }
@@ -1803,7 +2255,47 @@ export default function OrdinaryConversationFlow() {
     setPendingPrefill(false);
   }, [clearWizardPromptTimer, pendingPrefill, wizardSteps, wizardAnswers, notes, effectiveAttachmentCount]);
 
-  const handleBookConsultancy = () => {
+  const handleBookConsultancy = async () => {
+    let normalizedDynamicIntake: Record<string, any> | null = null;
+    if (isDynamicFlowCategory && dynamicFlowSession && !dynamicFlowFallback) {
+      if (!dynamicFlowSession.isComplete) {
+        toast({
+          title: "Complete the required prompts",
+          description: "Please answer all required dynamic flow questions before booking.",
+        });
+        return;
+      }
+      try {
+        const completion = await residentFetch<{
+          ok: boolean;
+          normalizedIntake?: Record<string, any>;
+          session?: DynamicFlowSessionView;
+          error?: string;
+        }>(`/api/app/ordinary-flow/sessions/${dynamicFlowSession.sessionId}/complete`, {
+          method: "POST",
+        });
+        if (!completion?.ok || !completion?.normalizedIntake) {
+          toast({
+            title: "Conversation incomplete",
+            description: "Please answer all required prompts before continuing.",
+            variant: "destructive",
+          });
+          return;
+        }
+        normalizedDynamicIntake = completion.normalizedIntake;
+        if (completion.session) {
+          applyDynamicFlowSession(completion.session);
+        }
+      } catch {
+        toast({
+          title: "Could not finalize conversation",
+          description: "Please answer all required prompts, then try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     const requestStatus = String(activeRequestLive?.status || "").toLowerCase();
     const paymentStatus = String(activeRequestLive?.paymentStatus || "").toLowerCase();
     const alreadyBooked =
@@ -1826,16 +2318,65 @@ export default function OrdinaryConversationFlow() {
       return;
     }
 
+    const dynamicDescriptionParts =
+      isDynamicFlowCategory && dynamicFlowSession && !dynamicFlowFallback
+        ? (dynamicFlowSession.history || [])
+            .map((question) => {
+              const answer = wizardAnswers[String(question.questionKey || "")];
+              if (!answer) return null;
+              return `${question.prompt}: ${answer}`;
+            })
+            .filter(Boolean)
+        : [];
+
+    const readDynamicLabel = (value: any): string => {
+      if (!value) return "";
+      if (typeof value === "string") return value;
+      if (typeof value === "object") {
+        const optionKey = String(value.optionKey || "").trim();
+        if (optionKey) {
+          const issueQuestion = (dynamicFlowSession?.activePath || []).find(
+            (question) => String(question.questionKey || "") === "issue_type",
+          );
+          const matched = issueQuestion?.options?.find(
+            (option) => String(option.optionKey || "").trim() === optionKey,
+          );
+          return String(matched?.label || matched?.value || optionKey);
+        }
+        const text = String(value.text || value.value || "").trim();
+        if (text) return text;
+      }
+      return "";
+    };
+
+    const resolvedIssueType = normalizedDynamicIntake
+      ? readDynamicLabel(normalizedDynamicIntake.issueType)
+      : wizardAnswers.issue_type;
+    const resolvedQuantity = normalizedDynamicIntake
+      ? readDynamicLabel(normalizedDynamicIntake.quantity)
+      : wizardAnswers.quantity;
+    const resolvedTimeWindow = normalizedDynamicIntake
+      ? readDynamicLabel(normalizedDynamicIntake.timeWindow)
+      : wizardAnswers.time_window;
+    const resolvedUrgency = normalizedDynamicIntake
+      ? normalizeUrgencyLabel(readDynamicLabel(normalizedDynamicIntake.urgency))
+      : urgency;
+
     const descriptionParts = [
-      wizardAnswers.issue_type ? `Issue: ${wizardAnswers.issue_type}` : null,
-      ...categoryProfile.followUps.map((f) =>
-        wizardAnswers[f.id] ? `${f.prompt}: ${wizardAnswers[f.id]}` : null,
-      ),
-      wizardAnswers.quantity ? `Quantity: ${wizardAnswers.quantity}` : null,
-      wizardAnswers.time_window ? `Preferred time: ${wizardAnswers.time_window}` : null,
-      urgency ? `Urgency: ${urgency}` : null,
+      resolvedIssueType ? `Issue: ${resolvedIssueType}` : null,
+      wizardAnswers.issue_other_details
+        ? `Other issue details: ${wizardAnswers.issue_other_details}`
+        : null,
+      ...(dynamicDescriptionParts.length
+        ? dynamicDescriptionParts
+        : categoryProfile.followUps.map((f) =>
+            wizardAnswers[f.id] ? `${f.prompt}: ${wizardAnswers[f.id]}` : null,
+          )),
+      resolvedQuantity ? `Quantity: ${resolvedQuantity}` : null,
+      resolvedTimeWindow ? `Preferred time: ${resolvedTimeWindow}` : null,
+      resolvedUrgency ? `Urgency: ${resolvedUrgency}` : null,
       `Location: ${intakeLocationLabel()}`,
-      notes.trim() ? `Notes: ${notes.trim()}` : null,
+      notes.trim() ? `Additional information: ${notes.trim()}` : null,
       effectiveAttachmentCount
         ? `Photos attached: ${effectiveAttachmentCount}`
         : "Photos attached: 0",
@@ -1855,11 +2396,11 @@ export default function OrdinaryConversationFlow() {
     const draft = {
       categoryKey: categoryKeyCandidate,
       categoryLabel: selectedCategoryLabel || String(selectedCategory?.name ?? ""),
-      urgency,
-      issueType: wizardAnswers.issue_type || "",
+      urgency: resolvedUrgency,
+      issueType: resolvedIssueType || "",
       areaAffected: primaryFollowUpAnswer || "",
-      quantityLabel: wizardAnswers.quantity || "",
-      timeWindowLabel: wizardAnswers.time_window || "",
+      quantityLabel: resolvedQuantity || "",
+      timeWindowLabel: resolvedTimeWindow || "",
       notes: notes.trim(),
       location: intakeLocationLabel(),
       addressLine: address.trim(),
@@ -1870,6 +2411,8 @@ export default function OrdinaryConversationFlow() {
       residenceMode: estateResidenceMode,
       description: descriptionParts.join("\n"),
       attachmentsCount: effectiveAttachmentCount,
+      ordinaryFlowSessionId: dynamicFlowSession?.sessionId || null,
+      ordinaryFlowIntakeSnapshot: normalizedDynamicIntake || null,
     };
 
     try {
@@ -1935,6 +2478,7 @@ export default function OrdinaryConversationFlow() {
     return locationDraft || "Not provided";
   }, [storedDraftSnapshot]);
   const draftSessionPreview = useMemo(() => {
+    if (stage === "summary") return null;
     if (!activeRequestId && liveDraftHasContent) {
       return {
         id: draftSessionId,
@@ -1958,6 +2502,7 @@ export default function OrdinaryConversationFlow() {
     liveDraftHasContent,
     liveDraftSnippet,
     selectedCategoryLabel,
+    stage,
     storedDraftSnapshot,
     storedDraftSnippet,
     storedDraftTitle,
@@ -2161,8 +2706,12 @@ export default function OrdinaryConversationFlow() {
     [serviceRequestMessages],
   );
 
-  const providerDisplayName = assignedProvider?.name || "CityConnect Assistant";
   const activeRequestStatusValue = normalizeStatusKey(activeRequestLive?.status || "");
+  const isScheduledMaintenanceRequest = Boolean(activeRequestLive?.maintenance?.scheduleId);
+  const maintenanceContext = activeRequestLive?.maintenance || null;
+  const providerDisplayName =
+    assignedProvider?.name ||
+    (isScheduledMaintenanceRequest ? "CityConnect Care Desk" : "CityConnect Assistant");
   const activeCancellationCase = activeRequestLive?.cancellationCase || null;
   const activeCancellationCaseStatus = normalizeStatusKey(activeCancellationCase?.status || "");
   const hasOpenCancellationReview = ["requested", "under_review"].includes(activeCancellationCaseStatus);
@@ -2178,6 +2727,33 @@ export default function OrdinaryConversationFlow() {
   const canMessageAssignedProvider =
     Boolean(activeRequestLive?.providerId) &&
     !["cancelled", "completed"].includes(activeRequestStatusValue);
+  const canMessageScheduledMaintenance =
+    Boolean(activeRequestId) &&
+    isScheduledMaintenanceRequest &&
+    !["cancelled", "completed"].includes(activeRequestStatusValue);
+  const canUseConversationComposer = canMessageAssignedProvider || canMessageScheduledMaintenance;
+  const maintenanceScheduledFor = toDate(
+    maintenanceContext?.schedule?.scheduledFor || activeRequestLive?.preferredTime,
+  );
+  const maintenanceScheduledForLabel = maintenanceScheduledFor
+    ? maintenanceScheduledFor.toLocaleString(undefined, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "To be confirmed";
+  const maintenanceIntroTitle =
+    maintenanceContext?.introTitle ||
+    maintenanceContext?.title ||
+    "Scheduled maintenance";
+  const maintenanceIntroBody = [
+    maintenanceContext?.plan?.name ? `Plan: ${maintenanceContext.plan.name}.` : "",
+    maintenanceContext?.nextStep ? `Next step: ${maintenanceContext.nextStep}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const inProgressStartedAt =
     activeRequestStatusValue === "in_progress"
       ? toDate(activeRequestLive?.updatedAt) || toDate(activeRequestLive?.assignedAt)
@@ -2255,9 +2831,22 @@ export default function OrdinaryConversationFlow() {
     urgency ||
     "Not set";
   const summaryProblemTypeValue = parsedActiveRequestDetails.issueType || wizardAnswers.issue_type || "Not set";
+  const summaryOtherIssueDetailsValue =
+    parsedActiveRequestDetails.otherIssueDetails ||
+    String(wizardAnswers.issue_other_details || "").trim() ||
+    "";
+  const summaryProblemTypeDisplay =
+    String(summaryProblemTypeValue || "").trim().toLowerCase() === "other" && summaryOtherIssueDetailsValue
+      ? `Other - ${summaryOtherIssueDetailsValue}`
+      : summaryProblemTypeValue;
   const summaryQuantityValue = parsedActiveRequestDetails.quantity || wizardAnswers.quantity || "Not set";
   const summaryTimeWindowValue =
     parsedActiveRequestDetails.timeWindow || wizardAnswers.time_window || "Not set";
+  const summaryAdditionalInformationValue =
+    parsedActiveRequestDetails.additionalInformation ||
+    parsedActiveRequestDetails.notes ||
+    notes.trim() ||
+    "Not provided";
   const summaryAttachmentCount =
     parsedActiveRequestDetails.photosCount ?? persistedAttachmentCount ?? attachments.length;
   const consultancyAlreadyBooked = Boolean(activeRequestId) && (
@@ -2302,9 +2891,18 @@ export default function OrdinaryConversationFlow() {
     },
     {
       label: "Problem type",
-      value: summaryProblemTypeValue,
+      value: summaryProblemTypeDisplay,
       onEdit: () => jumpToWizard("issue_type"),
     },
+    ...(String(summaryProblemTypeValue || "").trim().toLowerCase() === "other"
+      ? [
+          {
+            label: "Other issue details",
+            value: summaryOtherIssueDetailsValue || "Not provided",
+            onEdit: () => jumpToWizard("issue_other_details"),
+          },
+        ]
+      : []),
     {
       label: "Quantity",
       value: summaryQuantityValue,
@@ -2320,8 +2918,15 @@ export default function OrdinaryConversationFlow() {
       value: `${summaryAttachmentCount} photo(s)`,
       onEdit: () => jumpToWizard("photos"),
     },
+    {
+      label: "Additional information",
+      value: summaryAdditionalInformationValue,
+      onEdit: () => jumpToWizard("notes"),
+    },
   ];
-  const showWizardInteractiveStep = !activeRequestId || activeRequestStatusValue === "pending";
+  const showWizardInteractiveStep =
+    (!activeRequestId || activeRequestStatusValue === "pending") &&
+    !isScheduledMaintenanceRequest;
   const isConversationStage = stage === "wizard" || stage === "summary";
   const showInProgressCounter =
     isConversationStage && !showWizardInteractiveStep && activeRequestStatusValue === "in_progress";
@@ -2334,7 +2939,9 @@ export default function OrdinaryConversationFlow() {
 
   const providerAvailabilityLabel = canMessageAssignedProvider
     ? "Assigned to this request"
-    : "Awaiting assignment";
+    : isScheduledMaintenanceRequest
+      ? "Care brief ready"
+      : "Awaiting assignment";
   const providerEtaLabel = assignedProvider?.scheduledAt
     ? `Scheduled ${assignedProvider.scheduledAt.toLocaleString(undefined, {
         month: "short",
@@ -2342,7 +2949,9 @@ export default function OrdinaryConversationFlow() {
         hour: "numeric",
         minute: "2-digit",
       })}`
-      : "Schedule pending";
+      : isScheduledMaintenanceRequest
+        ? `Visit target ${maintenanceScheduledForLabel}`
+        : "Schedule pending";
 
   const handlePayRequestedJob = async () => {
     if (!activeRequestId) return;
@@ -2391,7 +3000,8 @@ export default function OrdinaryConversationFlow() {
         throw new Error("Missing authorization URL from Paystack initialization");
       }
 
-      window.location.href = authUrl;
+      setPaystackRedirectUrl(authUrl);
+      setShowPaystackRedirectModal(true);
     } catch (error: any) {
       toast({
         title: "Payment error",
@@ -2504,6 +3114,18 @@ export default function OrdinaryConversationFlow() {
 
   const conversationItems = useMemo<ThreadItem[]>(() => {
     const items: ThreadItem[] = [];
+
+    if (isScheduledMaintenanceRequest && maintenanceContext) {
+      items.push({
+        id: "scheduled-maintenance-context",
+        kind: "event",
+        title: maintenanceIntroTitle,
+        body:
+          maintenanceIntroBody ||
+          "This request already includes your asset and plan context, so you do not need to start from scratch.",
+        scheduleLabel: maintenanceScheduledForLabel,
+      });
+    }
 
     if (assignedProvider) {
       items.push({
@@ -2721,6 +3343,11 @@ export default function OrdinaryConversationFlow() {
     activeRequestLive?.billedAmount,
     activeRequestLive?.assignedAt,
     activeRequestLive?.updatedAt,
+    isScheduledMaintenanceRequest,
+    maintenanceContext,
+    maintenanceIntroBody,
+    maintenanceIntroTitle,
+    maintenanceScheduledForLabel,
     activeConsultancyReport,
     activeRequestLive?.preferredTime,
     activeRequestLive?.paymentRequestedAt,
@@ -2992,11 +3619,18 @@ export default function OrdinaryConversationFlow() {
                   {!isProviderDetailsCollapsed ? (
                     <ProviderHeader
                       providerName={providerDisplayName}
-                      providerRole={assignedProvider?.role || "Service coordinator"}
+                      providerRole={
+                        assignedProvider?.role ||
+                        (isScheduledMaintenanceRequest ? "Maintenance coordinator" : "Service coordinator")
+                      }
                       availabilityLabel={providerAvailabilityLabel}
                       etaLabel={providerEtaLabel}
-                      coverageLabel={intakeLocationLabel()}
-                      onReviewSummary={() => setStage("summary")}
+                      coverageLabel={
+                        maintenanceContext?.asset?.locationLabel ||
+                        maintenanceContext?.asset?.label ||
+                        intakeLocationLabel()
+                      }
+                      onReviewSummary={openJobSummary}
                     />
                   ) : null}
                   <RequestProgressTracker
@@ -3026,6 +3660,29 @@ export default function OrdinaryConversationFlow() {
           {isConversationStage ? (
             <div className="mx-auto flex h-full max-w-[1100px] min-h-0 w-full flex-col gap-1.5 px-4 sm:px-6 lg:px-10 pb-2 pt-1.5">
               <div className="flex min-h-0 flex-1 flex-col">
+                    {isScheduledMaintenanceRequest && maintenanceContext ? (
+                      <div className="mb-2 shrink-0">
+                        <MaintenanceContextCard
+                          title={maintenanceIntroTitle}
+                          assetLabel={maintenanceContext.asset?.label || "Protected asset"}
+                          itemTypeLabel={maintenanceContext.asset?.itemTypeName || "Maintenance asset"}
+                          locationLabel={maintenanceContext.asset?.locationLabel || null}
+                          conditionLabel={formatMaintenanceConditionLabel(
+                            maintenanceContext.asset?.condition || null,
+                          )}
+                          planName={maintenanceContext.plan?.name || "Maintenance plan"}
+                          durationLabel={formatMaintenanceDurationLabel(
+                            maintenanceContext.plan?.durationType || null,
+                          )}
+                          scheduledForLabel={maintenanceScheduledForLabel}
+                          nextStep={
+                            maintenanceContext.nextStep ||
+                            "Confirm preferred time and access instructions"
+                          }
+                          includedTasks={maintenanceContext.plan?.includedTasks || []}
+                        />
+                      </div>
+                    ) : null}
                     <div
                       ref={chatScrollContainerRef}
                       className={cn(
@@ -3306,11 +3963,31 @@ export default function OrdinaryConversationFlow() {
                                 variant="outline"
                                 className="rounded-full"
                                 disabled={!isLocationComplete || isWizardBotThinking}
-                                onClick={() => {
+                                onClick={async () => {
                                   if (isWizardBotThinking || !isLocationComplete) return;
+                                  if (isDynamicFlowCategory && dynamicFlowSession && !dynamicFlowFallback) {
+                                    const locationPayload =
+                                      estateResidenceMode === "outside"
+                                        ? {
+                                            estateMode: "outside",
+                                            state: residentState,
+                                            lga: residentLga,
+                                            address: address.trim(),
+                                            unit: unit.trim() || null,
+                                          }
+                                        : {
+                                            estateMode: "estate",
+                                            estateName,
+                                            address: address.trim(),
+                                            unit: unit.trim() || null,
+                                          };
+                                    setWizardAnswers((prev) => ({ ...prev, [currentStep.id]: intakeLocationLabel() }));
+                                    await submitDynamicAnswer(currentStep.id, locationPayload);
+                                    return;
+                                  }
                                   setWizardAnswers((prev) => ({ ...prev, [currentStep.id]: intakeLocationLabel() }));
                                   const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
-                                  queueWizardStepAdvance(nextIndex);
+                                  commitLegacyStepAdvance(nextIndex);
                                 }}
                               >
                                 Add location
@@ -3442,8 +4119,22 @@ export default function OrdinaryConversationFlow() {
                                 <Button
                                   variant="outline"
                                   disabled={isWizardBotThinking}
-                                  onClick={() => {
+                                  onClick={async () => {
                                     if (isWizardBotThinking) return;
+                                    if (
+                                      isDynamicFlowCategory &&
+                                      dynamicFlowSession &&
+                                      !dynamicFlowFallback &&
+                                      isDynamicBackendStep(currentStep.id)
+                                    ) {
+                                      await submitDynamicAnswer(currentStep.id, { files: [] });
+                                      return;
+                                    }
+                                    setLocalWrapUpCompleted((prev) => ({ ...prev, [currentStep.id]: true }));
+                                    if (wizardIndex >= wizardSteps.length - 1) {
+                                      openJobSummary();
+                                      return;
+                                    }
                                     const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
                                     queueWizardStepAdvance(nextIndex);
                                   }}
@@ -3453,9 +4144,32 @@ export default function OrdinaryConversationFlow() {
                               ) : null}
                               <Button
                                 disabled={isWizardBotThinking}
-                                onClick={() => {
+                                onClick={async () => {
                                   if (isWizardBotThinking) return;
                                   if (currentStep.required && attachments.length === 0) return;
+                                  if (
+                                    isDynamicFlowCategory &&
+                                    dynamicFlowSession &&
+                                    !dynamicFlowFallback &&
+                                    isDynamicBackendStep(currentStep.id)
+                                  ) {
+                                    const files = attachments.map((file) => {
+                                      const mimeMatch = String(file.dataUrl || "").match(/^data:([^;]+);/i);
+                                      return {
+                                        dataUrl: file.dataUrl,
+                                        mimeType: mimeMatch?.[1] || "image/*",
+                                        byteSize: Math.round((file.dataUrl.length * 3) / 4),
+                                      };
+                                    });
+                                    setPersistedAttachmentCount(files.length);
+                                    await submitDynamicAnswer(currentStep.id, { files });
+                                    return;
+                                  }
+                                  setLocalWrapUpCompleted((prev) => ({ ...prev, [currentStep.id]: true }));
+                                  if (wizardIndex >= wizardSteps.length - 1) {
+                                    openJobSummary();
+                                    return;
+                                  }
                                   const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
                                   queueWizardStepAdvance(nextIndex);
                                 }}
@@ -3470,14 +4184,27 @@ export default function OrdinaryConversationFlow() {
                         {currentStep.kind === "text" ? (
                           <div className="space-y-3">
                             <textarea
-                              value={notes}
-                              onChange={(event) => setNotes(event.target.value)}
+                              value={
+                                currentStep.id === "notes"
+                                  ? notes
+                                  : String(wizardAnswers[currentStep.id] || "")
+                              }
+                              onChange={(event) => {
+                                if (currentStep.id === "notes") {
+                                  setNotes(event.target.value);
+                                  return;
+                                }
+                                setWizardAnswers((prev) => ({
+                                  ...prev,
+                                  [currentStep.id]: event.target.value,
+                                }));
+                              }}
                               placeholder={currentStep.placeholder}
                               className="min-h-[120px] w-full rounded-xl border border-[#D0D5DD] px-3 py-2 text-sm"
                             />
                             <div className="flex justify-start">
                               <Button variant="outline" onClick={handleFinishNotes}>
-                                Continue to summary
+                                {wizardIndex >= wizardSteps.length - 1 ? "Continue to summary" : "Next"}
                               </Button>
                             </div>
                           </div>
@@ -3494,10 +4221,14 @@ export default function OrdinaryConversationFlow() {
 
           </div>
           {isConversationStage ? (
-            canMessageAssignedProvider ? (
+            canUseConversationComposer ? (
               <MessageComposer
                 variant="citybuddy"
-                label={`Message ${providerDisplayName}`}
+                label={
+                  canMessageAssignedProvider
+                    ? `Message ${providerDisplayName}`
+                    : "Share preferred time and access notes"
+                }
                 value={residentMessageDraft}
                 onChange={handleResidentComposerChange}
                 onSend={handleSendComposerMessage}
@@ -3506,6 +4237,11 @@ export default function OrdinaryConversationFlow() {
                 onAttachFiles={handleComposerAttachFiles}
                 onRemoveAttachment={handleRemoveComposerAttachment}
                 onShareLocation={handleShareLocationToComposer}
+                placeholder={
+                  canMessageAssignedProvider
+                    ? undefined
+                    : "Share your preferred time, gate or access instructions, and anything the maintenance provider should know."
+                }
               />
             ) : (
               <div className="border-t border-[#EAECF0] bg-white px-5 py-2.5">
@@ -3707,7 +4443,7 @@ export default function OrdinaryConversationFlow() {
             type="button"
             aria-label="Close job summary"
             className="absolute inset-0 bg-black/40"
-            onClick={() => setStage("wizard")}
+            onClick={returnToWizardFromSummary}
           />
           <div
             className="absolute right-0 top-0 h-full w-full max-w-[520px] bg-white shadow-2xl overflow-y-auto"
@@ -3719,7 +4455,7 @@ export default function OrdinaryConversationFlow() {
                   <p className="text-[18px] font-semibold text-[#101828]">Job summary</p>
                   <p className="text-[12px] text-[#667085]">Review and confirm before booking inspection.</p>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => setStage("wizard")}>
+                <Button variant="ghost" size="sm" onClick={returnToWizardFromSummary}>
                   Close
                 </Button>
               </div>
@@ -3783,7 +4519,7 @@ export default function OrdinaryConversationFlow() {
                         {formatCategoryLabel(activeRequestCategoryDisplay || "General Provider")}
                       </p>
                       <p className="text-[12px] text-[#667085]">
-                        Issue: {summaryProblemTypeValue}
+                        Issue: {summaryProblemTypeDisplay}
                       </p>
                       <p className="text-[12px] text-[#667085] mt-1">
                         Coverage: {summaryLocationValue}
@@ -3806,7 +4542,7 @@ export default function OrdinaryConversationFlow() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {[summaryQuantityValue, summaryUrgencyValue, summaryProblemTypeValue]
+                    {[summaryQuantityValue, summaryUrgencyValue, summaryProblemTypeDisplay]
                       .filter(Boolean)
                       .filter((badge) => badge !== "Not set")
                       .map((badge, idx) => (
@@ -3819,7 +4555,7 @@ export default function OrdinaryConversationFlow() {
                       ))}
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={() => setStage("wizard")}>
+                    <Button variant="outline" onClick={returnToWizardFromSummary}>
                       Change details
                     </Button>
                   </div>
@@ -3877,7 +4613,7 @@ export default function OrdinaryConversationFlow() {
               ) : null}
 
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <Button variant="outline" onClick={() => setStage("wizard")}>
+                <Button variant="outline" onClick={returnToWizardFromSummary}>
                   Back to wizard
                 </Button>
                 {canBookConsultancy ? (
@@ -3917,6 +4653,18 @@ export default function OrdinaryConversationFlow() {
           ) : null}
         </DialogContent>
       </Dialog>
+
+      <PaystackRedirectDialog
+        open={showPaystackRedirectModal}
+        redirectUrl={paystackRedirectUrl}
+        onOpenChange={(open) => {
+          setShowPaystackRedirectModal(open);
+          if (!open) {
+            setPaystackRedirectUrl(null);
+            setIsStartingJobPayment(false);
+          }
+        }}
+      />
     </div>
   );
 }

@@ -78,6 +78,40 @@ enum PaymentStatus {
   FAILED
 }
 
+enum MaintenancePlanDuration {
+  MONTHLY @map("monthly")
+  QUARTERLY_3M @map("quarterly_3m")
+  HALFYEARLY_6M @map("halfyearly_6m")
+  YEARLY @map("yearly")
+}
+
+enum AssetCondition {
+  NEW @map("new")
+  GOOD @map("good")
+  FAIR @map("fair")
+  POOR @map("poor")
+}
+
+enum AssetSubscriptionStatus {
+  DRAFT @map("draft")
+  PENDING_PAYMENT @map("pending_payment")
+  ACTIVE @map("active")
+  PAUSED @map("paused")
+  EXPIRED @map("expired")
+  CANCELLED @map("cancelled")
+}
+
+enum MaintenanceScheduleStatus {
+  UPCOMING @map("upcoming")
+  DUE @map("due")
+  ASSIGNED @map("assigned")
+  IN_PROGRESS @map("in_progress")
+  COMPLETED @map("completed")
+  MISSED @map("missed")
+  RESCHEDULED @map("rescheduled")
+  CANCELLED @map("cancelled")
+}
+
 model User {
   id           String  @id @default(cuid())
   email        String  @unique
@@ -119,6 +153,8 @@ model User {
   updatedAt    DateTime      @updatedAt
   storeEstates StoreEstate[]
   assets       Asset[]
+  residentAssets            ResidentAsset[]      @relation("MaintenanceResidentAssets")
+  maintenanceSubscriptions  AssetSubscription[]  @relation("MaintenanceSubscriptions")
 }
 
 model Wallet {
@@ -277,6 +313,7 @@ model ServiceRequest {
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   maintenancePlans MaintenancePlan[]
+  maintenanceSchedules MaintenanceSchedule[] @relation("MaintenanceScheduleSourceRequest")
 }
 
 model Inspection {
@@ -499,6 +536,148 @@ model MaintenancePlan {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model MaintenanceCategory {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  icon        String?
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  items MaintenanceItem[]
+
+  @@map("maintenance_categories")
+}
+
+model MaintenanceItem {
+  id          String   @id @default(cuid())
+  categoryId  String   @map("category_id")
+  category    MaintenanceCategory @relation(fields: [categoryId], references: [id])
+  name        String
+  slug        String   @unique
+  description String?
+  defaultFrequency MaintenancePlanDuration? @map("default_frequency")
+  recommendedTasks Json? @map("recommended_tasks")
+  imageUrl    String?  @map("image_url")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  residentAssets ResidentAsset[]
+  maintenancePlans PreventiveMaintenancePlan[]
+
+  @@index([categoryId])
+  @@map("maintenance_items")
+}
+
+model ResidentAsset {
+  id                String   @id @default(cuid())
+  userId            String   @map("user_id")
+  user              User     @relation("MaintenanceResidentAssets", fields: [userId], references: [id])
+  maintenanceItemId String   @map("maintenance_item_id")
+  maintenanceItem   MaintenanceItem @relation(fields: [maintenanceItemId], references: [id])
+  estateId          String?  @map("estate_id")
+  customName        String?  @map("custom_name")
+  locationLabel     String?  @map("location_label")
+  brand             String?
+  model             String?
+  serialNumber      String?  @map("serial_number")
+  purchaseDate      DateTime? @map("purchase_date")
+  installedAt       DateTime? @map("installed_at")
+  lastServiceDate   DateTime? @map("last_service_date")
+  condition         AssetCondition @default(GOOD)
+  notes             String?
+  metadata          Json?
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  subscriptions AssetSubscription[]
+
+  @@index([userId])
+  @@index([maintenanceItemId])
+  @@map("resident_assets")
+}
+
+model PreventiveMaintenancePlan {
+  id                String   @id @default(cuid())
+  maintenanceItemId String   @map("maintenance_item_id")
+  maintenanceItem   MaintenanceItem @relation(fields: [maintenanceItemId], references: [id])
+  name              String
+  description       String?
+  durationType      MaintenancePlanDuration @map("duration_type")
+  price             Decimal  @default("0") @db.Decimal(10, 2)
+  currency          String   @default("NGN")
+  visitsIncluded    Int      @default(1) @map("visits_included")
+  includedTasks     Json?    @map("included_tasks")
+  requestLeadDays   Int      @default(3) @map("request_lead_days")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  subscriptions AssetSubscription[]
+
+  @@index([maintenanceItemId])
+  @@map("maintenance_plans")
+}
+
+model AssetSubscription {
+  id                String   @id @default(cuid())
+  userId            String   @map("user_id")
+  user              User     @relation("MaintenanceSubscriptions", fields: [userId], references: [id])
+  residentAssetId   String   @map("resident_asset_id")
+  residentAsset     ResidentAsset @relation(fields: [residentAssetId], references: [id])
+  maintenancePlanId String   @map("maintenance_plan_id")
+  maintenancePlan   PreventiveMaintenancePlan @relation(fields: [maintenancePlanId], references: [id])
+  startDate         DateTime @map("start_date")
+  endDate           DateTime? @map("end_date")
+  status            AssetSubscriptionStatus @default(DRAFT)
+  autoRenew         Boolean  @default(false) @map("auto_renew")
+  activatedAt       DateTime? @map("activated_at")
+  pausedAt          DateTime? @map("paused_at")
+  expiredAt         DateTime? @map("expired_at")
+  cancelledAt       DateTime? @map("cancelled_at")
+  billingAmount     Decimal  @default("0") @map("billing_amount") @db.Decimal(10, 2)
+  currency          String   @default("NGN")
+  nextScheduleAt    DateTime? @map("next_schedule_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  schedules MaintenanceSchedule[]
+
+  @@index([userId])
+  @@index([residentAssetId])
+  @@index([maintenancePlanId])
+  @@index([status])
+  @@map("asset_subscriptions")
+}
+
+model MaintenanceSchedule {
+  id             String   @id @default(cuid())
+  subscriptionId String   @map("subscription_id")
+  subscription   AssetSubscription @relation(fields: [subscriptionId], references: [id])
+  scheduledDate  DateTime @map("scheduled_date")
+  status         MaintenanceScheduleStatus @default(UPCOMING)
+  completedAt    DateTime? @map("completed_at")
+  skippedAt      DateTime? @map("skipped_at")
+  rescheduledFrom String? @map("rescheduled_from")
+  sourceSchedule MaintenanceSchedule? @relation("MaintenanceScheduleReschedule", fields: [rescheduledFrom], references: [id])
+  rescheduledSchedules MaintenanceSchedule[] @relation("MaintenanceScheduleReschedule")
+  notes          String?
+  sourceRequestId String? @map("source_request_id")
+  sourceRequest  ServiceRequest? @relation("MaintenanceScheduleSourceRequest", fields: [sourceRequestId], references: [id])
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([subscriptionId])
+  @@index([status])
+  @@index([scheduledDate])
+  @@index([sourceRequestId])
+  @@map("maintenance_schedules")
 }
 
 model Transaction {

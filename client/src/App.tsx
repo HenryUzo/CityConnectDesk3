@@ -2,6 +2,7 @@ import { Suspense, lazy, type ComponentType } from "react";
 import { Switch, Route, Redirect } from "wouter";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
+import AppErrorDialog from "@/components/AppErrorDialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "./hooks/use-auth";
 import { ProtectedRoute } from "./lib/protected-route";
@@ -23,6 +24,7 @@ import ServiceCategories from "@/pages/service-categories";
 import BookMarketRun from "@/pages/book-market-run";
 import TrackOrders from "@/pages/track-orders";
 import ServiceRequestsPage from "@/pages/service-requests";
+import { RequestsPage as LegacyRequestsPage } from "@/pages/requests-page";
 import CheckoutDiagnosis from "@/pages/checkout-diagnosis";
 import PaymentPolicy from "@/pages/payment-policy";
 import PaymentConfirmation from "@/pages/payment-confirmation";
@@ -33,6 +35,7 @@ import CartPage from "@/pages/resident/CartPage";
 import OrdersPage from "@/pages/resident/OrdersPage";
 import Settings from "@/pages/resident/Settings";
 import Homepage from "@/pages/resident/Homepage";
+import MaintenanceAssetsPage from "@/pages/resident/MaintenanceAssets";
 import OrdinaryConversationFlow from "@/pages/resident/OrdinaryConversationFlow";
 import NotFound from "@/pages/not-found";
 import { ProfileProvider } from "@/contexts/ProfileContext";
@@ -214,6 +217,9 @@ function Router() {
       <Route path="/admin/request-questions">
         <Redirect to="/admin-dashboard/request-questions" />
       </Route>
+      <Route path="/admin/maintenance-setup">
+        <Redirect to="/admin-dashboard/maintenance-setup" />
+      </Route>
       <ProtectedRoute path="/admin/providers/matching" component={AdminProviderMatchingPage} requiredRole="admin" />
       <Route path="/admin/login">
         <Redirect to="/admin-dashboard" />
@@ -268,6 +274,7 @@ function Router() {
       <ProtectedRoute path="/payment-confirmation" component={PaymentConfirmation} />
       <ProtectedRoute path="/book-market-run" component={BookMarketRun} />
       <ProtectedRoute path="/track-orders" component={TrackOrders} />
+      <ProtectedRoute path="/requests" component={LegacyRequestsPage} />
       <ProtectedRoute path="/service-requests" component={ServiceRequestsPage} />
       <Route path="/resident/requests/new">
         <Redirect to="/resident/requests/ordinary" />
@@ -281,6 +288,7 @@ function Router() {
       <ProtectedRoute path="/resident/citymart/cart" component={CartPage} />
       <ProtectedRoute path="/resident/citymart/orders" component={OrdersPage} />
       <ProtectedRoute path="/resident/citymart" component={CityMart} />
+      <ProtectedRoute path="/resident/maintenance" component={MaintenanceAssetsPage} />
       <ProtectedRoute path="/resident/settings" component={Settings} />
       <Route component={NotFound} />
     </Switch>
@@ -321,6 +329,7 @@ function App() {
           <ProfileProvider>
             <TooltipProvider>
             <Toaster />
+            <AppErrorDialog />
             <ImpersonationBanner />
             <Router />
             </TooltipProvider>

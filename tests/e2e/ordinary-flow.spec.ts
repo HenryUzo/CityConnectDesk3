@@ -20,6 +20,12 @@ test.describe("Ordinary conversation flow", () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
       window.localStorage.setItem("dev_user_email", "testresident@gmail.com");
+      if (!window.sessionStorage.getItem("ordinary_flow_e2e_started")) {
+        Object.keys(window.localStorage)
+          .filter((key) => key.startsWith("ordinary_flow_draft_v1:"))
+          .forEach((key) => window.localStorage.removeItem(key));
+        window.sessionStorage.setItem("ordinary_flow_e2e_started", "1");
+      }
     });
     await page.setExtraHTTPHeaders({
       "x-user-email": "testresident@gmail.com",
@@ -29,10 +35,10 @@ test.describe("Ordinary conversation flow", () => {
   test("category -> estate branch -> urgency -> wizard", async ({ page }) => {
     await openOrdinaryFlowAndSelectFirstCategory(page);
 
-    await expect(page.getByText("Do you live in a CityConnect estate?")).toBeVisible();
+    await expect(page.getByText("Do you live in an estate registered with CityConnect?")).toBeVisible();
     await page.getByRole("button", { name: /^Yes$/i }).click();
 
-    const estateOption = page.getByRole("button", { name: /Victoria Garden City/i }).first();
+    const estateOption = page.getByRole("button", { name: /^Victoria Garden City$/i }).first();
     if (await estateOption.isVisible({ timeout: 5000 }).catch(() => false)) {
       await estateOption.click();
     }
@@ -130,7 +136,7 @@ test("provider shell routes render with shared chrome", async ({ page }) => {
   ];
 
   for (const route of routes) {
-    await page.goto(route.path);
+    await page.goto(route.path, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState('domcontentloaded');
     await expect(page.getByRole('heading', { name: route.title }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: route.nav }).first()).toBeVisible();

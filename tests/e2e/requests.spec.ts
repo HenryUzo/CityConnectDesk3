@@ -8,12 +8,18 @@ import {
 
 const KNOWN_STATUSES = ["PENDING", "UNDER_REVIEW", "IN_PROGRESS", "COMPLETED", "CANCELLED", "UNSET"];
 const requestsEndpointRegex = /\/api\/estates\/.*?\/requests/;
+const RESIDENT_EMAIL = "testresident@gmail.com";
 
 function getBaseURL(testInfo: TestInfo) {
   return testInfo.project.use.baseURL || "http://localhost:5000";
 }
 
 async function openRequestsPage(page: Page) {
+  await page.context().setExtraHTTPHeaders({ "x-user-email": RESIDENT_EMAIL });
+  await page.addInitScript((email: string) => {
+    window.localStorage.setItem("dev_user_email", email);
+  }, RESIDENT_EMAIL);
+
   const estatesResponsePromise = page.waitForResponse(
     (response) => response.url().includes("/api/my-estates") && response.request().method() === "GET"
   );
@@ -53,14 +59,14 @@ test.describe("Requests page", () => {
   test("Can move a request from PENDING to UNDER_REVIEW and then to IN_PROGRESS", async ({ page }, testInfo) => {
     const baseURL = getBaseURL(testInfo);
     const pendingRequest = await ensurePendingRequest(baseURL);
-    const targetTitle = pendingRequest.title ?? "Untitled request";
+    const targetDescription = pendingRequest.description ?? pendingRequest.title ?? "Untitled request";
 
     await openRequestsPage(page);
 
     const pendingRow = page
       .locator("table tbody tr")
       .filter({
-        has: page.getByText(targetTitle),
+        has: page.getByText(targetDescription),
         hasText: "PENDING",
       })
       .first();
@@ -76,21 +82,25 @@ test.describe("Requests page", () => {
     expect(underReviewResponse.ok()).toBeTruthy();
     const underReviewBody = await underReviewResponse.json();
     expect((underReviewBody as any).status).toBe("UNDER_REVIEW");
-    await expect(pendingRow.getByText("UNDER_REVIEW")).toBeVisible();
+    const targetRow = page
+      .locator("table tbody tr")
+      .filter({ has: page.getByText(targetDescription) })
+      .first();
+    await expect(targetRow.getByText("UNDER_REVIEW")).toBeVisible();
 
     const toInProgress = page.waitForResponse(
       (response) =>
         response.request().method() === "PATCH" &&
         response.url().includes(`/api/requests/${pendingRequest.id}/status`)
     );
-    await pendingRow.getByRole("button", { name: /In Progress/i }).click();
+    await targetRow.getByRole("button", { name: /In Progress/i }).click();
     const inProgressResponse = await toInProgress;
     expect(inProgressResponse.ok()).toBeTruthy();
     const inProgressBody = await inProgressResponse.json();
     expect((inProgressBody as any).status).toBe("IN_PROGRESS");
-    await expect(pendingRow.getByText("IN_PROGRESS")).toBeVisible();
+    await expect(targetRow.getByText("IN_PROGRESS")).toBeVisible();
 
-    const titleCell = pendingRow.locator("td").first();
+    const titleCell = targetRow.locator("td").first();
     const titleText = (await titleCell.innerText()).trim();
 
     await openRequestsPage(page);
@@ -98,7 +108,7 @@ test.describe("Requests page", () => {
     const reloadedRow = page
       .locator("table tbody tr")
       .filter({
-        has: page.getByText(titleText || targetTitle),
+        has: page.getByText(targetDescription || titleText),
         hasText: "IN_PROGRESS",
       })
       .first();
@@ -109,14 +119,14 @@ test.describe("Requests page", () => {
     const baseURL = getBaseURL(testInfo);
     const sample = await ensurePendingRequest(baseURL);
     const completed = await setRequestStatus(sample.id, "COMPLETED", baseURL);
-    const targetTitle = completed.title ?? "Untitled request";
+    const targetDescription = completed.description ?? completed.title ?? "Untitled request";
 
     await openRequestsPage(page);
 
     const completedRow = page
       .locator("table tbody tr")
       .filter({
-        has: page.getByText(targetTitle),
+        has: page.getByText(targetDescription),
         hasText: "COMPLETED",
       })
       .first();
