@@ -17,17 +17,6 @@ const configuredApiBase = ((import.meta as any).env?.VITE_API_URL || "")
   .replace(/\/$/, "")
   .trim();
 
-function normalizeApiPath(path: string) {
-  return String(path || "")
-    .trim()
-    .replace(/^\$\{import\.meta\.env\.VITE_API_URL\}/, "")
-    .replace(/^(undefined|null)(?=\/api\/)/, "");
-}
-
-const configuredApiBase = ((import.meta as any).env?.VITE_API_URL || "")
-  .replace(/\/$/, "")
-  .trim();
-
 const API_BASE =
   (configuredApiBase && configuredApiBase !== "undefined" && configuredApiBase !== "null"
     ? configuredApiBase
