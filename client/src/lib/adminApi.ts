@@ -13,7 +13,7 @@ function normalizeApiPath(path: string) {
     .replace(/^(undefined|null)(?=\/api\/)/, "");
 }
 
-const configuredApiBase = ((import.meta as any).env?.VITE_API_URL || "")
+const configuredApiBase = (import.meta.env.VITE_API_URL || "")
   .replace(/\/$/, "")
   .trim();
 

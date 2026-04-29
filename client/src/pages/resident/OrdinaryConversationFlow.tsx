@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { io } from "socket.io-client";
+import { ArrowRight, Camera, ImagePlus, Leaf, ShieldCheck, X } from "lucide-react";
 import { AIAskBotIcon, AIAnsweredBotIcon, UploadItem } from "@/components/ui/icon";
 import Nav from "@/components/layout/Nav";
 import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
@@ -4043,140 +4044,285 @@ export default function OrdinaryConversationFlow() {
 
                         {currentStep.kind === "photos" ? (
                           <div className="space-y-4">
-                            {currentStep.helperText ? (
-                              <p className="text-[13px] text-[#475467]">{currentStep.helperText}</p>
-                            ) : null}
-                            <div className="flex flex-wrap items-center gap-3">
-                              <Button variant="outline" onClick={handleUploadClick}>
-                                <UploadItem />
-                                Add photo
-                              </Button>
-                              <Badge
-                                className={cn(
-                                  "rounded-full border",
-                                  currentStep.required
-                                    ? "bg-rose-50 text-rose-700 border-rose-200"
-                                    : "bg-amber-50 text-amber-700 border-amber-200",
-                                )}
-                              >
-                                {currentStep.required ? "Required" : "Recommended"}
-                              </Badge>
-                              <p className="text-[12px] text-[#667085]">Max 3 photos</p>
-                            </div>
-                            <input
-                              ref={fileInputRef}
-                              type="file"
-                              accept="image/*"
-                              multiple
-                              className="hidden"
-                              onChange={(event) => {
-                                const files = Array.from(event.target.files || []);
-                                files
-                                  .slice(0, Math.max(0, 3 - attachments.length))
-                                  .forEach(handleAddAttachment);
-                                event.target.value = "";
-                              }}
-                            />
-                            {attachments.length ? (
-                              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                                {attachments.map((file) => (
-                                  <div key={file.id} className="space-y-1.5">
-                                    <div className="relative overflow-hidden rounded-xl border border-[#D0D5DD] bg-white">
+                            <div className="overflow-hidden rounded-[28px] border border-[#D8E5DA] bg-[linear-gradient(180deg,#FCFDFB_0%,#F6FBF7_100%)] shadow-[0_18px_48px_rgba(16,24,40,0.06)]">
+                              <div className="border-b border-[#E4ECE6] px-5 py-5 sm:px-6">
+                                <div className="flex flex-wrap items-start justify-between gap-4">
+                                  <div className="flex min-w-0 items-start gap-3.5">
+                                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#EAF7EE] text-[#067647] shadow-[inset_0_0_0_1px_rgba(6,118,71,0.08)]">
+                                      <Camera className="h-5 w-5" />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <h3 className="text-[18px] font-semibold leading-[24px] text-[#101828]">
+                                          Add photo evidence
+                                        </h3>
+                                        <Badge
+                                          className={cn(
+                                            "rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
+                                            currentStep.required
+                                              ? "border-rose-200 bg-rose-50 text-rose-700"
+                                              : "border-[#D5F2DF] bg-[#F2FBF5] text-[#067647]",
+                                          )}
+                                        >
+                                          {currentStep.required ? "Required" : "Optional but helpful"}
+                                        </Badge>
+                                      </div>
+                                      <p className="max-w-[520px] text-[14px] leading-[21px] text-[#475467]">
+                                        {currentStep.helperText ||
+                                          "Photos help the provider arrive with the right tools and understand the issue before getting to your home."}
+                                      </p>
+                                      <div className="flex flex-wrap items-center gap-3 text-[12px] text-[#667085]">
+                                        <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1 shadow-[inset_0_0_0_1px_rgba(16,24,40,0.06)]">
+                                          <Leaf className="h-3.5 w-3.5 text-[#12B76A]" />
+                                          Up to 3 images
+                                        </span>
+                                        <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1 shadow-[inset_0_0_0_1px_rgba(16,24,40,0.06)]">
+                                          <ShieldCheck className="h-3.5 w-3.5 text-[#12B76A]" />
+                                          Shared only with your assigned provider
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={handleUploadClick}
+                                    disabled={attachments.length >= 3}
+                                    className={cn(
+                                      "group inline-flex min-h-[56px] items-center gap-3 rounded-2xl border px-4 py-3 text-left transition",
+                                      attachments.length >= 3
+                                        ? "cursor-not-allowed border-[#E4E7EC] bg-[#F9FAFB] text-[#98A2B3]"
+                                        : "border-[#D0D5DD] bg-white text-[#101828] shadow-sm hover:border-[#12B76A] hover:bg-[#F7FEF9]",
+                                    )}
+                                  >
+                                    <span
+                                      className={cn(
+                                        "flex h-10 w-10 items-center justify-center rounded-xl",
+                                        attachments.length >= 3
+                                          ? "bg-[#F2F4F7] text-[#98A2B3]"
+                                          : "bg-[#EAF7EE] text-[#067647]",
+                                      )}
+                                    >
+                                      <ImagePlus className="h-5 w-5" />
+                                    </span>
+                                    <span className="space-y-0.5">
+                                      <span className="block text-[15px] font-semibold leading-5">
+                                        {attachments.length >= 3 ? "Photo limit reached" : "Choose photos"}
+                                      </span>
+                                      <span className="block text-[12px] leading-4 text-[#667085]">
+                                        {attachments.length > 0
+                                          ? `${attachments.length} of 3 added`
+                                          : "JPG or PNG from your phone"}
+                                      </span>
+                                    </span>
+                                    <ArrowRight
+                                      className={cn(
+                                        "ml-1 h-4 w-4 transition-transform",
+                                        attachments.length >= 3 ? "text-[#98A2B3]" : "text-[#067647] group-hover:translate-x-0.5",
+                                      )}
+                                    />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="px-5 py-5 sm:px-6">
+                                <input
+                                  ref={fileInputRef}
+                                  type="file"
+                                  accept="image/*"
+                                  multiple
+                                  className="hidden"
+                                  onChange={(event) => {
+                                    const files = Array.from(event.target.files || []);
+                                    files
+                                      .slice(0, Math.max(0, 3 - attachments.length))
+                                      .forEach(handleAddAttachment);
+                                    event.target.value = "";
+                                  }}
+                                />
+
+                                {attachments.length ? (
+                                  <div className="space-y-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <p className="text-[13px] font-medium text-[#344054]">
+                                        {attachments.length} photo{attachments.length === 1 ? "" : "s"} ready
+                                      </p>
                                       <button
                                         type="button"
-                                        className="block w-full"
-                                        onClick={() => setPreviewAttachment({ name: file.name, url: file.dataUrl })}
+                                        onClick={handleUploadClick}
+                                        disabled={attachments.length >= 3}
+                                        className={cn(
+                                          "text-[13px] font-medium transition",
+                                          attachments.length >= 3
+                                            ? "cursor-not-allowed text-[#98A2B3]"
+                                            : "text-[#067647] hover:text-[#05603A]",
+                                        )}
                                       >
-                                        <img src={file.dataUrl} alt={file.name} className="h-24 w-full object-cover" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        aria-label={`Remove ${file.name}`}
-                                        className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-sm font-semibold text-white transition hover:bg-black"
-                                        onClick={(event) => {
-                                          event.preventDefault();
-                                          event.stopPropagation();
-                                          handleRemoveAttachment(file.id);
-                                        }}
-                                      >
-                                        x
+                                        Add another
                                       </button>
                                     </div>
-                                    <p className="truncate text-[11px] text-[#475467]" title={file.name}>
-                                      {file.name}
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                      {attachments.map((file) => (
+                                        <div
+                                          key={file.id}
+                                          className="group overflow-hidden rounded-[22px] border border-[#D0D5DD] bg-white shadow-[0_12px_28px_rgba(16,24,40,0.06)]"
+                                        >
+                                          <div className="relative">
+                                            <button
+                                              type="button"
+                                              className="block w-full"
+                                              onClick={() => setPreviewAttachment({ name: file.name, url: file.dataUrl })}
+                                            >
+                                              <img
+                                                src={file.dataUrl}
+                                                alt={file.name}
+                                                className="h-36 w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                                              />
+                                            </button>
+                                            <button
+                                              type="button"
+                                              aria-label={`Remove ${file.name}`}
+                                              className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#101828]/78 text-white transition hover:bg-[#101828]"
+                                              onClick={(event) => {
+                                                event.preventDefault();
+                                                event.stopPropagation();
+                                                handleRemoveAttachment(file.id);
+                                              }}
+                                            >
+                                              <X className="h-4 w-4" />
+                                            </button>
+                                          </div>
+                                          <div className="space-y-2 px-3.5 py-3">
+                                            <p className="truncate text-[13px] font-medium text-[#101828]" title={file.name}>
+                                              {file.name}
+                                            </p>
+                                            <button
+                                              type="button"
+                                              className="inline-flex items-center gap-1 text-[12px] font-medium text-[#067647] transition hover:text-[#05603A]"
+                                              onClick={() => setPreviewAttachment({ name: file.name, url: file.dataUrl })}
+                                            >
+                                              View photo
+                                              <ArrowRight className="h-3.5 w-3.5" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={handleUploadClick}
+                                    className="group flex w-full flex-col items-start gap-4 rounded-[24px] border border-dashed border-[#B7D4BF] bg-white/80 px-5 py-5 text-left transition hover:border-[#12B76A] hover:bg-[#FCFEFC]"
+                                  >
+                                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F2FBF5] text-[#067647] shadow-[inset_0_0_0_1px_rgba(6,118,71,0.08)]">
+                                      <UploadItem />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                      <p className="text-[16px] font-semibold leading-6 text-[#101828]">
+                                        Add clear photos of the issue
+                                      </p>
+                                      <p className="max-w-[520px] text-[14px] leading-[21px] text-[#667085]">
+                                        Show the damaged area, surrounding space, or anything the provider should prepare for before arrival.
+                                      </p>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2 text-[12px] text-[#667085]">
+                                      <span className="rounded-full bg-[#F2FBF5] px-3 py-1 font-medium text-[#067647]">
+                                        Quick tip
+                                      </span>
+                                      <span>Good lighting and one wide shot usually help most.</span>
+                                    </div>
+                                  </button>
+                                )}
+
+                                {photoGuard ? (
+                                  <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3">
+                                    <p className="text-[13px] font-medium text-rose-700">{photoGuard}</p>
+                                  </div>
+                                ) : null}
+
+                                <div className="mt-4 flex flex-col gap-3 rounded-[22px] border border-[#E4ECE6] bg-white/75 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="space-y-1">
+                                    <p className="text-[14px] font-semibold text-[#101828]">
+                                      {attachments.length > 0
+                                        ? "Your evidence is attached"
+                                        : currentStep.required
+                                          ? "Please attach at least one photo to continue"
+                                          : "You can continue without photos if needed"}
+                                    </p>
+                                    <p className="text-[12px] text-[#667085]">
+                                      {attachments.length > 0
+                                        ? "You can still add or remove photos before moving on."
+                                        : "You will still be able to explain the issue in the next steps."}
                                     </p>
                                   </div>
-                                ))}
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {!currentStep.required ? (
+                                      <Button
+                                        variant="outline"
+                                        disabled={isWizardBotThinking}
+                                        className="rounded-full border-[#D0D5DD] bg-white px-5"
+                                        onClick={async () => {
+                                          if (isWizardBotThinking) return;
+                                          if (
+                                            isDynamicFlowCategory &&
+                                            dynamicFlowSession &&
+                                            !dynamicFlowFallback &&
+                                            isDynamicBackendStep(currentStep.id)
+                                          ) {
+                                            await submitDynamicAnswer(currentStep.id, { files: [] });
+                                            return;
+                                          }
+                                          setLocalWrapUpCompleted((prev) => ({ ...prev, [currentStep.id]: true }));
+                                          if (wizardIndex >= wizardSteps.length - 1) {
+                                            openJobSummary();
+                                            return;
+                                          }
+                                          const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
+                                          queueWizardStepAdvance(nextIndex);
+                                        }}
+                                      >
+                                        Skip for now
+                                      </Button>
+                                    ) : null}
+                                    <Button
+                                      disabled={isWizardBotThinking}
+                                      onClick={async () => {
+                                        if (isWizardBotThinking) return;
+                                        if (currentStep.required && attachments.length === 0) return;
+                                        if (
+                                          isDynamicFlowCategory &&
+                                          dynamicFlowSession &&
+                                          !dynamicFlowFallback &&
+                                          isDynamicBackendStep(currentStep.id)
+                                        ) {
+                                          const files = attachments.map((file) => {
+                                            const mimeMatch = String(file.dataUrl || "").match(/^data:([^;]+);/i);
+                                            return {
+                                              dataUrl: file.dataUrl,
+                                              mimeType: mimeMatch?.[1] || "image/*",
+                                              byteSize: Math.round((file.dataUrl.length * 3) / 4),
+                                            };
+                                          });
+                                          setPersistedAttachmentCount(files.length);
+                                          await submitDynamicAnswer(currentStep.id, { files });
+                                          return;
+                                        }
+                                        setLocalWrapUpCompleted((prev) => ({ ...prev, [currentStep.id]: true }));
+                                        if (wizardIndex >= wizardSteps.length - 1) {
+                                          openJobSummary();
+                                          return;
+                                        }
+                                        const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
+                                        queueWizardStepAdvance(nextIndex);
+                                      }}
+                                      className="rounded-full bg-[#067647] px-5 text-white hover:bg-[#05603A]"
+                                    >
+                                      Continue
+                                    </Button>
+                                  </div>
+                                </div>
                               </div>
-                            ) : (
-                              <p className="text-[13px] text-[#667085]">No photos added yet.</p>
-                            )}
-                            {photoGuard ? (
-                              <p className="text-[13px] text-rose-600">{photoGuard}</p>
-                            ) : null}
-                            <div className="flex justify-start gap-2">
-                              {!currentStep.required ? (
-                                <Button
-                                  variant="outline"
-                                  disabled={isWizardBotThinking}
-                                  onClick={async () => {
-                                    if (isWizardBotThinking) return;
-                                    if (
-                                      isDynamicFlowCategory &&
-                                      dynamicFlowSession &&
-                                      !dynamicFlowFallback &&
-                                      isDynamicBackendStep(currentStep.id)
-                                    ) {
-                                      await submitDynamicAnswer(currentStep.id, { files: [] });
-                                      return;
-                                    }
-                                    setLocalWrapUpCompleted((prev) => ({ ...prev, [currentStep.id]: true }));
-                                    if (wizardIndex >= wizardSteps.length - 1) {
-                                      openJobSummary();
-                                      return;
-                                    }
-                                    const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
-                                    queueWizardStepAdvance(nextIndex);
-                                  }}
-                                >
-                                  Skip for now
-                                </Button>
-                              ) : null}
-                              <Button
-                                disabled={isWizardBotThinking}
-                                onClick={async () => {
-                                  if (isWizardBotThinking) return;
-                                  if (currentStep.required && attachments.length === 0) return;
-                                  if (
-                                    isDynamicFlowCategory &&
-                                    dynamicFlowSession &&
-                                    !dynamicFlowFallback &&
-                                    isDynamicBackendStep(currentStep.id)
-                                  ) {
-                                    const files = attachments.map((file) => {
-                                      const mimeMatch = String(file.dataUrl || "").match(/^data:([^;]+);/i);
-                                      return {
-                                        dataUrl: file.dataUrl,
-                                        mimeType: mimeMatch?.[1] || "image/*",
-                                        byteSize: Math.round((file.dataUrl.length * 3) / 4),
-                                      };
-                                    });
-                                    setPersistedAttachmentCount(files.length);
-                                    await submitDynamicAnswer(currentStep.id, { files });
-                                    return;
-                                  }
-                                  setLocalWrapUpCompleted((prev) => ({ ...prev, [currentStep.id]: true }));
-                                  if (wizardIndex >= wizardSteps.length - 1) {
-                                    openJobSummary();
-                                    return;
-                                  }
-                                  const nextIndex = Math.min(wizardIndex + 1, wizardSteps.length - 1);
-                                  queueWizardStepAdvance(nextIndex);
-                                }}
-                                className="rounded-full"
-                              >
-                                Continue
-                              </Button>
                             </div>
                           </div>
                         ) : null}

@@ -6,6 +6,7 @@ import MobileNavDrawer from "@/components/layout/MobileNavDrawer";
 import { useProfile } from "@/contexts/ProfileContext";
 import { useResidentDashboard } from "@/hooks/useResidentDashboard";
 import { getQueryFn } from "@/lib/queryClient";
+import cityConnectLogo from "@/assets/cityconnect-logo.svg";
 import serviceCardImage from "@/assets/resident-service-card.jpg";
 import promoArtisanCutout from "@/assets/resident/promo-artisan-cutout.png";
 import promoLeafCluster from "@/assets/resident/promo-leaf-cluster.png";
@@ -21,7 +22,6 @@ import {
   ChevronRight,
   ClipboardCheck,
   FileText,
-  Home,
   Leaf,
   TrendingUp,
 } from "lucide-react";
@@ -780,23 +780,22 @@ function BottomSection({
 
 function MobileTopBar() {
   const { firstName } = useProfile();
-  const initial = (firstName || "U").slice(0, 1).toUpperCase();
+  const safeName = firstName && firstName !== "User" ? firstName : "";
+  const initial = (safeName || "U").slice(0, 1).toUpperCase();
 
   return (
-    <div className="flex items-center justify-between">
-      <div className="h-[78px] w-[78px] shrink-0" aria-hidden="true" />
-      <div className="flex min-w-0 flex-1 items-center justify-center gap-2 px-2">
-        <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#E7F5EA] text-[#0B5E36]">
-          <Home size={22} strokeWidth={2.2} />
-        </div>
-        <p className="truncate font-['General_Sans:Semibold',sans-serif] text-[28px] leading-8 tracking-[-0.6px] text-[#075332]">
-          CityConnect
-        </p>
+    <div className="flex items-center justify-between gap-3 pl-[66px]">
+      <div className="flex min-w-0 flex-1 items-center">
+        <img
+          src={cityConnectLogo}
+          alt="CityConnect"
+          className="h-9 w-auto max-w-[172px] object-contain sm:h-10 sm:max-w-[188px]"
+        />
       </div>
-      <div className="flex h-[78px] w-[78px] shrink-0 items-center justify-center rounded-full border border-white/80 bg-[#F2FAF3] text-[#075332] shadow-[0_10px_24px_rgba(5,79,49,0.18)]">
-        <div className="relative flex h-12 w-12 items-center justify-center rounded-full bg-[#E4F3E7]">
-          <Leaf className="absolute right-[9px] top-[8px] text-[#2E9E50]" size={14} />
-          <span className="font-['General_Sans:Semibold',sans-serif] text-[19px] leading-none">{initial}</span>
+      <div className="flex h-[56px] w-[56px] shrink-0 items-center justify-center rounded-full border border-white/80 bg-[#F2FAF3] text-[#075332] shadow-[0_10px_22px_rgba(5,79,49,0.12)]">
+        <div className="relative flex h-[41px] w-[41px] items-center justify-center rounded-full bg-[#E4F3E7]">
+          <Leaf className="absolute right-[6px] top-[6px] text-[#2E9E50]" size={11} />
+          <span className="font-['General_Sans:Semibold',sans-serif] text-[16px] leading-none">{initial}</span>
         </div>
       </div>
     </div>
@@ -805,19 +804,21 @@ function MobileTopBar() {
 
 function MobileWelcomeBlock() {
   const { firstName } = useProfile();
+  const safeFirstName = firstName && firstName !== "User" ? firstName : "Resident";
+  const showLeaf = Boolean(firstName && firstName !== "User");
 
   return (
-    <section className="space-y-2">
-      <p className="font-['General_Sans:Medium',sans-serif] text-[28px] leading-8 tracking-[-0.4px] text-[#162823]">
+    <section className="space-y-2.5">
+      <p className="font-['General_Sans:Medium',sans-serif] text-[25px] leading-8 tracking-[-0.35px] text-[#162823]">
         Welcome back,
       </p>
       <div className="flex items-start gap-2">
-        <h1 className="min-w-0 break-words font-['General_Sans:Semibold',sans-serif] text-[50px] leading-[0.95] tracking-[-1.8px] text-[#075332]">
-          {firstName || "there"}
+        <h1 className="min-w-0 break-words font-['General_Sans:Semibold',sans-serif] text-[44px] leading-[0.94] tracking-[-1.35px] text-[#075332] sm:text-[48px]">
+          {safeFirstName}
         </h1>
-        <Leaf className="mt-1 shrink-0 text-[#3FAA55]" size={22} />
+        {showLeaf ? <Leaf className="mt-2 shrink-0 text-[#3FAA55]" size={18} /> : null}
       </div>
-      <p className="font-['General_Sans:Regular',sans-serif] text-[18px] leading-7 text-[#667085]">
+      <p className="max-w-[314px] font-['General_Sans:Regular',sans-serif] text-[16px] leading-6 text-[#667085]">
         Track, manage and forecast your activities
       </p>
     </section>
@@ -842,7 +843,7 @@ function MobileActionCard({
       type="button"
       onClick={onClick}
       className={[
-        "group flex min-h-[108px] items-center gap-4 rounded-[18px] px-5 text-left shadow-[0_12px_26px_rgba(15,40,30,0.12)] transition active:scale-[0.99]",
+        "group flex min-h-[90px] items-center gap-3 rounded-[18px] px-3.5 py-3.5 text-left shadow-[0_10px_22px_rgba(15,40,30,0.1)] transition active:scale-[0.99]",
         isSolid
           ? "bg-[#054F31] text-white"
           : "border border-[#DCE9DF] bg-[#F8FCF7] text-[#075332]",
@@ -850,17 +851,17 @@ function MobileActionCard({
     >
       <span
         className={[
-          "flex h-[58px] w-[58px] shrink-0 items-center justify-center rounded-[16px]",
+          "flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-[14px]",
           isSolid ? "bg-white/10 text-white ring-1 ring-white/10" : "bg-[#DFF1E4] text-[#075332]",
         ].join(" ")}
       >
         {icon}
       </span>
-      <span className="min-w-0 flex-1 font-['General_Sans:Semibold',sans-serif] text-[20px] leading-6">
+      <span className="min-w-0 flex-1 font-['General_Sans:Semibold',sans-serif] text-[16px] leading-5 tracking-[-0.18px]">
         {label}
       </span>
       <ChevronRight
-        size={24}
+        size={18}
         className={isSolid ? "text-[#DFF1E4]" : "text-[#075332]"}
         strokeWidth={2.4}
       />
@@ -876,20 +877,36 @@ function MobileActionsRow({
   onBookRepairs?: () => void;
 }) {
   return (
-    <section className="grid grid-cols-1 gap-4 min-[390px]:grid-cols-2">
+    <section className="grid grid-cols-2 gap-3">
       <MobileActionCard
         label="Buy something"
-        icon={<ShoppingCart size={31} strokeWidth={2.1} />}
+        icon={<ShoppingCart size={24} strokeWidth={2.1} />}
         variant="soft"
         onClick={onBuySomething}
       />
       <MobileActionCard
         label="Book Repairs"
-        icon={<Wrench size={31} strokeWidth={2.1} />}
+        icon={<Wrench size={24} strokeWidth={2.1} />}
         variant="solid"
         onClick={onBookRepairs}
       />
     </section>
+  );
+}
+
+function MobileChangeStat({ value }: { value: number }) {
+  const positive = value >= 0;
+
+  return (
+    <span className="inline-flex items-center gap-1 text-[13px] leading-5">
+      {positive ? (
+        <ArrowUpIcon size={14} className="text-[#12B76A]" />
+      ) : (
+        <ArrowDownIcon size={14} className="text-[#F04438]" />
+      )}
+      <span className={positive ? "text-[#12B76A]" : "text-[#F04438]"}>{Math.abs(value)}%</span>
+      <span className="text-[#667085]">vs last month</span>
+    </span>
   );
 }
 
@@ -900,6 +917,7 @@ function MobileKpiCard({
   children,
   actionLabel,
   onAction,
+  emphasis = "default",
 }: {
   title: string;
   count: number;
@@ -907,34 +925,52 @@ function MobileKpiCard({
   children: ReactNode;
   actionLabel: string;
   onAction?: () => void;
+  emphasis?: "default" | "wide";
 }) {
   return (
-    <article className="flex min-h-[230px] min-w-[176px] snap-start flex-col rounded-[18px] border border-[#EEF1EC] bg-white p-5 shadow-[0_12px_30px_rgba(16,24,40,0.08)]">
-      <div className="mb-5 flex h-[56px] w-[56px] items-center justify-center rounded-[18px] bg-[#EFF9F1] text-[#087443]">
+    <article
+      className={[
+        "flex h-full flex-col rounded-[20px] border border-[#EEF1EC] bg-white shadow-[0_10px_22px_rgba(16,24,40,0.07)]",
+        emphasis === "wide" ? "min-h-[178px] p-5" : "min-h-[208px] p-[18px]",
+      ].join(" ")}
+    >
+      <div className="mb-3.5 flex h-[48px] w-[48px] items-center justify-center rounded-[16px] bg-[#EFF9F1] text-[#087443]">
         {icon}
       </div>
-      <h2 className="min-h-[52px] font-['General_Sans:Semibold',sans-serif] text-[21px] leading-[25px] tracking-[-0.2px] text-[#162823]">
+      <h2
+        className={[
+          "font-['General_Sans:Semibold',sans-serif] tracking-[-0.18px] text-[#162823]",
+          emphasis === "wide" ? "min-h-[30px] text-[18px] leading-6" : "min-h-[52px] text-[18px] leading-[23px]",
+        ].join(" ")}
+      >
         {title}
       </h2>
-      <p className="mt-4 font-['General_Sans:Semibold',sans-serif] text-[42px] leading-none tracking-[-1px] text-[#162823]">
+      <p className="mt-3.5 font-['General_Sans:Semibold',sans-serif] text-[38px] leading-none tracking-[-0.9px] text-[#162823]">
         {count}
       </p>
-      <div className="mt-4 min-h-[42px] text-[15px] leading-5 text-[#667085]">{children}</div>
-      <div className="mt-auto border-t border-[#EEF1EC] pt-4">
+      <div
+        className={[
+          "mt-3.5 text-[#667085]",
+          emphasis === "wide" ? "min-h-[34px] text-[13px] leading-5" : "min-h-[48px] text-[13px] leading-[22px]",
+        ].join(" ")}
+      >
+        {children}
+      </div>
+      <div className="mt-auto border-t border-[#EEF1EC] pt-3.5">
         <button
           type="button"
           onClick={onAction}
-          className="flex w-full items-center justify-between gap-3 font-['General_Sans:Medium',sans-serif] text-[16px] leading-5 text-[#075332]"
+          className="flex w-full items-center justify-between gap-3 font-['General_Sans:Medium',sans-serif] text-[14px] leading-5 text-[#075332]"
         >
           <span>{actionLabel}</span>
-          <ChevronRight size={20} />
+          <ChevronRight size={18} />
         </button>
       </div>
     </article>
   );
 }
 
-function MobileKpiCards({
+function LegacyMobileKpiCards({
   stats,
   onGoToOrders,
   onViewContracts,
@@ -949,22 +985,24 @@ function MobileKpiCards({
   const completedPositive = stats.completedChangePercent >= 0;
 
   return (
-    <section className="-mx-6 overflow-x-auto px-6 pb-2">
-      <div className="flex snap-x gap-4">
+    <section className="grid grid-cols-2 gap-3">
+      <div className="col-span-1">
         <MobileKpiCard
           title="Maintenance Schedule"
           count={stats.maintenanceScheduleCount}
-          icon={<CalendarDays size={28} strokeWidth={2} />}
+          icon={<CalendarDays size={24} strokeWidth={2} />}
           actionLabel="Open Maintenance"
           onAction={onManageMaintenance}
         >
-          <span className="text-[#087443]">Next:</span>{" "}
+          <span className="font-['General_Sans:Medium',sans-serif] text-[#087443]">Next:</span>{" "}
           <span>{stats.nextMaintenance || "No scheduled maintenance"}</span>
         </MobileKpiCard>
+      </div>
+      <div className="col-span-1">
         <MobileKpiCard
           title="Active Contracts"
           count={stats.activeContractsCount}
-          icon={<FileText size={28} strokeWidth={2} />}
+          icon={<FileText size={24} strokeWidth={2} />}
           actionLabel="Go to Orders"
           onAction={onGoToOrders}
         >
@@ -990,7 +1028,7 @@ function MobileKpiCards({
   );
 }
 
-function MobilePromoCard({ onClick }: { onClick?: () => void }) {
+function LegacyMobilePromoCard({ onClick }: { onClick?: () => void }) {
   return (
     <section
       onClick={onClick}
@@ -1041,7 +1079,7 @@ function MobilePromoCard({ onClick }: { onClick?: () => void }) {
   );
 }
 
-function MobileMarketTrends({ onGoToMarketplace }: { onGoToMarketplace?: () => void }) {
+function LegacyMobileMarketTrends({ onGoToMarketplace }: { onGoToMarketplace?: () => void }) {
   const { data } = useQuery<MarketTrendsResponse | null>({
     queryKey: ["/api/app/market-trends"],
     queryFn: getQueryFn({ on401: "returnNull" }),
@@ -1151,6 +1189,225 @@ function MobileMarketTrends({ onGoToMarketplace }: { onGoToMarketplace?: () => v
   );
 }
 
+function MobileKpiCards({
+  stats,
+  onGoToOrders,
+  onViewContracts,
+  onManageMaintenance,
+}: {
+  stats: DashboardStats;
+  onGoToOrders?: () => void;
+  onViewContracts?: () => void;
+  onManageMaintenance?: () => void;
+}) {
+  return (
+    <section className="grid grid-cols-2 gap-4">
+      <div className="col-span-1">
+        <MobileKpiCard
+          title="Maintenance Schedule"
+          count={stats.maintenanceScheduleCount}
+          icon={<CalendarDays size={28} strokeWidth={2} />}
+          actionLabel="Open Maintenance"
+          onAction={onManageMaintenance}
+        >
+          <span className="font-['General_Sans:Medium',sans-serif] text-[#087443]">Next:</span>{" "}
+          <span>{stats.nextMaintenance || "No scheduled maintenance"}</span>
+        </MobileKpiCard>
+      </div>
+      <div className="col-span-1">
+        <MobileKpiCard
+          title="Active Contracts"
+          count={stats.activeContractsCount}
+          icon={<FileText size={28} strokeWidth={2} />}
+          actionLabel="Go to Orders"
+          onAction={onGoToOrders}
+        >
+          <MobileChangeStat value={stats.contractsChangePercent} />
+        </MobileKpiCard>
+      </div>
+      <div className="col-span-2">
+        <MobileKpiCard
+          title="Completed Requests"
+          count={stats.completedRequestsCount}
+          icon={<ClipboardCheck size={24} strokeWidth={2} />}
+          actionLabel="View Requests"
+          onAction={onViewContracts}
+          emphasis="wide"
+        >
+          <MobileChangeStat value={stats.completedChangePercent} />
+        </MobileKpiCard>
+      </div>
+    </section>
+  );
+}
+
+function MobilePromoCard({ onClick }: { onClick?: () => void }) {
+  return (
+    <section
+      onClick={onClick}
+      className="relative min-h-[336px] cursor-pointer overflow-hidden rounded-[22px] bg-[#075332] shadow-[0_18px_34px_rgba(5,79,49,0.22)]"
+    >
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_82%_34%,rgba(83,187,111,0.18),transparent_30%),linear-gradient(90deg,rgba(6,65,40,0.12),rgba(6,65,40,0.01)_46%,rgba(255,255,255,0)_72%)]" />
+      <img
+        aria-hidden="true"
+        alt=""
+        src={promoLeafCluster}
+        className="absolute bottom-[34px] right-[38px] h-[138px] w-[138px] object-contain opacity-20"
+      />
+      <div className="absolute bottom-0 right-0 top-0 flex w-[43%] items-end justify-end pr-3">
+        <div className="absolute bottom-8 right-3 top-10 w-[148px] rounded-[28px] bg-[linear-gradient(180deg,rgba(227,244,232,0.24),rgba(227,244,232,0.08))] backdrop-blur-[2px]" />
+        <img
+          aria-hidden="true"
+          alt=""
+          src={serviceCardImage}
+          className="relative z-10 h-[228px] w-[146px] rounded-[26px] object-cover object-[70%_center] shadow-[0_16px_24px_rgba(0,0,0,0.18)]"
+        />
+      </div>
+      <div className="relative z-10 flex min-h-[336px] max-w-[58%] flex-col p-6">
+        <div className="mb-4 inline-flex w-fit items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-2 backdrop-blur-sm">
+          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#E9F7EC] text-[#075332]">
+            <Leaf size={15} />
+          </span>
+          <p className="font-['General_Sans:Semibold',sans-serif] text-[14px] leading-5 text-white">
+            Book a service
+          </p>
+        </div>
+        <h2 className="max-w-[190px] font-['General_Sans:Semibold',sans-serif] text-[24px] leading-[30px] tracking-[-0.45px] text-white">
+          You don&apos;t have to break your back
+        </h2>
+        <p className="mt-3 max-w-[176px] font-['General_Sans:Medium',sans-serif] text-[15px] leading-6 text-white/82">
+          We got it covered
+        </p>
+        <button
+          type="button"
+          className="mt-6 flex h-11 w-[164px] items-center justify-center gap-2.5 rounded-full bg-white font-['General_Sans:Semibold',sans-serif] text-[14px] text-[#075332] shadow-[0_10px_20px_rgba(0,0,0,0.12)]"
+        >
+          Let&apos;s help out
+          <ChevronRight size={18} />
+        </button>
+        <div className="mt-auto flex items-center gap-2.5 pb-1">
+          <span className="h-2.5 w-2.5 rounded-full bg-white" />
+          <span className="h-2.5 w-2.5 rounded-full bg-[#80B784]" />
+          <span className="h-2.5 w-2.5 rounded-full bg-[#80B784]" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MobileMarketTrends({ onGoToMarketplace }: { onGoToMarketplace?: () => void }) {
+  const { data } = useQuery<MarketTrendsResponse | null>({
+    queryKey: ["/api/app/market-trends"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+  });
+
+  const activeSeries = (data?.series ?? []).filter((item) => item.isActive !== false).slice(0, 3);
+  const chartData = buildMarketChartData(activeSeries);
+
+  return (
+    <section className="rounded-[22px] border border-[#EEF1EC] bg-white p-[18px] shadow-[0_10px_24px_rgba(16,24,40,0.07)]">
+      <div className="flex flex-col gap-3 min-[390px]:flex-row min-[390px]:items-center">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[14px] bg-[#EFF9F1] text-[#087443]">
+            <TrendingUp size={22} strokeWidth={2.1} />
+          </div>
+          <h2 className="min-w-0 flex-1 font-['General_Sans:Semibold',sans-serif] text-[20px] leading-6 tracking-[-0.24px] text-[#16352A]">
+            Market Trends
+          </h2>
+        </div>
+        <button
+          type="button"
+          onClick={onGoToMarketplace}
+          className="inline-flex h-9 w-full shrink-0 items-center justify-center rounded-full border border-[#DCE9DF] bg-[#F8FCF7] px-4 font-['General_Sans:Medium',sans-serif] text-[13px] text-[#075332] min-[390px]:w-auto"
+        >
+          Go to Marketplace
+        </button>
+      </div>
+
+      {activeSeries.length ? (
+        <>
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2.5">
+            {activeSeries.map((series, index) => (
+              <div key={series.id} className="flex items-center gap-2.5">
+                <span
+                  className="h-3 w-3 rounded-full"
+                  style={{ backgroundColor: series.color || ["#075332", "#44C767", "#12B76A"][index] }}
+                />
+                <span className="font-['General_Sans:Medium',sans-serif] text-[13px] text-[#667085]">
+                  {series.name}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 h-[206px] w-full overflow-hidden rounded-[18px] bg-[#FCFDFC] px-1 py-2.5">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 10, right: 8, left: -20, bottom: 4 }}>
+                <CartesianGrid stroke="#E9EFEA" strokeDasharray="6 8" vertical={false} />
+                <XAxis
+                  dataKey="month"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: "#667085", fontSize: 12, fontFamily: "General_Sans" }}
+                  interval="preserveStartEnd"
+                  dy={8}
+                />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: "#667085", fontSize: 12, fontFamily: "General_Sans" }}
+                  domain={[0, "dataMax + 100"]}
+                  dx={-8}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "white",
+                    border: "1px solid #E1E8E2",
+                    borderRadius: "12px",
+                    boxShadow: "0 12px 28px rgba(16, 24, 40, 0.12)",
+                    fontSize: "12px",
+                    fontFamily: "General_Sans",
+                  }}
+                  formatter={(value: number) => `${value}`}
+                  labelStyle={{ color: "#101828", fontWeight: 600 }}
+                />
+                {activeSeries.map((series, index) => (
+                  <Line
+                    key={series.id}
+                    type="monotone"
+                    dataKey={series.slug}
+                    stroke={series.color || ["#075332", "#44C767", "#12B76A"][index]}
+                    strokeWidth={3}
+                    dot={false}
+                    activeDot={{ r: 5, strokeWidth: 0 }}
+                    connectNulls
+                    name={series.name}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </>
+      ) : (
+        <div className="mt-6 flex min-h-[220px] items-center justify-center rounded-[18px] border border-dashed border-[#DCE9DF] bg-[#F8FCF7] px-6 text-center font-['General_Sans:Medium',sans-serif] text-[15px] leading-6 text-[#667085]">
+          Market trends will appear here once they are configured by admin.
+        </div>
+      )}
+
+      <div className="mt-4 flex items-start gap-3 rounded-[16px] border border-[#E1ECE4] bg-[#F8FCF7] p-3.5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[12px] bg-[#E9F7EC] text-[#087443]">
+          <Leaf size={18} />
+        </span>
+        <p className="font-['General_Sans:Regular',sans-serif] text-[13px] leading-[22px] text-[#667085]">
+          <span className="font-['General_Sans:Medium',sans-serif] text-[#263C35]">
+            Prices updated weekly from trusted local markets.
+          </span>{" "}
+          Make smarter choices for your home.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function MobileDashboard({
   onNavigateToChat,
   onGoToMarketplace,
@@ -1167,7 +1424,7 @@ function MobileDashboard({
   onManageMaintenance?: () => void;
 }) {
   return (
-    <div className="flex w-full flex-col gap-6 px-6 pb-8 pt-6 lg:hidden">
+    <div className="flex w-full flex-col gap-[18px] px-5 pb-8 pt-5 sm:px-6 lg:hidden">
       <MobileTopBar />
       <MobileWelcomeBlock />
       <MobileActionsRow onBuySomething={onGoToMarketplace} onBookRepairs={onNavigateToChat} />
@@ -1337,7 +1594,7 @@ export default function Homepage({
       data-name="Homepage"
     >
       <MobileNavDrawer
-        buttonClassName="fixed left-6 top-6 z-50 inline-flex h-[78px] w-[78px] items-center justify-center rounded-full bg-[#054f31] text-white shadow-[0_12px_28px_rgba(5,79,49,0.28)] transition active:scale-95 lg:hidden"
+        buttonClassName="fixed left-5 top-5 z-50 inline-flex h-[58px] w-[58px] items-center justify-center rounded-full bg-[#054f31] text-white shadow-[0_10px_20px_rgba(5,79,49,0.2)] transition active:scale-95 lg:hidden"
         onBookServiceClick={handleBookServiceClick}
         onNavigateToHomepage={handleNavigateToHomepage}
         onNavigateToSettings={handleNavigateToSettings}
